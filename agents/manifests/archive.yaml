@@ -1,0 +1,17 @@
+kind: AgentManifest
+apiVersion: jarvis.local/v1alpha1
+metadata: {id: archive, name: Archive, version: 1.0.0, department: operations, status: simulated}
+spec:
+  parent: jarvis
+  role: File and Document Specialist
+  description: Retrieves and organizes simulated fixture artifacts.
+  goals: [Preserve artifact lineage, Restrict access to fixtures]
+  capabilities: [simulated_retrieval, artifact_organization]
+  allowedTools: [simulated_workspace]
+  deniedTools: [shell, real_filesystem, cloud_storage]
+  memoryAccess: {scope: fixture-only, durable: false}
+  approvalPolicy: {requiredFor: [delete, external_write]}
+  execution: {maximumHeavyTasks: 0, maximumLightweightTasks: 4, timeoutSeconds: 120, retryPolicy: {maximumRetries: 2}}
+  review: {reviewer: sentinel}
+  deployment: {sandboxProfile: phase-1-placeholder, gitRequired: true, branchConvention: feature/*}
+  office: {spriteIdentifier: sprite-archive, zone: Personal Operations, deskId: P-01}

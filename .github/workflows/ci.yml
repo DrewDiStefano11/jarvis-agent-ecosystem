@@ -1,0 +1,35 @@
+name: Phase 1 checks
+on: [push, pull_request]
+jobs:
+  backend:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install -e ".[dev]"
+        working-directory: apps/api
+      - run: ruff format . --check
+        working-directory: apps/api
+      - run: ruff check .
+        working-directory: apps/api
+      - run: pytest -q
+        working-directory: apps/api
+  frontend:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: {version: 11}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22', cache: pnpm, cache-dependency-path: apps/web/pnpm-lock.yaml}
+      - run: pnpm install --frozen-lockfile
+        working-directory: apps/web
+      - run: pnpm typecheck
+        working-directory: apps/web
+      - run: pnpm lint
+        working-directory: apps/web
+      - run: pnpm test
+        working-directory: apps/web
+      - run: pnpm build
+        working-directory: apps/web

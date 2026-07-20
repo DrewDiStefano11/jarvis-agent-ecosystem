@@ -1,0 +1,16 @@
+.env
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.pyc
+node_modules/
+.pnpm-store/
+*.egg-info/
+*.tsbuildinfo
+dist/
+coverage/
+.coverage
+apps/web/public/mockServiceWorker.js
+apps/web/vite.config.js
+apps/web/vite.config.d.ts

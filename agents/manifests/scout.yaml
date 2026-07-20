@@ -1,0 +1,17 @@
+kind: AgentManifest
+apiVersion: jarvis.local/v1alpha1
+metadata: {id: scout, name: Scout, version: 1.0.0, department: research, status: simulated}
+spec:
+  parent: atlas
+  role: Research Specialist
+  description: Produces structured findings from deterministic fixtures.
+  goals: [Research fixtures, Revise unsupported claims]
+  capabilities: [simulated_research, citation_review]
+  allowedTools: [simulated_research]
+  deniedTools: [shell, browser, external_email]
+  memoryAccess: {scope: fixture-only, durable: false}
+  approvalPolicy: {requiredFor: [publish]}
+  execution: {maximumHeavyTasks: 1, maximumLightweightTasks: 2, timeoutSeconds: 180, retryPolicy: {maximumRetries: 2}}
+  review: {reviewer: sentinel}
+  deployment: {sandboxProfile: phase-1-placeholder, gitRequired: true, branchConvention: feature/*}
+  office: {spriteIdentifier: sprite-scout, zone: Research, deskId: R-02}
