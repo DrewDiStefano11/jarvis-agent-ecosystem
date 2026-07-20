@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any
@@ -33,6 +34,12 @@ from app.models.domain import Agent, Approval, Artifact, AuditEvent, Department,
 from app.services.seed import build_seed
 
 SEED_VERSION = "2.0"
+
+
+@dataclass(frozen=True)
+class IdempotencyClaim:
+    response: tuple[int, dict[str, Any]] | None
+    owned: bool
 
 
 class SqlAlchemyRepository:
@@ -488,12 +495,10 @@ class SqlAlchemyRepository:
                 )
             return row.response_status, row.response_body
 
-    def idempotency_claim(
-        self, key: str, command: str, payload: Any
-    ) -> tuple[int, dict[str, Any]] | None:
+    def idempotency_claim(self, key: str, command: str, payload: Any) -> IdempotencyClaim:
         existing = self.idempotency_lookup(key, command, payload)
         if existing:
-            return existing
+            return IdempotencyClaim(response=existing, owned=False)
         try:
             with self.session_factory() as session, session.begin():
                 session.add(
@@ -508,8 +513,10 @@ class SqlAlchemyRepository:
                     )
                 )
         except IntegrityError:
-            return self.idempotency_lookup(key, command, payload)
-        return None
+            return IdempotencyClaim(
+                response=self.idempotency_lookup(key, command, payload), owned=False
+            )
+        return IdempotencyClaim(response=None, owned=True)
 
     def idempotency_store(
         self,
@@ -544,11 +551,12 @@ class SqlAlchemyRepository:
                     )
                 )
 
-    def idempotency_abandon(self, key: str) -> None:
+    def idempotency_abandon(self, key: str, command: str) -> None:
         with self.session_factory() as session, session.begin():
             session.execute(
                 delete(IdempotencyRecordRow).where(
                     IdempotencyRecordRow.idempotency_key == key,
+                    IdempotencyRecordRow.command_type == command,
                     IdempotencyRecordRow.response_status == 0,
                 )
             )
@@ -746,13 +754,15 @@ class SqlAlchemyRepository:
         with self.session_factory() as session, session.begin():
             run = session.scalar(
                 select(WorkflowRunRow)
-                .where(WorkflowRunRow.status == "running")
+                .where(WorkflowRunRow.status.in_(["running", "paused"]))
                 .order_by(WorkflowRunRow.started_at.desc())
             )
             if not run:
                 return False
-            run.status = "recovery_required"
-            run.pause_reason = "Backend restarted before a clean workflow completion."
+            was_paused = run.status == "paused"
+            if not was_paused:
+                run.status = "recovery_required"
+                run.pause_reason = "Backend restarted before a clean workflow completion."
             run.updated_at = datetime.now(UTC)
             state = session.get(SystemStateRow, 1)
             state.recovery_status = "required"

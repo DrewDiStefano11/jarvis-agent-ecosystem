@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
@@ -100,18 +101,37 @@ def test_concurrent_duplicate_submission_creates_one_task(tmp_path: Path) -> Non
     url = database_url(tmp_path / "concurrent.db")
     body = {"title": "One durable task", "description": "Submitted concurrently"}
     headers = {"Idempotency-Key": "concurrent-task-key"}
+    first_app = create_app(delay_ms=1, database_url=url)
+    second_app = create_app(delay_ms=1, database_url=url)
+    third_app = create_app(delay_ms=1, database_url=url)
+    entered_publish = threading.Event()
+    release_publish = threading.Event()
+    original_publish = first_app.state.broker._publish
+
+    async def delayed_publish(event) -> None:
+        entered_publish.set()
+        released = await asyncio.to_thread(release_publish.wait, 5)
+        assert released
+        await original_publish(event)
+
+    first_app.state.broker._publish = delayed_publish
     with (
-        TestClient(create_app(delay_ms=1, database_url=url)) as first,
-        TestClient(create_app(delay_ms=1, database_url=url)) as second,
-        ThreadPoolExecutor(max_workers=2) as pool,
+        TestClient(first_app) as first,
+        TestClient(second_app) as second,
+        TestClient(third_app) as third,
+        ThreadPoolExecutor(max_workers=1) as pool,
     ):
-        responses = list(
-            pool.map(
-                lambda client: client.post("/api/tasks", json=body, headers=headers),
-                [first, second],
-            )
-        )
-    assert sorted(response.status_code for response in responses) in ([201, 201], [201, 409])
+        first_response = pool.submit(first.post, "/api/tasks", json=body, headers=headers)
+        assert entered_publish.wait(5)
+        second_response = second.post("/api/tasks", json=body, headers=headers)
+        third_response = third.post("/api/tasks", json=body, headers=headers)
+        assert second_response.status_code == 409
+        assert second_response.json()["error"]["code"] == "IDEMPOTENCY_REQUEST_IN_PROGRESS"
+        assert third_response.status_code == 409
+        assert third_response.json()["error"]["code"] == "IDEMPOTENCY_REQUEST_IN_PROGRESS"
+        release_publish.set()
+        created = first_response.result(timeout=5)
+        assert created.status_code == 201
     with TestClient(create_app(delay_ms=1, database_url=url)) as verifier:
         matches = [
             item
@@ -119,6 +139,74 @@ def test_concurrent_duplicate_submission_creates_one_task(tmp_path: Path) -> Non
             if item["title"] == body["title"]
         ]
         assert len(matches) == 1
+        replay = verifier.post("/api/tasks", json=body, headers=headers)
+        assert replay.status_code == 201
+        assert replay.json()["data"]["id"] == matches[0]["id"]
+
+
+def test_paused_workflow_remains_resumable_after_application_recreation(tmp_path: Path) -> None:
+    url = database_url(tmp_path / "paused-recovery.db")
+    with TestClient(create_app(delay_ms=20, database_url=url)) as first:
+        first.post("/api/simulator/start")
+        asyncio.run(asyncio.sleep(0.07))
+        paused = first.post("/api/simulator/pause")
+        assert paused.status_code == 200
+        paused_step = paused.json()["data"]["currentStep"]
+        paused_status = first.get("/api/system/status").json()["data"]
+        run_id = paused_status["activeWorkflowRunId"]
+        checkpoint_id = paused_status["lastCheckpointId"]
+
+    with TestClient(create_app(delay_ms=1, database_url=url)) as second:
+        restored = second.get("/api/system/status").json()["data"]
+        assert restored["simulator"]["state"] == "paused"
+        assert restored["simulator"]["currentStep"] == paused_step
+        assert restored["activeWorkflowRunId"] == run_id
+        assert restored["lastCheckpointId"] == checkpoint_id
+        assert second.post("/api/simulator/resume").status_code == 200
+        for _ in range(150):
+            status = second.get("/api/system/status").json()["data"]
+            if status["simulator"]["state"] == "completed":
+                break
+            asyncio.run(asyncio.sleep(0.005))
+        assert status["simulator"]["state"] == "completed"
+        audit = second.get("/api/audit-events").json()["data"]
+        step_numbers = [item["payload"].get("step") for item in audit if "step" in item["payload"]]
+        assert len(step_numbers) == len(set(step_numbers))
+
+
+def test_rapid_reset_and_restart_create_distinct_workflow_run_ids(tmp_path: Path) -> None:
+    url = database_url(tmp_path / "run-ids.db")
+    app = create_app(delay_ms=100, database_url=url)
+    with TestClient(app) as api:
+        assert api.post("/api/simulator/start").status_code == 200
+        first_run_id = api.get("/api/system/status").json()["data"]["activeWorkflowRunId"]
+        assert api.post("/api/simulator/reset").status_code == 200
+        assert api.post("/api/simulator/start").status_code == 200
+        second_run_id = api.get("/api/system/status").json()["data"]["activeWorkflowRunId"]
+        assert first_run_id != second_run_id
+        assert api.post("/api/simulator/reset").status_code == 200
+
+
+def test_reset_idempotency_replays_after_lost_response(tmp_path: Path) -> None:
+    url = database_url(tmp_path / "reset-idempotency.db")
+    headers = {"Idempotency-Key": "lost-reset-response"}
+    with TestClient(create_app(delay_ms=1, database_url=url)) as api:
+        before_session = api.get("/api/system/status").json()["data"]["eventSessionId"]
+        first = api.post("/api/simulator/reset", headers=headers)
+        after_first_session = api.get("/api/system/status").json()["data"]["eventSessionId"]
+        retry = api.post("/api/simulator/reset", headers=headers)
+        after_retry_session = api.get("/api/system/status").json()["data"]["eventSessionId"]
+        assert first.status_code == 200
+        assert retry.status_code == 200
+        assert retry.json() == first.json()
+        assert before_session != after_first_session
+        assert after_retry_session == after_first_session
+        reset_audits = [
+            item
+            for item in api.get("/api/audit-events").json()["data"]
+            if item["eventType"] == "system.simulator.reset"
+        ]
+        assert len(reset_audits) == 1
 
 
 def test_interrupted_workflow_has_checkpoint_and_resumes(tmp_path: Path) -> None:

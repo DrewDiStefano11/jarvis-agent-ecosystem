@@ -16,3 +16,5 @@ Routes:
 Approvals are idempotency-guarded: processed, expired, unknown, black-risk, or emergency-blocked decisions never execute. No Phase 1 command performs a real external action.
 
 Phase 2A mutation routes accept an optional `Idempotency-Key` header for task creation, approval decisions, task retry, temporary-agent creation, simulator start, and reset. Same-key/same-request calls replay the durable response; changed content returns `IDEMPOTENCY_KEY_CONFLICT` (409). System status additively reports storage, migration, event-session, outbox, checkpoint, and recovery fields. Health distinguishes process, database, schema, dispatcher, and recovery state without exposing database paths.
+
+Reset hashing uses only the stable client action, never event-session or workflow state. An in-progress claim is owned by the request that created it; duplicate in-progress or conflicting requests cannot abandon another request's claim.

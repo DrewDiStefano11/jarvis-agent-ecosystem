@@ -75,7 +75,9 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     )
     if recovery_required:
         active = repository.active_workflow()
-        simulator.control.state = "recovery_required"
+        simulator.control.state = (
+            "paused" if active and active.status == "paused" else "recovery_required"
+        )
         simulator.control.currentStep = active.current_step_index if active else 0
     app.state.repository = repository
     app.state.broker = broker
@@ -84,11 +86,28 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     app.state.engine = engine
     app.state.recovery_required = recovery_required
 
-    def replay_idempotent(key: str | None, command_type: str, payload: object) -> object | None:
+    def replay_idempotent(
+        request: Request, key: str | None, command_type: str, payload: object
+    ) -> object | None:
         if not key:
             return None
-        record = repository.idempotency_claim(key, command_type, payload)
-        return record[1]["data"] if record else None
+        claim = repository.idempotency_claim(key, command_type, payload)
+        if claim.owned:
+            request.state.idempotency_claim = (key, command_type)
+        return claim.response[1]["data"] if claim.response else None
+
+    @app.middleware("http")
+    async def cleanup_owned_idempotency_claim(request: Request, call_next):
+        try:
+            response = await call_next(request)
+        except (Exception, asyncio.CancelledError):
+            if claim := getattr(request.state, "idempotency_claim", None):
+                repository.idempotency_abandon(*claim)
+            raise
+        if response.status_code >= 400:
+            if claim := getattr(request.state, "idempotency_claim", None):
+                repository.idempotency_abandon(*claim)
+        return response
 
     def remember_idempotent(
         key: str | None,
@@ -131,9 +150,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         engine.dispose()
 
     @app.exception_handler(DomainError)
-    async def domain_error(request: Request, exc: DomainError) -> JSONResponse:
-        if idempotency_key := request.headers.get("Idempotency-Key"):
-            repository.idempotency_abandon(idempotency_key)
+    async def domain_error(_: Request, exc: DomainError) -> JSONResponse:
         return JSONResponse(
             status_code=exc.status_code,
             content={"error": {"code": exc.code, "message": exc.message, "details": {}}},
@@ -221,11 +238,12 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.post("/api/agents/temporary", response_model=ApiResponse, status_code=201)
     async def create_temporary(
+        request: Request,
         body: CreateTemporaryAgentRequest,
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     ) -> ApiResponse:
         payload = body.model_dump(mode="json")
-        if replay := replay_idempotent(idempotency_key, "temporary-agent.create", payload):
+        if replay := replay_idempotent(request, idempotency_key, "temporary-agent.create", payload):
             return ApiResponse(data=Agent.model_validate(replay))
         repository.require(repository.departments, body.departmentId, "department")
         item_id = f"temp-{uuid4().hex[:8]}"
@@ -282,11 +300,12 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.post("/api/tasks", response_model=ApiResponse, status_code=201)
     async def create_task(
+        request: Request,
         body: CreateTaskRequest,
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     ) -> ApiResponse:
         payload = body.model_dump(mode="json")
-        if replay := replay_idempotent(idempotency_key, "task.create", payload):
+        if replay := replay_idempotent(request, idempotency_key, "task.create", payload):
             return ApiResponse(data=Task.model_validate(replay))
         now = datetime.now(UTC)
         item = Task(
@@ -359,11 +378,12 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.post("/api/tasks/{task_id}/retry", response_model=ApiResponse)
     async def retry_task(
+        request: Request,
         task_id: str,
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     ) -> ApiResponse:
         payload = {"taskId": task_id}
-        if replay := replay_idempotent(idempotency_key, "task.retry", payload):
+        if replay := replay_idempotent(request, idempotency_key, "task.retry", payload):
             return ApiResponse(data=Task.model_validate(replay))
         item = await task_action(task_id, "retry")
         remember_idempotent(idempotency_key, "task.retry", payload, item)
@@ -421,12 +441,13 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.post("/api/approvals/{approval_id}/approve", response_model=ApiResponse)
     async def approve(
+        request: Request,
         approval_id: str,
         body: DecisionRequest,
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     ) -> ApiResponse:
         payload = {"approvalId": approval_id, **body.model_dump(mode="json")}
-        if replay := replay_idempotent(idempotency_key, "approval.approve", payload):
+        if replay := replay_idempotent(request, idempotency_key, "approval.approve", payload):
             return ApiResponse(data=Approval.model_validate(replay))
         item = await decide(approval_id, "approved", body)
         remember_idempotent(idempotency_key, "approval.approve", payload, item)
@@ -434,12 +455,13 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.post("/api/approvals/{approval_id}/reject", response_model=ApiResponse)
     async def reject(
+        request: Request,
         approval_id: str,
         body: DecisionRequest,
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     ) -> ApiResponse:
         payload = {"approvalId": approval_id, **body.model_dump(mode="json")}
-        if replay := replay_idempotent(idempotency_key, "approval.reject", payload):
+        if replay := replay_idempotent(request, idempotency_key, "approval.reject", payload):
             return ApiResponse(data=Approval.model_validate(replay))
         item = await decide(approval_id, "rejected", body)
         remember_idempotent(idempotency_key, "approval.reject", payload, item)
@@ -482,10 +504,11 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.post("/api/simulator/start", response_model=ApiResponse)
     async def start_simulator(
+        request: Request,
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     ) -> ApiResponse:
         payload = {"action": "start"}
-        if replay := replay_idempotent(idempotency_key, "simulator.start", payload):
+        if replay := replay_idempotent(request, idempotency_key, "simulator.start", payload):
             return ApiResponse(data=replay)
         result = await simulator.start()
         remember_idempotent(idempotency_key, "simulator.start", payload, result)
@@ -501,10 +524,11 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.post("/api/simulator/reset", response_model=ApiResponse)
     async def reset_simulator(
+        request: Request,
         idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     ) -> ApiResponse:
-        payload = {"action": "reset", "eventSessionId": repository.event_session_id}
-        if replay := replay_idempotent(idempotency_key, "simulator.reset", payload):
+        payload = {"action": "reset"}
+        if replay := replay_idempotent(request, idempotency_key, "simulator.reset", payload):
             return ApiResponse(data=replay)
         result = await simulator.reset()
         remember_idempotent(idempotency_key, "simulator.reset", payload, result)

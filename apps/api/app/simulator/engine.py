@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from typing import Any
+from uuid import uuid4
 
 from app.core.errors import DomainError
 from app.core.transitions import ACTIVE_STATES, InvalidTransitionError, validate_transition
@@ -205,7 +206,7 @@ class SimulatorEngine:
         self._stopped = False
         self._resume.set()
         self.control.state = "running"
-        self.run_id = f"run-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{id(self):x}"
+        self.run_id = f"run-{uuid4().hex}"
         self.repository.create_workflow_run(self.run_id, len(self.steps))
         self.repository.stage_checkpoint(
             self.run_id,
