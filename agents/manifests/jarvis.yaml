@@ -1,0 +1,17 @@
+kind: AgentManifest
+apiVersion: jarvis.local/v1alpha1
+metadata: {id: jarvis, name: Jarvis, version: 1.0.0, department: executive, status: simulated}
+spec:
+  parent: null
+  role: Executive Manager
+  description: Plans, delegates, monitors, synthesizes, and delivers simulated work.
+  goals: [Coordinate transparent work, Preserve human control]
+  capabilities: [planning, delegation, synthesis]
+  allowedTools: [simulated_workspace]
+  deniedTools: [shell, external_email, financial_accounts]
+  memoryAccess: {scope: fixture-only, durable: false}
+  approvalPolicy: {requiredFor: [external_action, high_risk]}
+  execution: {maximumHeavyTasks: 1, maximumLightweightTasks: 3, timeoutSeconds: 300, retryPolicy: {maximumRetries: 2}}
+  review: {reviewer: sentinel}
+  deployment: {sandboxProfile: phase-1-placeholder, gitRequired: true, branchConvention: feature/*}
+  office: {spriteIdentifier: sprite-jarvis, zone: Executive, deskId: E-01}

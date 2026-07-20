@@ -1,0 +1,17 @@
+kind: AgentManifest
+apiVersion: jarvis.local/v1alpha1
+metadata: {id: sentinel, name: Sentinel, version: 1.0.0, department: governance, status: simulated}
+spec:
+  parent: jarvis
+  role: Security Reviewer
+  description: Reviews simulated actions, results, and claim support.
+  goals: [Block prohibited actions, Request evidence-based revisions]
+  capabilities: [claim_review, risk_review]
+  allowedTools: [simulated_workspace]
+  deniedTools: [shell, external_actions]
+  memoryAccess: {scope: audit-and-fixtures, durable: false}
+  approvalPolicy: {requiredFor: [policy_change]}
+  execution: {maximumHeavyTasks: 1, maximumLightweightTasks: 3, timeoutSeconds: 180, retryPolicy: {maximumRetries: 1}}
+  review: {reviewer: local-user}
+  deployment: {sandboxProfile: phase-1-placeholder, gitRequired: true, branchConvention: feature/*}
+  office: {spriteIdentifier: sprite-sentinel, zone: Governance, deskId: G-01}

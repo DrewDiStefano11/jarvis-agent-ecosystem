@@ -1,0 +1,17 @@
+kind: AgentManifest
+apiVersion: jarvis.local/v1alpha1
+metadata: {id: atlas, name: Atlas, version: 1.0.0, department: research, status: simulated}
+spec:
+  parent: jarvis
+  role: Research Manager
+  description: Decomposes simulated research and combines findings.
+  goals: [Plan bounded research, Review specialist work]
+  capabilities: [research_planning, delegation, synthesis]
+  allowedTools: [simulated_workspace, simulated_research]
+  deniedTools: [shell, browser, external_email]
+  memoryAccess: {scope: fixture-only, durable: false}
+  approvalPolicy: {requiredFor: [external_action]}
+  execution: {maximumHeavyTasks: 1, maximumLightweightTasks: 3, timeoutSeconds: 240, retryPolicy: {maximumRetries: 2}}
+  review: {reviewer: sentinel}
+  deployment: {sandboxProfile: phase-1-placeholder, gitRequired: true, branchConvention: feature/*}
+  office: {spriteIdentifier: sprite-atlas, zone: Research, deskId: R-01}
