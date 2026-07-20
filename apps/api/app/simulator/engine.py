@@ -338,6 +338,12 @@ class SimulatorEngine:
                     "message": "Controlled simulated failure.",
                 }
                 task.updatedAt = now
+                for agent in self.repository.agents.values():
+                    if agent.currentTaskId == task.id and agent.status in ACTIVE_STATES:
+                        agent.previousStatus = agent.status
+                        agent.status = "failed"
+                        agent.statusMessage = "Stopped by controlled simulated failure"
+                        agent.updatedAt = now
                 self.control.state = "failed"
                 self.repository._system.simulator_status = "failed"
                 self.repository._system.recovery_status = "none"
@@ -559,6 +565,9 @@ class SimulatorEngine:
 
     async def emergency_stop(self) -> None:
         async with self._step_lock:
+            checkpointable = bool(
+                self.run_id and self.control.state in {"running", "paused", "recovery_required"}
+            )
             self.repository.emergency_stop = True
             if self.control.state == "running":
                 self.control.state = "paused"
@@ -568,7 +577,7 @@ class SimulatorEngine:
                     agent.previousStatus = agent.status
                     agent.status = "paused"
                     agent.statusMessage = "Paused by emergency stop"
-            if self.run_id:
+            if checkpointable and self.run_id:
                 step_id = str(self.steps[max(0, self.control.currentStep - 1)]["id"])
                 self.repository.stage_checkpoint(
                     self.run_id,

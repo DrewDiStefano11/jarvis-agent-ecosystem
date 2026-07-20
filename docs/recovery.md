@@ -14,6 +14,8 @@ The health endpoint performs a live database query and compares the stored Alemb
 
 Graceful shutdown cancels further simulator steps, commits or rolls back the current boundary, records shutdown time, dispatches pending committed events, and closes database resources. Reset cancels the runner, records an audit, creates a new event session, restores deterministic demo fixtures, removes temporary demo agents, and preserves user-created tasks and historical audit rows.
 
+Emergency stop checkpoints only active or recoverable workflow state. Invoking it after completion or failure preserves the terminal run, terminal checkpoint, and non-resumable status while still persisting the system-wide emergency flag.
+
 The `20260720_01` migration is frozen as explicit table, index, unique-constraint, and foreign-key operations and does not import live application metadata. Blank installations persist the deterministic seeded audit fixture before serving requests; audit endpoints and snapshots retain it across application recreation.
 
 Known limitation: the dispatcher is in-process and the database is intended for one local API process. Stable event IDs and frontend duplicate/gap handling make retries safe, but exactly-once delivery to a disconnected browser is not claimed.

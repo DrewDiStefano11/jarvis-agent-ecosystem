@@ -1084,6 +1084,129 @@ def test_expiration_commit_failure_rolls_back_cache_audit_outbox_and_retries(
         )
 
 
+def test_emergency_stop_preserves_completed_and_failed_terminal_runs(tmp_path: Path) -> None:
+    for terminal_state in ("completed", "failed"):
+        url = database_url(tmp_path / f"terminal-emergency-{terminal_state}.db")
+        app = create_app(delay_ms=1, database_url=url)
+        with TestClient(app) as api:
+            assert api.post("/api/simulator/start").status_code == 200
+            if terminal_state == "completed":
+                for _ in range(200):
+                    state = api.get("/api/system/status").json()["data"]["simulator"]["state"]
+                    if state == "completed":
+                        break
+                    asyncio.run(asyncio.sleep(0.005))
+                assert state == "completed"
+            else:
+                assert (
+                    api.post(
+                        "/api/simulator/failure", json={"scenario": "archive_unavailable"}
+                    ).status_code
+                    == 200
+                )
+            before = api.get("/api/system/status").json()["data"]
+            run_id = before["activeWorkflowRunId"]
+            checkpoint_id = before["lastCheckpointId"]
+            with create_engine(url).connect() as connection:
+                checkpoint_count = connection.scalar(
+                    select(func.count()).select_from(WorkflowCheckpointRow)
+                )
+            stopped = api.post("/api/system/emergency-stop").json()["data"]
+            assert stopped["emergencyStop"] is True
+            assert stopped["simulator"]["state"] == terminal_state
+            assert stopped["lastCheckpointId"] == checkpoint_id
+
+        with create_engine(url).connect() as connection:
+            run = connection.execute(
+                select(
+                    WorkflowRunRow.status,
+                    WorkflowRunRow.checkpoint_id,
+                    WorkflowRunRow.resume_eligibility,
+                ).where(WorkflowRunRow.id == run_id)
+            ).one()
+            assert run == (terminal_state, checkpoint_id, False)
+            assert (
+                connection.scalar(select(func.count()).select_from(WorkflowCheckpointRow))
+                == checkpoint_count
+            )
+
+        with TestClient(create_app(delay_ms=1, database_url=url)) as recreated:
+            restored = recreated.get("/api/system/status").json()["data"]
+            assert restored["simulator"]["state"] == terminal_state
+            assert restored["lastCheckpointId"] == checkpoint_id
+            assert recreated.post("/api/simulator/resume").status_code == 409
+            assert recreated.post("/api/system/resume").status_code == 200
+            assert recreated.post("/api/simulator/reset").status_code == 200
+
+
+def test_outbox_dispatch_stops_at_configured_retry_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url = database_url(tmp_path / "outbox-retry-limit.db")
+    monkeypatch.setenv("JARVIS_OUTBOX_MAX_ATTEMPTS", "2")
+    with TestClient(create_app(delay_ms=1, database_url=url)) as api:
+        created = api.post(
+            "/api/tasks",
+            json={"title": "Retry ceiling", "description": "Corrupt this durable envelope"},
+        )
+        assert created.status_code == 201
+        task_id = created.json()["data"]["id"]
+
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        row = connection.execute(
+            select(OutboxEventRow.id, OutboxEventRow.envelope).where(
+                OutboxEventRow.envelope["taskId"].as_string() == task_id
+            )
+        ).one()
+        invalid_envelope = dict(row.envelope)
+        invalid_envelope.pop("eventType")
+        connection.execute(
+            update(OutboxEventRow)
+            .where(OutboxEventRow.id == row.id)
+            .values(
+                envelope=invalid_envelope,
+                status="failed",
+                publish_attempt_count=0,
+                last_publish_error=None,
+            )
+        )
+
+    retrying = create_app(delay_ms=1, database_url=url)
+    assert len(retrying.state.repository.pending_outbox()) == 1
+    asyncio.run(retrying.state.broker.dispatch_pending())
+    assert len(retrying.state.repository.pending_outbox()) == 1
+    asyncio.run(retrying.state.broker.dispatch_pending())
+    assert retrying.state.repository.pending_outbox() == []
+    asyncio.run(retrying.state.broker.dispatch_pending())
+    retrying.state.engine.dispose()
+
+    with engine.connect() as connection:
+        exhausted = connection.execute(
+            select(
+                OutboxEventRow.status,
+                OutboxEventRow.publish_attempt_count,
+                OutboxEventRow.last_publish_error,
+            ).where(OutboxEventRow.id == row.id)
+        ).one()
+        assert exhausted.status == "failed"
+        assert exhausted.publish_attempt_count == 2
+        assert exhausted.last_publish_error
+
+    recreated = create_app(delay_ms=1, database_url=url)
+    assert recreated.state.repository.pending_outbox() == []
+    asyncio.run(recreated.state.broker.dispatch_pending())
+    recreated.state.engine.dispose()
+    with engine.connect() as connection:
+        assert (
+            connection.scalar(
+                select(OutboxEventRow.publish_attempt_count).where(OutboxEventRow.id == row.id)
+            )
+            == 2
+        )
+    engine.dispose()
+
+
 def test_rapid_reset_and_restart_create_distinct_workflow_run_ids(tmp_path: Path) -> None:
     url = database_url(tmp_path / "run-ids.db")
     app = create_app(delay_ms=100, database_url=url)

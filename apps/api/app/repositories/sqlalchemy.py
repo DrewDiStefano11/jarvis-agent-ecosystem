@@ -57,10 +57,14 @@ class IdempotencyResult:
 
 class SqlAlchemyRepository:
     def __init__(
-        self, session_factory: sessionmaker[Session], idempotency_lease_seconds: int = 30
+        self,
+        session_factory: sessionmaker[Session],
+        idempotency_lease_seconds: int = 30,
+        outbox_max_attempts: int = 10,
     ) -> None:
         self.session_factory = session_factory
         self.idempotency_lease_seconds = idempotency_lease_seconds
+        self.outbox_max_attempts = outbox_max_attempts
         self._pending_checkpoint: dict[str, Any] | None = None
         self._pending_workflow_run: dict[str, Any] | None = None
         self._audit_session_ids: dict[str, str] = {}
@@ -489,7 +493,10 @@ class SqlAlchemyRepository:
                 row.envelope
                 for row in session.scalars(
                     select(OutboxEventRow)
-                    .where(OutboxEventRow.status.in_(["pending", "failed"]))
+                    .where(
+                        OutboxEventRow.status.in_(["pending", "failed"]),
+                        OutboxEventRow.publish_attempt_count < self.outbox_max_attempts,
+                    )
                     .order_by(OutboxEventRow.created_at)
                 )
             ]

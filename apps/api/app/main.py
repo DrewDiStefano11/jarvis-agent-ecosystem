@@ -57,7 +57,9 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         _upgrade_database(settings)
     engine = create_database_engine(settings.database_url, settings.sql_echo)
     repository = SqlAlchemyRepository(
-        create_session_factory(engine), settings.idempotency_lease_seconds
+        create_session_factory(engine),
+        settings.idempotency_lease_seconds,
+        settings.outbox_max_attempts,
     )
     restored_workflow_state = repository.mark_interrupted_workflow()
     app = FastAPI(
