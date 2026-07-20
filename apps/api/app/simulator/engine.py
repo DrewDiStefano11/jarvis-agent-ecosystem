@@ -8,7 +8,7 @@ from uuid import uuid4
 from app.core.errors import DomainError
 from app.core.transitions import ACTIVE_STATES, InvalidTransitionError, validate_transition
 from app.models.domain import AgentStatus, Artifact, Notification, SimulatorControl
-from app.repositories.sqlalchemy import SqlAlchemyRepository
+from app.repositories.sqlalchemy import IdempotencyResult, SqlAlchemyRepository
 from app.services.events import EventBroker
 
 
@@ -194,7 +194,7 @@ class SimulatorEngine:
             },
         ]
 
-    async def start(self) -> SimulatorControl:
+    async def start(self, idempotency: IdempotencyResult | None = None) -> SimulatorControl:
         if self._runner and not self._runner.done():
             raise DomainError(
                 "SIMULATOR_ALREADY_RUNNING", "The deterministic demo is already active.", 409
@@ -214,13 +214,19 @@ class SimulatorEngine:
             "workflow.start",
             {"totalSteps": len(self.steps)},
         )
+        try:
+            await self.broker.emit(
+                "system.simulator.started",
+                {"state": "running"},
+                "task-demo",
+                audit={"summary": "Started the deterministic durable workflow"},
+                idempotency=idempotency,
+            )
+        except Exception:
+            self.control.state = "idle"
+            self.run_id = self.repository._system.last_workflow_run_id
+            raise
         self._runner = asyncio.create_task(self._run())
-        await self.broker.emit(
-            "system.simulator.started",
-            {"state": "running"},
-            "task-demo",
-            audit={"summary": "Started the deterministic durable workflow"},
-        )
         return self.control
 
     async def _run(self) -> None:
@@ -397,7 +403,9 @@ class SimulatorEngine:
         await self.broker.emit("system.simulator.resumed", {"step": self.control.currentStep})
         return self.control
 
-    async def reset(self) -> SimulatorControl:
+    async def reset(self, idempotency: IdempotencyResult | None = None) -> SimulatorControl:
+        previous_state = self.control.state
+        was_running = bool(self._runner and not self._runner.done())
         self._stopped = True
         self._resume.set()
         if self._runner and not self._runner.done():
@@ -406,16 +414,20 @@ class SimulatorEngine:
                 await self._runner
             except asyncio.CancelledError:
                 pass
-        if self.run_id:
-            self.repository.set_workflow_status(self.run_id, "cancelled", "Reset by local operator")
-        self.repository.add_audit(
+        self.repository.stage_audit(
             "system.simulator.reset",
             "Reset the deterministic demo while preserving durable audit history",
             self.repository.next_sequence(),
             "task-demo",
         )
-        self.repository.reset()
-        self.broker.reset_sequence()
+        try:
+            self.repository.reset(self.run_id, idempotency)
+        except Exception:
+            self._stopped = False
+            if was_running and previous_state == "running":
+                self._runner = asyncio.create_task(self._run())
+            raise
+        self.broker.sequence = self.repository.sequence
         self.control = SimulatorControl(accelerated=self.delay_ms <= 10)
         self._runner = None
         self.run_id = None

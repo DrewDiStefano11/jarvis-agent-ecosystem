@@ -32,6 +32,7 @@ from app.db.models import (
 )
 from app.models.domain import Agent, Approval, Artifact, AuditEvent, Department, Notification, Task
 from app.services.seed import build_seed
+from app.services.unit_of_work import UnitOfWork
 
 SEED_VERSION = "2.0"
 
@@ -42,10 +43,21 @@ class IdempotencyClaim:
     owned: bool
 
 
+@dataclass(frozen=True)
+class IdempotencyResult:
+    key: str
+    command: str
+    payload: Any
+    status: int
+    body: dict[str, Any]
+    resource_id: str | None = None
+
+
 class SqlAlchemyRepository:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self.session_factory = session_factory
         self._pending_checkpoint: dict[str, Any] | None = None
+        self._pending_workflow_run: dict[str, Any] | None = None
         self._load_or_seed()
 
     def _load_or_seed(self) -> None:
@@ -65,7 +77,6 @@ class SqlAlchemyRepository:
                 recovery_status="none",
                 updated_at=datetime.now(UTC),
             )
-            self.audit = []
             self.persist()
         else:
             self.reload()
@@ -83,6 +94,8 @@ class SqlAlchemyRepository:
         self.audit = [AuditEvent.model_validate(x) for x in seed["audit"]]
 
     def reload(self) -> None:
+        self._pending_checkpoint = None
+        self._pending_workflow_run = None
         with self.session_factory() as session:
             self.departments = {
                 row.id: Department.model_validate(row.payload)
@@ -158,11 +171,16 @@ class SqlAlchemyRepository:
         return store[item_id]
 
     def persist(self) -> None:
-        with self.session_factory() as session, session.begin():
-            self._persist_entities(session)
-            self._persist_audit(session)
-            self._system.updated_at = datetime.now(UTC)
-            session.merge(self._system)
+        try:
+            with UnitOfWork(self.session_factory) as uow:
+                assert uow.session is not None
+                self._persist_entities(uow.session)
+                self._persist_audit(uow.session)
+                self._system.updated_at = datetime.now(UTC)
+                uow.session.merge(self._system)
+        except Exception:
+            self.reload()
+            raise
 
     def _persist_entities(self, session: Session) -> None:
         for item in self.departments.values():
@@ -405,28 +423,46 @@ class SqlAlchemyRepository:
         self.audit.append(item)
         return item
 
-    def enqueue_event(self, envelope: dict[str, Any]) -> None:
+    def enqueue_event(
+        self,
+        envelope: dict[str, Any],
+        idempotency: IdempotencyResult | None = None,
+    ) -> None:
         pending_checkpoint = self._pending_checkpoint
-        with self.session_factory() as session, session.begin():
-            self._persist_entities(session)
-            self._persist_audit(session)
-            self._system.updated_at = datetime.now(UTC)
-            session.merge(self._system)
-            session.add(
-                OutboxEventRow(
-                    id=envelope["eventId"],
-                    event_type=envelope["eventType"],
-                    envelope=envelope,
-                    correlation_id=envelope["correlationId"],
-                    event_session_id=self.event_session_id,
-                    sequence_number=envelope["sequenceNumber"],
-                    status="pending",
-                    created_at=datetime.now(UTC),
-                    publish_attempt_count=0,
+        pending_workflow_run = self._pending_workflow_run
+        try:
+            with UnitOfWork(self.session_factory) as uow:
+                assert uow.session is not None
+                session = uow.session
+                self._persist_entities(session)
+                self._persist_audit(session)
+                self._system.updated_at = datetime.now(UTC)
+                session.merge(self._system)
+                if pending_workflow_run:
+                    session.add(WorkflowRunRow(**pending_workflow_run))
+                    session.flush()
+                session.add(
+                    OutboxEventRow(
+                        id=envelope["eventId"],
+                        event_type=envelope["eventType"],
+                        envelope=envelope,
+                        correlation_id=envelope["correlationId"],
+                        event_session_id=self.event_session_id,
+                        sequence_number=envelope["sequenceNumber"],
+                        status="pending",
+                        created_at=datetime.now(UTC),
+                        publish_attempt_count=0,
+                    )
                 )
-            )
-            if pending_checkpoint:
-                self._write_checkpoint(session, pending_checkpoint)
+                if pending_checkpoint:
+                    self._write_checkpoint(session, pending_checkpoint)
+                if idempotency:
+                    self._store_idempotency(session, idempotency)
+        except Exception:
+            self.reload()
+            raise
+        if pending_workflow_run:
+            self._pending_workflow_run = None
         if pending_checkpoint:
             self._system.last_checkpoint_id = pending_checkpoint["id"]
             self._system.simulator_status = pending_checkpoint["status"]
@@ -518,38 +554,19 @@ class SqlAlchemyRepository:
             )
         return IdempotencyClaim(response=None, owned=True)
 
-    def idempotency_store(
-        self,
-        key: str,
-        command: str,
-        payload: Any,
-        status: int,
-        body: dict[str, Any],
-        resource_id: str | None = None,
-    ) -> None:
-        with self.session_factory() as session, session.begin():
-            row = session.scalar(
-                select(IdempotencyRecordRow).where(
-                    IdempotencyRecordRow.idempotency_key == key,
-                    IdempotencyRecordRow.command_type == command,
-                )
+    @staticmethod
+    def _store_idempotency(session: Session, result: IdempotencyResult) -> None:
+        row = session.scalar(
+            select(IdempotencyRecordRow).where(
+                IdempotencyRecordRow.idempotency_key == result.key,
+                IdempotencyRecordRow.command_type == result.command,
             )
-            if row:
-                row.response_status = status
-                row.response_body = body
-                row.created_resource_id = resource_id
-            else:
-                session.add(
-                    IdempotencyRecordRow(
-                        idempotency_key=key,
-                        command_type=command,
-                        canonical_request_hash=self.request_hash(payload),
-                        response_status=status,
-                        response_body=body,
-                        created_resource_id=resource_id,
-                        created_at=datetime.now(UTC),
-                    )
-                )
+        )
+        if not row:
+            raise RuntimeError("The idempotency claim disappeared before command commit.")
+        row.response_status = result.status
+        row.response_body = result.body
+        row.created_resource_id = result.resource_id
 
     def idempotency_abandon(self, key: str, command: str) -> None:
         with self.session_factory() as session, session.begin():
@@ -563,27 +580,20 @@ class SqlAlchemyRepository:
 
     def create_workflow_run(self, run_id: str, total_steps: int) -> None:
         now = datetime.now(UTC)
-        with self.session_factory() as session, session.begin():
-            session.add(
-                WorkflowRunRow(
-                    id=run_id,
-                    correlation_id=run_id,
-                    root_task_id="task-demo",
-                    workflow_type="deterministic-demo",
-                    workflow_version="2.0",
-                    current_step_index=0,
-                    current_step_identifier=None,
-                    status="running",
-                    started_at=now,
-                    updated_at=now,
-                    retry_count=0,
-                    resume_eligibility=True,
-                )
-            )
-            state = session.get(SystemStateRow, 1)
-            state.last_workflow_run_id = run_id
-            state.simulator_status = "running"
-            state.recovery_status = "none"
+        self._pending_workflow_run = {
+            "id": run_id,
+            "correlation_id": run_id,
+            "root_task_id": "task-demo",
+            "workflow_type": "deterministic-demo",
+            "workflow_version": "2.0",
+            "current_step_index": 0,
+            "current_step_identifier": None,
+            "status": "running",
+            "started_at": now,
+            "updated_at": now,
+            "retry_count": 0,
+            "resume_eligibility": True,
+        }
         self._system.last_workflow_run_id = run_id
         self._system.simulator_status = "running"
         self._system.recovery_status = "none"
@@ -750,7 +760,7 @@ class SqlAlchemyRepository:
                 "INVALID_CHECKPOINT", "The workflow checkpoint is invalid or incompatible.", 409
             )
 
-    def mark_interrupted_workflow(self) -> bool:
+    def mark_interrupted_workflow(self) -> str | None:
         with self.session_factory() as session, session.begin():
             run = session.scalar(
                 select(WorkflowRunRow)
@@ -758,20 +768,24 @@ class SqlAlchemyRepository:
                 .order_by(WorkflowRunRow.started_at.desc())
             )
             if not run:
-                return False
+                return None
             was_paused = run.status == "paused"
             if not was_paused:
                 run.status = "recovery_required"
                 run.pause_reason = "Backend restarted before a clean workflow completion."
             run.updated_at = datetime.now(UTC)
             state = session.get(SystemStateRow, 1)
-            state.recovery_status = "required"
+            state.recovery_status = "none" if was_paused else "required"
             state.simulator_status = "paused"
-        self._system.recovery_status = "required"
+        self._system.recovery_status = "none" if was_paused else "required"
         self._system.simulator_status = "paused"
-        return True
+        return "paused" if was_paused else "recovery_required"
 
-    def reset(self) -> None:
+    def reset(
+        self,
+        run_id: str | None = None,
+        idempotency: IdempotencyResult | None = None,
+    ) -> None:
         user_tasks = {
             key: value
             for key, value in self.tasks.items()
@@ -782,23 +796,43 @@ class SqlAlchemyRepository:
         seed = build_seed()
         seed_artifact_ids = {item["id"] for item in seed["artifacts"]}
         seed_notification_ids = {item["id"] for item in seed["notifications"]}
-        with self.session_factory() as session, session.begin():
-            session.execute(delete(TaskAgentRow))
-            session.execute(delete(TaskDependencyRow))
-            session.execute(delete(TaskBlockerRow))
-            session.execute(delete(ArtifactRow).where(ArtifactRow.id.not_in(seed_artifact_ids)))
-            session.execute(delete(TaskRow).where(TaskRow.id.like("task-demo-%")))
-            session.execute(delete(AgentRow).where(AgentRow.is_temporary.is_(True)))
-            session.execute(
-                delete(NotificationRow).where(NotificationRow.id.not_in(seed_notification_ids))
-            )
         self._load_seed_memory()
         self.tasks.update(user_tasks)
         self.audit = historical_audit
         self.reset_sequence()
         self.emergency_stop = False
         self._system.recovery_status = "none"
-        self.persist()
+        self._system.simulator_status = "idle"
+        try:
+            with UnitOfWork(self.session_factory) as uow:
+                assert uow.session is not None
+                session = uow.session
+                session.execute(delete(TaskAgentRow))
+                session.execute(delete(TaskDependencyRow))
+                session.execute(delete(TaskBlockerRow))
+                session.execute(delete(ArtifactRow).where(ArtifactRow.id.not_in(seed_artifact_ids)))
+                session.execute(delete(TaskRow).where(TaskRow.id.like("task-demo-%")))
+                session.execute(delete(AgentRow).where(AgentRow.is_temporary.is_(True)))
+                session.execute(
+                    delete(NotificationRow).where(NotificationRow.id.not_in(seed_notification_ids))
+                )
+                if run_id:
+                    run = session.get(WorkflowRunRow, run_id)
+                    if run:
+                        now = datetime.now(UTC)
+                        run.status = "cancelled"
+                        run.updated_at = now
+                        run.completed_at = now
+                        run.pause_reason = "Reset by local operator"
+                self._persist_entities(session)
+                self._persist_audit(session)
+                self._system.updated_at = datetime.now(UTC)
+                session.merge(self._system)
+                if idempotency:
+                    self._store_idempotency(session, idempotency)
+        except Exception:
+            self.reload()
+            raise
 
     def snapshot(self) -> dict[str, object]:
         return deepcopy(

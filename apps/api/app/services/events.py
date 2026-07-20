@@ -7,7 +7,7 @@ from uuid import uuid4
 from fastapi import WebSocket
 
 from app.models.domain import EventEnvelope
-from app.repositories.sqlalchemy import SqlAlchemyRepository
+from app.repositories.sqlalchemy import IdempotencyResult, SqlAlchemyRepository
 
 
 class EventBroker:
@@ -40,6 +40,7 @@ class EventBroker:
         agent_id: str | None = None,
         correlation_id: str = "phase-1-demo",
         audit: dict[str, object] | None = None,
+        idempotency: IdempotencyResult | None = None,
     ) -> EventEnvelope:
         if self.repository:
             self.sequence = self.repository.next_sequence()
@@ -69,7 +70,11 @@ class EventBroker:
                     audit.get("new"),
                     audit.get("payload"),
                 )
-            self.repository.enqueue_event(envelope)
+            try:
+                self.repository.enqueue_event(envelope, idempotency)
+            except Exception:
+                self.sequence = self.repository.sequence
+                raise
         await self._publish(event)
         return event
 

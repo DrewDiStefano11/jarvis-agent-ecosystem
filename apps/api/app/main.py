@@ -31,10 +31,11 @@ from app.models.domain import (
     Office,
     Performance,
     ResourceStatus,
+    SimulatorControl,
     SystemStatus,
     Task,
 )
-from app.repositories.sqlalchemy import SqlAlchemyRepository
+from app.repositories.sqlalchemy import IdempotencyResult, SqlAlchemyRepository
 from app.services.events import EventBroker
 from app.simulator.engine import SimulatorEngine
 
@@ -54,7 +55,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         _upgrade_database(settings)
     engine = create_database_engine(settings.database_url, settings.sql_echo)
     repository = SqlAlchemyRepository(create_session_factory(engine))
-    recovery_required = repository.mark_interrupted_workflow()
+    restored_workflow_state = repository.mark_interrupted_workflow()
     app = FastAPI(
         title="Jarvis Agent Ecosystem Simulator",
         version="0.1.0",
@@ -73,18 +74,16 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         broker,
         delay_ms if delay_ms is not None else int(os.getenv("SIMULATOR_DELAY_MS", "800")),
     )
-    if recovery_required:
+    if restored_workflow_state:
         active = repository.active_workflow()
-        simulator.control.state = (
-            "paused" if active and active.status == "paused" else "recovery_required"
-        )
+        simulator.control.state = restored_workflow_state
         simulator.control.currentStep = active.current_step_index if active else 0
     app.state.repository = repository
     app.state.broker = broker
     app.state.simulator = simulator
     app.state.settings = settings
     app.state.engine = engine
-    app.state.recovery_required = recovery_required
+    app.state.recovery_required = restored_workflow_state == "recovery_required"
 
     def replay_idempotent(
         request: Request, key: str | None, command_type: str, payload: object
@@ -109,19 +108,24 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 repository.idempotency_abandon(*claim)
         return response
 
-    def remember_idempotent(
+    def idempotency_result(
         key: str | None,
         command_type: str,
         payload: object,
         data: object,
         status: int = 200,
         resource_id: str | None = None,
-    ) -> None:
+    ) -> IdempotencyResult | None:
         if not key:
-            return
+            return None
         encoded = data.model_dump(mode="json") if hasattr(data, "model_dump") else data
-        repository.idempotency_store(
-            key, command_type, payload, status, {"data": encoded}, resource_id
+        return IdempotencyResult(
+            key=key,
+            command=command_type,
+            payload=payload,
+            status=status,
+            body={"data": encoded},
+            resource_id=resource_id,
         )
 
     @app.on_event("startup")
@@ -131,7 +135,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         repository.persist()
         await broker.dispatch_pending()
         await broker.start_dispatcher(settings.outbox_poll_interval_ms)
-        if recovery_required and settings.simulator_auto_resume:
+        if restored_workflow_state == "recovery_required" and settings.simulator_auto_resume:
             await simulator.resume()
 
     @app.on_event("shutdown")
@@ -285,9 +289,13 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         )
         repository.agents[item.id] = item
         await broker.emit(
-            "temporary_agent.created", {"agent": item.model_dump(mode="json")}, agent_id=item.id
+            "temporary_agent.created",
+            {"agent": item.model_dump(mode="json")},
+            agent_id=item.id,
+            idempotency=idempotency_result(
+                idempotency_key, "temporary-agent.create", payload, item, 201, item.id
+            ),
         )
-        remember_idempotent(idempotency_key, "temporary-agent.create", payload, item, 201, item.id)
         return ApiResponse(data=item)
 
     @app.get("/api/tasks", response_model=ApiResponse)
@@ -325,11 +333,19 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             {"task": item.model_dump(mode="json")},
             item.id,
             audit={"summary": f"Created task: {item.title}"},
+            idempotency=idempotency_result(
+                idempotency_key, "task.create", payload, item, 201, item.id
+            ),
         )
-        remember_idempotent(idempotency_key, "task.create", payload, item, 201, item.id)
         return ApiResponse(data=item)
 
-    async def task_action(task_id: str, action: str) -> Task:
+    async def task_action(
+        task_id: str,
+        action: str,
+        idempotency_key: str | None = None,
+        idempotency_command: str | None = None,
+        idempotency_payload: object | None = None,
+    ) -> Task:
         item = repository.require(repository.tasks, task_id, "task")
         assert isinstance(item, Task)
         if action == "pause":
@@ -365,6 +381,14 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             {"task": item.model_dump(mode="json")},
             item.id,
             audit={"summary": item.statusMessage},
+            idempotency=idempotency_result(
+                idempotency_key,
+                idempotency_command,
+                idempotency_payload,
+                item,
+            )
+            if idempotency_command and idempotency_payload is not None
+            else None,
         )
         return item
 
@@ -385,8 +409,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         payload = {"taskId": task_id}
         if replay := replay_idempotent(request, idempotency_key, "task.retry", payload):
             return ApiResponse(data=Task.model_validate(replay))
-        item = await task_action(task_id, "retry")
-        remember_idempotent(idempotency_key, "task.retry", payload, item)
+        item = await task_action(task_id, "retry", idempotency_key, "task.retry", payload)
         return ApiResponse(data=item)
 
     @app.post("/api/tasks/{task_id}/cancel", response_model=ApiResponse)
@@ -401,7 +424,14 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     async def approval(approval_id: str) -> ApiResponse:
         return ApiResponse(data=repository.require(repository.approvals, approval_id, "approval"))
 
-    async def decide(approval_id: str, decision: str, body: DecisionRequest) -> Approval:
+    async def decide(
+        approval_id: str,
+        decision: str,
+        body: DecisionRequest,
+        idempotency_key: str | None = None,
+        idempotency_command: str | None = None,
+        idempotency_payload: object | None = None,
+    ) -> Approval:
         item = repository.require(repository.approvals, approval_id, "approval")
         assert isinstance(item, Approval)
         if repository.emergency_stop:
@@ -415,7 +445,6 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "APPROVAL_ALREADY_PROCESSED", f"Approval is already {item.status}.", 409
             )
         if item.expiresAt <= datetime.now(UTC):
-            item.status = "expired"
             raise DomainError("APPROVAL_EXPIRED", "Expired approvals cannot be processed.", 409)
         if decision == "approved" and item.riskLevel == "black":
             raise DomainError(
@@ -436,6 +465,14 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "summary": f"Approval {decision}",
                 "payload": {"approvalId": item.id, "status": decision},
             },
+            idempotency=idempotency_result(
+                idempotency_key,
+                idempotency_command,
+                idempotency_payload,
+                item,
+            )
+            if idempotency_command and idempotency_payload is not None
+            else None,
         )
         return item
 
@@ -449,8 +486,9 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         payload = {"approvalId": approval_id, **body.model_dump(mode="json")}
         if replay := replay_idempotent(request, idempotency_key, "approval.approve", payload):
             return ApiResponse(data=Approval.model_validate(replay))
-        item = await decide(approval_id, "approved", body)
-        remember_idempotent(idempotency_key, "approval.approve", payload, item)
+        item = await decide(
+            approval_id, "approved", body, idempotency_key, "approval.approve", payload
+        )
         return ApiResponse(data=item)
 
     @app.post("/api/approvals/{approval_id}/reject", response_model=ApiResponse)
@@ -463,8 +501,9 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         payload = {"approvalId": approval_id, **body.model_dump(mode="json")}
         if replay := replay_idempotent(request, idempotency_key, "approval.reject", payload):
             return ApiResponse(data=Approval.model_validate(replay))
-        item = await decide(approval_id, "rejected", body)
-        remember_idempotent(idempotency_key, "approval.reject", payload, item)
+        item = await decide(
+            approval_id, "rejected", body, idempotency_key, "approval.reject", payload
+        )
         return ApiResponse(data=item)
 
     @app.post("/api/approvals/{approval_id}/edit", response_model=ApiResponse)
@@ -510,8 +549,10 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         payload = {"action": "start"}
         if replay := replay_idempotent(request, idempotency_key, "simulator.start", payload):
             return ApiResponse(data=replay)
-        result = await simulator.start()
-        remember_idempotent(idempotency_key, "simulator.start", payload, result)
+        expected = simulator.control.model_copy(deep=True, update={"state": "running"})
+        result = await simulator.start(
+            idempotency_result(idempotency_key, "simulator.start", payload, expected)
+        )
         return ApiResponse(data=result)
 
     @app.post("/api/simulator/pause", response_model=ApiResponse)
@@ -530,8 +571,10 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         payload = {"action": "reset"}
         if replay := replay_idempotent(request, idempotency_key, "simulator.reset", payload):
             return ApiResponse(data=replay)
-        result = await simulator.reset()
-        remember_idempotent(idempotency_key, "simulator.reset", payload, result)
+        expected = SimulatorControl(accelerated=simulator.delay_ms <= 10)
+        result = await simulator.reset(
+            idempotency_result(idempotency_key, "simulator.reset", payload, expected)
+        )
         return ApiResponse(data=result)
 
     @app.post("/api/simulator/approval", response_model=ApiResponse)

@@ -13,7 +13,15 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.exc import IntegrityError
 
-from app.db.models import AuditEventRow, OutboxEventRow, TaskRow
+from app.db.models import (
+    AuditEventRow,
+    IdempotencyRecordRow,
+    OutboxEventRow,
+    TaskRow,
+    WorkflowCheckpointRow,
+    WorkflowRunRow,
+)
+from app.db.session import create_database_engine
 from app.main import create_app
 from app.services.unit_of_work import UnitOfWork
 
@@ -29,22 +37,56 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     config = Config(str(root / "alembic.ini"))
     command.upgrade(config, "head")
     engine = create_engine(database_url(path))
-    tables = set(inspect(engine).get_table_names())
-    assert {
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    expected_tables = {
         "agents",
         "approvals",
+        "artifacts",
         "audit_events",
+        "departments",
         "idempotency_records",
+        "notifications",
         "outbox_events",
         "system_state",
+        "task_agents",
+        "task_blockers",
+        "task_dependencies",
         "tasks",
         "workflow_checkpoints",
         "workflow_runs",
-    } <= tables
+    }
+    assert expected_tables <= tables
+    assert {item["name"] for item in inspector.get_indexes("audit_events")} == {
+        "ix_audit_events_correlation_id",
+        "ix_audit_events_event_session_id",
+        "ix_audit_events_event_type",
+        "ix_audit_events_task_id",
+    }
+    assert {
+        tuple(item["column_names"])
+        for item in inspector.get_unique_constraints("idempotency_records")
+    } == {("idempotency_key", "command_type")}
+    assert {
+        tuple(item["constrained_columns"])
+        for item in inspector.get_foreign_keys("workflow_checkpoints")
+    } == {("root_task_id",), ("workflow_run_id",)}
     with engine.connect() as connection:
         assert connection.scalar(text("select version_num from alembic_version")) == "20260720_01"
-        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+    engine.dispose()
+    command.downgrade(config, "base")
+    downgraded_tables = set(inspect(create_engine(database_url(path))).get_table_names())
+    assert not expected_tables & downgraded_tables
+    command.upgrade(config, "head")
+    command.current(config)
+    with create_database_engine(database_url(path)).connect() as connection:
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
+        assert connection.scalar(text("select version_num from alembic_version")) == "20260720_01"
+    revision = root / "migrations" / "versions" / "20260720_01_durable_control_plane.py"
+    source = revision.read_text(encoding="utf-8")
+    assert "Base.metadata" not in source
+    assert "create_all" not in source
+    assert "drop_all" not in source
 
 
 def test_state_and_idempotency_survive_application_recreation(tmp_path: Path) -> None:
@@ -74,6 +116,16 @@ def test_state_and_idempotency_survive_application_recreation(tmp_path: Path) ->
         assert status["emergencyStop"] is True
         assert status["eventSessionId"] == session_id
         assert len(second.get("/api/audit-events").json()["data"]) >= audit_count
+    with create_engine(url).connect() as connection:
+        assert (
+            connection.scalar(
+                text(
+                    "select response_status from idempotency_records "
+                    "where idempotency_key = 'create-durable-task'"
+                )
+            )
+            == 201
+        )
 
 
 def test_idempotency_conflict_is_structured(tmp_path: Path) -> None:
@@ -106,15 +158,15 @@ def test_concurrent_duplicate_submission_creates_one_task(tmp_path: Path) -> Non
     third_app = create_app(delay_ms=1, database_url=url)
     entered_publish = threading.Event()
     release_publish = threading.Event()
-    original_publish = first_app.state.broker._publish
+    original_enqueue = first_app.state.repository.enqueue_event
 
-    async def delayed_publish(event) -> None:
+    def delayed_enqueue(envelope, idempotency=None) -> None:
         entered_publish.set()
-        released = await asyncio.to_thread(release_publish.wait, 5)
+        released = release_publish.wait(5)
         assert released
-        await original_publish(event)
+        original_enqueue(envelope, idempotency)
 
-    first_app.state.broker._publish = delayed_publish
+    first_app.state.repository.enqueue_event = delayed_enqueue
     with (
         TestClient(first_app) as first,
         TestClient(second_app) as second,
@@ -160,6 +212,11 @@ def test_paused_workflow_remains_resumable_after_application_recreation(tmp_path
         restored = second.get("/api/system/status").json()["data"]
         assert restored["simulator"]["state"] == "paused"
         assert restored["simulator"]["currentStep"] == paused_step
+        assert restored["status"] == "healthy"
+        assert restored["recoveryRequired"] is False
+        health = second.get("/api/health").json()["data"]
+        assert health["status"] == "healthy"
+        assert health["recoveryRequired"] is False
         assert restored["activeWorkflowRunId"] == run_id
         assert restored["lastCheckpointId"] == checkpoint_id
         assert second.post("/api/simulator/resume").status_code == 200
@@ -223,7 +280,11 @@ def test_interrupted_workflow_has_checkpoint_and_resumes(tmp_path: Path) -> None
     with TestClient(create_app(delay_ms=1, database_url=url)) as second:
         interrupted = second.get("/api/system/status").json()["data"]
         assert interrupted["recoveryRequired"] is True
+        assert interrupted["status"] == "degraded"
         assert interrupted["simulator"]["state"] == "recovery_required"
+        health = second.get("/api/health").json()["data"]
+        assert health["status"] == "degraded"
+        assert health["recoveryRequired"] is True
         assert second.post("/api/simulator/resume").status_code == 200
         for _ in range(150):
             status = second.get("/api/system/status").json()["data"]
@@ -343,3 +404,193 @@ def test_unit_of_work_rolls_back_domain_audit_and_outbox_together(tmp_path: Path
     with repository.session_factory() as session:
         assert session.get(TaskRow, "transaction-task") is None
         assert session.get(AuditEventRow, "transaction-audit") is None
+
+
+def test_command_commit_is_atomic_and_failed_cache_state_is_reloaded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url = database_url(tmp_path / "command-rollback.db")
+    app = create_app(delay_ms=1, database_url=url)
+    body = {"title": "Must roll back", "description": "Fail immediately before commit"}
+    headers = {"Idempotency-Key": "rollback-command"}
+    original_commit = UnitOfWork.commit
+
+    def fail_before_commit(_: UnitOfWork) -> None:
+        raise RuntimeError("simulated failure immediately before commit")
+
+    with TestClient(app, raise_server_exceptions=False) as api:
+        monkeypatch.setattr(UnitOfWork, "commit", fail_before_commit)
+        failed = api.post("/api/tasks", json=body, headers=headers)
+        monkeypatch.setattr(UnitOfWork, "commit", original_commit)
+        assert failed.status_code == 500
+        assert all(item["title"] != body["title"] for item in api.get("/api/tasks").json()["data"])
+        assert (
+            api.post(
+                "/api/tasks",
+                json={"title": "Unrelated success", "description": "Must not persist failed state"},
+            ).status_code
+            == 201
+        )
+
+    with create_engine(url).connect() as connection:
+        assert connection.scalar(select(TaskRow.id).where(TaskRow.title == body["title"])) is None
+        assert (
+            len(
+                connection.execute(
+                    select(AuditEventRow.id).where(AuditEventRow.event_type == "task.created")
+                ).all()
+            )
+            == 1
+        )
+        assert (
+            connection.scalar(
+                select(IdempotencyRecordRow.id).where(
+                    IdempotencyRecordRow.idempotency_key == headers["Idempotency-Key"]
+                )
+            )
+            is None
+        )
+        failed_outbox = connection.execute(
+            select(OutboxEventRow.envelope).where(OutboxEventRow.event_type == "task.created")
+        ).scalars()
+        assert all(row["payload"]["task"]["title"] != body["title"] for row in failed_outbox)
+
+
+def test_successful_command_commits_domain_audit_outbox_and_idempotency_together(
+    tmp_path: Path,
+) -> None:
+    url = database_url(tmp_path / "command-commit.db")
+    headers = {"Idempotency-Key": "atomic-success"}
+    body = {"title": "Atomic success", "description": "Commit one durable command"}
+    with TestClient(create_app(delay_ms=1, database_url=url)) as api:
+        response = api.post("/api/tasks", json=body, headers=headers)
+        assert response.status_code == 201
+        task_id = response.json()["data"]["id"]
+        retry = api.post("/api/tasks", json=body, headers=headers)
+        assert retry.json() == response.json()
+
+    with create_engine(url).connect() as connection:
+        assert connection.scalar(select(TaskRow.id).where(TaskRow.id == task_id)) == task_id
+        assert (
+            connection.scalar(select(AuditEventRow.id).where(AuditEventRow.task_id == task_id))
+            is not None
+        )
+        assert (
+            connection.scalar(
+                select(OutboxEventRow.id).where(OutboxEventRow.event_type == "task.created")
+            )
+            is not None
+        )
+        record = connection.execute(
+            select(
+                IdempotencyRecordRow.response_status,
+                IdempotencyRecordRow.created_resource_id,
+            ).where(IdempotencyRecordRow.idempotency_key == headers["Idempotency-Key"])
+        ).one()
+        assert record == (201, task_id)
+
+
+def test_keyed_workflow_start_commits_run_checkpoint_outbox_and_response_together(
+    tmp_path: Path,
+) -> None:
+    url = database_url(tmp_path / "workflow-command-commit.db")
+    headers = {"Idempotency-Key": "atomic-workflow-start"}
+    with TestClient(create_app(delay_ms=100, database_url=url)) as api:
+        response = api.post("/api/simulator/start", headers=headers)
+        assert response.status_code == 200
+        run_id = api.get("/api/system/status").json()["data"]["activeWorkflowRunId"]
+
+    with create_engine(url).connect() as connection:
+        run = connection.execute(
+            select(WorkflowRunRow.id, WorkflowRunRow.checkpoint_id).where(
+                WorkflowRunRow.id == run_id
+            )
+        ).one()
+        assert run.checkpoint_id is not None
+        assert (
+            connection.scalar(
+                select(WorkflowCheckpointRow.id).where(
+                    WorkflowCheckpointRow.id == run.checkpoint_id
+                )
+            )
+            == run.checkpoint_id
+        )
+        assert (
+            connection.scalar(
+                select(AuditEventRow.id).where(
+                    AuditEventRow.event_type == "system.simulator.started"
+                )
+            )
+            is not None
+        )
+        assert (
+            connection.scalar(
+                select(OutboxEventRow.id).where(
+                    OutboxEventRow.event_type == "system.simulator.started"
+                )
+            )
+            is not None
+        )
+        assert (
+            connection.scalar(
+                select(IdempotencyRecordRow.response_status).where(
+                    IdempotencyRecordRow.idempotency_key == headers["Idempotency-Key"]
+                )
+            )
+            == 200
+        )
+
+
+def test_failed_unkeyed_mutations_reload_cached_and_directly_persisted_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url = database_url(tmp_path / "unkeyed-rollback.db")
+    app = create_app(delay_ms=1, database_url=url)
+    original_commit = UnitOfWork.commit
+
+    def fail_before_commit(_: UnitOfWork) -> None:
+        raise RuntimeError("simulated failure immediately before commit")
+
+    with TestClient(app, raise_server_exceptions=False) as api:
+        monkeypatch.setattr(UnitOfWork, "commit", fail_before_commit)
+        assert api.post("/api/tasks/task-demo/pause").status_code == 500
+        monkeypatch.setattr(UnitOfWork, "commit", original_commit)
+        assert api.get("/api/tasks/task-demo").json()["data"]["status"] == "in_progress"
+
+        monkeypatch.setattr(UnitOfWork, "commit", fail_before_commit)
+        assert api.post("/api/notifications/notification-1/read").status_code == 500
+        monkeypatch.setattr(UnitOfWork, "commit", original_commit)
+        notification = next(
+            item
+            for item in api.get("/api/notifications").json()["data"]
+            if item["id"] == "notification-1"
+        )
+        assert notification["isRead"] is False
+
+    with TestClient(create_app(delay_ms=1, database_url=url)) as verifier:
+        assert verifier.get("/api/tasks/task-demo").json()["data"]["status"] == "in_progress"
+        notification = next(
+            item
+            for item in verifier.get("/api/notifications").json()["data"]
+            if item["id"] == "notification-1"
+        )
+        assert notification["isRead"] is False
+
+
+def test_seeded_audit_history_survives_blank_startup_and_recreation(tmp_path: Path) -> None:
+    url = database_url(tmp_path / "seed-audit.db")
+    with TestClient(create_app(delay_ms=1, database_url=url)) as first:
+        first_audit = first.get("/api/audit-events").json()["data"]
+        assert any(item["id"] == "audit-1" for item in first_audit)
+        assert any(
+            item.id == "audit-1" for item in first.app.state.repository.snapshot()["auditEvents"]
+        )
+        with first.websocket_connect("/ws/events") as socket:
+            snapshot = socket.receive_json()
+            assert any(
+                item["id"] == "audit-1" for item in snapshot["payload"]["snapshot"]["auditEvents"]
+            )
+    with TestClient(create_app(delay_ms=1, database_url=url)) as second:
+        assert any(
+            item["id"] == "audit-1" for item in second.get("/api/audit-events").json()["data"]
+        )

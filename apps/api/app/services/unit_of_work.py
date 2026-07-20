@@ -15,12 +15,16 @@ class UnitOfWork:
         self.session.begin()
         return self
 
+    def commit(self) -> None:
+        assert self.session is not None
+        self.session.commit()
+
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         assert self.session is not None
         try:
             if exc_type is None:
                 try:
-                    self.session.commit()
+                    self.commit()
                 except Exception:
                     self.session.rollback()
                     raise
