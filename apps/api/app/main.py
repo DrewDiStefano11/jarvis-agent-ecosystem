@@ -39,6 +39,8 @@ from app.repositories.sqlalchemy import IdempotencyResult, SqlAlchemyRepository
 from app.services.events import EventBroker
 from app.simulator.engine import SimulatorEngine
 
+DATABASE_REVISION = "20260720_01"
+
 
 def _upgrade_database(settings: Settings) -> None:
     config_path = Path(__file__).resolve().parents[1] / "alembic.ini"
@@ -80,6 +82,11 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         active = repository.active_workflow()
         simulator.control.state = restored_workflow_state
         simulator.control.currentStep = active.current_step_index if active else 0
+    elif repository._system.simulator_status in {"completed", "failed"}:
+        simulator.control.state = repository._system.simulator_status
+        if repository._system.last_checkpoint_id:
+            checkpoint = repository.load_checkpoint(repository._system.last_checkpoint_id)
+            simulator.control.currentStep = int(checkpoint["stepIndex"])
     app.state.repository = repository
     app.state.broker = broker
     app.state.simulator = simulator
@@ -174,15 +181,19 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.get("/api/health", response_model=ApiResponse)
     async def health() -> ApiResponse:
+        database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
+        degraded = (
+            repository._system.recovery_status == "required"
+            or not database_reachable
+            or not schema_current
+        )
         return ApiResponse(
             data={
-                "status": "degraded"
-                if repository._system.recovery_status == "required"
-                else "healthy",
+                "status": "degraded" if degraded else "healthy",
                 "service": "jarvis-simulator-api",
                 "processAlive": True,
-                "databaseReachable": True,
-                "schemaCurrent": True,
+                "databaseReachable": database_reachable,
+                "schemaCurrent": schema_current,
                 "outboxDispatcherRunning": broker.dispatcher_running,
                 "recoveryRequired": repository._system.recovery_status == "required",
                 "simulated": True,
@@ -210,7 +221,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             lastSynchronizedAt=datetime.now(UTC),
             storageBackend="sqlite",
             databaseHealthy=True,
-            databaseRevision="20260720_01",
+            databaseRevision=DATABASE_REVISION,
             eventSessionId=repository.event_session_id,
             outboxPendingCount=repository.outbox_pending_count(),
             recoveryRequired=repository._system.recovery_status == "required",

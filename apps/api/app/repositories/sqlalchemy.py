@@ -8,8 +8,8 @@ from hashlib import sha256
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, func, or_, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import delete, func, or_, select, text, update
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.errors import DomainError
@@ -678,6 +678,19 @@ class SqlAlchemyRepository:
                 .order_by(WorkflowRunRow.started_at.desc())
             )
 
+    def health_probe(self, expected_revision: str) -> tuple[bool, bool]:
+        try:
+            with self.session_factory() as session:
+                session.execute(text("SELECT 1"))
+        except SQLAlchemyError:
+            return False, False
+        try:
+            with self.session_factory() as session:
+                revision = session.scalar(text("SELECT version_num FROM alembic_version"))
+        except SQLAlchemyError:
+            return True, False
+        return True, revision == expected_revision
+
     def checkpoint(
         self,
         run_id: str,
@@ -832,13 +845,13 @@ class SqlAlchemyRepository:
         with self.session_factory() as session, session.begin():
             run = session.scalar(
                 select(WorkflowRunRow)
-                .where(WorkflowRunRow.status.in_(["running", "paused"]))
+                .where(WorkflowRunRow.status.in_(["running", "paused", "recovery_required"]))
                 .order_by(WorkflowRunRow.started_at.desc())
             )
             if not run:
                 return None
             was_paused = run.status == "paused"
-            if not was_paused:
+            if run.status == "running":
                 run.status = "recovery_required"
                 run.pause_reason = "Backend restarted before a clean workflow completion."
             run.updated_at = datetime.now(UTC)

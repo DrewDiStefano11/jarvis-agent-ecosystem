@@ -512,6 +512,95 @@ def test_paused_workflow_remains_resumable_after_application_recreation(tmp_path
         assert len(step_numbers) == len(set(step_numbers))
 
 
+def test_recovery_required_workflow_survives_repeated_application_recreation(
+    tmp_path: Path,
+) -> None:
+    url = database_url(tmp_path / "repeated-recovery.db")
+    with TestClient(create_app(delay_ms=20, database_url=url)) as first:
+        assert first.post("/api/simulator/start").status_code == 200
+        asyncio.run(asyncio.sleep(0.07))
+        original = first.get("/api/system/status").json()["data"]
+        assert original["simulator"]["currentStep"] > 0
+
+    with TestClient(create_app(delay_ms=1, database_url=url)) as second:
+        first_recovery = second.get("/api/system/status").json()["data"]
+        assert first_recovery["simulator"]["state"] == "recovery_required"
+        assert first_recovery["recoveryRequired"] is True
+
+    with TestClient(create_app(delay_ms=1, database_url=url)) as third:
+        repeated_recovery = third.get("/api/system/status").json()["data"]
+        assert repeated_recovery["simulator"]["state"] == "recovery_required"
+        assert (
+            repeated_recovery["simulator"]["currentStep"]
+            == first_recovery["simulator"]["currentStep"]
+        )
+        assert repeated_recovery["activeWorkflowRunId"] == first_recovery["activeWorkflowRunId"]
+        assert repeated_recovery["lastCheckpointId"] == first_recovery["lastCheckpointId"]
+        assert repeated_recovery["recoveryRequired"] is True
+        assert third.post("/api/simulator/resume").status_code == 200
+        for _ in range(150):
+            status = third.get("/api/system/status").json()["data"]
+            if status["simulator"]["state"] == "completed":
+                break
+            asyncio.run(asyncio.sleep(0.005))
+        assert status["simulator"]["state"] == "completed"
+        audit = third.get("/api/audit-events").json()["data"]
+        step_numbers = [item["payload"].get("step") for item in audit if "step" in item["payload"]]
+        assert len(step_numbers) == len(set(step_numbers))
+
+
+def test_completed_workflow_requires_reset_after_clean_application_recreation(
+    tmp_path: Path,
+) -> None:
+    url = database_url(tmp_path / "completed-recovery.db")
+    with TestClient(create_app(delay_ms=1, database_url=url)) as first:
+        assert first.post("/api/simulator/start").status_code == 200
+        for _ in range(150):
+            completed = first.get("/api/system/status").json()["data"]
+            if completed["simulator"]["state"] == "completed":
+                break
+            asyncio.run(asyncio.sleep(0.005))
+        assert completed["simulator"]["state"] == "completed"
+        run_id = completed["activeWorkflowRunId"]
+        checkpoint_id = completed["lastCheckpointId"]
+        artifacts = first.get("/api/artifacts").json()["data"]
+
+    with TestClient(create_app(delay_ms=1, database_url=url)) as second:
+        restored = second.get("/api/system/status").json()["data"]
+        assert restored["simulator"]["state"] == "completed"
+        assert restored["simulator"]["currentStep"] == 25
+        assert restored["activeWorkflowRunId"] == run_id
+        assert restored["lastCheckpointId"] == checkpoint_id
+        rejected = second.post("/api/simulator/start")
+        assert rejected.status_code == 409
+        assert rejected.json()["error"]["code"] == "SIMULATOR_RESET_REQUIRED"
+        assert second.get("/api/artifacts").json()["data"] == artifacts
+        assert second.post("/api/simulator/reset").status_code == 200
+        assert second.post("/api/simulator/start").status_code == 200
+        assert second.post("/api/simulator/reset").status_code == 200
+
+
+def test_health_degrades_for_unreachable_database_or_stale_schema(tmp_path: Path) -> None:
+    url = database_url(tmp_path / "health-probe.db")
+    app = create_app(delay_ms=1, database_url=url)
+    with TestClient(app) as api:
+        repository = app.state.repository
+        original_probe = repository.health_probe
+        repository.health_probe = lambda _revision: (False, False)
+        unavailable = api.get("/api/health").json()["data"]
+        assert unavailable["status"] == "degraded"
+        assert unavailable["databaseReachable"] is False
+        assert unavailable["schemaCurrent"] is False
+        repository.health_probe = original_probe
+
+        with app.state.engine.begin() as connection:
+            connection.execute(text("DROP TABLE alembic_version"))
+        stale = api.get("/api/health").json()["data"]
+        assert stale["status"] == "degraded"
+        assert stale["databaseReachable"] is True
+        assert stale["schemaCurrent"] is False
+
+
 def test_rapid_reset_and_restart_create_distinct_workflow_run_ids(tmp_path: Path) -> None:
     url = database_url(tmp_path / "run-ids.db")
     app = create_app(delay_ms=100, database_url=url)
