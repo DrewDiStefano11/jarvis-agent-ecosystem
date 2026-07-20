@@ -7,13 +7,13 @@ from typing import Any
 from app.core.errors import DomainError
 from app.core.transitions import ACTIVE_STATES, InvalidTransitionError, validate_transition
 from app.models.domain import AgentStatus, Artifact, Notification, SimulatorControl
+from app.repositories.sqlalchemy import SqlAlchemyRepository
 from app.services.events import EventBroker
-from app.services.repository import InMemoryRepository
 
 
 class SimulatorEngine:
     def __init__(
-        self, repository: InMemoryRepository, broker: EventBroker, delay_ms: int = 60
+        self, repository: SqlAlchemyRepository, broker: EventBroker, delay_ms: int = 60
     ) -> None:
         self.repository = repository
         self.broker = broker
@@ -24,6 +24,10 @@ class SimulatorEngine:
         self._resume.set()
         self._stopped = False
         self.steps = self._build_steps()
+        for index, step in enumerate(self.steps):
+            slug = "_".join(str(step["message"]).lower().split()[:4])
+            step["id"] = f"{step['agent']}.{index + 1:02d}.{slug}"
+        self.run_id: str | None = repository._system.last_workflow_run_id
 
     def _build_steps(self) -> list[dict[str, Any]]:
         return [
@@ -201,8 +205,22 @@ class SimulatorEngine:
         self._stopped = False
         self._resume.set()
         self.control.state = "running"
+        self.run_id = f"run-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{id(self):x}"
+        self.repository.create_workflow_run(self.run_id, len(self.steps))
+        self.repository.checkpoint(
+            self.run_id,
+            0,
+            "workflow.start",
+            {"totalSteps": len(self.steps)},
+        )
         self._runner = asyncio.create_task(self._run())
-        await self.broker.emit("system.simulator.started", {"state": "running"})
+        event = await self.broker.emit("system.simulator.started", {"state": "running"})
+        self.repository.add_audit(
+            "system.simulator.started",
+            "Started the deterministic durable workflow",
+            event.sequenceNumber,
+            "task-demo",
+        )
         return self.control
 
     async def _run(self) -> None:
@@ -214,6 +232,13 @@ class SimulatorEngine:
             step = self.steps[self.control.currentStep]
             await self._apply_step(step)
             self.control.currentStep += 1
+            if self.run_id:
+                self.repository.checkpoint(
+                    self.run_id,
+                    self.control.currentStep,
+                    str(step["id"]),
+                    {"totalSteps": len(self.steps)},
+                )
             await asyncio.sleep(self.delay_ms / 1000)
         if not self._stopped and self.control.currentStep >= len(self.steps):
             self.control.state = "completed"
@@ -229,6 +254,14 @@ class SimulatorEngine:
             await self.broker.emit(
                 "system.simulator.completed", {"state": "completed"}, "task-demo"
             )
+            if self.run_id:
+                self.repository.checkpoint(
+                    self.run_id,
+                    self.control.currentStep,
+                    "jarvis.complete",
+                    {"totalSteps": len(self.steps)},
+                    "completed",
+                )
 
     async def _apply_step(self, step: dict[str, Any]) -> None:
         agent = self.repository.agents[step["agent"]]
@@ -339,11 +372,16 @@ class SimulatorEngine:
             raise DomainError("SIMULATOR_NOT_RUNNING", "The simulator is not running.", 409)
         self.control.state = "paused"
         self._resume.clear()
+        if self.run_id:
+            step_id = str(self.steps[max(0, self.control.currentStep - 1)]["id"])
+            self.repository.checkpoint(
+                self.run_id, self.control.currentStep, step_id, status="paused"
+            )
         await self.broker.emit("system.simulator.paused", {"step": self.control.currentStep})
         return self.control
 
     async def resume(self) -> SimulatorControl:
-        if self.control.state != "paused":
+        if self.control.state not in {"paused", "recovery_required"}:
             raise DomainError("SIMULATOR_NOT_PAUSED", "The simulator is not paused.", 409)
         if self.repository.emergency_stop:
             raise DomainError(
@@ -351,6 +389,15 @@ class SimulatorEngine:
             )
         self.control.state = "running"
         self._resume.set()
+        if self.run_id:
+            active = self.repository.active_workflow()
+            if active and active.checkpoint_id:
+                checkpoint = self.repository.load_checkpoint(active.checkpoint_id)
+                self.control.currentStep = int(checkpoint["stepIndex"])
+            self.repository.set_workflow_status(self.run_id, "running")
+        if not self._runner or self._runner.done():
+            self._stopped = False
+            self._runner = asyncio.create_task(self._run())
         await self.broker.emit("system.simulator.resumed", {"step": self.control.currentStep})
         return self.control
 
@@ -363,10 +410,19 @@ class SimulatorEngine:
                 await self._runner
             except asyncio.CancelledError:
                 pass
+        if self.run_id:
+            self.repository.set_workflow_status(self.run_id, "cancelled", "Reset by local operator")
+        self.repository.add_audit(
+            "system.simulator.reset",
+            "Reset the deterministic demo while preserving durable audit history",
+            self.repository.next_sequence(),
+            "task-demo",
+        )
         self.repository.reset()
         self.broker.reset_sequence()
         self.control = SimulatorControl(accelerated=self.delay_ms <= 10)
         self._runner = None
+        self.run_id = None
         return self.control
 
     async def emergency_stop(self) -> None:
@@ -379,6 +435,11 @@ class SimulatorEngine:
                 agent.previousStatus = agent.status
                 agent.status = "paused"
                 agent.statusMessage = "Paused by emergency stop"
+        if self.run_id:
+            step_id = str(self.steps[max(0, self.control.currentStep - 1)]["id"])
+            self.repository.checkpoint(
+                self.run_id, self.control.currentStep, step_id, {"emergencyStop": True}, "paused"
+            )
         await self.broker.emit("system.emergency_stop", {"active": True})
 
     async def system_resume(self) -> None:

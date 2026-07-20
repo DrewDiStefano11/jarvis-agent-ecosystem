@@ -1,0 +1,742 @@
+from __future__ import annotations
+
+import json
+from copy import deepcopy
+from datetime import UTC, datetime
+from hashlib import sha256
+from typing import Any
+from uuid import uuid4
+
+from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, sessionmaker
+
+from app.core.errors import DomainError
+from app.db.models import (
+    AgentRow,
+    ApprovalRow,
+    ArtifactRow,
+    AuditEventRow,
+    DepartmentRow,
+    IdempotencyRecordRow,
+    NotificationRow,
+    OutboxEventRow,
+    SystemStateRow,
+    TaskAgentRow,
+    TaskBlockerRow,
+    TaskDependencyRow,
+    TaskRow,
+    WorkflowCheckpointRow,
+    WorkflowRunRow,
+)
+from app.models.domain import Agent, Approval, Artifact, AuditEvent, Department, Notification, Task
+from app.services.seed import build_seed
+
+SEED_VERSION = "2.0"
+
+
+class SqlAlchemyRepository:
+    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+        self.session_factory = session_factory
+        self._load_or_seed()
+
+    def _load_or_seed(self) -> None:
+        with self.session_factory() as session:
+            has_seed = session.scalar(select(func.count()).select_from(DepartmentRow)) or 0
+        if not has_seed:
+            self._load_seed_memory()
+            self._system = SystemStateRow(
+                id=1,
+                emergency_stop=False,
+                simulator_status="idle",
+                event_session_id=f"session-{uuid4().hex}",
+                current_sequence_number=0,
+                seed_data_version=SEED_VERSION,
+                last_successful_startup=datetime.now(UTC),
+                startup_was_clean=True,
+                recovery_status="none",
+                updated_at=datetime.now(UTC),
+            )
+            self.audit = []
+            self.persist()
+        else:
+            self.reload()
+
+    def _load_seed_memory(self) -> None:
+        seed = build_seed()
+        self.departments = {x["id"]: Department.model_validate(x) for x in seed["departments"]}
+        self.agents = {x["id"]: Agent.model_validate(x) for x in seed["agents"]}
+        self.tasks = {x["id"]: Task.model_validate(x) for x in seed["tasks"]}
+        self.approvals = {x["id"]: Approval.model_validate(x) for x in seed["approvals"]}
+        self.artifacts = {x["id"]: Artifact.model_validate(x) for x in seed["artifacts"]}
+        self.notifications = {
+            x["id"]: Notification.model_validate(x) for x in seed["notifications"]
+        }
+        self.audit = [AuditEvent.model_validate(x) for x in seed["audit"]]
+
+    def reload(self) -> None:
+        with self.session_factory() as session:
+            self.departments = {
+                row.id: Department.model_validate(row.payload)
+                for row in session.scalars(select(DepartmentRow))
+            }
+            self.agents = {
+                row.id: Agent.model_validate(row.payload)
+                for row in session.scalars(select(AgentRow))
+            }
+            self.tasks = {
+                row.id: Task.model_validate(row.payload) for row in session.scalars(select(TaskRow))
+            }
+            self.approvals = {
+                row.id: Approval.model_validate(row.payload)
+                for row in session.scalars(select(ApprovalRow))
+            }
+            self.artifacts = {
+                row.id: Artifact.model_validate(row.payload)
+                for row in session.scalars(select(ArtifactRow))
+            }
+            self.notifications = {
+                row.id: Notification.model_validate(row.payload)
+                for row in session.scalars(select(NotificationRow))
+            }
+            self.audit = [
+                self._audit_from_row(row)
+                for row in session.scalars(select(AuditEventRow).order_by(AuditEventRow.timestamp))
+            ]
+            self._system = session.get(SystemStateRow, 1)
+            if self._system is None:
+                self._system = SystemStateRow(
+                    id=1,
+                    emergency_stop=False,
+                    simulator_status="idle",
+                    event_session_id=f"session-{uuid4().hex}",
+                    current_sequence_number=0,
+                    seed_data_version=SEED_VERSION,
+                    startup_was_clean=True,
+                    recovery_status="none",
+                    updated_at=datetime.now(UTC),
+                )
+                session.add(self._system)
+                session.commit()
+
+    @property
+    def emergency_stop(self) -> bool:
+        return self._system.emergency_stop
+
+    @emergency_stop.setter
+    def emergency_stop(self, value: bool) -> None:
+        self._system.emergency_stop = value
+
+    @property
+    def event_session_id(self) -> str:
+        return self._system.event_session_id
+
+    @property
+    def sequence(self) -> int:
+        return self._system.current_sequence_number
+
+    def next_sequence(self) -> int:
+        self._system.current_sequence_number += 1
+        return self._system.current_sequence_number
+
+    def reset_sequence(self) -> None:
+        self._system.event_session_id = f"session-{uuid4().hex}"
+        self._system.current_sequence_number = 0
+
+    @staticmethod
+    def require(store: dict[str, object], item_id: str, kind: str) -> object:
+        if item_id not in store:
+            raise DomainError(f"{kind.upper()}_NOT_FOUND", f"Unknown {kind} ID: {item_id}", 404)
+        return store[item_id]
+
+    def persist(self) -> None:
+        with self.session_factory() as session, session.begin():
+            self._persist_entities(session)
+            self._persist_audit(session)
+            self._system.updated_at = datetime.now(UTC)
+            session.merge(self._system)
+
+    def _persist_entities(self, session: Session) -> None:
+        for item in self.departments.values():
+            payload = item.model_dump(mode="json")
+            session.merge(
+                DepartmentRow(
+                    id=item.id,
+                    name=item.name,
+                    description=item.description,
+                    manager_agent_id=item.managerAgentId,
+                    schema_version="1.0",
+                    payload=payload,
+                )
+            )
+        session.flush()
+        for item in self.agents.values():
+            session.merge(
+                AgentRow(
+                    id=item.id,
+                    name=item.name,
+                    role=item.role,
+                    description=item.description,
+                    department_id=item.departmentId,
+                    manager_id=item.managerId,
+                    status=item.status,
+                    previous_status=item.previousStatus,
+                    current_task_id=item.currentTaskId,
+                    progress=item.progress,
+                    status_message=item.statusMessage,
+                    deployment_status=item.deploymentStatus,
+                    is_temporary=item.isTemporary,
+                    schema_version=item.schemaVersion,
+                    version=item.version,
+                    payload=item.model_dump(mode="json"),
+                    created_at=item.createdAt,
+                    updated_at=item.updatedAt,
+                )
+            )
+            session.flush()
+        for item in self.tasks.values():
+            session.merge(
+                TaskRow(
+                    id=item.id,
+                    title=item.title,
+                    description=item.description,
+                    original_request=item.request,
+                    parent_task_id=item.parentTaskId,
+                    project_id=item.projectId,
+                    creator=item.createdBy,
+                    assigned_manager_id=item.assignedManagerId,
+                    priority=item.priority,
+                    status=item.status,
+                    progress=item.progress,
+                    status_message=item.statusMessage,
+                    result=item.result,
+                    error=item.error,
+                    retry_count=item.retryCount,
+                    maximum_retries=item.maxRetries,
+                    schema_version=item.schemaVersion,
+                    payload=item.model_dump(mode="json"),
+                    created_at=item.createdAt,
+                    started_at=item.startedAt,
+                    updated_at=item.updatedAt,
+                    completed_at=item.completedAt,
+                )
+            )
+            session.flush()
+        for item in self.approvals.values():
+            updated = item.reviewedAt or item.createdAt
+            session.merge(
+                ApprovalRow(
+                    id=item.id,
+                    task_id=item.taskId,
+                    requesting_agent_id=item.requestedByAgentId,
+                    action_type=item.actionType,
+                    title=item.title,
+                    description=item.description,
+                    reason=item.reason,
+                    risk_level=item.riskLevel,
+                    affected_resources=item.affectedResources,
+                    exact_action_preview=item.exactActionPreview,
+                    expected_outcome=item.expectedOutcome,
+                    reversal_method=item.reversalMethod,
+                    expires_at=item.expiresAt,
+                    status=item.status,
+                    reviewed_by=item.reviewedBy,
+                    reviewed_at=item.reviewedAt,
+                    decision_note=item.decisionNote,
+                    schema_version=item.schemaVersion,
+                    payload=item.model_dump(mode="json"),
+                    created_at=item.createdAt,
+                    updated_at=updated,
+                )
+            )
+        for item in self.artifacts.values():
+            session.merge(
+                ArtifactRow(
+                    id=item.id,
+                    task_id=item.taskId,
+                    producing_agent_id=None,
+                    name=item.name,
+                    artifact_type=item.type,
+                    description=item.summary,
+                    content_reference=item.simulatedPath,
+                    metadata_json={"simulated": True},
+                    version="1.0.0",
+                    schema_version="1.0",
+                    payload=item.model_dump(mode="json"),
+                    created_at=item.createdAt,
+                    updated_at=item.createdAt,
+                )
+            )
+        for item in self.notifications.values():
+            session.merge(
+                NotificationRow(
+                    id=item.id,
+                    notification_type=item.level,
+                    title=item.title,
+                    message=item.message,
+                    related_task_id=item.taskId,
+                    related_agent_id=None,
+                    is_read=item.isRead,
+                    metadata_json={},
+                    schema_version="1.0",
+                    payload=item.model_dump(mode="json"),
+                    created_at=item.createdAt,
+                    read_at=datetime.now(UTC) if item.isRead else None,
+                )
+            )
+        session.execute(delete(TaskAgentRow))
+        session.execute(delete(TaskDependencyRow))
+        session.execute(delete(TaskBlockerRow))
+        task_ids = set(self.tasks)
+        for item in self.tasks.values():
+            for agent_id in item.assignedAgentIds:
+                if agent_id in self.agents:
+                    session.add(TaskAgentRow(task_id=item.id, agent_id=agent_id))
+            for dependency in item.dependencies:
+                if dependency.taskId in task_ids:
+                    session.add(
+                        TaskDependencyRow(
+                            task_id=item.id,
+                            dependency_task_id=dependency.taskId,
+                            dependency_type=dependency.type,
+                        )
+                    )
+            for blocker_id in item.blockedBy:
+                if blocker_id in task_ids:
+                    session.add(TaskBlockerRow(task_id=item.id, blocker_task_id=blocker_id))
+
+    def _persist_audit(self, session: Session) -> None:
+        existing = set(session.scalars(select(AuditEventRow.id)))
+        for item in self.audit:
+            if item.id not in existing:
+                session.add(
+                    AuditEventRow(
+                        id=item.id,
+                        event_type=item.eventType,
+                        actor="system" if item.actorAgentId is None else item.actorAgentId,
+                        agent_id=item.actorAgentId,
+                        task_id=item.taskId,
+                        approval_id=item.approvalId,
+                        previous_state=item.previousState,
+                        new_state=item.newState,
+                        correlation_id=item.correlationId,
+                        sequence_number=item.sequenceNumber,
+                        event_session_id=self.event_session_id,
+                        timestamp=item.timestamp,
+                        payload={
+                            "summary": item.summary,
+                            "payload": item.payload,
+                            "artifactIds": item.artifactIds,
+                        },
+                        schema_version="1.0",
+                    )
+                )
+
+    @staticmethod
+    def _audit_from_row(row: AuditEventRow) -> AuditEvent:
+        return AuditEvent(
+            id=row.id,
+            timestamp=row.timestamp,
+            eventType=row.event_type,
+            actorAgentId=row.agent_id,
+            taskId=row.task_id,
+            previousState=row.previous_state,
+            newState=row.new_state,
+            summary=row.payload.get("summary", row.event_type),
+            correlationId=row.correlation_id,
+            sequenceNumber=row.sequence_number,
+            payload=row.payload.get("payload", {}),
+            artifactIds=row.payload.get("artifactIds", []),
+            approvalId=row.approval_id,
+        )
+
+    def add_audit(
+        self,
+        event_type: str,
+        summary: str,
+        sequence: int,
+        task_id: str | None = None,
+        agent_id: str | None = None,
+        previous: str | None = None,
+        new: str | None = None,
+        payload: dict[str, object] | None = None,
+    ) -> AuditEvent:
+        item = AuditEvent(
+            id=f"audit-{uuid4().hex[:12]}",
+            timestamp=datetime.now(UTC),
+            eventType=event_type,
+            actorAgentId=agent_id,
+            taskId=task_id,
+            previousState=previous,
+            newState=new,
+            summary=summary,
+            correlationId="phase-2-demo",
+            sequenceNumber=sequence,
+            payload=payload or {},
+            approvalId=str((payload or {}).get("approvalId"))
+            if (payload or {}).get("approvalId")
+            else None,
+        )
+        self.audit.append(item)
+        self.persist()
+        return item
+
+    def enqueue_event(self, envelope: dict[str, Any]) -> None:
+        with self.session_factory() as session, session.begin():
+            self._persist_entities(session)
+            self._persist_audit(session)
+            self._system.updated_at = datetime.now(UTC)
+            session.merge(self._system)
+            session.add(
+                OutboxEventRow(
+                    id=envelope["eventId"],
+                    event_type=envelope["eventType"],
+                    envelope=envelope,
+                    correlation_id=envelope["correlationId"],
+                    event_session_id=self.event_session_id,
+                    sequence_number=envelope["sequenceNumber"],
+                    status="pending",
+                    created_at=datetime.now(UTC),
+                    publish_attempt_count=0,
+                )
+            )
+
+    def pending_outbox(self) -> list[dict[str, Any]]:
+        with self.session_factory() as session:
+            return [
+                row.envelope
+                for row in session.scalars(
+                    select(OutboxEventRow)
+                    .where(OutboxEventRow.status.in_(["pending", "failed"]))
+                    .order_by(OutboxEventRow.created_at)
+                )
+            ]
+
+    def mark_outbox(self, event_id: str, published: bool, error: str | None = None) -> None:
+        with self.session_factory() as session, session.begin():
+            row = session.get(OutboxEventRow, event_id)
+            if row:
+                row.publish_attempt_count += 1
+                row.status = "published" if published else "failed"
+                row.published_at = datetime.now(UTC) if published else None
+                row.last_publish_error = error
+
+    def outbox_pending_count(self) -> int:
+        with self.session_factory() as session:
+            return int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(OutboxEventRow)
+                    .where(OutboxEventRow.status != "published")
+                )
+                or 0
+            )
+
+    @staticmethod
+    def request_hash(payload: Any) -> str:
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        return sha256(canonical.encode()).hexdigest()
+
+    def idempotency_lookup(
+        self, key: str, command: str, payload: Any
+    ) -> tuple[int, dict[str, Any]] | None:
+        digest = self.request_hash(payload)
+        with self.session_factory() as session:
+            row = session.scalar(
+                select(IdempotencyRecordRow).where(
+                    IdempotencyRecordRow.idempotency_key == key,
+                    IdempotencyRecordRow.command_type == command,
+                )
+            )
+            if not row:
+                return None
+            if row.canonical_request_hash != digest:
+                raise DomainError(
+                    "IDEMPOTENCY_KEY_CONFLICT",
+                    "The idempotency key was already used with a different request.",
+                    409,
+                )
+            if row.response_status == 0:
+                raise DomainError(
+                    "IDEMPOTENCY_REQUEST_IN_PROGRESS",
+                    "A command with this idempotency key is still in progress.",
+                    409,
+                )
+            return row.response_status, row.response_body
+
+    def idempotency_claim(
+        self, key: str, command: str, payload: Any
+    ) -> tuple[int, dict[str, Any]] | None:
+        existing = self.idempotency_lookup(key, command, payload)
+        if existing:
+            return existing
+        try:
+            with self.session_factory() as session, session.begin():
+                session.add(
+                    IdempotencyRecordRow(
+                        idempotency_key=key,
+                        command_type=command,
+                        canonical_request_hash=self.request_hash(payload),
+                        response_status=0,
+                        response_body={},
+                        created_resource_id=None,
+                        created_at=datetime.now(UTC),
+                    )
+                )
+        except IntegrityError:
+            return self.idempotency_lookup(key, command, payload)
+        return None
+
+    def idempotency_store(
+        self,
+        key: str,
+        command: str,
+        payload: Any,
+        status: int,
+        body: dict[str, Any],
+        resource_id: str | None = None,
+    ) -> None:
+        with self.session_factory() as session, session.begin():
+            row = session.scalar(
+                select(IdempotencyRecordRow).where(
+                    IdempotencyRecordRow.idempotency_key == key,
+                    IdempotencyRecordRow.command_type == command,
+                )
+            )
+            if row:
+                row.response_status = status
+                row.response_body = body
+                row.created_resource_id = resource_id
+            else:
+                session.add(
+                    IdempotencyRecordRow(
+                        idempotency_key=key,
+                        command_type=command,
+                        canonical_request_hash=self.request_hash(payload),
+                        response_status=status,
+                        response_body=body,
+                        created_resource_id=resource_id,
+                        created_at=datetime.now(UTC),
+                    )
+                )
+
+    def idempotency_abandon(self, key: str) -> None:
+        with self.session_factory() as session, session.begin():
+            session.execute(
+                delete(IdempotencyRecordRow).where(
+                    IdempotencyRecordRow.idempotency_key == key,
+                    IdempotencyRecordRow.response_status == 0,
+                )
+            )
+
+    def create_workflow_run(self, run_id: str, total_steps: int) -> None:
+        now = datetime.now(UTC)
+        with self.session_factory() as session, session.begin():
+            session.add(
+                WorkflowRunRow(
+                    id=run_id,
+                    correlation_id=run_id,
+                    root_task_id="task-demo",
+                    workflow_type="deterministic-demo",
+                    workflow_version="2.0",
+                    current_step_index=0,
+                    current_step_identifier=None,
+                    status="running",
+                    started_at=now,
+                    updated_at=now,
+                    retry_count=0,
+                    resume_eligibility=True,
+                )
+            )
+            state = session.get(SystemStateRow, 1)
+            state.last_workflow_run_id = run_id
+            state.simulator_status = "running"
+            state.recovery_status = "none"
+        self._system.last_workflow_run_id = run_id
+        self._system.simulator_status = "running"
+        self._system.recovery_status = "none"
+
+    def active_workflow(self) -> WorkflowRunRow | None:
+        with self.session_factory() as session:
+            return session.scalar(
+                select(WorkflowRunRow)
+                .where(
+                    WorkflowRunRow.status.in_(
+                        ["running", "paused", "recovery_required", "waiting_for_approval"]
+                    )
+                )
+                .order_by(WorkflowRunRow.started_at.desc())
+            )
+
+    def checkpoint(
+        self,
+        run_id: str,
+        step_index: int,
+        step_identifier: str,
+        simulator_variables: dict[str, Any] | None = None,
+        status: str = "running",
+    ) -> str:
+        checkpoint_id = f"checkpoint-{uuid4().hex}"
+        payload = {
+            "workflowVersion": "2.0",
+            "stepIndex": step_index,
+            "stepIdentifier": step_identifier,
+            "rootTaskId": "task-demo",
+            "agentStatuses": {key: value.status for key, value in self.agents.items()},
+            "agentLocations": {
+                key: value.office.currentDestination for key, value in self.agents.items()
+            },
+            "taskStatuses": {key: value.status for key, value in self.tasks.items()},
+            "taskProgressValues": {key: value.progress for key, value in self.tasks.items()},
+            "pendingApprovals": [
+                key for key, value in self.approvals.items() if value.status == "pending"
+            ],
+            "revisionCount": int((simulator_variables or {}).get("revisionCount", 0)),
+            "retryCount": int((simulator_variables or {}).get("retryCount", 0)),
+            "emergencyStop": self.emergency_stop,
+            "eventSessionId": self.event_session_id,
+            "lastCommittedSequenceNumber": self.sequence,
+            "simulatorVariables": simulator_variables or {},
+        }
+        self.validate_checkpoint(payload)
+        now = datetime.now(UTC)
+        with self.session_factory() as session, session.begin():
+            session.add(
+                WorkflowCheckpointRow(
+                    id=checkpoint_id,
+                    workflow_run_id=run_id,
+                    workflow_version="2.0",
+                    step_index=step_index,
+                    step_identifier=step_identifier,
+                    root_task_id="task-demo",
+                    payload=payload,
+                    created_at=now,
+                )
+            )
+            run = session.get(WorkflowRunRow, run_id)
+            if run:
+                run.current_step_index = step_index
+                run.current_step_identifier = step_identifier
+                run.checkpoint_id = checkpoint_id
+                run.status = status
+                run.updated_at = now
+                if status == "completed":
+                    run.completed_at = now
+            state = session.get(SystemStateRow, 1)
+            state.last_checkpoint_id = checkpoint_id
+            state.simulator_status = status
+        self._system.last_checkpoint_id = checkpoint_id
+        self._system.simulator_status = status
+        return checkpoint_id
+
+    def load_checkpoint(self, checkpoint_id: str) -> dict[str, Any]:
+        with self.session_factory() as session:
+            row = session.get(WorkflowCheckpointRow, checkpoint_id)
+            if not row:
+                raise DomainError(
+                    "CHECKPOINT_NOT_FOUND", "The workflow checkpoint was not found.", 404
+                )
+            payload = row.payload
+        self.validate_checkpoint(payload)
+        return payload
+
+    def set_workflow_status(self, run_id: str, status: str, reason: str | None = None) -> None:
+        with self.session_factory() as session, session.begin():
+            run = session.get(WorkflowRunRow, run_id)
+            if run:
+                run.status = status
+                run.updated_at = datetime.now(UTC)
+                if status == "cancelled":
+                    run.completed_at = datetime.now(UTC)
+                if reason:
+                    run.pause_reason = reason
+            state = session.get(SystemStateRow, 1)
+            state.simulator_status = status
+            if status in {"running", "completed", "cancelled"}:
+                state.recovery_status = "none"
+        self._system.simulator_status = status
+        if status in {"running", "completed", "cancelled"}:
+            self._system.recovery_status = "none"
+
+    @staticmethod
+    def validate_checkpoint(payload: dict[str, Any]) -> None:
+        required = {
+            "workflowVersion",
+            "stepIndex",
+            "stepIdentifier",
+            "rootTaskId",
+            "agentStatuses",
+            "taskStatuses",
+            "eventSessionId",
+            "lastCommittedSequenceNumber",
+        }
+        if (
+            not required.issubset(payload)
+            or payload["workflowVersion"] != "2.0"
+            or not isinstance(payload["stepIndex"], int)
+        ):
+            raise DomainError(
+                "INVALID_CHECKPOINT", "The workflow checkpoint is invalid or incompatible.", 409
+            )
+
+    def mark_interrupted_workflow(self) -> bool:
+        with self.session_factory() as session, session.begin():
+            run = session.scalar(
+                select(WorkflowRunRow)
+                .where(WorkflowRunRow.status == "running")
+                .order_by(WorkflowRunRow.started_at.desc())
+            )
+            if not run:
+                return False
+            run.status = "recovery_required"
+            run.pause_reason = "Backend restarted before a clean workflow completion."
+            run.updated_at = datetime.now(UTC)
+            state = session.get(SystemStateRow, 1)
+            state.recovery_status = "required"
+            state.simulator_status = "paused"
+        self._system.recovery_status = "required"
+        self._system.simulator_status = "paused"
+        return True
+
+    def reset(self) -> None:
+        user_tasks = {
+            key: value
+            for key, value in self.tasks.items()
+            if key not in {x["id"] for x in build_seed()["tasks"]}
+            and not key.startswith("task-demo-")
+        }
+        historical_audit = list(self.audit)
+        seed = build_seed()
+        seed_artifact_ids = {item["id"] for item in seed["artifacts"]}
+        seed_notification_ids = {item["id"] for item in seed["notifications"]}
+        with self.session_factory() as session, session.begin():
+            session.execute(delete(TaskAgentRow))
+            session.execute(delete(TaskDependencyRow))
+            session.execute(delete(TaskBlockerRow))
+            session.execute(delete(ArtifactRow).where(ArtifactRow.id.not_in(seed_artifact_ids)))
+            session.execute(delete(TaskRow).where(TaskRow.id.like("task-demo-%")))
+            session.execute(delete(AgentRow).where(AgentRow.is_temporary.is_(True)))
+            session.execute(
+                delete(NotificationRow).where(NotificationRow.id.not_in(seed_notification_ids))
+            )
+        self._load_seed_memory()
+        self.tasks.update(user_tasks)
+        self.audit = historical_audit
+        self.reset_sequence()
+        self.emergency_stop = False
+        self._system.recovery_status = "none"
+        self.persist()
+
+    def snapshot(self) -> dict[str, object]:
+        return deepcopy(
+            {
+                "departments": list(self.departments.values()),
+                "agents": list(self.agents.values()),
+                "tasks": list(self.tasks.values()),
+                "approvals": list(self.approvals.values()),
+                "artifacts": list(self.artifacts.values()),
+                "notifications": list(self.notifications.values()),
+                "auditEvents": self.audit,
+                "emergencyStop": self.emergency_stop,
+            }
+        )

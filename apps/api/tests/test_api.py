@@ -3,10 +3,17 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.models.manifest import load_manifest
+
+
+@pytest.fixture(autouse=True)
+def isolated_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    database = (tmp_path / "jarvis-test.db").as_posix()
+    monkeypatch.setenv("JARVIS_DATABASE_URL", f"sqlite:///{database}")
 
 
 def client() -> TestClient:

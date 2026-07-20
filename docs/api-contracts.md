@@ -14,3 +14,5 @@ Routes:
 - Events: `WS /ws/events`
 
 Approvals are idempotency-guarded: processed, expired, unknown, black-risk, or emergency-blocked decisions never execute. No Phase 1 command performs a real external action.
+
+Phase 2A mutation routes accept an optional `Idempotency-Key` header for task creation, approval decisions, task retry, temporary-agent creation, simulator start, and reset. Same-key/same-request calls replay the durable response; changed content returns `IDEMPOTENCY_KEY_CONFLICT` (409). System status additively reports storage, migration, event-session, outbox, checkpoint, and recovery fields. Health distinguishes process, database, schema, dispatcher, and recovery state without exposing database paths.

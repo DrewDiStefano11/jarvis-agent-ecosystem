@@ -1,4 +1,4 @@
-name: Phase 1 checks
+name: Phase 2A durable control-plane checks
 on: [push, pull_request]
 jobs:
   backend:
@@ -8,6 +8,12 @@ jobs:
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
       - run: python -m pip install -e ".[dev]"
+        working-directory: apps/api
+      - name: Upgrade a blank SQLite database
+        run: |
+          $env:JARVIS_DATABASE_URL = "sqlite:///$($env:RUNNER_TEMP.Replace('\','/'))/jarvis-ci.db"
+          python -m alembic upgrade head
+          python -m alembic current
         working-directory: apps/api
       - run: ruff format . --check
         working-directory: apps/api
