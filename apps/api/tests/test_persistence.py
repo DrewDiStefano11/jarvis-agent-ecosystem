@@ -3,20 +3,21 @@ from __future__ import annotations
 import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, inspect, select, text
+from sqlalchemy import create_engine, func, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from app.db.models import (
     AuditEventRow,
     IdempotencyRecordRow,
     OutboxEventRow,
+    SystemStateRow,
     TaskRow,
     WorkflowCheckpointRow,
     WorkflowRunRow,
@@ -194,6 +195,286 @@ def test_concurrent_duplicate_submission_creates_one_task(tmp_path: Path) -> Non
         replay = verifier.post("/api/tasks", json=body, headers=headers)
         assert replay.status_code == 201
         assert replay.json()["data"]["id"] == matches[0]["id"]
+
+
+def test_orphaned_idempotency_claim_lease_is_reclaimed_once_after_restart(
+    tmp_path: Path,
+) -> None:
+    url = database_url(tmp_path / "orphaned-claim.db")
+    body = {
+        "title": "Reclaimed exactly once",
+        "description": "Crash before command execution",
+        "priority": "medium",
+    }
+    headers = {"Idempotency-Key": "orphaned-command"}
+    command = "task.create"
+    first_app = create_app(delay_ms=1, database_url=url)
+    orphan = first_app.state.repository.idempotency_claim(headers["Idempotency-Key"], command, body)
+    assert orphan.owned is True
+    assert orphan.lease_expires_at is not None
+    first_app.state.engine.dispose()
+
+    with TestClient(create_app(delay_ms=1, database_url=url)) as unexpired:
+        blocked = unexpired.post("/api/tasks", json=body, headers=headers)
+        assert blocked.status_code == 409
+        assert blocked.json()["error"]["code"] == "IDEMPOTENCY_REQUEST_IN_PROGRESS"
+
+    engine = create_engine(url)
+    with engine.begin() as connection:
+        connection.execute(
+            update(IdempotencyRecordRow)
+            .where(IdempotencyRecordRow.idempotency_key == headers["Idempotency-Key"])
+            .values(expiration_at=datetime.now(UTC) - timedelta(seconds=1))
+        )
+
+    reclaiming_app = create_app(delay_ms=1, database_url=url)
+    duplicate_app = create_app(delay_ms=1, database_url=url)
+    third_app = create_app(delay_ms=1, database_url=url)
+    entered_command = threading.Event()
+    release_command = threading.Event()
+    original_enqueue = reclaiming_app.state.repository.enqueue_event
+
+    def delayed_enqueue(envelope, idempotency=None) -> None:
+        entered_command.set()
+        assert release_command.wait(5)
+        original_enqueue(envelope, idempotency)
+
+    reclaiming_app.state.repository.enqueue_event = delayed_enqueue
+    with (
+        TestClient(reclaiming_app) as reclaiming,
+        TestClient(duplicate_app) as duplicate,
+        TestClient(third_app) as third,
+        ThreadPoolExecutor(max_workers=1) as pool,
+    ):
+        winner = pool.submit(reclaiming.post, "/api/tasks", json=body, headers=headers)
+        assert entered_command.wait(5)
+        second = duplicate.post("/api/tasks", json=body, headers=headers)
+        third_response = third.post("/api/tasks", json=body, headers=headers)
+        assert second.status_code == 409
+        assert third_response.status_code == 409
+        assert second.json()["error"]["code"] == "IDEMPOTENCY_REQUEST_IN_PROGRESS"
+        assert third_response.json()["error"]["code"] == "IDEMPOTENCY_REQUEST_IN_PROGRESS"
+        release_command.set()
+        completed = winner.result(timeout=5)
+        assert completed.status_code == 201
+        task_id = completed.json()["data"]["id"]
+
+    with engine.connect() as connection:
+        assert (
+            connection.scalar(
+                select(func.count()).select_from(TaskRow).where(TaskRow.title == body["title"])
+            )
+            == 1
+        )
+        assert (
+            connection.scalar(
+                select(func.count())
+                .select_from(AuditEventRow)
+                .where(AuditEventRow.task_id == task_id)
+            )
+            == 1
+        )
+        matching_outbox = [
+            envelope
+            for envelope in connection.scalars(
+                select(OutboxEventRow.envelope).where(OutboxEventRow.event_type == "task.created")
+            )
+            if envelope["payload"]["task"]["id"] == task_id
+        ]
+        assert len(matching_outbox) == 1
+        record = connection.execute(
+            select(
+                IdempotencyRecordRow.response_status,
+                IdempotencyRecordRow.created_resource_id,
+                IdempotencyRecordRow.expiration_at,
+            ).where(IdempotencyRecordRow.idempotency_key == headers["Idempotency-Key"])
+        ).one()
+        assert record == (201, task_id, None)
+
+
+def _exercise_checkpoint_publication_race(tmp_path: Path, operation: str) -> None:
+    url = database_url(tmp_path / f"{operation}-checkpoint-race.db")
+    app = create_app(delay_ms=20, database_url=url)
+    step_committed = threading.Event()
+    release_publication = threading.Event()
+    original_publish = app.state.broker._publish
+    delayed_once = False
+
+    async def delayed_step_publish(event) -> None:
+        nonlocal delayed_once
+        if event.eventType == "agent.status.changed" and not delayed_once:
+            delayed_once = True
+            step_committed.set()
+            assert await asyncio.to_thread(release_publication.wait, 5)
+        await original_publish(event)
+
+    app.state.broker._publish = delayed_step_publish
+    route = "/api/simulator/pause" if operation == "pause" else "/api/system/emergency-stop"
+    with TestClient(app) as first, ThreadPoolExecutor(max_workers=1) as pool:
+        assert first.post("/api/simulator/start").status_code == 200
+        assert step_committed.wait(5)
+        operation_response = pool.submit(first.post, route)
+        asyncio.run(asyncio.sleep(0.05))
+        assert not operation_response.done()
+        release_publication.set()
+        assert operation_response.result(timeout=5).status_code == 200
+        paused = first.get("/api/system/status").json()["data"]
+        assert paused["simulator"]["state"] == "paused"
+        paused_step = paused["simulator"]["currentStep"]
+        run_id = paused["activeWorkflowRunId"]
+        checkpoint_id = paused["lastCheckpointId"]
+        assert paused_step >= 1
+
+    with create_engine(url).connect() as connection:
+        run = connection.execute(
+            select(
+                WorkflowRunRow.current_step_index,
+                WorkflowRunRow.checkpoint_id,
+                WorkflowRunRow.status,
+            ).where(WorkflowRunRow.id == run_id)
+        ).one()
+        checkpoint_step = connection.scalar(
+            select(WorkflowCheckpointRow.step_index).where(
+                WorkflowCheckpointRow.id == checkpoint_id
+            )
+        )
+        assert run == (paused_step, checkpoint_id, "paused")
+        assert checkpoint_step == paused_step
+
+    with TestClient(create_app(delay_ms=1, database_url=url)) as resumed:
+        restored = resumed.get("/api/system/status").json()["data"]
+        assert restored["simulator"]["currentStep"] == paused_step
+        if operation == "emergency-stop":
+            assert resumed.post("/api/system/resume").status_code == 200
+        assert resumed.post("/api/simulator/resume").status_code == 200
+        for _ in range(200):
+            final = resumed.get("/api/system/status").json()["data"]
+            if final["simulator"]["state"] == "completed":
+                break
+            asyncio.run(asyncio.sleep(0.005))
+        assert final["simulator"]["state"] == "completed"
+        assert resumed.get("/api/tasks/task-demo").json()["data"]["status"] == "completed"
+        audits = resumed.get("/api/audit-events").json()["data"]
+        step_numbers = [item["payload"]["step"] for item in audits if "step" in item["payload"]]
+        assert len(step_numbers) == len(set(step_numbers)) == 25
+
+    with create_engine(url).connect() as connection:
+        final_run = connection.execute(
+            select(WorkflowRunRow.current_step_index, WorkflowRunRow.checkpoint_id).where(
+                WorkflowRunRow.id == run_id
+            )
+        ).one()
+        final_checkpoint_step = connection.scalar(
+            select(WorkflowCheckpointRow.step_index).where(
+                WorkflowCheckpointRow.id == final_run.checkpoint_id
+            )
+        )
+        assert final_run.current_step_index == final_checkpoint_step == 25
+
+
+def test_pause_waits_for_in_flight_step_checkpoint_before_persisting(tmp_path: Path) -> None:
+    _exercise_checkpoint_publication_race(tmp_path, "pause")
+
+
+def test_emergency_stop_waits_for_in_flight_step_checkpoint_before_persisting(
+    tmp_path: Path,
+) -> None:
+    _exercise_checkpoint_publication_race(tmp_path, "emergency-stop")
+
+
+def test_reset_audit_and_next_event_use_monotonic_session_sequences(tmp_path: Path) -> None:
+    url = database_url(tmp_path / "reset-sequences.db")
+    before_body = {"title": "Before reset", "description": "Old event session"}
+    after_body = {"title": "After reset", "description": "New event session"}
+    with TestClient(create_app(delay_ms=1, database_url=url)) as api:
+        old_session = api.get("/api/system/status").json()["data"]["eventSessionId"]
+        before = api.post("/api/tasks", json=before_body)
+        assert before.status_code == 201
+        before_id = before.json()["data"]["id"]
+        assert api.post("/api/simulator/reset").status_code == 200
+        reset_status = api.get("/api/system/status").json()["data"]
+        new_session = reset_status["eventSessionId"]
+        assert new_session != old_session
+        after = api.post("/api/tasks", json=after_body)
+        assert after.status_code == 201
+        after_id = after.json()["data"]["id"]
+        final_status = api.get("/api/system/status").json()["data"]
+        assert final_status["eventSessionId"] == new_session
+
+    engine = create_engine(url)
+    with engine.connect() as connection:
+        before_audit = connection.execute(
+            select(AuditEventRow.event_session_id, AuditEventRow.sequence_number).where(
+                AuditEventRow.task_id == before_id
+            )
+        ).one()
+        reset_audit = connection.execute(
+            select(AuditEventRow.event_session_id, AuditEventRow.sequence_number).where(
+                AuditEventRow.event_type == "system.simulator.reset"
+            )
+        ).one()
+        after_audit = connection.execute(
+            select(AuditEventRow.event_session_id, AuditEventRow.sequence_number).where(
+                AuditEventRow.task_id == after_id
+            )
+        ).one()
+        after_outbox = connection.execute(
+            select(OutboxEventRow.event_session_id, OutboxEventRow.sequence_number).where(
+                OutboxEventRow.envelope["taskId"].as_string() == after_id
+            )
+        ).one()
+        assert before_audit.event_session_id == reset_audit.event_session_id == old_session
+        assert reset_audit.sequence_number == before_audit.sequence_number + 1
+        assert after_audit == (new_session, 1)
+        assert after_outbox == (new_session, 1)
+        assert (
+            connection.scalar(
+                select(func.count())
+                .select_from(OutboxEventRow)
+                .where(OutboxEventRow.event_type == "system.simulator.reset")
+            )
+            == 0
+        )
+
+        audit_pairs = connection.execute(
+            select(
+                AuditEventRow.event_session_id,
+                AuditEventRow.sequence_number,
+                AuditEventRow.timestamp,
+            ).order_by(AuditEventRow.timestamp)
+        ).all()
+        audit_by_session: dict[str, list[int]] = {}
+        for session_id, sequence, _ in audit_pairs:
+            audit_by_session.setdefault(session_id, []).append(sequence)
+        for sequences in audit_by_session.values():
+            assert sequences == sorted(sequences)
+            assert len(sequences) == len(set(sequences))
+
+        outbox_pairs = connection.execute(
+            select(
+                OutboxEventRow.event_session_id,
+                OutboxEventRow.sequence_number,
+                OutboxEventRow.created_at,
+            ).order_by(OutboxEventRow.created_at)
+        ).all()
+        outbox_by_session: dict[str, list[int]] = {}
+        for session_id, sequence, _ in outbox_pairs:
+            outbox_by_session.setdefault(session_id, []).append(sequence)
+        for sequences in outbox_by_session.values():
+            assert sequences == sorted(sequences)
+            assert len(sequences) == len(set(sequences))
+
+        state = connection.get_isolation_level()
+        assert state
+        durable = connection.execute(
+            select(SystemStateRow.event_session_id, SystemStateRow.current_sequence_number)
+        ).one()
+        assert durable == (new_session, 1)
+
+    with TestClient(create_app(delay_ms=1, database_url=url)) as recreated:
+        restored = recreated.get("/api/system/status").json()["data"]
+        assert restored["eventSessionId"] == new_session
+        assert recreated.app.state.repository.sequence == 1
 
 
 def test_paused_workflow_remains_resumable_after_application_recreation(tmp_path: Path) -> None:

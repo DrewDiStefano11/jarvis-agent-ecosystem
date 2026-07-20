@@ -2,6 +2,8 @@
 
 Each deterministic run has a durable version and stable step identifiers. Every committed step stores a validated JSON-compatible checkpoint containing agent/task state, progress, pending approvals, retries/revisions, emergency state, event session, last committed sequence, and simulator variables. Pickle and arbitrary class serialization are prohibited.
 
+The workflow runner serializes each step's durable commit, publication handoff, and in-memory step advancement with pause and emergency-stop checkpointing. An operator action that arrives during publication waits for the committed step to advance before writing its paused checkpoint, so durable and in-memory indices cannot regress.
+
 Startup migrates, seeds idempotently, inspects active runs and pending outbox rows, then marks interrupted running work `recovery_required`. Automatic resume is off by default. The System page shows the run/checkpoint and offers the existing Resume demo action. Resume validates workflow version and checkpoint shape and continues at the next uncommitted step. Invalid/incompatible checkpoints return a structured error instead of executing uncertain work.
 
 Durably paused runs are also restored on startup. They remain paused at the existing checkpoint and can use the same resume command without repeating committed steps. Intentional pauses keep `recovery_status=none` and health remains healthy; only a run interrupted while `running` is promoted to `recovery_required`.

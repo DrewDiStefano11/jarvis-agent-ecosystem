@@ -23,6 +23,7 @@ class SimulatorEngine:
         self._runner: asyncio.Task[None] | None = None
         self._resume = asyncio.Event()
         self._resume.set()
+        self._step_lock = asyncio.Lock()
         self._stopped = False
         self.steps = self._build_steps()
         for index, step in enumerate(self.steps):
@@ -232,35 +233,44 @@ class SimulatorEngine:
     async def _run(self) -> None:
         while self.control.currentStep < len(self.steps) and not self._stopped:
             await self._resume.wait()
-            if self.repository.emergency_stop:
-                await asyncio.sleep(0.01)
-                continue
-            step = self.steps[self.control.currentStep]
-            await self._apply_step(step)
-            self.control.currentStep += 1
+            async with self._step_lock:
+                if (
+                    self._stopped
+                    or self.control.state != "running"
+                    or self.repository.emergency_stop
+                ):
+                    continue
+                step = self.steps[self.control.currentStep]
+                await self._apply_step(step)
+                self.control.currentStep += 1
             await asyncio.sleep(self.delay_ms / 1000)
-        if not self._stopped and self.control.currentStep >= len(self.steps):
-            self.control.state = "completed"
-            self._finish_agents()
-            self.repository.notifications["notification-demo-complete"] = Notification(
-                id="notification-demo-complete",
-                title="Trip report completed",
-                message="The deterministic simulated workflow finished.",
-                level="success",
-                taskId="task-demo",
-                createdAt=datetime.now(UTC),
-            )
-            if self.run_id:
-                self.repository.stage_checkpoint(
-                    self.run_id,
-                    self.control.currentStep,
-                    "jarvis.complete",
-                    {"totalSteps": len(self.steps)},
-                    "completed",
+        async with self._step_lock:
+            if (
+                not self._stopped
+                and self.control.state == "running"
+                and self.control.currentStep >= len(self.steps)
+            ):
+                self.control.state = "completed"
+                self._finish_agents()
+                self.repository.notifications["notification-demo-complete"] = Notification(
+                    id="notification-demo-complete",
+                    title="Trip report completed",
+                    message="The deterministic simulated workflow finished.",
+                    level="success",
+                    taskId="task-demo",
+                    createdAt=datetime.now(UTC),
                 )
-            await self.broker.emit(
-                "system.simulator.completed", {"state": "completed"}, "task-demo"
-            )
+                if self.run_id:
+                    self.repository.stage_checkpoint(
+                        self.run_id,
+                        self.control.currentStep,
+                        "jarvis.complete",
+                        {"totalSteps": len(self.steps)},
+                        "completed",
+                    )
+                await self.broker.emit(
+                    "system.simulator.completed", {"state": "completed"}, "task-demo"
+                )
 
     async def _apply_step(self, step: dict[str, Any]) -> None:
         agent = self.repository.agents[step["agent"]]
@@ -370,17 +380,18 @@ class SimulatorEngine:
                 agent.statusMessage = "Available"
 
     async def pause(self) -> SimulatorControl:
-        if self.control.state != "running":
-            raise DomainError("SIMULATOR_NOT_RUNNING", "The simulator is not running.", 409)
-        self.control.state = "paused"
-        self._resume.clear()
-        if self.run_id:
-            step_id = str(self.steps[max(0, self.control.currentStep - 1)]["id"])
-            self.repository.stage_checkpoint(
-                self.run_id, self.control.currentStep, step_id, status="paused"
-            )
-        await self.broker.emit("system.simulator.paused", {"step": self.control.currentStep})
-        return self.control
+        async with self._step_lock:
+            if self.control.state != "running":
+                raise DomainError("SIMULATOR_NOT_RUNNING", "The simulator is not running.", 409)
+            self.control.state = "paused"
+            self._resume.clear()
+            if self.run_id:
+                step_id = str(self.steps[max(0, self.control.currentStep - 1)]["id"])
+                self.repository.stage_checkpoint(
+                    self.run_id, self.control.currentStep, step_id, status="paused"
+                )
+            await self.broker.emit("system.simulator.paused", {"step": self.control.currentStep})
+            return self.control
 
     async def resume(self) -> SimulatorControl:
         if self.control.state not in {"paused", "recovery_required"}:
@@ -419,6 +430,7 @@ class SimulatorEngine:
             "Reset the deterministic demo while preserving durable audit history",
             self.repository.next_sequence(),
             "task-demo",
+            event_session_id=self.repository.event_session_id,
         )
         try:
             self.repository.reset(self.run_id, idempotency)
@@ -434,21 +446,26 @@ class SimulatorEngine:
         return self.control
 
     async def emergency_stop(self) -> None:
-        self.repository.emergency_stop = True
-        if self.control.state == "running":
-            self.control.state = "paused"
-            self._resume.clear()
-        for agent in self.repository.agents.values():
-            if agent.status in ACTIVE_STATES:
-                agent.previousStatus = agent.status
-                agent.status = "paused"
-                agent.statusMessage = "Paused by emergency stop"
-        if self.run_id:
-            step_id = str(self.steps[max(0, self.control.currentStep - 1)]["id"])
-            self.repository.stage_checkpoint(
-                self.run_id, self.control.currentStep, step_id, {"emergencyStop": True}, "paused"
-            )
-        await self.broker.emit("system.emergency_stop", {"active": True})
+        async with self._step_lock:
+            self.repository.emergency_stop = True
+            if self.control.state == "running":
+                self.control.state = "paused"
+                self._resume.clear()
+            for agent in self.repository.agents.values():
+                if agent.status in ACTIVE_STATES:
+                    agent.previousStatus = agent.status
+                    agent.status = "paused"
+                    agent.statusMessage = "Paused by emergency stop"
+            if self.run_id:
+                step_id = str(self.steps[max(0, self.control.currentStep - 1)]["id"])
+                self.repository.stage_checkpoint(
+                    self.run_id,
+                    self.control.currentStep,
+                    step_id,
+                    {"emergencyStop": True},
+                    "paused",
+                )
+            await self.broker.emit("system.emergency_stop", {"active": True})
 
     async def system_resume(self) -> None:
         if not self.repository.emergency_stop:

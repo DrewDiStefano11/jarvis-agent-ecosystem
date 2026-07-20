@@ -3,12 +3,12 @@ from __future__ import annotations
 import json
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -41,6 +41,7 @@ SEED_VERSION = "2.0"
 class IdempotencyClaim:
     response: tuple[int, dict[str, Any]] | None
     owned: bool
+    lease_expires_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -50,14 +51,19 @@ class IdempotencyResult:
     payload: Any
     status: int
     body: dict[str, Any]
+    lease_expires_at: datetime
     resource_id: str | None = None
 
 
 class SqlAlchemyRepository:
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+    def __init__(
+        self, session_factory: sessionmaker[Session], idempotency_lease_seconds: int = 30
+    ) -> None:
         self.session_factory = session_factory
+        self.idempotency_lease_seconds = idempotency_lease_seconds
         self._pending_checkpoint: dict[str, Any] | None = None
         self._pending_workflow_run: dict[str, Any] | None = None
+        self._audit_session_ids: dict[str, str] = {}
         self._load_or_seed()
 
     def _load_or_seed(self) -> None:
@@ -92,6 +98,7 @@ class SqlAlchemyRepository:
             x["id"]: Notification.model_validate(x) for x in seed["notifications"]
         }
         self.audit = [AuditEvent.model_validate(x) for x in seed["audit"]]
+        self._audit_session_ids = {item.id: "seed" for item in self.audit}
 
     def reload(self) -> None:
         self._pending_checkpoint = None
@@ -124,6 +131,9 @@ class SqlAlchemyRepository:
                 self._audit_from_row(row)
                 for row in session.scalars(select(AuditEventRow).order_by(AuditEventRow.timestamp))
             ]
+            self._audit_session_ids = {
+                row.id: row.event_session_id for row in session.scalars(select(AuditEventRow))
+            }
             self._system = session.get(SystemStateRow, 1)
             if self._system is None:
                 self._system = SystemStateRow(
@@ -347,7 +357,9 @@ class SqlAlchemyRepository:
                         new_state=item.newState,
                         correlation_id=item.correlationId,
                         sequence_number=item.sequenceNumber,
-                        event_session_id=self.event_session_id,
+                        event_session_id=self._audit_session_ids.get(
+                            item.id, self.event_session_id
+                        ),
                         timestamp=item.timestamp,
                         payload={
                             "summary": item.summary,
@@ -403,6 +415,7 @@ class SqlAlchemyRepository:
         previous: str | None = None,
         new: str | None = None,
         payload: dict[str, object] | None = None,
+        event_session_id: str | None = None,
     ) -> AuditEvent:
         item = AuditEvent(
             id=f"audit-{uuid4().hex[:12]}",
@@ -421,6 +434,8 @@ class SqlAlchemyRepository:
             else None,
         )
         self.audit.append(item)
+        if event_session_id:
+            self._audit_session_ids[item.id] = event_session_id
         return item
 
     def enqueue_event(
@@ -532,49 +547,102 @@ class SqlAlchemyRepository:
             return row.response_status, row.response_body
 
     def idempotency_claim(self, key: str, command: str, payload: Any) -> IdempotencyClaim:
-        existing = self.idempotency_lookup(key, command, payload)
-        if existing:
-            return IdempotencyClaim(response=existing, owned=False)
+        digest = self.request_hash(payload)
+        now = datetime.now(UTC)
+        lease_expires_at = now + timedelta(seconds=self.idempotency_lease_seconds)
         try:
             with self.session_factory() as session, session.begin():
+                row = session.scalar(
+                    select(IdempotencyRecordRow).where(
+                        IdempotencyRecordRow.idempotency_key == key,
+                        IdempotencyRecordRow.command_type == command,
+                    )
+                )
+                if row:
+                    if row.canonical_request_hash != digest:
+                        raise DomainError(
+                            "IDEMPOTENCY_KEY_CONFLICT",
+                            "The idempotency key was already used with a different request.",
+                            409,
+                        )
+                    if row.response_status != 0:
+                        return IdempotencyClaim(
+                            response=(row.response_status, row.response_body), owned=False
+                        )
+                    reclaimed = session.execute(
+                        update(IdempotencyRecordRow)
+                        .where(
+                            IdempotencyRecordRow.id == row.id,
+                            IdempotencyRecordRow.response_status == 0,
+                            or_(
+                                IdempotencyRecordRow.expiration_at.is_(None),
+                                IdempotencyRecordRow.expiration_at <= now,
+                            ),
+                        )
+                        .values(
+                            created_at=now,
+                            expiration_at=lease_expires_at,
+                            response_body={},
+                            created_resource_id=None,
+                        )
+                        .execution_options(synchronize_session=False)
+                    )
+                    if reclaimed.rowcount == 1:
+                        return IdempotencyClaim(
+                            response=None,
+                            owned=True,
+                            lease_expires_at=lease_expires_at,
+                        )
+                    raise DomainError(
+                        "IDEMPOTENCY_REQUEST_IN_PROGRESS",
+                        "A command with this idempotency key is still in progress.",
+                        409,
+                    )
                 session.add(
                     IdempotencyRecordRow(
                         idempotency_key=key,
                         command_type=command,
-                        canonical_request_hash=self.request_hash(payload),
+                        canonical_request_hash=digest,
                         response_status=0,
                         response_body={},
                         created_resource_id=None,
-                        created_at=datetime.now(UTC),
+                        created_at=now,
+                        expiration_at=lease_expires_at,
                     )
                 )
         except IntegrityError:
-            return IdempotencyClaim(
-                response=self.idempotency_lookup(key, command, payload), owned=False
-            )
-        return IdempotencyClaim(response=None, owned=True)
+            return self.idempotency_claim(key, command, payload)
+        return IdempotencyClaim(response=None, owned=True, lease_expires_at=lease_expires_at)
 
     @staticmethod
     def _store_idempotency(session: Session, result: IdempotencyResult) -> None:
-        row = session.scalar(
-            select(IdempotencyRecordRow).where(
+        completed = session.execute(
+            update(IdempotencyRecordRow)
+            .where(
                 IdempotencyRecordRow.idempotency_key == result.key,
                 IdempotencyRecordRow.command_type == result.command,
+                IdempotencyRecordRow.response_status == 0,
+                IdempotencyRecordRow.expiration_at == result.lease_expires_at,
             )
+            .values(
+                response_status=result.status,
+                response_body=result.body,
+                created_resource_id=result.resource_id,
+                expiration_at=None,
+            )
+            .execution_options(synchronize_session=False)
         )
-        if not row:
-            raise RuntimeError("The idempotency claim disappeared before command commit.")
-        row.response_status = result.status
-        row.response_body = result.body
-        row.created_resource_id = result.resource_id
+        if completed.rowcount != 1:
+            raise RuntimeError("The idempotency claim lease was lost before command commit.")
 
-    def idempotency_abandon(self, key: str, command: str) -> None:
+    def idempotency_abandon(self, key: str, command: str, lease_expires_at: datetime) -> None:
         with self.session_factory() as session, session.begin():
             session.execute(
                 delete(IdempotencyRecordRow).where(
                     IdempotencyRecordRow.idempotency_key == key,
                     IdempotencyRecordRow.command_type == command,
                     IdempotencyRecordRow.response_status == 0,
+                    IdempotencyRecordRow.expiration_at == lease_expires_at,
                 )
             )
 
@@ -793,12 +861,14 @@ class SqlAlchemyRepository:
             and not key.startswith("task-demo-")
         }
         historical_audit = list(self.audit)
+        historical_audit_sessions = dict(self._audit_session_ids)
         seed = build_seed()
         seed_artifact_ids = {item["id"] for item in seed["artifacts"]}
         seed_notification_ids = {item["id"] for item in seed["notifications"]}
         self._load_seed_memory()
         self.tasks.update(user_tasks)
         self.audit = historical_audit
+        self._audit_session_ids = historical_audit_sessions
         self.reset_sequence()
         self.emergency_stop = False
         self._system.recovery_status = "none"

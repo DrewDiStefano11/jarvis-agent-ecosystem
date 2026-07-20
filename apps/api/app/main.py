@@ -54,7 +54,9 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     if settings.auto_migrate:
         _upgrade_database(settings)
     engine = create_database_engine(settings.database_url, settings.sql_echo)
-    repository = SqlAlchemyRepository(create_session_factory(engine))
+    repository = SqlAlchemyRepository(
+        create_session_factory(engine), settings.idempotency_lease_seconds
+    )
     restored_workflow_state = repository.mark_interrupted_workflow()
     app = FastAPI(
         title="Jarvis Agent Ecosystem Simulator",
@@ -92,7 +94,12 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             return None
         claim = repository.idempotency_claim(key, command_type, payload)
         if claim.owned:
-            request.state.idempotency_claim = (key, command_type)
+            assert claim.lease_expires_at is not None
+            request.state.idempotency_claim = (
+                key,
+                command_type,
+                claim.lease_expires_at,
+            )
         return claim.response[1]["data"] if claim.response else None
 
     @app.middleware("http")
@@ -109,6 +116,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         return response
 
     def idempotency_result(
+        request: Request,
         key: str | None,
         command_type: str,
         payload: object,
@@ -118,6 +126,9 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     ) -> IdempotencyResult | None:
         if not key:
             return None
+        claim = getattr(request.state, "idempotency_claim", None)
+        if not claim or claim[0] != key or claim[1] != command_type:
+            raise RuntimeError("The request does not own the idempotency claim.")
         encoded = data.model_dump(mode="json") if hasattr(data, "model_dump") else data
         return IdempotencyResult(
             key=key,
@@ -125,6 +136,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             payload=payload,
             status=status,
             body={"data": encoded},
+            lease_expires_at=claim[2],
             resource_id=resource_id,
         )
 
@@ -293,7 +305,13 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             {"agent": item.model_dump(mode="json")},
             agent_id=item.id,
             idempotency=idempotency_result(
-                idempotency_key, "temporary-agent.create", payload, item, 201, item.id
+                request,
+                idempotency_key,
+                "temporary-agent.create",
+                payload,
+                item,
+                201,
+                item.id,
             ),
         )
         return ApiResponse(data=item)
@@ -334,7 +352,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             item.id,
             audit={"summary": f"Created task: {item.title}"},
             idempotency=idempotency_result(
-                idempotency_key, "task.create", payload, item, 201, item.id
+                request, idempotency_key, "task.create", payload, item, 201, item.id
             ),
         )
         return ApiResponse(data=item)
@@ -345,6 +363,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         idempotency_key: str | None = None,
         idempotency_command: str | None = None,
         idempotency_payload: object | None = None,
+        request: Request | None = None,
     ) -> Task:
         item = repository.require(repository.tasks, task_id, "task")
         assert isinstance(item, Task)
@@ -382,12 +401,13 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             item.id,
             audit={"summary": item.statusMessage},
             idempotency=idempotency_result(
+                request,
                 idempotency_key,
                 idempotency_command,
                 idempotency_payload,
                 item,
             )
-            if idempotency_command and idempotency_payload is not None
+            if request and idempotency_command and idempotency_payload is not None
             else None,
         )
         return item
@@ -409,7 +429,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         payload = {"taskId": task_id}
         if replay := replay_idempotent(request, idempotency_key, "task.retry", payload):
             return ApiResponse(data=Task.model_validate(replay))
-        item = await task_action(task_id, "retry", idempotency_key, "task.retry", payload)
+        item = await task_action(task_id, "retry", idempotency_key, "task.retry", payload, request)
         return ApiResponse(data=item)
 
     @app.post("/api/tasks/{task_id}/cancel", response_model=ApiResponse)
@@ -431,6 +451,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         idempotency_key: str | None = None,
         idempotency_command: str | None = None,
         idempotency_payload: object | None = None,
+        request: Request | None = None,
     ) -> Approval:
         item = repository.require(repository.approvals, approval_id, "approval")
         assert isinstance(item, Approval)
@@ -466,12 +487,13 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "payload": {"approvalId": item.id, "status": decision},
             },
             idempotency=idempotency_result(
+                request,
                 idempotency_key,
                 idempotency_command,
                 idempotency_payload,
                 item,
             )
-            if idempotency_command and idempotency_payload is not None
+            if request and idempotency_command and idempotency_payload is not None
             else None,
         )
         return item
@@ -487,7 +509,13 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         if replay := replay_idempotent(request, idempotency_key, "approval.approve", payload):
             return ApiResponse(data=Approval.model_validate(replay))
         item = await decide(
-            approval_id, "approved", body, idempotency_key, "approval.approve", payload
+            approval_id,
+            "approved",
+            body,
+            idempotency_key,
+            "approval.approve",
+            payload,
+            request,
         )
         return ApiResponse(data=item)
 
@@ -502,7 +530,13 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         if replay := replay_idempotent(request, idempotency_key, "approval.reject", payload):
             return ApiResponse(data=Approval.model_validate(replay))
         item = await decide(
-            approval_id, "rejected", body, idempotency_key, "approval.reject", payload
+            approval_id,
+            "rejected",
+            body,
+            idempotency_key,
+            "approval.reject",
+            payload,
+            request,
         )
         return ApiResponse(data=item)
 
@@ -551,7 +585,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             return ApiResponse(data=replay)
         expected = simulator.control.model_copy(deep=True, update={"state": "running"})
         result = await simulator.start(
-            idempotency_result(idempotency_key, "simulator.start", payload, expected)
+            idempotency_result(request, idempotency_key, "simulator.start", payload, expected)
         )
         return ApiResponse(data=result)
 
@@ -573,7 +607,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             return ApiResponse(data=replay)
         expected = SimulatorControl(accelerated=simulator.delay_ms <= 10)
         result = await simulator.reset(
-            idempotency_result(idempotency_key, "simulator.reset", payload, expected)
+            idempotency_result(request, idempotency_key, "simulator.reset", payload, expected)
         )
         return ApiResponse(data=result)
 
