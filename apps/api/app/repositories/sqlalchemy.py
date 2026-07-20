@@ -38,6 +38,7 @@ SEED_VERSION = "2.0"
 class SqlAlchemyRepository:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self.session_factory = session_factory
+        self._pending_checkpoint: dict[str, Any] | None = None
         self._load_or_seed()
 
     def _load_or_seed(self) -> None:
@@ -398,6 +399,7 @@ class SqlAlchemyRepository:
         return item
 
     def enqueue_event(self, envelope: dict[str, Any]) -> None:
+        pending_checkpoint = self._pending_checkpoint
         with self.session_factory() as session, session.begin():
             self._persist_entities(session)
             self._persist_audit(session)
@@ -416,6 +418,12 @@ class SqlAlchemyRepository:
                     publish_attempt_count=0,
                 )
             )
+            if pending_checkpoint:
+                self._write_checkpoint(session, pending_checkpoint)
+        if pending_checkpoint:
+            self._system.last_checkpoint_id = pending_checkpoint["id"]
+            self._system.simulator_status = pending_checkpoint["status"]
+            self._pending_checkpoint = None
 
     def pending_outbox(self) -> list[dict[str, Any]]:
         with self.session_factory() as session:
@@ -592,6 +600,38 @@ class SqlAlchemyRepository:
         simulator_variables: dict[str, Any] | None = None,
         status: str = "running",
     ) -> str:
+        checkpoint = self._build_checkpoint(
+            run_id, step_index, step_identifier, simulator_variables, status
+        )
+        with self.session_factory() as session, session.begin():
+            self._write_checkpoint(session, checkpoint)
+        self._system.last_checkpoint_id = checkpoint["id"]
+        self._system.simulator_status = status
+        return str(checkpoint["id"])
+
+    def stage_checkpoint(
+        self,
+        run_id: str,
+        step_index: int,
+        step_identifier: str,
+        simulator_variables: dict[str, Any] | None = None,
+        status: str = "running",
+    ) -> str:
+        checkpoint = self._build_checkpoint(
+            run_id, step_index, step_identifier, simulator_variables, status
+        )
+        checkpoint["payload"]["lastCommittedSequenceNumber"] = self.sequence + 1
+        self._pending_checkpoint = checkpoint
+        return str(checkpoint["id"])
+
+    def _build_checkpoint(
+        self,
+        run_id: str,
+        step_index: int,
+        step_identifier: str,
+        simulator_variables: dict[str, Any] | None,
+        status: str,
+    ) -> dict[str, Any]:
         checkpoint_id = f"checkpoint-{uuid4().hex}"
         payload = {
             "workflowVersion": "2.0",
@@ -615,35 +655,42 @@ class SqlAlchemyRepository:
             "simulatorVariables": simulator_variables or {},
         }
         self.validate_checkpoint(payload)
-        now = datetime.now(UTC)
-        with self.session_factory() as session, session.begin():
-            session.add(
-                WorkflowCheckpointRow(
-                    id=checkpoint_id,
-                    workflow_run_id=run_id,
-                    workflow_version="2.0",
-                    step_index=step_index,
-                    step_identifier=step_identifier,
-                    root_task_id="task-demo",
-                    payload=payload,
-                    created_at=now,
-                )
+        return {
+            "id": checkpoint_id,
+            "run_id": run_id,
+            "step_index": step_index,
+            "step_identifier": step_identifier,
+            "payload": payload,
+            "status": status,
+            "created_at": datetime.now(UTC),
+        }
+
+    @staticmethod
+    def _write_checkpoint(session: Session, checkpoint: dict[str, Any]) -> None:
+        session.add(
+            WorkflowCheckpointRow(
+                id=checkpoint["id"],
+                workflow_run_id=checkpoint["run_id"],
+                workflow_version="2.0",
+                step_index=checkpoint["step_index"],
+                step_identifier=checkpoint["step_identifier"],
+                root_task_id="task-demo",
+                payload=checkpoint["payload"],
+                created_at=checkpoint["created_at"],
             )
-            run = session.get(WorkflowRunRow, run_id)
-            if run:
-                run.current_step_index = step_index
-                run.current_step_identifier = step_identifier
-                run.checkpoint_id = checkpoint_id
-                run.status = status
-                run.updated_at = now
-                if status == "completed":
-                    run.completed_at = now
-            state = session.get(SystemStateRow, 1)
-            state.last_checkpoint_id = checkpoint_id
-            state.simulator_status = status
-        self._system.last_checkpoint_id = checkpoint_id
-        self._system.simulator_status = status
-        return checkpoint_id
+        )
+        run = session.get(WorkflowRunRow, checkpoint["run_id"])
+        if run:
+            run.current_step_index = checkpoint["step_index"]
+            run.current_step_identifier = checkpoint["step_identifier"]
+            run.checkpoint_id = checkpoint["id"]
+            run.status = checkpoint["status"]
+            run.updated_at = checkpoint["created_at"]
+            if checkpoint["status"] == "completed":
+                run.completed_at = checkpoint["created_at"]
+        state = session.get(SystemStateRow, 1)
+        state.last_checkpoint_id = checkpoint["id"]
+        state.simulator_status = checkpoint["status"]
 
     def load_checkpoint(self, checkpoint_id: str) -> dict[str, Any]:
         with self.session_factory() as session:

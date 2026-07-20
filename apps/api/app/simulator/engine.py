@@ -207,7 +207,7 @@ class SimulatorEngine:
         self.control.state = "running"
         self.run_id = f"run-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}-{id(self):x}"
         self.repository.create_workflow_run(self.run_id, len(self.steps))
-        self.repository.checkpoint(
+        self.repository.stage_checkpoint(
             self.run_id,
             0,
             "workflow.start",
@@ -231,13 +231,6 @@ class SimulatorEngine:
             step = self.steps[self.control.currentStep]
             await self._apply_step(step)
             self.control.currentStep += 1
-            if self.run_id:
-                self.repository.checkpoint(
-                    self.run_id,
-                    self.control.currentStep,
-                    str(step["id"]),
-                    {"totalSteps": len(self.steps)},
-                )
             await asyncio.sleep(self.delay_ms / 1000)
         if not self._stopped and self.control.currentStep >= len(self.steps):
             self.control.state = "completed"
@@ -250,17 +243,17 @@ class SimulatorEngine:
                 taskId="task-demo",
                 createdAt=datetime.now(UTC),
             )
-            await self.broker.emit(
-                "system.simulator.completed", {"state": "completed"}, "task-demo"
-            )
             if self.run_id:
-                self.repository.checkpoint(
+                self.repository.stage_checkpoint(
                     self.run_id,
                     self.control.currentStep,
                     "jarvis.complete",
                     {"totalSteps": len(self.steps)},
                     "completed",
                 )
+            await self.broker.emit(
+                "system.simulator.completed", {"state": "completed"}, "task-demo"
+            )
 
     async def _apply_step(self, step: dict[str, Any]) -> None:
         agent = self.repository.agents[step["agent"]]
@@ -289,6 +282,13 @@ class SimulatorEngine:
             self._create_children()
         if artifact_kind := step.get("artifact"):
             self._create_artifact(artifact_kind)
+        if self.run_id:
+            self.repository.stage_checkpoint(
+                self.run_id,
+                self.control.currentStep + 1,
+                str(step["id"]),
+                {"totalSteps": len(self.steps)},
+            )
         await self.broker.emit(
             "agent.status.changed",
             {"agent": agent.model_dump(mode="json"), "message": step["message"]},
@@ -369,7 +369,7 @@ class SimulatorEngine:
         self._resume.clear()
         if self.run_id:
             step_id = str(self.steps[max(0, self.control.currentStep - 1)]["id"])
-            self.repository.checkpoint(
+            self.repository.stage_checkpoint(
                 self.run_id, self.control.currentStep, step_id, status="paused"
             )
         await self.broker.emit("system.simulator.paused", {"step": self.control.currentStep})
@@ -432,7 +432,7 @@ class SimulatorEngine:
                 agent.statusMessage = "Paused by emergency stop"
         if self.run_id:
             step_id = str(self.steps[max(0, self.control.currentStep - 1)]["id"])
-            self.repository.checkpoint(
+            self.repository.stage_checkpoint(
                 self.run_id, self.control.currentStep, step_id, {"emergencyStop": True}, "paused"
             )
         await self.broker.emit("system.emergency_stop", {"active": True})
