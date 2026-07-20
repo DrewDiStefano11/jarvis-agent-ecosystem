@@ -8,6 +8,8 @@ Representative valid agent transitions include `idle → assigned → planning`,
 
 Emergency stop stores each active agent's prior state, marks it paused, and freezes the simulator checkpoint. System resume restores those states; simulator resume is a separate explicit command.
 
+Discovering an expired pending approval during a decision commits one `approval.expired` event with the approval row, audit transition, and outbox envelope. The triggering decision receives `APPROVAL_EXPIRED`; later attempts receive `APPROVAL_ALREADY_PROCESSED` and do not emit another expiration event.
+
 Phase 2A adds `eventSessionId` to each envelope. The complete validated envelope enters the SQLite outbox in the command commit before WebSocket publication. Sequence numbers never repeat inside one session; reset creates a new session. Stable event IDs make retry delivery safe, and one failed client cannot block dispatch.
 
 Frontend duplicate detection is scoped to `eventSessionId`. A session change resets the stored sequence before evaluating the new event, so a new session's sequence-zero snapshot and subsequent low-numbered events are accepted.

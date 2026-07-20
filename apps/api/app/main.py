@@ -73,6 +73,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         allow_headers=["Content-Type", "Idempotency-Key"],
     )
     broker = EventBroker(repository)
+    approval_decision_locks: dict[str, asyncio.Lock] = {}
     simulator = SimulatorEngine(
         repository,
         broker,
@@ -464,50 +465,74 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         idempotency_payload: object | None = None,
         request: Request | None = None,
     ) -> Approval:
-        item = repository.require(repository.approvals, approval_id, "approval")
-        assert isinstance(item, Approval)
-        if repository.emergency_stop:
-            raise DomainError(
-                "EMERGENCY_STOP_ACTIVE",
-                "Approval actions are blocked while emergency stop is active.",
-                423,
+        lock = approval_decision_locks.setdefault(approval_id, asyncio.Lock())
+        async with lock:
+            item = repository.require(repository.approvals, approval_id, "approval")
+            assert isinstance(item, Approval)
+            if repository.emergency_stop:
+                raise DomainError(
+                    "EMERGENCY_STOP_ACTIVE",
+                    "Approval actions are blocked while emergency stop is active.",
+                    423,
+                )
+            if item.status != "pending":
+                raise DomainError(
+                    "APPROVAL_ALREADY_PROCESSED", f"Approval is already {item.status}.", 409
+                )
+            if item.expiresAt <= datetime.now(UTC):
+                expired_at = datetime.now(UTC)
+                item.status = "expired"
+                item.reviewedBy = "system"
+                item.reviewedAt = expired_at
+                item.decisionNote = "Expired before review."
+                await broker.emit(
+                    "approval.expired",
+                    {"approval": item.model_dump(mode="json")},
+                    item.taskId,
+                    item.requestedByAgentId,
+                    audit={
+                        "summary": "Approval expired before a decision",
+                        "previous": "pending",
+                        "new": "expired",
+                        "payload": {
+                            "approvalId": item.id,
+                            "status": "expired",
+                            "requestedByAgentId": item.requestedByAgentId,
+                            "expiresAt": item.expiresAt.isoformat(),
+                        },
+                    },
+                )
+                raise DomainError("APPROVAL_EXPIRED", "Expired approvals cannot be processed.", 409)
+            if decision == "approved" and item.riskLevel == "black":
+                raise DomainError(
+                    "BLACK_RISK_PROHIBITED", "Black-risk actions cannot be approved.", 403
+                )
+            item.status = decision
+            item.reviewedBy, item.reviewedAt, item.decisionNote = (
+                body.reviewedBy,
+                datetime.now(UTC),
+                body.decisionNote,
             )
-        if item.status != "pending":
-            raise DomainError(
-                "APPROVAL_ALREADY_PROCESSED", f"Approval is already {item.status}.", 409
+            await broker.emit(
+                f"approval.{decision}",
+                {"approval": item.model_dump(mode="json")},
+                item.taskId,
+                item.requestedByAgentId,
+                audit={
+                    "summary": f"Approval {decision}",
+                    "payload": {"approvalId": item.id, "status": decision},
+                },
+                idempotency=idempotency_result(
+                    request,
+                    idempotency_key,
+                    idempotency_command,
+                    idempotency_payload,
+                    item,
+                )
+                if request and idempotency_command and idempotency_payload is not None
+                else None,
             )
-        if item.expiresAt <= datetime.now(UTC):
-            raise DomainError("APPROVAL_EXPIRED", "Expired approvals cannot be processed.", 409)
-        if decision == "approved" and item.riskLevel == "black":
-            raise DomainError(
-                "BLACK_RISK_PROHIBITED", "Black-risk actions cannot be approved.", 403
-            )
-        item.status = decision
-        item.reviewedBy, item.reviewedAt, item.decisionNote = (
-            body.reviewedBy,
-            datetime.now(UTC),
-            body.decisionNote,
-        )
-        await broker.emit(
-            f"approval.{decision}",
-            {"approval": item.model_dump(mode="json")},
-            item.taskId,
-            item.requestedByAgentId,
-            audit={
-                "summary": f"Approval {decision}",
-                "payload": {"approvalId": item.id, "status": decision},
-            },
-            idempotency=idempotency_result(
-                request,
-                idempotency_key,
-                idempotency_command,
-                idempotency_payload,
-                item,
-            )
-            if request and idempotency_command and idempotency_payload is not None
-            else None,
-        )
-        return item
+            return item
 
     @app.post("/api/approvals/{approval_id}/approve", response_model=ApiResponse)
     async def approve(
@@ -633,16 +658,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 validate_transition("idle", "reviewing")
             except InvalidTransitionError as exc:
                 raise DomainError("INVALID_STATE_TRANSITION", str(exc), 409) from exc
-        task_item = repository.tasks["task-demo"]
-        task_item.status = "failed"
-        task_item.statusMessage = body.scenario.replace("_", " ").title()
-        task_item.error = {
-            "code": body.scenario.upper(),
-            "message": "Controlled simulated failure.",
-        }
-        simulator.control.state = "failed"
-        await broker.emit("error.simulated", {"scenario": body.scenario}, task_item.id)
-        return ApiResponse(data=task_item)
+        return ApiResponse(data=await simulator.fail(body.scenario))
 
     @app.websocket("/ws/events")
     async def websocket_events(websocket: WebSocket) -> None:

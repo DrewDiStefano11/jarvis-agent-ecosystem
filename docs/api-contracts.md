@@ -13,7 +13,9 @@ Routes:
 - Simulator: `POST /api/simulator/{start|pause|resume|reset|failure|approval}`
 - Events: `WS /ws/events`
 
-Approvals are idempotency-guarded: processed, expired, unknown, black-risk, or emergency-blocked decisions never execute. No Phase 1 command performs a real external action.
+Approvals are idempotency-guarded: processed, expired, unknown, black-risk, or emergency-blocked decisions never execute. A pending approval discovered past its expiration commits a durable `expired` transition before returning `APPROVAL_EXPIRED`; subsequent attempts return `APPROVAL_ALREADY_PROCESSED`. No Phase 1 command performs a real external action.
+
+Simulator start accepts only idle state with emergency stop inactive. Running, paused, recovery-required, completed, and failed states return typed conflicts without creating a run, checkpoint, audit, or outbox event. Controlled failure is terminal: active or paused work commits a failed checkpoint and becomes ineligible for resume, while idle failure persists system/task state without fabricating a workflow run.
 
 Phase 2A mutation routes accept an optional `Idempotency-Key` header for task creation, approval decisions, task retry, temporary-agent creation, simulator start, and reset. Same-key/same-request calls replay the durable response; changed content returns `IDEMPOTENCY_KEY_CONFLICT` (409). System status additively reports storage, migration, event-session, outbox, checkpoint, and recovery fields. Health distinguishes process, database, schema, dispatcher, and recovery state without exposing database paths.
 

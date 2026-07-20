@@ -785,11 +785,17 @@ class SqlAlchemyRepository:
             run.checkpoint_id = checkpoint["id"]
             run.status = checkpoint["status"]
             run.updated_at = checkpoint["created_at"]
-            if checkpoint["status"] == "completed":
+            if checkpoint["status"] in {"completed", "failed"}:
                 run.completed_at = checkpoint["created_at"]
+                run.resume_eligibility = False
+            if checkpoint["status"] == "failed":
+                scenario = checkpoint["payload"].get("simulatorVariables", {}).get("scenario")
+                run.failure_reason = str(scenario or "Controlled simulated failure.")
         state = session.get(SystemStateRow, 1)
         state.last_checkpoint_id = checkpoint["id"]
         state.simulator_status = checkpoint["status"]
+        if checkpoint["status"] == "failed":
+            state.recovery_status = "none"
 
     def load_checkpoint(self, checkpoint_id: str) -> dict[str, Any]:
         with self.session_factory() as session:
@@ -907,6 +913,7 @@ class SqlAlchemyRepository:
                         run.updated_at = now
                         run.completed_at = now
                         run.pause_reason = "Reset by local operator"
+                        run.resume_eligibility = False
                 self._persist_entities(session)
                 self._persist_audit(session)
                 self._system.updated_at = datetime.now(UTC)

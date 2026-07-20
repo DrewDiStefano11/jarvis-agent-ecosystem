@@ -14,6 +14,7 @@ from sqlalchemy import create_engine, func, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
 
 from app.db.models import (
+    ApprovalRow,
     AuditEventRow,
     IdempotencyRecordRow,
     OutboxEventRow,
@@ -599,6 +600,488 @@ def test_health_degrades_for_unreachable_database_or_stale_schema(tmp_path: Path
         assert stale["status"] == "degraded"
         assert stale["databaseReachable"] is True
         assert stale["schemaCurrent"] is False
+
+
+def test_active_failure_is_atomic_terminal_and_survives_repeated_recreation(
+    tmp_path: Path,
+) -> None:
+    url = database_url(tmp_path / "active-failure.db")
+    app = create_app(delay_ms=20, database_url=url)
+    with TestClient(app) as api:
+        assert api.post("/api/simulator/start").status_code == 200
+        for _ in range(100):
+            before = api.get("/api/system/status").json()["data"]
+            if before["simulator"]["currentStep"] >= 1:
+                break
+            asyncio.run(asyncio.sleep(0.005))
+        runner = app.state.simulator._runner
+        failed = api.post("/api/simulator/failure", json={"scenario": "scout_research_failure"})
+        assert failed.status_code == 200
+        assert failed.json()["data"]["status"] == "failed"
+        assert runner is not None and runner.done()
+        assert app.state.simulator._runner is None
+        terminal = api.get("/api/system/status").json()["data"]
+        failed_step = terminal["simulator"]["currentStep"]
+        assert terminal["simulator"]["state"] == "failed"
+        assert api.get("/api/health").status_code == 200
+        assert (
+            api.get("/api/system/status").json()["data"]["simulator"]["currentStep"] == failed_step
+        )
+        run_id = terminal["activeWorkflowRunId"]
+        checkpoint_id = terminal["lastCheckpointId"]
+
+    engine = create_engine(url)
+    with engine.connect() as connection:
+        task = connection.execute(
+            select(TaskRow.status, TaskRow.payload).where(TaskRow.id == "task-demo")
+        ).one()
+        run = connection.execute(
+            select(
+                WorkflowRunRow.status,
+                WorkflowRunRow.checkpoint_id,
+                WorkflowRunRow.current_step_index,
+                WorkflowRunRow.current_step_identifier,
+                WorkflowRunRow.completed_at,
+                WorkflowRunRow.resume_eligibility,
+                WorkflowRunRow.failure_reason,
+            ).where(WorkflowRunRow.id == run_id)
+        ).one()
+        checkpoint = connection.execute(
+            select(WorkflowCheckpointRow.step_index, WorkflowCheckpointRow.payload).where(
+                WorkflowCheckpointRow.id == checkpoint_id
+            )
+        ).one()
+        system = connection.execute(
+            select(
+                SystemStateRow.simulator_status,
+                SystemStateRow.last_checkpoint_id,
+                SystemStateRow.recovery_status,
+            )
+        ).one()
+        assert task.status == task.payload["status"] == "failed"
+        assert run.status == "failed"
+        assert run.checkpoint_id == checkpoint_id
+        assert run.current_step_index == checkpoint.step_index == failed_step
+        assert run.current_step_identifier == "failure.scout_research_failure"
+        assert run.completed_at is not None
+        assert run.resume_eligibility is False
+        assert run.failure_reason == "scout_research_failure"
+        assert checkpoint.payload["stepIndex"] == failed_step
+        assert checkpoint.payload["taskStatuses"]["task-demo"] == "failed"
+        assert system == ("failed", checkpoint_id, "none")
+        assert (
+            connection.scalar(
+                select(func.count())
+                .select_from(AuditEventRow)
+                .where(AuditEventRow.event_type == "error.simulated")
+            )
+            == 1
+        )
+        assert (
+            connection.scalar(
+                select(func.count())
+                .select_from(OutboxEventRow)
+                .where(OutboxEventRow.event_type == "error.simulated")
+            )
+            == 1
+        )
+        baseline_counts = (
+            connection.scalar(select(func.count()).select_from(AuditEventRow)),
+            connection.scalar(select(func.count()).select_from(OutboxEventRow)),
+        )
+
+    for _ in range(2):
+        with TestClient(create_app(delay_ms=1, database_url=url)) as recreated:
+            restored = recreated.get("/api/system/status").json()["data"]
+            assert restored["simulator"] == {
+                "state": "failed",
+                "currentStep": failed_step,
+                "totalSteps": 25,
+                "accelerated": True,
+            }
+            assert restored["recoveryRequired"] is False
+            assert recreated.post("/api/simulator/resume").status_code == 409
+            assert (
+                recreated.post("/api/simulator/start").json()["error"]["code"]
+                == "SIMULATOR_RESET_REQUIRED"
+            )
+            assert (
+                recreated.get("/api/tasks/task-demo").json()["data"]["progress"]
+                == task.payload["progress"]
+            )
+    with engine.connect() as connection:
+        assert (
+            connection.scalar(select(func.count()).select_from(AuditEventRow)),
+            connection.scalar(select(func.count()).select_from(OutboxEventRow)),
+        ) == baseline_counts
+
+
+def test_failure_waits_for_published_step_and_persists_non_regressing_checkpoint(
+    tmp_path: Path,
+) -> None:
+    url = database_url(tmp_path / "failure-publication-race.db")
+    app = create_app(delay_ms=20, database_url=url)
+    step_committed = threading.Event()
+    release_publication = threading.Event()
+    original_publish = app.state.broker._publish
+    delayed_once = False
+
+    async def delayed_publish(event) -> None:
+        nonlocal delayed_once
+        if event.eventType == "agent.status.changed" and not delayed_once:
+            delayed_once = True
+            step_committed.set()
+            assert await asyncio.to_thread(release_publication.wait, 5)
+        await original_publish(event)
+
+    app.state.broker._publish = delayed_publish
+    with TestClient(app) as api, ThreadPoolExecutor(max_workers=1) as pool:
+        assert api.post("/api/simulator/start").status_code == 200
+        assert step_committed.wait(5)
+        failure = pool.submit(
+            api.post,
+            "/api/simulator/failure",
+            json={"scenario": "archive_unavailable"},
+        )
+        asyncio.run(asyncio.sleep(0.05))
+        assert not failure.done()
+        release_publication.set()
+        assert failure.result(timeout=5).status_code == 200
+        status = api.get("/api/system/status").json()["data"]
+        assert status["simulator"]["state"] == "failed"
+        assert status["simulator"]["currentStep"] == 1
+        assert app.state.simulator._runner is None
+        audits = api.get("/api/audit-events").json()["data"]
+        assert [
+            item["payload"]["step"]
+            for item in audits
+            if item["eventType"] == "agent.status.changed"
+        ] == [1]
+        asyncio.run(asyncio.sleep(0.05))
+        assert api.get("/api/system/status").json()["data"]["simulator"]["currentStep"] == 1
+
+    with create_engine(url).connect() as connection:
+        run = connection.execute(
+            select(
+                WorkflowRunRow.current_step_index,
+                WorkflowRunRow.checkpoint_id,
+                WorkflowRunRow.status,
+            )
+        ).one()
+        checkpoint = connection.execute(
+            select(WorkflowCheckpointRow.step_index, WorkflowCheckpointRow.payload).where(
+                WorkflowCheckpointRow.id == run.checkpoint_id
+            )
+        ).one()
+        assert run.current_step_index == checkpoint.step_index == 1
+        assert run.status == "failed"
+        assert checkpoint.payload["stepIndex"] == 1
+
+
+def test_paused_failure_stops_blocked_runner_and_failure_rollback_restores_pause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url = database_url(tmp_path / "paused-failure-rollback.db")
+    app = create_app(delay_ms=20, database_url=url)
+    original_commit = UnitOfWork.commit
+
+    def fail_commit(_: UnitOfWork) -> None:
+        raise RuntimeError("controlled failed-transition commit failure")
+
+    with TestClient(app, raise_server_exceptions=False) as api:
+        assert api.post("/api/simulator/start").status_code == 200
+        asyncio.run(asyncio.sleep(0.04))
+        paused = api.post("/api/simulator/pause").json()["data"]
+        old_checkpoint = api.get("/api/system/status").json()["data"]["lastCheckpointId"]
+        monkeypatch.setattr(UnitOfWork, "commit", fail_commit)
+        failed_commit = api.post("/api/simulator/failure", json={"scenario": "archive_unavailable"})
+        monkeypatch.setattr(UnitOfWork, "commit", original_commit)
+        assert failed_commit.status_code == 500
+        rolled_back = api.get("/api/system/status").json()["data"]
+        assert rolled_back["simulator"]["state"] == "paused"
+        assert rolled_back["simulator"]["currentStep"] == paused["currentStep"]
+        assert rolled_back["lastCheckpointId"] == old_checkpoint
+        assert api.get("/api/tasks/task-demo").json()["data"]["status"] != "failed"
+        successful = api.post("/api/simulator/failure", json={"scenario": "sentinel_rejection"})
+        assert successful.status_code == 200
+        assert app.state.simulator._runner is None
+        assert api.post("/api/simulator/resume").status_code == 409
+        assert api.get("/api/health").status_code == 200
+        assert api.post("/api/simulator/reset").status_code == 200
+
+    with create_engine(url).connect() as connection:
+        assert (
+            connection.scalar(
+                select(func.count())
+                .select_from(WorkflowCheckpointRow)
+                .where(WorkflowCheckpointRow.step_identifier == "failure.archive_unavailable")
+            )
+            == 0
+        )
+        assert (
+            connection.scalar(
+                select(func.count())
+                .select_from(AuditEventRow)
+                .where(
+                    AuditEventRow.payload["payload"]["scenario"].as_string()
+                    == "archive_unavailable"
+                )
+            )
+            == 0
+        )
+        assert (
+            connection.scalar(
+                select(func.count())
+                .select_from(OutboxEventRow)
+                .where(
+                    OutboxEventRow.envelope["payload"]["scenario"].as_string()
+                    == "archive_unavailable"
+                )
+            )
+            == 0
+        )
+
+
+def test_idle_failure_is_durable_without_fabricating_workflow_run(tmp_path: Path) -> None:
+    url = database_url(tmp_path / "idle-failure.db")
+    with TestClient(create_app(delay_ms=1, database_url=url)) as first:
+        assert (
+            first.post(
+                "/api/simulator/failure", json={"scenario": "websocket_disconnect"}
+            ).status_code
+            == 200
+        )
+        assert first.get("/api/system/status").json()["data"]["simulator"]["state"] == "failed"
+    with create_engine(url).connect() as connection:
+        assert connection.scalar(select(func.count()).select_from(WorkflowRunRow)) == 0
+        assert connection.scalar(select(func.count()).select_from(WorkflowCheckpointRow)) == 0
+        assert connection.scalar(select(SystemStateRow.simulator_status)) == "failed"
+    with TestClient(create_app(delay_ms=1, database_url=url)) as second:
+        assert second.get("/api/system/status").json()["data"]["simulator"]["state"] == "failed"
+        assert (
+            second.post("/api/simulator/start").json()["error"]["code"]
+            == "SIMULATOR_RESET_REQUIRED"
+        )
+        assert second.post("/api/simulator/reset").status_code == 200
+        assert second.get("/api/system/status").json()["data"]["simulator"]["state"] == "idle"
+
+
+def _durable_mutation_counts(url: str) -> tuple[int, int, int, int]:
+    with create_engine(url).connect() as connection:
+        return (
+            connection.scalar(select(func.count()).select_from(WorkflowRunRow)) or 0,
+            connection.scalar(select(func.count()).select_from(WorkflowCheckpointRow)) or 0,
+            connection.scalar(
+                select(func.count())
+                .select_from(AuditEventRow)
+                .where(AuditEventRow.event_type == "system.simulator.started")
+            )
+            or 0,
+            connection.scalar(
+                select(func.count())
+                .select_from(OutboxEventRow)
+                .where(OutboxEventRow.event_type == "system.simulator.started")
+            )
+            or 0,
+        )
+
+
+def test_start_rejects_every_non_idle_state_without_creating_durable_work(
+    tmp_path: Path,
+) -> None:
+    cases = {
+        "paused": "SIMULATOR_RESUME_OR_RESET_REQUIRED",
+        "recovery": "SIMULATOR_RECOVERY_REQUIRED",
+        "failed": "SIMULATOR_RESET_REQUIRED",
+        "completed": "SIMULATOR_RESET_REQUIRED",
+        "emergency": "EMERGENCY_STOP_ACTIVE",
+        "running": "SIMULATOR_ALREADY_RUNNING",
+    }
+    for case, error_code in cases.items():
+        url = database_url(tmp_path / f"start-guard-{case}.db")
+        if case == "failed":
+            with TestClient(create_app(delay_ms=1, database_url=url)) as setup:
+                setup.post("/api/simulator/failure", json={"scenario": "sentinel_rejection"})
+        elif case == "emergency":
+            with TestClient(create_app(delay_ms=1, database_url=url)) as setup:
+                setup.post("/api/system/emergency-stop")
+        else:
+            with TestClient(
+                create_app(delay_ms=20 if case != "completed" else 1, database_url=url)
+            ) as setup:
+                setup.post("/api/simulator/start")
+                if case == "paused":
+                    asyncio.run(asyncio.sleep(0.03))
+                    setup.post("/api/simulator/pause")
+                elif case == "completed":
+                    for _ in range(200):
+                        if (
+                            setup.get("/api/system/status").json()["data"]["simulator"]["state"]
+                            == "completed"
+                        ):
+                            break
+                        asyncio.run(asyncio.sleep(0.005))
+                elif case == "running":
+                    setup.app.state.simulator._resume.clear()
+                    asyncio.run(asyncio.sleep(0.02))
+                    before = _durable_mutation_counts(url)
+                    rejected = setup.post("/api/simulator/start")
+                    assert rejected.json()["error"]["code"] == error_code
+                    assert _durable_mutation_counts(url) == before
+                    setup.post("/api/simulator/reset")
+                    continue
+
+        with TestClient(create_app(delay_ms=1, database_url=url)) as verifier:
+            before = _durable_mutation_counts(url)
+            rejected = verifier.post("/api/simulator/start")
+            assert rejected.status_code == 409
+            assert rejected.json()["error"]["code"] == error_code
+            assert _durable_mutation_counts(url) == before
+            assert verifier.post("/api/simulator/reset").status_code == 200
+            assert verifier.post("/api/simulator/start").status_code == 200
+            assert verifier.post("/api/simulator/reset").status_code == 200
+
+
+def test_expired_pending_approval_commits_once_restarts_and_abandons_claim(
+    tmp_path: Path,
+) -> None:
+    url = database_url(tmp_path / "approval-expiration.db")
+    app = create_app(delay_ms=1, database_url=url)
+    approval = app.state.repository.approvals["approval-pending"]
+    approval.expiresAt = datetime.now(UTC) - timedelta(seconds=1)
+    app.state.repository.persist()
+    headers = {"Idempotency-Key": "expired-decision"}
+    with TestClient(app) as api:
+        with api.websocket_connect("/ws/events") as socket:
+            snapshot = socket.receive_json()
+            first = api.post("/api/approvals/approval-pending/approve", json={}, headers=headers)
+            event = socket.receive_json()
+        assert first.status_code == 409
+        assert first.json()["error"]["code"] == "APPROVAL_EXPIRED"
+        assert event["eventType"] == "approval.expired"
+        assert event["eventSessionId"] == snapshot["eventSessionId"]
+        assert event["sequenceNumber"] == snapshot["sequenceNumber"] + 1
+        assert api.get("/api/approvals/approval-pending").json()["data"]["status"] == "expired"
+        repeated = api.post("/api/approvals/approval-pending/approve", json={}, headers=headers)
+        assert repeated.status_code == 409
+        assert repeated.json()["error"]["code"] == "APPROVAL_ALREADY_PROCESSED"
+
+    with create_engine(url).connect() as connection:
+        row = connection.execute(
+            select(ApprovalRow.status, ApprovalRow.payload).where(
+                ApprovalRow.id == "approval-pending"
+            )
+        ).one()
+        assert row.status == row.payload["status"] == "expired"
+        assert (
+            connection.scalar(
+                select(func.count())
+                .select_from(AuditEventRow)
+                .where(AuditEventRow.event_type == "approval.expired")
+            )
+            == 1
+        )
+        assert (
+            connection.scalar(
+                select(func.count())
+                .select_from(OutboxEventRow)
+                .where(OutboxEventRow.event_type == "approval.expired")
+            )
+            == 1
+        )
+        assert (
+            connection.scalar(
+                select(IdempotencyRecordRow.id).where(
+                    IdempotencyRecordRow.idempotency_key == headers["Idempotency-Key"]
+                )
+            )
+            is None
+        )
+    with TestClient(create_app(delay_ms=1, database_url=url)) as recreated:
+        assert (
+            recreated.get("/api/approvals/approval-pending").json()["data"]["status"] == "expired"
+        )
+        assert (
+            recreated.post("/api/approvals/approval-pending/approve", json={}).json()["error"][
+                "code"
+            ]
+            == "APPROVAL_ALREADY_PROCESSED"
+        )
+
+
+def test_concurrent_expiration_attempts_commit_one_transition(tmp_path: Path) -> None:
+    url = database_url(tmp_path / "approval-expiration-concurrent.db")
+    app = create_app(delay_ms=1, database_url=url)
+    approval = app.state.repository.approvals["approval-pending"]
+    approval.expiresAt = datetime.now(UTC) - timedelta(seconds=1)
+    app.state.repository.persist()
+    with TestClient(app) as api, ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(api.post, "/api/approvals/approval-pending/approve", json={})
+        second = pool.submit(api.post, "/api/approvals/approval-pending/reject", json={})
+        responses = [first.result(timeout=5), second.result(timeout=5)]
+        assert {response.json()["error"]["code"] for response in responses} == {
+            "APPROVAL_EXPIRED",
+            "APPROVAL_ALREADY_PROCESSED",
+        }
+    with create_engine(url).connect() as connection:
+        assert (
+            connection.scalar(
+                select(func.count())
+                .select_from(AuditEventRow)
+                .where(AuditEventRow.event_type == "approval.expired")
+            )
+            == 1
+        )
+        assert (
+            connection.scalar(
+                select(func.count())
+                .select_from(OutboxEventRow)
+                .where(OutboxEventRow.event_type == "approval.expired")
+            )
+            == 1
+        )
+
+
+def test_expiration_commit_failure_rolls_back_cache_audit_outbox_and_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    url = database_url(tmp_path / "approval-expiration-rollback.db")
+    app = create_app(delay_ms=1, database_url=url)
+    approval = app.state.repository.approvals["approval-pending"]
+    approval.expiresAt = datetime.now(UTC) - timedelta(seconds=1)
+    app.state.repository.persist()
+    original_commit = UnitOfWork.commit
+
+    def fail_commit(_: UnitOfWork) -> None:
+        raise RuntimeError("controlled expiration commit failure")
+
+    with TestClient(app, raise_server_exceptions=False) as api:
+        monkeypatch.setattr(UnitOfWork, "commit", fail_commit)
+        failed = api.post("/api/approvals/approval-pending/approve", json={})
+        monkeypatch.setattr(UnitOfWork, "commit", original_commit)
+        assert failed.status_code == 500
+        assert api.get("/api/approvals/approval-pending").json()["data"]["status"] == "pending"
+        retry = api.post("/api/approvals/approval-pending/approve", json={})
+        assert retry.status_code == 409
+        assert retry.json()["error"]["code"] == "APPROVAL_EXPIRED"
+
+    with create_engine(url).connect() as connection:
+        assert (
+            connection.scalar(
+                select(func.count())
+                .select_from(AuditEventRow)
+                .where(AuditEventRow.event_type == "approval.expired")
+            )
+            == 1
+        )
+        assert (
+            connection.scalar(
+                select(func.count())
+                .select_from(OutboxEventRow)
+                .where(OutboxEventRow.event_type == "approval.expired")
+            )
+            == 1
+        )
 
 
 def test_rapid_reset_and_restart_create_distinct_workflow_run_ids(tmp_path: Path) -> None:
