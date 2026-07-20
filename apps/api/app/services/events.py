@@ -39,6 +39,7 @@ class EventBroker:
         task_id: str | None = None,
         agent_id: str | None = None,
         correlation_id: str = "phase-1-demo",
+        audit: dict[str, object] | None = None,
     ) -> EventEnvelope:
         if self.repository:
             self.sequence = self.repository.next_sequence()
@@ -57,6 +58,17 @@ class EventBroker:
         )
         envelope = event.model_dump(mode="json")
         if self.repository:
+            if audit:
+                self.repository.stage_audit(
+                    event_type,
+                    str(audit["summary"]),
+                    event.sequenceNumber,
+                    task_id,
+                    agent_id,
+                    audit.get("previous"),
+                    audit.get("new"),
+                    audit.get("payload"),
+                )
             self.repository.enqueue_event(envelope)
         await self._publish(event)
         return event

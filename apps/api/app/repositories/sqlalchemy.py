@@ -361,6 +361,23 @@ class SqlAlchemyRepository:
         new: str | None = None,
         payload: dict[str, object] | None = None,
     ) -> AuditEvent:
+        item = self.stage_audit(
+            event_type, summary, sequence, task_id, agent_id, previous, new, payload
+        )
+        self.persist()
+        return item
+
+    def stage_audit(
+        self,
+        event_type: str,
+        summary: str,
+        sequence: int,
+        task_id: str | None = None,
+        agent_id: str | None = None,
+        previous: str | None = None,
+        new: str | None = None,
+        payload: dict[str, object] | None = None,
+    ) -> AuditEvent:
         item = AuditEvent(
             id=f"audit-{uuid4().hex[:12]}",
             timestamp=datetime.now(UTC),
@@ -378,7 +395,6 @@ class SqlAlchemyRepository:
             else None,
         )
         self.audit.append(item)
-        self.persist()
         return item
 
     def enqueue_event(self, envelope: dict[str, Any]) -> None:

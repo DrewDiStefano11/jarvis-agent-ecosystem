@@ -214,12 +214,11 @@ class SimulatorEngine:
             {"totalSteps": len(self.steps)},
         )
         self._runner = asyncio.create_task(self._run())
-        event = await self.broker.emit("system.simulator.started", {"state": "running"})
-        self.repository.add_audit(
+        await self.broker.emit(
             "system.simulator.started",
-            "Started the deterministic durable workflow",
-            event.sequenceNumber,
+            {"state": "running"},
             "task-demo",
+            audit={"summary": "Started the deterministic durable workflow"},
         )
         return self.control
 
@@ -290,21 +289,17 @@ class SimulatorEngine:
             self._create_children()
         if artifact_kind := step.get("artifact"):
             self._create_artifact(artifact_kind)
-        event = await self.broker.emit(
+        await self.broker.emit(
             "agent.status.changed",
             {"agent": agent.model_dump(mode="json"), "message": step["message"]},
             "task-demo",
             agent.id,
-        )
-        self.repository.add_audit(
-            "agent.status.changed",
-            step["message"],
-            event.sequenceNumber,
-            "task-demo",
-            agent.id,
-            previous,
-            new_status,
-            {"step": self.control.currentStep + 1},
+            audit={
+                "summary": step["message"],
+                "previous": previous,
+                "new": new_status,
+                "payload": {"step": self.control.currentStep + 1},
+            },
         )
 
     def _create_children(self) -> None:

@@ -301,9 +301,11 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             updatedAt=now,
         )
         repository.tasks[item.id] = item
-        event = await broker.emit("task.created", {"task": item.model_dump(mode="json")}, item.id)
-        repository.add_audit(
-            "task.created", f"Created task: {item.title}", event.sequenceNumber, item.id
+        await broker.emit(
+            "task.created",
+            {"task": item.model_dump(mode="json")},
+            item.id,
+            audit={"summary": f"Created task: {item.title}"},
         )
         remember_idempotent(idempotency_key, "task.create", payload, item, 201, item.id)
         return ApiResponse(data=item)
@@ -339,8 +341,12 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 )
             item.status, item.statusMessage = "cancelled", "Cancelled by user"
         item.updatedAt = datetime.now(UTC)
-        event = await broker.emit(f"task.{action}", {"task": item.model_dump(mode="json")}, item.id)
-        repository.add_audit(f"task.{action}", item.statusMessage, event.sequenceNumber, item.id)
+        await broker.emit(
+            f"task.{action}",
+            {"task": item.model_dump(mode="json")},
+            item.id,
+            audit={"summary": item.statusMessage},
+        )
         return item
 
     @app.post("/api/tasks/{task_id}/pause", response_model=ApiResponse)
@@ -401,19 +407,15 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             datetime.now(UTC),
             body.decisionNote,
         )
-        event = await broker.emit(
+        await broker.emit(
             f"approval.{decision}",
             {"approval": item.model_dump(mode="json")},
             item.taskId,
             item.requestedByAgentId,
-        )
-        repository.add_audit(
-            f"approval.{decision}",
-            f"Approval {decision}",
-            event.sequenceNumber,
-            item.taskId,
-            item.requestedByAgentId,
-            payload={"approvalId": item.id, "status": decision},
+            audit={
+                "summary": f"Approval {decision}",
+                "payload": {"approvalId": item.id, "status": decision},
+            },
         )
         return item
 
