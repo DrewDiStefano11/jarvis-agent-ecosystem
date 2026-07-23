@@ -7,6 +7,8 @@ dependencies = [
   "pydantic>=2.10,<3",
   "pydantic-settings>=2.7,<3",
   "pyyaml>=6,<7",
+  "sqlalchemy>=2.0,<3",
+  "alembic>=1.14,<2",
   "uvicorn[standard]>=0.34,<1",
 ]
 
@@ -16,6 +18,10 @@ dev = ["httpx>=0.28,<1", "pytest>=8,<9", "pytest-asyncio>=0.25,<1", "ruff>=0.9,<
 [tool.pytest.ini_options]
 pythonpath = ["."]
 asyncio_mode = "auto"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+exclude = ["migrations*"]
 
 [tool.ruff]
 line-length = 100
