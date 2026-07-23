@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvis.example.com/task-review-input.schema.json",
+  "title": "Task Review Input",
+  "type": "object",
+  "properties": {
+    "schema_version": { "type": "string" },
+    "task": {
+      "type": "object",
+      "properties": {
+        "task_id": { "type": "string" },
+        "title": { "type": "string" },
+        "request": { "type": "string" },
+        "task_type": { "type": "string" },
+        "priority": { "type": "string" },
+        "completion_criteria": {
+          "type": "array",
+          "items": { "$ref": "completion-criterion.schema.json" }
+        },
+        "required_artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "artifact_id": { "type": "string" },
+              "artifact_type": { "type": "string" },
+              "format": { "type": "string" },
+              "required": { "type": "boolean" }
+            },
+            "required": ["artifact_id", "artifact_type", "format", "required"],
+            "additionalProperties": false
+          }
+        },
+        "allowed_result_types": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "approval_policy_version": { "type": "string" }
+      },
+      "required": [
+        "task_id",
+        "title",
+        "request",
+        "task_type",
+        "completion_criteria",
+        "required_artifacts",
+        "allowed_result_types"
+      ],
+      "additionalProperties": false
+    },
+    "worker_result": { "$ref": "worker-result.schema.json" },
+    "artifacts": {
+      "type": "array",
+      "items": { "$ref": "artifact-manifest.schema.json" }
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "evidence_id": { "type": "string" },
+          "evidence_type": { "type": "string" },
+          "source": { "type": "string" },
+          "trust_level": {
+             "type": "string",
+             "enum": ["authoritative", "trusted_validator", "trusted_tool", "operator", "worker_claim", "model_claim", "unknown"]
+          },
+          "related_criterion_ids": { "type": "array", "items": { "type": "string" } },
+          "timestamp": { "type": "string", "format": "date-time" },
+          "payload": { "type": ["object", "string", "null"] }
+        },
+        "required": ["evidence_id", "evidence_type", "source", "trust_level", "timestamp"],
+        "additionalProperties": false
+      }
+    },
+    "approvals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "approval_id": { "type": "string" },
+          "task_id": { "type": "string" },
+          "action_type": { "type": "string" },
+          "status": { "type": "string" },
+          "risk_level": { "type": "string" },
+          "scope": { "type": "string" },
+          "reviewed_by": { "type": "string" },
+          "reviewed_at": { "type": "string", "format": "date-time" },
+          "expiration": { "type": ["string", "null"], "format": "date-time" },
+          "decision_token": { "type": ["string", "null"] }
+        },
+        "required": ["approval_id", "task_id", "action_type", "status", "scope", "reviewed_by", "reviewed_at"],
+        "additionalProperties": false
+      }
+    },
+    "trusted_checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "check_id": { "type": "string" },
+          "check_type": { "type": "string" },
+          "status": { "type": "string" },
+          "source": { "type": "string" },
+          "task_id": { "type": "string" },
+          "related_artifact_ids": { "type": "array", "items": { "type": "string" } },
+          "details": { "type": "object", "additionalProperties": true },
+          "completed_at": { "type": "string", "format": "date-time" }
+        },
+        "required": ["check_id", "check_type", "status", "source", "task_id", "completed_at"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "schema_version",
+    "task",
+    "worker_result",
+    "artifacts",
+    "evidence",
+    "approvals",
+    "trusted_checks"
+  ],
+  "additionalProperties": false
+}

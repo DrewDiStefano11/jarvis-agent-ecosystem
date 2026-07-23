@@ -1,0 +1,61 @@
+{
+  "schema_version": "1.0",
+  "task": {
+    "task_id": "task-example-001",
+    "title": "Prepare a technical summary",
+    "request": "Read the approved documents and produce a concise technical summary.",
+    "task_type": "documentation",
+    "priority": "medium",
+    "completion_criteria": [
+      {
+        "criterion_id": "criterion-001",
+        "description": "The final summary covers all required topics.",
+        "criterion_type": "content",
+        "required": true,
+        "verification_method": "deterministic",
+        "severity_if_unmet": "major",
+        "automatic_validation_possible": true
+      },
+      {
+        "criterion_id": "criterion-002",
+        "description": "A Markdown artifact is produced.",
+        "criterion_type": "artifact",
+        "required": true,
+        "verification_method": "artifact_manifest",
+        "severity_if_unmet": "major"
+      },
+      {
+        "criterion_id": "criterion-003",
+        "description": "Manual review of style.",
+        "criterion_type": "manual_review",
+        "required": false,
+        "verification_method": "human_review",
+        "human_review_required": true
+      }
+    ],
+    "required_artifacts": [
+      {
+        "artifact_id": "required-summary",
+        "artifact_type": "report",
+        "format": "markdown",
+        "required": true
+      }
+    ],
+    "allowed_result_types": ["report"],
+    "approval_policy_version": "phase-2b-prototype-1"
+  },
+  "worker_result": {
+    "schema_version": "1.0",
+    "task_id": "task-example-001",
+    "status_claim": "unknown",
+    "summary": "Mock summary",
+    "result_type": "unknown",
+    "artifact_ids": [],
+    "criterion_claims": [],
+    "worker_confidence": 0.0
+  },
+  "artifacts": [],
+  "evidence": [],
+  "approvals": [],
+  "trusted_checks": []
+}

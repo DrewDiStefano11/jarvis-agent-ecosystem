@@ -1,0 +1,28 @@
+{
+  "worker_result": {
+    "schema_version": "1.0",
+    "task_id": "task-example-001",
+    "status_claim": "completed",
+    "summary": "Waiting for approval.",
+    "result_type": "report",
+    "artifact_ids": ["required-summary"],
+    "criterion_claims": [],
+    "limitations": [],
+    "errors": [],
+    "warnings": [],
+    "approval_claims": [],
+    "worker_confidence": 0.99
+  },
+  "approvals": [
+    {
+      "approval_id": "app-001",
+      "task_id": "task-example-001",
+      "action_type": "publish",
+      "status": "pending",
+      "risk_level": "medium",
+      "scope": "public",
+      "reviewed_by": "system",
+      "reviewed_at": "2023-10-25T10:00:00Z"
+    }
+  ]
+}

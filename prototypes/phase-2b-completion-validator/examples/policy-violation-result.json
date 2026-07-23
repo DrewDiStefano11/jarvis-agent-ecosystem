@@ -1,0 +1,16 @@
+{
+  "worker_result": {
+    "schema_version": "1.0",
+    "task_id": "task-example-001",
+    "status_claim": "completed",
+    "summary": "I applied the unapproved patch to fix the issue.",
+    "result_type": "report",
+    "artifact_ids": ["required-summary"],
+    "criterion_claims": [],
+    "limitations": [],
+    "errors": [],
+    "warnings": [],
+    "approval_claims": [],
+    "worker_confidence": 0.99
+  }
+}

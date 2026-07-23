@@ -1,0 +1,43 @@
+{
+  "schema_version": "1.0",
+  "validator_version": "0.1.0",
+  "timestamp": "2023-10-25T10:00:00Z",
+  "task_id": "task-example-001",
+  "worker_claim": {
+    "status": "completed",
+    "confidence": 0.94
+  },
+  "actual_result": {
+    "completion_status": "incomplete",
+    "recommendation": "request_revision",
+    "automatic_acceptance_allowed": false
+  },
+  "score": {
+    "total": 68,
+    "criteria_coverage": 70,
+    "artifact_validity": 90,
+    "evidence_strength": 40,
+    "consistency": 80,
+    "policy_compliance": 100,
+    "approval_readiness": 100
+  },
+  "criteria": [
+    {
+      "criterion_id": "criterion-001",
+      "status": "unmet",
+      "verification_method": "deterministic",
+      "evidence_ids": [],
+      "findings": [
+        "finding-001"
+      ]
+    }
+  ],
+  "artifacts": [],
+  "approvals": [],
+  "trusted_checks": [],
+  "findings": [],
+  "contradictions": [],
+  "unsupported_claims": [],
+  "warnings": [],
+  "recommended_next_actions": []
+}

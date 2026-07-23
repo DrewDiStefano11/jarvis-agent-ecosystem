@@ -1,0 +1,57 @@
+{
+  "worker_result": {
+    "schema_version": "1.0",
+    "task_id": "task-example-001",
+    "status_claim": "completed",
+    "summary": "The requested summary was created. Tests passed.",
+    "result_type": "report",
+    "artifact_ids": ["required-summary"],
+    "criterion_claims": [
+      {
+        "criterion_id": "criterion-001",
+        "claimed_satisfied": true,
+        "evidence_ids": ["ev-trusted-content-check"]
+      },
+      {
+        "criterion_id": "criterion-002",
+        "claimed_satisfied": true,
+        "evidence_ids": ["ev-artifact-manifest"]
+      }
+    ],
+    "limitations": [],
+    "errors": [],
+    "warnings": [],
+    "approval_claims": [],
+    "worker_confidence": 0.99
+  },
+  "evidence": [
+    {
+      "evidence_id": "ev-trusted-content-check",
+      "evidence_type": "trusted_tool_receipt",
+      "source": "content_validator",
+      "trust_level": "trusted_validator",
+      "timestamp": "2023-10-25T10:00:00Z",
+      "related_criterion_ids": ["criterion-001"]
+    },
+    {
+      "evidence_id": "ev-artifact-manifest",
+      "evidence_type": "artifact",
+      "source": "system",
+      "trust_level": "authoritative",
+      "timestamp": "2023-10-25T10:00:00Z",
+      "related_criterion_ids": ["criterion-002"]
+    }
+  ],
+  "trusted_checks": [
+    {
+      "check_id": "check-tests-001",
+      "check_type": "test_suite",
+      "status": "passed",
+      "source": "trusted_test_runner",
+      "task_id": "task-example-001",
+      "related_artifact_ids": ["required-summary"],
+      "details": {"passed": 42, "failed": 0},
+      "completed_at": "2023-10-25T10:00:00Z"
+    }
+  ]
+}

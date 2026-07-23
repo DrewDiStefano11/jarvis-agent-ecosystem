@@ -1,0 +1,81 @@
+from enum import Enum
+
+class Recommendation(str, Enum):
+    ACCEPT = "accept"
+    ACCEPT_WITH_WARNINGS = "accept_with_warnings"
+    REQUEST_REVISION = "request_revision"
+    RETRY_STEP = "retry_step"
+    REPLAN_TASK = "replan_task"
+    REQUEST_APPROVAL = "request_approval"
+    BLOCK = "block"
+    HUMAN_REVIEW = "human_review"
+    REJECT = "reject"
+
+class CriterionType(str, Enum):
+    CONTENT = "content"
+    ARTIFACT = "artifact"
+    FORMAT = "format"
+    TEST = "test"
+    SCHEMA = "schema"
+    POLICY = "policy"
+    APPROVAL = "approval"
+    SOURCE = "source"
+    COVERAGE = "coverage"
+    CONSISTENCY = "consistency"
+    PERFORMANCE = "performance"
+    MANUAL_REVIEW = "manual_review"
+
+class VerificationMethod(str, Enum):
+    DETERMINISTIC = "deterministic"
+    ARTIFACT_MANIFEST = "artifact_manifest"
+    HASH_MATCH = "hash_match"
+    SCHEMA_VALIDATION = "schema_validation"
+    EXACT_VALUE = "exact_value"
+    CONTAINS_REQUIRED_SECTIONS = "contains_required_sections"
+    CONTAINS_REQUIRED_FIELDS = "contains_required_fields"
+    TRUSTED_TEST_RESULT = "trusted_test_result"
+    TRUSTED_TOOL_RECEIPT = "trusted_tool_receipt"
+    APPROVAL_RECORD = "approval_record"
+    HUMAN_REVIEW = "human_review"
+    UNSUPPORTED = "unsupported"
+
+class EvidenceTrustLevel(str, Enum):
+    AUTHORITATIVE = "authoritative"
+    TRUSTED_VALIDATOR = "trusted_validator"
+    TRUSTED_TOOL = "trusted_tool"
+    OPERATOR = "operator"
+    WORKER_CLAIM = "worker_claim"
+    MODEL_CLAIM = "model_claim"
+    UNKNOWN = "unknown"
+
+class FindingSeverity(str, Enum):
+    INFO = "info"
+    WARNING = "warning"
+    MINOR = "minor"
+    MAJOR = "major"
+    CRITICAL = "critical"
+
+class FindingCategory(str, Enum):
+    MISSING_EVIDENCE = "missing_evidence"
+    MISSING_ARTIFACT = "missing_artifact"
+    INVALID_ARTIFACT = "invalid_artifact"
+    CRITERION_UNMET = "criterion_unmet"
+    UNSUPPORTED_CLAIM = "unsupported_claim"
+    CONTRADICTION = "contradiction"
+    POLICY_VIOLATION = "policy_violation"
+    APPROVAL_MISSING = "approval_missing"
+    APPROVAL_INVALID = "approval_invalid"
+    TRUSTED_CHECK_FAILED = "trusted_check_failed"
+    SCHEMA_FAILURE = "schema_failure"
+    INCOMPLETE_OUTPUT = "incomplete_output"
+    PLACEHOLDER_CONTENT = "placeholder_content"
+    WRONG_RESULT_TYPE = "wrong_result_type"
+    WRONG_TASK = "wrong_task"
+    INTEGRITY_FAILURE = "integrity_failure"
+    MANUAL_REVIEW_REQUIRED = "manual_review_required"
+
+class CriterionStatus(str, Enum):
+    MET = "met"
+    UNMET = "unmet"
+    MANUAL_REVIEW_REQUIRED = "manual_review_required"
+    UNKNOWN = "unknown"

@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvis.example.com/completion-report.schema.json",
+  "title": "Completion Report",
+  "type": "object",
+  "properties": {
+    "schema_version": { "type": "string" },
+    "validator_version": { "type": "string" },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "task_id": { "type": "string" },
+    "worker_claim": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "required": ["status", "confidence"],
+      "additionalProperties": false
+    },
+    "actual_result": {
+      "type": "object",
+      "properties": {
+        "completion_status": { "type": "string" },
+        "recommendation": {
+          "type": "string",
+          "enum": [
+            "accept", "accept_with_warnings", "request_revision",
+            "retry_step", "replan_task", "request_approval",
+            "block", "human_review", "reject"
+          ]
+        },
+        "automatic_acceptance_allowed": { "type": "boolean" }
+      },
+      "required": ["completion_status", "recommendation", "automatic_acceptance_allowed"],
+      "additionalProperties": false
+    },
+    "score": {
+      "type": "object",
+      "properties": {
+        "total": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "criteria_coverage": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "artifact_validity": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "evidence_strength": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "consistency": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "policy_compliance": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "approval_readiness": { "type": "integer", "minimum": 0, "maximum": 100 }
+      },
+      "required": [
+        "total", "criteria_coverage", "artifact_validity",
+        "evidence_strength", "consistency", "policy_compliance", "approval_readiness"
+      ],
+      "additionalProperties": false
+    },
+    "criteria": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "criterion_id": { "type": "string" },
+          "status": { "type": "string", "enum": ["met", "unmet", "manual_review_required", "unknown"] },
+          "verification_method": { "type": "string" },
+          "evidence_ids": { "type": "array", "items": { "type": "string" } },
+          "findings": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["criterion_id", "status", "verification_method", "evidence_ids", "findings"],
+        "additionalProperties": false
+      }
+    },
+    "artifacts": { "type": "array", "items": { "type": "object" } },
+    "approvals": { "type": "array", "items": { "type": "object" } },
+    "trusted_checks": { "type": "array", "items": { "type": "object" } },
+    "findings": {
+      "type": "array",
+      "items": { "$ref": "reviewer-finding.schema.json" }
+    },
+    "contradictions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "description": { "type": "string" },
+          "finding_id": { "type": "string" }
+        },
+        "required": ["description", "finding_id"],
+        "additionalProperties": false
+      }
+    },
+    "unsupported_claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "claim": { "type": "string" },
+          "finding_id": { "type": "string" }
+        },
+        "required": ["claim", "finding_id"],
+        "additionalProperties": false
+      }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "recommended_next_actions": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": [
+    "schema_version",
+    "validator_version",
+    "timestamp",
+    "task_id",
+    "worker_claim",
+    "actual_result",
+    "score",
+    "criteria",
+    "artifacts",
+    "approvals",
+    "trusted_checks",
+    "findings",
+    "contradictions",
+    "unsupported_claims",
+    "warnings",
+    "recommended_next_actions"
+  ],
+  "additionalProperties": false
+}

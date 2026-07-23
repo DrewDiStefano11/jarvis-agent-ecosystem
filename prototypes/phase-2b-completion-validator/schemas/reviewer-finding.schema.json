@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvis.example.com/reviewer-finding.schema.json",
+  "title": "Reviewer Finding",
+  "type": "object",
+  "properties": {
+    "finding_id": { "type": "string" },
+    "severity": {
+      "type": "string",
+      "enum": ["info", "warning", "minor", "major", "critical"]
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "missing_evidence", "missing_artifact", "invalid_artifact",
+        "criterion_unmet", "unsupported_claim", "contradiction",
+        "policy_violation", "approval_missing", "approval_invalid",
+        "trusted_check_failed", "schema_failure", "incomplete_output",
+        "placeholder_content", "wrong_result_type", "wrong_task",
+        "integrity_failure", "manual_review_required"
+      ]
+    },
+    "summary": { "type": "string" },
+    "detailed_reason": { "type": "string" },
+    "related_criterion_id": { "type": ["string", "null"] },
+    "related_artifact_id": { "type": ["string", "null"] },
+    "related_evidence_id": { "type": ["string", "null"] },
+    "automatically_remediable": { "type": "boolean" },
+    "recommended_next_action": { "type": ["string", "null"] }
+  },
+  "required": [
+    "finding_id",
+    "severity",
+    "category",
+    "summary",
+    "detailed_reason",
+    "automatically_remediable"
+  ],
+  "additionalProperties": false
+}

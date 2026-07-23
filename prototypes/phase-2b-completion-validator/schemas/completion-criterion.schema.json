@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvis.example.com/completion-criterion.schema.json",
+  "title": "Completion Criterion",
+  "type": "object",
+  "properties": {
+    "criterion_id": {
+      "type": "string"
+    },
+    "description": {
+      "type": "string"
+    },
+    "criterion_type": {
+      "type": "string",
+      "enum": ["content", "artifact", "format", "test", "schema", "policy", "approval", "source", "coverage", "consistency", "performance", "manual_review"]
+    },
+    "required": {
+      "type": "boolean"
+    },
+    "verification_method": {
+      "type": "string",
+      "enum": ["deterministic", "artifact_manifest", "hash_match", "schema_validation", "exact_value", "contains_required_sections", "contains_required_fields", "trusted_test_result", "trusted_tool_receipt", "approval_record", "human_review", "unsupported"]
+    },
+    "expected_value": {
+      "type": ["string", "number", "boolean", "null"]
+    },
+    "severity_if_unmet": {
+      "type": "string",
+      "enum": ["info", "warning", "minor", "major", "critical"]
+    },
+    "automatic_validation_possible": {
+      "type": "boolean"
+    },
+    "human_review_required": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "criterion_id",
+    "description",
+    "criterion_type",
+    "required",
+    "verification_method"
+  ],
+  "additionalProperties": false
+}

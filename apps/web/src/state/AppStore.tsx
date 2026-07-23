@@ -9,7 +9,7 @@ const initial:AppState={departments:[],agents:[],tasks:[],approvals:[],artifacts
 
 export function AppStoreProvider({children}:{children:ReactNode}){
   const [state,setState]=useState(initial); const [selectedAgentId,selectAgent]=useState<string|null>(null); const [selectedTaskId,selectTask]=useState<string|null>(null)
-  const sequence=useRef(0); const reconnects=useRef(0)
+  const sequence=useRef(-1); const eventSession=useRef<string|null>(null); const reconnects=useRef(0)
   const refresh=useCallback(async()=>{try{
     const [departments,agents,tasks,approvals,artifacts,auditEvents,notifications,system]=await Promise.all([
       request<Department[]>('/api/departments'),request<Agent[]>('/api/agents'),request<Task[]>('/api/tasks'),request<Approval[]>('/api/approvals'),
@@ -22,8 +22,9 @@ export function AppStoreProvider({children}:{children:ReactNode}){
     const connect=()=>{if(closed)return;setState(s=>({...s,connection:reconnects.current?'reconnecting':'connecting'}));socket=new WebSocket(WS_URL)
       socket.onopen=()=>{reconnects.current=0;setState(s=>({...s,connection:'connected'}))}
       socket.onmessage=(message)=>{const event=JSON.parse(String(message.data)) as EventEnvelope
+        if(event.eventSessionId&&event.eventSessionId!==eventSession.current){eventSession.current=event.eventSessionId;sequence.current=-1}
         if(event.sequenceNumber<=sequence.current)return
-        if(sequence.current>0&&event.sequenceNumber!==sequence.current+1){setState(s=>({...s,resyncRequired:true}));void refresh()}
+        if(sequence.current>=0&&event.sequenceNumber!==sequence.current+1){setState(s=>({...s,resyncRequired:true}));void refresh()}
         sequence.current=event.sequenceNumber
         if(event.eventType==='system.snapshot'){const payload=event.payload as {snapshot:Snapshot;system:SystemStatus};const snap=payload.snapshot;setState(s=>({...s,...snap,system:payload.system,loading:false,lastSync:new Date().toISOString(),error:null}))}
         else void refresh()
