@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-example-001",
+  "task_id": "task-example-001",
+  "objective": "Analyze approved documentation and produce a summary.",
+  "assumptions": [],
+  "completion_criteria": [
+    "All approved input files were read."
+  ],
+  "steps": [
+    {
+      "step_id": "step-001",
+      "title": "Read approved files",
+      "description": "Read files inside the approved workspace.",
+      "step_type": "tool",
+      "tool_name": "read_approved_file",
+      "parameters": {
+        "path": "approved/input.txt"
+      },
+      "depends_on": [],
+      "expected_output": "UTF-8 text",
+      "approval_hint": "none"
+    }
+  ],
+  "final_output": {
+    "type": "artifact",
+    "format": "markdown"
+  }
+}

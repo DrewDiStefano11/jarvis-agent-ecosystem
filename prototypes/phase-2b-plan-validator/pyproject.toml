@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jarvis_plan_validator"
+version = "0.1.0"
+description = "A self-contained prototype that validates structured plans returned by a local language model."
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "Jules", email = "jules@example.com" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+[project.scripts]
+jarvis_plan_validator = "jarvis_plan_validator.__main__:main"

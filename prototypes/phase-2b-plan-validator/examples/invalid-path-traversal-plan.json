@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-example-007",
+  "task_id": "task-example-001",
+  "objective": "Path traversal plan",
+  "assumptions": [],
+  "completion_criteria": ["done"],
+  "steps": [
+    {
+      "step_id": "step-001",
+      "title": "1",
+      "description": "1",
+      "step_type": "tool",
+      "tool_name": "read_approved_file",
+      "parameters": {"path": "../../secrets.txt"},
+      "depends_on": [],
+      "expected_output": "none"
+    }
+  ],
+  "final_output": {
+    "type": "artifact",
+    "format": "markdown"
+  }
+}

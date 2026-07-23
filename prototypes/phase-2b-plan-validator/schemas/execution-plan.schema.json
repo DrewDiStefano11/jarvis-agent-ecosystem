@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvis.example.com/schemas/execution-plan.schema.json",
+  "title": "Execution Plan",
+  "type": "object",
+  "properties": {
+    "schema_version": { "type": "string" },
+    "plan_id": { "type": "string", "maxLength": 100 },
+    "task_id": { "type": "string", "maxLength": 100 },
+    "objective": { "type": "string", "maxLength": 1000 },
+    "assumptions": {
+      "type": "array",
+      "items": { "type": "string", "maxLength": 200 },
+      "maxItems": 20
+    },
+    "completion_criteria": {
+      "type": "array",
+      "items": { "type": "string", "maxLength": 500 },
+      "minItems": 1,
+      "maxItems": 20
+    },
+    "steps": {
+      "type": "array",
+      "items": { "$ref": "execution-step.schema.json" },
+      "maxItems": 50
+    },
+    "final_output": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["artifact", "summary", "report", "analysis", "patch_proposal"] },
+        "format": { "type": "string", "enum": ["markdown", "json", "text", "unified_diff"] }
+      },
+      "required": ["type", "format"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["schema_version", "plan_id", "task_id", "objective", "completion_criteria", "steps", "final_output"],
+  "additionalProperties": false
+}

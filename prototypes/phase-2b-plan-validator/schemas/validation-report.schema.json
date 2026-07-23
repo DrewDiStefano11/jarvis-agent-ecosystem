@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvis.example.com/schemas/validation-report.schema.json",
+  "title": "Validation Report",
+  "type": "object",
+  "properties": {
+    "schema_version": { "type": "string" },
+    "validator_version": { "type": "string" },
+    "timestamp": { "type": "string" },
+    "task_id": { "type": "string" },
+    "plan_id": { "type": "string" },
+    "input": {
+      "type": "object",
+      "properties": {
+        "raw_bytes": { "type": "integer" },
+        "json_extraction": { "type": "string" },
+        "extra_prose_detected": { "type": "boolean" }
+      },
+      "required": ["raw_bytes", "json_extraction", "extra_prose_detected"],
+      "additionalProperties": false
+    },
+    "result": {
+      "type": "object",
+      "properties": {
+        "status": { "type": "string", "enum": ["valid", "invalid"] },
+        "execution_eligibility": { "type": "string" },
+        "schema_valid": { "type": "boolean" },
+        "graph_valid": { "type": "boolean" },
+        "policy_valid": { "type": "boolean" }
+      },
+      "required": ["status", "execution_eligibility", "schema_valid", "graph_valid", "policy_valid"],
+      "additionalProperties": false
+    },
+    "limits": {
+      "type": "object",
+      "properties": {
+        "step_count": { "type": "integer" },
+        "maximum_steps": { "type": "integer" }
+      },
+      "required": ["step_count", "maximum_steps"],
+      "additionalProperties": false
+    },
+    "graph": {
+      "type": "object",
+      "properties": {
+        "topological_order": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "cycles": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        }
+      },
+      "required": ["topological_order", "cycles"],
+      "additionalProperties": false
+    },
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "step_id": { "type": "string" },
+          "tool_name": { "type": "string" },
+          "risk_level": { "type": "string" },
+          "approval": { "type": "string" },
+          "valid": { "type": "boolean" },
+          "errors": { "type": "array", "items": { "type": "string" } },
+          "warnings": { "type": "array", "items": { "type": "string" } }
+        },
+        "required": ["step_id", "valid", "errors", "warnings"],
+        "additionalProperties": false
+      }
+    },
+    "errors": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "normalizations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "field": { "type": "string" },
+          "original": { "type": "string" },
+          "normalized": { "type": "string" },
+          "reason": { "type": "string" }
+        },
+        "required": ["field", "original", "normalized", "reason"],
+        "additionalProperties": false
+      }
+    },
+    "recommended_action": { "type": "string" }
+  },
+  "required": ["schema_version", "validator_version", "timestamp", "task_id", "plan_id", "input", "result", "limits", "graph", "steps", "errors", "warnings", "recommended_action"],
+  "additionalProperties": false
+}

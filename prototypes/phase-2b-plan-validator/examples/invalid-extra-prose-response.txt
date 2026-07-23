@@ -1,0 +1,30 @@
+Here is the plan you requested:
+
+```json
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-example-008",
+  "task_id": "task-example-001",
+  "objective": "Extra prose",
+  "assumptions": [],
+  "completion_criteria": ["done"],
+  "steps": [
+    {
+      "step_id": "step-001",
+      "title": "1",
+      "description": "1",
+      "step_type": "tool",
+      "tool_name": "read_approved_file",
+      "parameters": {"path": "approved/1.txt"},
+      "depends_on": [],
+      "expected_output": "none"
+    }
+  ],
+  "final_output": {
+    "type": "artifact",
+    "format": "markdown"
+  }
+}
+```
+
+Let me know if you need any further assistance!

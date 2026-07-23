@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvis.example.com/schemas/execution-step.schema.json",
+  "title": "Execution Step",
+  "type": "object",
+  "properties": {
+    "step_id": { "type": "string", "maxLength": 100, "pattern": "^[a-zA-Z0-9_-]+$" },
+    "title": { "type": "string", "maxLength": 200 },
+    "description": { "type": "string", "maxLength": 1000 },
+    "step_type": { "type": "string", "enum": ["tool", "reasoning", "validation", "human_review", "artifact_assembly"] },
+    "tool_name": { "type": "string", "maxLength": 100 },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "depends_on": {
+      "type": "array",
+      "items": { "type": "string" },
+      "maxItems": 20
+    },
+    "expected_output": { "type": "string", "maxLength": 500 },
+    "approval_hint": { "type": "string", "enum": ["none", "automatic", "required"] },
+    "retry_policy": {
+      "type": "object",
+      "properties": {
+        "maximum_attempts": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "retryable_errors": {
+          "type": "array",
+          "items": { "type": "string" },
+          "maxItems": 5
+        }
+      },
+      "additionalProperties": false
+    },
+    "checkpoint_after": { "type": "boolean" }
+  },
+  "required": ["step_id", "title", "description", "step_type", "depends_on", "expected_output"],
+  "additionalProperties": false
+}

@@ -1,0 +1,25 @@
+{
+  "schema_version": "1.0",
+  "task_id": "task-example-001",
+  "title": "Prepare a documentation summary",
+  "request": "Read the approved files and produce a summary.",
+  "project_id": "jarvis-agent-ecosystem",
+  "workspace_roots": [
+    "approved/"
+  ],
+  "allowed_tools": [
+    "read_approved_file",
+    "search_approved_text",
+    "create_sandbox_artifact",
+    "apply_patch_to_workspace"
+  ],
+  "denied_tools": [
+    "shell",
+    "git_push",
+    "email_send"
+  ],
+  "maximum_steps": 12,
+  "maximum_model_retries": 2,
+  "approval_policy_version": "phase-2b-prototype-1",
+  "network_policy": "none"
+}

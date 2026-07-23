@@ -1,0 +1,29 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-example-002",
+  "task_id": "task-example-001",
+  "objective": "Apply patch",
+  "assumptions": [],
+  "completion_criteria": [
+    "Patch applied"
+  ],
+  "steps": [
+    {
+      "step_id": "step-001",
+      "title": "Apply patch",
+      "description": "Apply patch",
+      "step_type": "tool",
+      "tool_name": "apply_patch_to_workspace",
+      "parameters": {
+        "path": "approved/input.txt"
+      },
+      "depends_on": [],
+      "expected_output": "Success",
+      "approval_hint": "none"
+    }
+  ],
+  "final_output": {
+    "type": "artifact",
+    "format": "markdown"
+  }
+}

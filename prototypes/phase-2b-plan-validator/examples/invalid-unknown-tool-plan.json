@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "plan_id": "plan-example-004",
+  "task_id": "task-example-001",
+  "objective": "Use unknown tool",
+  "assumptions": [],
+  "completion_criteria": ["done"],
+  "steps": [
+    {
+      "step_id": "step-001",
+      "title": "Use unknown",
+      "description": "unknown",
+      "step_type": "tool",
+      "tool_name": "hallucinated_tool",
+      "parameters": {},
+      "depends_on": [],
+      "expected_output": "none"
+    }
+  ],
+  "final_output": {
+    "type": "artifact",
+    "format": "markdown"
+  }
+}

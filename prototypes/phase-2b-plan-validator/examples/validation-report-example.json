@@ -1,0 +1,44 @@
+{
+  "schema_version": "1.0",
+  "validator_version": "0.1.0",
+  "timestamp": "2024-05-20T12:00:00Z",
+  "task_id": "task-example-001",
+  "plan_id": "plan-example-001",
+  "input": {
+    "raw_bytes": 1200,
+    "json_extraction": "pure_json",
+    "extra_prose_detected": false
+  },
+  "result": {
+    "status": "valid",
+    "execution_eligibility": "automatic",
+    "schema_valid": true,
+    "graph_valid": true,
+    "policy_valid": true
+  },
+  "limits": {
+    "step_count": 1,
+    "maximum_steps": 12
+  },
+  "graph": {
+    "topological_order": [
+      "step-001"
+    ],
+    "cycles": []
+  },
+  "steps": [
+    {
+      "step_id": "step-001",
+      "tool_name": "read_approved_file",
+      "risk_level": "green",
+      "approval": "none",
+      "valid": true,
+      "errors": [],
+      "warnings": []
+    }
+  ],
+  "errors": [],
+  "warnings": [],
+  "normalizations": [],
+  "recommended_action": "accept"
+}

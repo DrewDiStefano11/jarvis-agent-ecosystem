@@ -7,3 +7,5 @@ The default workflow is the seven-day Caribbean recommendation. Jarvis coordinat
 Primary users need desktop operational awareness and a touch-friendly approval experience. Accessibility requirements include semantic controls, visible focus, status text in addition to color, dialogs, reduced motion, and layouts down to 320 CSS pixels.
 
 Acceptance is defined by runnable API/UI builds, guarded approvals and transitions, ordered reconnectable events, exact seed identities, deterministic failure/recovery, validated manifests, reproducible Windows instructions, and automated tests. All external actions and telemetry must remain clearly simulated.
+
+Phase 2A additionally requires local state to survive process restarts, interrupted workflows to remain paused for explicit recovery by default, committed events to be retryable from an outbox, and repeated mutation commands to be idempotent. The existing operator experience and simulation-only safety boundary remain unchanged.
