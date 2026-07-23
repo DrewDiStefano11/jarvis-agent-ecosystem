@@ -1,0 +1,30 @@
+import enum
+
+class SupervisorState(str, enum.Enum):
+    STARTING = "starting"
+    IDLE = "idle"
+    LAUNCHING = "launching"
+    WAITING_FOR_READINESS = "waiting_for_readiness"
+    RUNNING = "running"
+    DEGRADED = "degraded"
+    STOPPING = "stopping"
+    PAUSED = "paused"
+    EMERGENCY_STOPPED = "emergency_stopped"
+    CRASH_LOOP = "crash_loop"
+    FAILED = "failed"
+    OFFLINE = "offline"
+
+class WorkerState(str, enum.Enum):
+    CREATED = "created"
+    STARTING = "starting"
+    READY = "ready"
+    HEALTHY = "healthy"
+    UNHEALTHY = "unhealthy"
+    STOPPING = "stopping"
+    STOPPED = "stopped"
+    COMPLETED = "completed"
+    CRASHED = "crashed"
+    KILLED = "killed"
+    TIMED_OUT = "timed_out"
+    ORPHANED = "orphaned"
+    UNKNOWN = "unknown"

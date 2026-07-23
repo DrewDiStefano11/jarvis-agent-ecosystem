@@ -1,0 +1,9 @@
+{
+  "supervisor_instance": "main",
+  "pre_restart_state": "running",
+  "reconciled_state": "running",
+  "duplicate_launch_prevented": true,
+  "identity_result": "verified",
+  "worker_monitoring_resumed": true,
+  "required_operator_action": "none"
+}

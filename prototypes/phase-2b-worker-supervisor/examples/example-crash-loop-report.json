@@ -1,0 +1,13 @@
+{
+  "supervisor_instance": "main",
+  "state": "crash_loop",
+  "paused": false,
+  "emergency_stop": false,
+  "crash_loop_detected": true,
+  "restart_attempt_count": 5,
+  "worker": null,
+  "recent_failures": [
+    {"reason": "crash_immediately", "exit_code": 1},
+    {"reason": "crash_immediately", "exit_code": 1}
+  ]
+}

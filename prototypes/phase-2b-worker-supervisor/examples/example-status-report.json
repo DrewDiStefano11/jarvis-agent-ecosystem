@@ -1,0 +1,26 @@
+{
+  "supervisor_instance": "main",
+  "state": "running",
+  "paused": false,
+  "emergency_stop": false,
+  "crash_loop_detected": false,
+  "restart_attempt_count": 0,
+  "worker": {
+    "instance_id": "abc-123",
+    "pid": 4567,
+    "process_start_token": "def-456",
+    "scenario": "healthy",
+    "status": "healthy",
+    "started_at": 1698765432.0,
+    "ready_at": 1698765433.0,
+    "last_heartbeat_at": 1698765450.0,
+    "shutdown_requested_at": null,
+    "stopped_at": null,
+    "exit_code": null,
+    "exit_reason": null,
+    "restart_number": null,
+    "log_stdout_path": null,
+    "log_stderr_path": null,
+    "metadata_json": null
+  }
+}
