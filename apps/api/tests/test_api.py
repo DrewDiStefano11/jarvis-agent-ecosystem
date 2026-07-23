@@ -3,10 +3,17 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.models.manifest import load_manifest
+
+
+@pytest.fixture(autouse=True)
+def isolated_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    database = (tmp_path / "jarvis-test.db").as_posix()
+    monkeypatch.setenv("JARVIS_DATABASE_URL", f"sqlite:///{database}")
 
 
 def client() -> TestClient:
@@ -95,6 +102,9 @@ def test_simulator_start_pause_resume_reset_and_duplicate_start() -> None:
         assert api.post("/api/simulator/start").status_code == 200
         assert api.post("/api/simulator/start").status_code == 409
         assert api.post("/api/simulator/pause").status_code == 200
+        paused_start = api.post("/api/simulator/start")
+        assert paused_start.status_code == 409
+        assert paused_start.json()["error"]["code"] == "SIMULATOR_RESUME_OR_RESET_REQUIRED"
         assert api.post("/api/simulator/resume").status_code == 200
         reset = api.post("/api/simulator/reset")
         assert reset.json()["data"]["currentStep"] == 0

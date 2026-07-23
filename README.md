@@ -1,8 +1,8 @@
 # Jarvis Agent Ecosystem
 
-Jarvis Phase 1 is a local, deterministic simulation of a future personal AI organization. It provides a stable React/FastAPI interface, typed contracts, approval gates, audit history, and a live office view without claiming that language models, autonomous agents, or external integrations are connected.
+Jarvis Phase 2A is a local deterministic simulation with a durable SQLite control plane. Tasks, approvals, audit history, notifications, system state, event delivery, and workflow checkpoints survive backend restarts while all agents and external actions remain simulated.
 
-## What works in Phase 1
+## What works in Phase 2A
 
 - FastAPI HTTP API and multi-client WebSocket event stream
 - deterministic 25-step Caribbean trip workflow with delegation, artifact handoff, review, revision, and delivery
@@ -11,6 +11,8 @@ Jarvis Phase 1 is a local, deterministic simulation of a future personal AI orga
 - deterministic departments, five permanent agents, tasks, approvals, artifacts, notifications, and audit fixtures
 - installable PWA metadata, offline shell, reconnection states, HTTP refresh fallback, and a 320px mobile layout
 - YAML agent manifests validated by Pydantic
+- SQLite persistence through typed SQLAlchemy models and Alembic revision `20260720_01`
+- transactional outbox, durable idempotency keys, workflow runs, per-step checkpoints, and safe restart recovery
 
 ## Explicit non-capabilities
 
@@ -18,7 +20,7 @@ No real AI models, autonomous agents, email, calendars, cloud files, browser/des
 
 ## Architecture
 
-`apps/api` owns authoritative state and contracts. Route handlers call an in-memory repository and deterministic simulator; a broker broadcasts ordered event envelopes. `apps/web` performs initial HTTP synchronization, applies WebSocket notifications, detects ordering problems, and refreshes authoritative state. The office consumes the same store as every other view. See [ARCHITECTURE.md](ARCHITECTURE.md).
+`apps/api` owns authoritative state and contracts. Route handlers use a durable repository and command boundaries; committed event envelopes are delivered from an SQLite outbox. `apps/web` retains the Phase 1 synchronization contract. See [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Fresh Windows setup
 
@@ -33,6 +35,8 @@ Set-Location apps/api
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e ".[dev]"
+python -m alembic upgrade head
+python -m alembic current
 
 Set-Location ..\web
 pnpm install --frozen-lockfile
@@ -97,4 +101,4 @@ docs/              Product, API, event, manifest, roadmap, testing docs
 .github/workflows/ CI checks
 ```
 
-The next phase should introduce durable local data and a control-plane boundary while retaining these API/event contracts.
+Runtime data defaults to `apps/api/data/jarvis.db` and is ignored by Git. See [persistence](docs/persistence.md), [migrations](docs/migrations.md), and [recovery](docs/recovery.md).
