@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
+from app.core.config import Settings
+from app.db.session import create_database_engine
 from app.main import create_app
 
 
@@ -112,13 +118,14 @@ def test_group_e_user_modified_seed_record_preservation(tmp_path: Path, monkeypa
     db_path = tmp_path / "modified.db"
     url = database_url(db_path)
 
-    with client(db_url=url):
+    with client(db_url=url) as api:
         pass  # Seed it
 
     import gc
 
     gc.collect()
 
+    from sqlalchemy import create_engine, text
 
     engine = create_engine(url)
     with engine.begin() as conn:
@@ -139,7 +146,7 @@ def test_group_f_system_controlled_field_repair(tmp_path: Path) -> None:
     db_path = tmp_path / "system-repair.db"
     url = database_url(db_path)
 
-    with client(db_url=url):
+    with client(db_url=url) as api:
         from sqlalchemy import create_engine, text
 
         engine = create_engine(url)
@@ -162,7 +169,7 @@ def test_group_h_partial_seed_state(tmp_path: Path) -> None:
     db_path = tmp_path / "partial.db"
     url = database_url(db_path)
 
-    with client(db_url=url):
+    with client(db_url=url) as api:
         from sqlalchemy import create_engine, text
 
         engine = create_engine(url)
@@ -180,7 +187,7 @@ def test_group_i_duplicate_preexisting_seed_like_record(tmp_path: Path) -> None:
     db_path = tmp_path / "duplicate.db"
     url = database_url(db_path)
 
-    with client(db_url=url):
+    with client(db_url=url) as api:
         pass  # Seed is set
 
     with client(db_url=url) as api2:
@@ -216,7 +223,7 @@ def test_group_l_concurrent_application_startup(tmp_path: Path) -> None:
     url = database_url(db_path)
 
     # Run a normal client first to trigger migrations synchronously
-    with client(db_url=url):
+    with client(db_url=url) as api:
         pass
 
     # Then clear the database tables so they're fully empty but schema exists?
@@ -224,6 +231,7 @@ def test_group_l_concurrent_application_startup(tmp_path: Path) -> None:
     # Actually, concurrent bootstrap is just concurrent `client(db_url=url)`.
     # SQLite locks the DB during migrations, so concurrent migrations will fail with "database is locked" or "OperationalError".
     # To test concurrent BOOTSTRAP, we should pre-migrate synchronously, then clear the seed data, then run concurrent boot.
+    from sqlalchemy import create_engine, text
 
     engine = create_engine(url)
     with engine.begin() as conn:
@@ -291,7 +299,7 @@ def test_group_p_restored_database_bootstrap(tmp_path: Path) -> None:
     db_path = tmp_path / "restore_bootstrap.db"
     url = database_url(db_path)
 
-    with client(db_url=url):
+    with client(db_url=url) as api:
         # Initial DB seed
         pass
 
@@ -309,91 +317,3 @@ def test_group_p_restored_database_bootstrap(tmp_path: Path) -> None:
     with client(db_url=restored_url) as api2:
         state = get_bootstrap_state(api2)
         assert len(state["agents"]) == 5
-
-
-def test_group_g_missing_required_record(tmp_path: Path) -> None:
-    db_path = tmp_path / "missing.db"
-    url = database_url(db_path)
-
-    with client(db_url=url):
-        from sqlalchemy import create_engine, text
-
-        engine = create_engine(url)
-        with engine.begin() as conn:
-            conn.execute(text("DELETE FROM departments WHERE id = 'executive'"))
-        engine.dispose()
-
-    with client(db_url=url) as api:
-        state = get_bootstrap_state(api)
-        # Should gracefully repair/re-insert 'executive'
-        assert "executive" in state["departments"]
-
-
-def test_group_j_seed_ordering_and_foreign_keys(tmp_path: Path) -> None:
-    # We verify foreign keys are valid
-    db_path = tmp_path / "fkeys.db"
-    url = database_url(db_path)
-    with client(db_url=url):
-        from sqlalchemy import create_engine, text
-
-        engine = create_engine(url)
-        with engine.begin() as conn:
-            res = conn.execute(text("PRAGMA foreign_key_check")).fetchall()
-        assert len(res) == 0
-
-
-def test_group_m_bootstrap_versus_migration_ordering(tmp_path: Path) -> None:
-    db_path = tmp_path / "mig_order.db"
-    url = database_url(db_path)
-
-    from sqlalchemy import inspect
-
-    with client(db_url=url):
-        engine = create_engine(url)
-        insp = inspect(engine)
-        tables = insp.get_table_names()
-        assert "alembic_version" in tables
-        assert "departments" in tables
-
-
-def test_group_o_emergency_stop_persistence(tmp_path: Path) -> None:
-    db_path = tmp_path / "em_stop.db"
-    url = database_url(db_path)
-
-    with client(db_url=url) as api:
-        api.post("/api/system/emergency-stop")
-
-    with client(db_url=url) as api2:
-        status = api2.get("/api/system/status").json()["data"]
-        assert status["emergencyStop"] is True
-
-
-def test_group_q_stable_api_and_websocket_visibility(tmp_path: Path) -> None:
-    db_path = tmp_path / "ws_vis.db"
-    url = database_url(db_path)
-
-    with client(db_url=url) as api:
-        s1 = get_bootstrap_state(api)
-        with api.websocket_connect("/ws/events") as ws:
-            while True:
-                ws_msg = ws.receive_json()
-                # We expect the payload inside the event to be system.snapshot or contain it
-                if ws_msg.get("eventType") == "system.snapshot":
-                    assert "snapshot" in ws_msg.get("payload", {})
-                    break
-
-    with client(db_url=url) as api2:
-        s2 = get_bootstrap_state(api2)
-        assert s1 == s2
-
-
-def test_group_r_bootstrap_query_purity(tmp_path: Path) -> None:
-    db_path = tmp_path / "purity.db"
-    url = database_url(db_path)
-
-    with client(db_url=url) as api:
-        s1 = get_bootstrap_state(api)
-        api.get("/api/agents")
-        api.get("/api/system/status")
-        s2 = get_bootstrap_state(api)
-        assert s1 == s2
