@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 import tempfile
@@ -88,11 +87,13 @@ def ws_client(app_factory, temp_db_path):
 
 # --- Group A: Endpoint availability and handshake ---
 
+
 def test_endpoint_exists_and_handshakes(ws_client):
     msg = ws_client.receive_json()
     assert msg is not None
     assert isinstance(msg, dict)
     assert msg.get("eventType") == "system.snapshot"
+
 
 def test_second_independent_connection_receives_snapshot(app_factory, temp_db_path):
     app = app_factory(temp_db_path)
@@ -104,6 +105,7 @@ def test_second_independent_connection_receives_snapshot(app_factory, temp_db_pa
                 msg2 = json.loads(ws2.receive_text())
                 assert msg2.get("eventType") == "system.snapshot"
 
+
 def test_normal_http_request_rejected(app_factory, temp_db_path):
     app = app_factory(temp_db_path)
     with TestClient(app) as client:
@@ -112,6 +114,7 @@ def test_normal_http_request_rejected(app_factory, temp_db_path):
 
 
 # --- Group B: Initial snapshot top-level contract ---
+
 
 def test_initial_snapshot_top_level_contract(ws_client):
     msg = ws_client.receive_json()
@@ -125,7 +128,12 @@ def test_initial_snapshot_top_level_contract(ws_client):
     snapshot = payload["snapshot"]
     # Check top level collections in snapshot
     expected_collections = [
-        "departments", "agents", "tasks",         "approvals", "artifacts", "notifications"
+        "departments",
+        "agents",
+        "tasks",
+        "approvals",
+        "artifacts",
+        "notifications",
     ]
     for collection in expected_collections:
         assert collection in snapshot
@@ -138,6 +146,7 @@ def test_initial_snapshot_top_level_contract(ws_client):
 
 
 # --- Group C: Empty-state initial snapshot ---
+
 
 def test_empty_state_initial_snapshot(ws_client):
     msg = ws_client.receive_json()
@@ -153,12 +162,14 @@ def test_empty_state_initial_snapshot(ws_client):
 
 # --- Group D: Primitive-only JSON output ---
 
+
 def test_primitive_only_json_output(ws_client):
     msg = ws_client.receive_json()
     recursive_check_primitives(msg)
 
 
 # --- Group E: Initial snapshot detachment ---
+
 
 def test_initial_snapshot_detachment(app_factory, temp_db_path):
     app = app_factory(temp_db_path)
@@ -179,6 +190,7 @@ def test_initial_snapshot_detachment(app_factory, temp_db_path):
 
 # --- Group F: Standard event envelope ---
 
+
 def test_standard_event_envelope(app_factory, temp_db_path):
     app = app_factory(temp_db_path)
     with TestClient(app) as client:
@@ -189,7 +201,7 @@ def test_standard_event_envelope(app_factory, temp_db_path):
             # Create a task via API to trigger an event
             response = client.post(
                 "/api/tasks",
-                json={"title": "Test Task", "description": "Test", "priority": "medium"}
+                json={"title": "Test Task", "description": "Test", "priority": "medium"},
             )
             assert response.status_code == 201
 
@@ -214,6 +226,7 @@ def test_standard_event_envelope(app_factory, temp_db_path):
 
 # --- Group G: Event ordering ---
 
+
 def test_event_ordering(app_factory, temp_db_path):
     app = app_factory(temp_db_path)
     with TestClient(app) as client:
@@ -223,7 +236,14 @@ def test_event_ordering(app_factory, temp_db_path):
 
             # Trigger 3 events sequentially
             for i in range(3):
-                res = client.post("/api/tasks", json={"title": f"T{i} task task", "description": "D description", "priority": "medium"})
+                res = client.post(
+                    "/api/tasks",
+                    json={
+                        "title": f"T{i} task task",
+                        "description": "D description",
+                        "priority": "medium",
+                    },
+                )
                 assert res.status_code == 201
 
             events = []
@@ -236,34 +256,62 @@ def test_event_ordering(app_factory, temp_db_path):
             assert seqs[0] < seqs[1] < seqs[2]
 
 
+
 # --- Group H: Multiple simultaneous clients ---
 
 def test_multiple_simultaneous_clients(app_factory, temp_db_path):
+    import time
+
     app = app_factory(temp_db_path)
     with TestClient(app) as client:
-        with client.websocket_connect("/ws/events") as ws1, \
-             client.websocket_connect("/ws/events") as ws2, \
-             client.websocket_connect("/ws/events") as ws3:
-
-            # Drain initial snapshots
+        # 1. Connect all clients before triggering broadcast
+        with (
+            client.websocket_connect("/ws/events") as ws1,
+            client.websocket_connect("/ws/events") as ws2,
+            client.websocket_connect("/ws/events") as ws3,
+        ):
+            # 2. Consume each client's initial system.snapshot
             ws1.receive_text()
             ws2.receive_text()
             ws3.receive_text()
 
-            # Trigger event
-            client.post("/api/tasks", json={"title": "M1 task", "description": "D1 description", "priority": "medium"})
+            # 3. Trigger exactly one domain event after all clients are ready
+            res = client.post(
+                "/api/tasks",
+                json={"title": "M1 task", "description": "D1 description", "priority": "medium"},
+            )
+            task_id = res.json()["data"]["id"]
 
-            # All clients receive exactly one event
-            e1 = json.loads(ws1.receive_text())
-            e2 = json.loads(ws2.receive_text())
-            e3 = json.loads(ws3.receive_text())
+            # Yield to let outbox dispatch trigger the race condition
+            time.sleep(1.2)
 
-            # The prompt requires: "If the tests reveal a production defect, preserve a focused failing test where practical, document the exact defect... Do not repair production code."
-            # So I should leave it as failing or use xfail. I will use xfail but let it fail if I want to strictly follow "preserve a focused failing test". Wait, pytest with failures will exit non-zero and might break my script flow. No, the prompt says "leave the pull request marked as draft or blocked. Do not repair production code." So failing is correct.
+            # 4. Matches the same broadcast using bounded waits to rule out noise
+            def get_task_created_event(ws, expected_task_id):
+                for _ in range(10):
+                    text = ws.receive_text()
+                    e = json.loads(text)
+                    if (
+                        e.get("eventType") == "task.created"
+                        and e.get("payload", {}).get("task", {}).get("id") == expected_task_id
+                    ):
+                        return e
+                raise TimeoutError("Event not received within bounded wait")
+
+            e1 = get_task_created_event(ws1, task_id)
+            e2 = get_task_created_event(ws2, task_id)
+            e3 = get_task_created_event(ws3, task_id)
+
+            # Assert they are the same logical event by sequence & correlation
+            assert e1["sequenceNumber"] == e2["sequenceNumber"] == e3["sequenceNumber"]
+            assert e1["correlationId"] == e2["correlationId"] == e3["correlationId"]
+
+            # 5. Assert that every client receives the same eventId.
+            # This is intentionally preserved to fail because the broker re-evaluates event identity.
             assert e1["eventId"] == e2["eventId"] == e3["eventId"]
 
 
 # --- Group I: Reconnection behavior ---
+
 
 def test_reconnection_behavior(app_factory, temp_db_path):
     app = app_factory(temp_db_path)
@@ -274,7 +322,10 @@ def test_reconnection_behavior(app_factory, temp_db_path):
             snapshot1 = msg1["payload"]["snapshot"]
 
             # Change state
-            client.post("/api/tasks", json={"title": "R1 task", "description": "D description", "priority": "medium"})
+            client.post(
+                "/api/tasks",
+                json={"title": "R1 task", "description": "D description", "priority": "medium"},
+            )
             ws1.receive_text()
 
         # Reconnect
@@ -289,21 +340,23 @@ def test_reconnection_behavior(app_factory, temp_db_path):
 
 # --- Group J: Disconnect cleanup ---
 
+
 def test_disconnect_cleanup(app_factory, temp_db_path):
     app = app_factory(temp_db_path)
 
     # Internal inspect since not public: event broker tracks clients.
     with TestClient(app) as client:
         assert len(app.state.broker.clients) == 0
-        with client.websocket_connect("/ws/events") as ws:
+        with client.websocket_connect("/ws/events"):
             assert len(app.state.broker.clients) == 1
         assert len(app.state.broker.clients) == 0
 
 
 # --- Group K: Invalid client-originated messages ---
 
+
 def test_invalid_client_originated_messages(ws_client):
-    ws_client.receive_json() # Drain snapshot
+    ws_client.receive_json()  # Drain snapshot
 
     # Current protocol says if it's "resync", it responds. Otherwise, ignored or fails.
     # Send random text
@@ -319,6 +372,7 @@ def test_invalid_client_originated_messages(ws_client):
 
 # --- Group L: Emergency-stop behavior ---
 
+
 def test_emergency_stop_behavior(app_factory, temp_db_path):
     app = app_factory(temp_db_path)
     with TestClient(app) as client:
@@ -330,19 +384,25 @@ def test_emergency_stop_behavior(app_factory, temp_db_path):
             client.post("/api/system/emergency-stop")
 
             msg2 = json.loads(ws.receive_text())
-            assert msg2["eventType"] == "system.emergency_stop.activated" or msg2["eventType"] == "system.emergency_stop"
+            assert (
+                msg2["eventType"] == "system.emergency_stop.activated"
+                or msg2["eventType"] == "system.emergency_stop"
+            )
             assert isinstance(msg2["payload"], dict)
 
 
 # --- Group M: Task and workflow events ---
 
+
 def test_task_events(app_factory, temp_db_path):
     app = app_factory(temp_db_path)
     with TestClient(app) as client:
         with client.websocket_connect("/ws/events") as ws:
-            ws.receive_text() # drain snapshot
+            ws.receive_text()  # drain snapshot
 
-            res = client.post("/api/tasks", json={"title": "Task A", "description": "Desc", "priority": "medium"})
+            res = client.post(
+                "/api/tasks", json={"title": "Task A", "description": "Desc", "priority": "medium"}
+            )
             task_id = res.json()["data"]["id"]
 
             event1 = json.loads(ws.receive_text())
@@ -364,14 +424,18 @@ def test_task_events(app_factory, temp_db_path):
 
 # --- Group N: Approval events ---
 
+
 def test_approval_events(app_factory, temp_db_path):
     app = app_factory(temp_db_path)
     with TestClient(app) as client:
         with client.websocket_connect("/ws/events") as ws:
-            ws.receive_text() # drain snapshot
+            ws.receive_text()  # drain snapshot
 
             # Using the pre-seeded "approval-pending"
-            res = client.post("/api/approvals/approval-pending/approve", json={"reviewedBy": "test", "decisionNote": "ok"})
+            res = client.post(
+                "/api/approvals/approval-pending/approve",
+                json={"reviewedBy": "test", "decisionNote": "ok"},
+            )
             assert res.status_code == 200
 
             event = json.loads(ws.receive_text())
@@ -381,6 +445,7 @@ def test_approval_events(app_factory, temp_db_path):
 
 
 # --- Group O: Notification and artifact events ---
+
 
 def test_notification_and_artifact_events(app_factory, temp_db_path):
     # This requires looking at how they are generated. If not generated via API in phase 2a easily, we assert on the snapshot content.
@@ -396,8 +461,8 @@ def test_notification_and_artifact_events(app_factory, temp_db_path):
             if len(artifacts) > 0:
                 art = artifacts[0]
                 assert "id" in art
-                assert "path" not in art # internal path shouldn't leak
-                assert "content" not in art # raw content shouldn't leak unless designed
+                assert "path" not in art  # internal path shouldn't leak
+                assert "content" not in art  # raw content shouldn't leak unless designed
 
             # Notifications
             notifications = snapshot["notifications"]
@@ -405,6 +470,7 @@ def test_notification_and_artifact_events(app_factory, temp_db_path):
 
 
 # --- Group P: Task-lease protocol compatibility ---
+
 
 def test_task_lease_protocol_compatibility(app_factory, temp_db_path):
     app = app_factory(temp_db_path)
@@ -416,7 +482,10 @@ def test_task_lease_protocol_compatibility(app_factory, temp_db_path):
             assert "activeLeaseCount" in sys_status
 
             # Register worker
-            res = client.post("/api/workers", json={"name": "test-worker", "instanceId": "123", "leaseSeconds": 60})
+            res = client.post(
+                "/api/workers",
+                json={"name": "test-worker", "instanceId": "123", "leaseSeconds": 60},
+            )
             assert res.status_code == 201
 
             # Wait for event (worker registered or similar if broadcasted, currently broker.dispatch_pending is called)
@@ -429,11 +498,12 @@ def test_task_lease_protocol_compatibility(app_factory, temp_db_path):
 
 # --- Group Q: Context Assembler protocol compatibility ---
 
+
 def test_context_assembler_protocol_compatibility(app_factory, temp_db_path):
     app = app_factory(temp_db_path)
     with TestClient(app) as client:
         with client.websocket_connect("/ws/events") as ws:
-            ws.receive_text() # drain
+            ws.receive_text()  # drain
 
             # We would need to create an assembly. Since there's no seeded one initially, we can try creating one.
             # But the prompt says "Focus only on WebSocket shape and delivery."
@@ -441,6 +511,7 @@ def test_context_assembler_protocol_compatibility(app_factory, temp_db_path):
 
 
 # --- Group R: Sensitive-data leakage prevention ---
+
 
 def test_sensitive_data_leakage(ws_client):
     msg = ws_client.receive_json()
@@ -465,10 +536,13 @@ def test_duplicate_delivery_protection(app_factory, temp_db_path):
     app = app_factory(temp_db_path)
     with TestClient(app) as client:
         with client.websocket_connect("/ws/events") as ws:
-            ws.receive_text() # drain
+            ws.receive_text()  # drain
 
             # One task creation should yield exactly ONE event.
-            client.post("/api/tasks", json={"title": "Single Task", "description": "Desc", "priority": "medium"})
+            client.post(
+                "/api/tasks",
+                json={"title": "Single Task", "description": "Desc", "priority": "medium"},
+            )
 
             e1 = json.loads(ws.receive_text())
             assert e1["eventType"] == "task.created"
@@ -482,14 +556,18 @@ def test_duplicate_delivery_protection(app_factory, temp_db_path):
 
 # --- Group V: Message size and large valid payloads ---
 
+
 def test_large_valid_payloads(app_factory, temp_db_path):
     app = app_factory(temp_db_path)
     with TestClient(app) as client:
         with client.websocket_connect("/ws/events") as ws:
-            ws.receive_text() # drain
+            ws.receive_text()  # drain
 
-            large_desc = "A" * 1500 # within 2000 limit
-            client.post("/api/tasks", json={"title": "Large Task", "description": large_desc, "priority": "medium"})
+            large_desc = "A" * 1500  # within 2000 limit
+            client.post(
+                "/api/tasks",
+                json={"title": "Large Task", "description": large_desc, "priority": "medium"},
+            )
 
             e = json.loads(ws.receive_text())
             assert e["payload"]["task"]["description"] == large_desc
@@ -497,14 +575,18 @@ def test_large_valid_payloads(app_factory, temp_db_path):
 
 # --- Group W: Unicode and encoding ---
 
+
 def test_unicode_and_encoding(app_factory, temp_db_path):
     app = app_factory(temp_db_path)
     with TestClient(app) as client:
         with client.websocket_connect("/ws/events") as ws:
             ws.receive_text()
 
-            unicode_str = "Tást ëmoji 🚀 \n \t \\ \" <script>"
-            client.post("/api/tasks", json={"title": "Unicode 🚀", "description": unicode_str, "priority": "medium"})
+            unicode_str = 'Tást ëmoji 🚀 \n \t \\ " <script>'
+            client.post(
+                "/api/tasks",
+                json={"title": "Unicode 🚀", "description": unicode_str, "priority": "medium"},
+            )
 
             e = json.loads(ws.receive_text())
             assert e["payload"]["task"]["description"] == unicode_str
@@ -512,13 +594,21 @@ def test_unicode_and_encoding(app_factory, temp_db_path):
 
 # --- Group X: Event consistency with durable state ---
 
+
 def test_event_consistency_with_durable_state(app_factory, temp_db_path):
     app = app_factory(temp_db_path)
     with TestClient(app) as client:
         with client.websocket_connect("/ws/events") as ws:
             ws.receive_text()
 
-            res = client.post("/api/tasks", json={"title": "Consist Task Consist Task", "description": "D desc desc", "priority": "medium"})
+            res = client.post(
+                "/api/tasks",
+                json={
+                    "title": "Consist Task Consist Task",
+                    "description": "D desc desc",
+                    "priority": "medium",
+                },
+            )
             task_id = res.json()["data"]["id"]
 
             e = json.loads(ws.receive_text())
@@ -533,11 +623,15 @@ def test_event_consistency_with_durable_state(app_factory, temp_db_path):
 
 # --- Group Y: Application restart and WebSocket state ---
 
+
 def test_application_restart_websocket_state(app_factory, temp_db_path):
     # App 1
     app1 = app_factory(temp_db_path)
     with TestClient(app1) as client1:
-        client1.post("/api/tasks", json={"title": "Restart Task T", "description": "D desc desc", "priority": "medium"})
+        client1.post(
+            "/api/tasks",
+            json={"title": "Restart Task T", "description": "D desc desc", "priority": "medium"},
+        )
 
     # App 2 (restart)
     app2 = app_factory(temp_db_path)
@@ -551,6 +645,7 @@ def test_application_restart_websocket_state(app_factory, temp_db_path):
 
 # --- Group Z: Multiple application-instance isolation ---
 
+
 def test_multiple_application_instance_isolation(app_factory, temp_db_path):
     # App 1
     app1 = app_factory(temp_db_path)
@@ -560,12 +655,22 @@ def test_multiple_application_instance_isolation(app_factory, temp_db_path):
     app2 = app_factory(db2)
 
     with TestClient(app1) as client1, TestClient(app2) as client2:
-        with client1.websocket_connect("/ws/events") as ws1, client2.websocket_connect("/ws/events") as ws2:
+        with (
+            client1.websocket_connect("/ws/events") as ws1,
+            client2.websocket_connect("/ws/events") as ws2,
+        ):
             ws1.receive_text()
             ws2.receive_text()
 
             # Create in App 1
-            client1.post("/api/tasks", json={"title": "Iso Task Iso Task", "description": "D desc desc", "priority": "medium"})
+            client1.post(
+                "/api/tasks",
+                json={
+                    "title": "Iso Task Iso Task",
+                    "description": "D desc desc",
+                    "priority": "medium",
+                },
+            )
 
             # ws1 gets it
             e1 = json.loads(ws1.receive_text())
