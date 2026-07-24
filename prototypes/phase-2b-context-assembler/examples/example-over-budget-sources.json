@@ -1,0 +1,14 @@
+[
+  {
+    "source_id": "source-big-001",
+    "source_type": "repository_file",
+    "trust_level": "repository_content",
+    "title": "Big File 1",
+    "content": "A very long content...",
+    "content_hash": "abcd",
+    "metadata": {
+      "project_id": "jarvis-agent-ecosystem",
+      "approved": true
+    }
+  }
+]

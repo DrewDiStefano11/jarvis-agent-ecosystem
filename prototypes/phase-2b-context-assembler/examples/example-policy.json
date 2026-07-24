@@ -1,0 +1,11 @@
+{
+  "policy_version": "phase-2b-context-prototype-1",
+  "allowed_source_types": ["repository_file", "prior_model_output", "validator_result", "operator_instruction", "task_request", "artifact"],
+  "allowed_trust_levels": ["system_policy", "operator_instruction", "trusted_configuration", "task_request", "trusted_validator", "approved_artifact", "repository_content", "prior_model_output"],
+  "maximum_source_count": 50,
+  "estimated_token_budget": 8192,
+  "reserved_output_tokens": 2048,
+  "cross_project_context_allowed": false,
+  "maximum_context_tokens": 8192,
+  "minimum_required_context": 0
+}

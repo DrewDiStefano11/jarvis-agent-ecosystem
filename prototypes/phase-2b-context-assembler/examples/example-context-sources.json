@@ -1,0 +1,15 @@
+[
+  {
+    "source_id": "source-001",
+    "source_type": "repository_file",
+    "trust_level": "repository_content",
+    "title": "Architecture notes",
+    "relative_path": "docs/example.md",
+    "content": "Example content",
+    "content_hash": "a4d334e2c0700d3d528b9d99292415d6faec8ef7665551fb43781e9bfa6d9171",
+    "metadata": {
+      "project_id": "jarvis-agent-ecosystem",
+      "approved": true
+    }
+  }
+]

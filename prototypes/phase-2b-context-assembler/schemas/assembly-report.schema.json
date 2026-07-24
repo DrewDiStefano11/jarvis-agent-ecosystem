@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvis.example.com/schemas/assembly-report.schema.json",
+  "title": "Assembly Report",
+  "type": "object",
+  "properties": {
+    "task_id": { "type": "string" },
+    "project_id": { "type": "string" },
+    "policy_version": { "type": "string" },
+    "request_id": { "type": "string" },
+    "request_hash": { "type": "string" },
+    "included_source_count": { "type": "integer" },
+    "excluded_source_count": { "type": "integer" },
+    "included_bytes": { "type": "integer" },
+    "estimated_tokens": { "type": "integer" },
+    "token_budget": { "type": "integer" },
+    "reserved_tokens": { "type": "integer" },
+    "redaction_count": { "type": "integer" },
+    "injection_findings": { "type": "array" },
+    "conflicts": { "type": "array" },
+    "duplicate_sources": { "type": "array" },
+    "truncated_sources": { "type": "array" },
+    "human_review_requirement": { "type": "boolean" },
+    "final_assembly_status": { "type": "string" }
+  },
+  "additionalProperties": false
+}

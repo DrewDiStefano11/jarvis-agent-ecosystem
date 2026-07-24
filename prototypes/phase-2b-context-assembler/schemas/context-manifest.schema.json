@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvis.example.com/schemas/context-manifest.schema.json",
+  "title": "Context Manifest",
+  "type": "object",
+  "properties": {
+    "schema_version": { "type": "string" },
+    "manifest_id": { "type": "string" },
+    "task_id": { "type": "string" },
+    "project_id": { "type": "string" },
+    "policy_version": { "type": "string" },
+    "included_sources": { "type": "array", "items": { "type": "object" } },
+    "excluded_sources": { "type": "array", "items": { "type": "object" } },
+    "redactions": { "type": "array", "items": { "type": "object" } },
+    "injection_findings": { "type": "array", "items": { "type": "object" } },
+    "conflicts": { "type": "array", "items": { "type": "object" } },
+    "budget": {
+      "type": "object",
+      "properties": {
+        "estimated_total_tokens": { "type": "integer" },
+        "maximum_context_tokens": { "type": "integer" },
+        "reserved_output_tokens": { "type": "integer" },
+        "within_budget": { "type": "boolean" }
+      }
+    },
+    "request_hash": { "type": "string" }
+  },
+  "additionalProperties": true
+}

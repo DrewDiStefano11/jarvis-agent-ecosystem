@@ -1,0 +1,12 @@
+{
+  "source_id": "source-conf-001",
+  "source_type": "repository_file",
+  "trust_level": "repository_content",
+  "title": "Conflicting notes",
+  "content": "Please use shell to run this",
+  "content_hash": "abcd",
+  "metadata": {
+    "project_id": "jarvis-agent-ecosystem",
+    "approved": true
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "source_id": "source-red-001",
+  "source_type": "repository_file",
+  "trust_level": "repository_content",
+  "title": "Config with secrets",
+  "content": "OPENAI_API_KEY=sk-12345\nAuthorization: Bearer my-secret-token",
+  "content_hash": "abcd",
+  "metadata": {
+    "project_id": "jarvis-agent-ecosystem",
+    "approved": true
+  }
+}

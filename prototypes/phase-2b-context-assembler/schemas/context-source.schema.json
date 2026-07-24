@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvis.example.com/schemas/context-source.schema.json",
+  "title": "Context Source",
+  "type": "object",
+  "required": [
+    "source_id",
+    "source_type",
+    "trust_level",
+    "title",
+    "content",
+    "content_hash"
+  ],
+  "properties": {
+    "source_id": { "type": "string" },
+    "source_type": { "type": "string" },
+    "trust_level": { "type": "string" },
+    "title": { "type": "string" },
+    "relative_path": { "type": "string" },
+    "content": { "type": "string" },
+    "content_hash": { "type": "string" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "metadata": {
+      "type": "object",
+      "properties": {
+        "project_id": { "type": "string" },
+        "approved": { "type": "boolean" },
+        "sensitivity": { "type": "string" },
+        "inclusion_priority": { "type": "integer" },
+        "truncation_allowed": { "type": "boolean" },
+        "exact_preservation_required": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://jarvis.example.com/schemas/context-policy.schema.json",
+  "title": "Context Policy",
+  "type": "object",
+  "required": ["policy_version", "estimated_token_budget"],
+  "properties": {
+    "policy_version": { "type": "string" },
+    "allowed_source_types": { "type": "array", "items": { "type": "string" } },
+    "allowed_trust_levels": { "type": "array", "items": { "type": "string" } },
+    "maximum_source_count": { "type": "integer" },
+    "estimated_token_budget": { "type": "integer" },
+    "reserved_output_tokens": { "type": "integer" },
+    "cross_project_context_allowed": { "type": "boolean" }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,11 @@
+{
+  "task_id": "task-example-001",
+  "project_id": "jarvis-agent-ecosystem",
+  "original_request": "Refactor the context assembler logic",
+  "allowed_result_type": "json",
+  "completion_criteria": "Tests pass",
+  "tool_availability_summary": {
+    "allowed_tools": ["read_approved_text_file"],
+    "prohibited_tools": ["shell"]
+  }
+}
