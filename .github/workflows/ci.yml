@@ -27,6 +27,21 @@ jobs:
         working-directory: apps/api
       - run: python -m pytest -q
         working-directory: apps/api
+  runtime-prototype:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install -e ".[dev]"
+        working-directory: prototypes/phase-2b-worker-supervisor
+      - run: ruff format . --check
+        working-directory: prototypes/phase-2b-worker-supervisor
+      - run: ruff check .
+        working-directory: prototypes/phase-2b-worker-supervisor
+      - run: python -m pytest -q
+        working-directory: prototypes/phase-2b-worker-supervisor
   frontend:
     runs-on: windows-latest
     steps:

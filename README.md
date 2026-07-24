@@ -22,6 +22,10 @@ No real AI models, autonomous agents, email, calendars, cloud files, browser/des
 
 `apps/api` owns authoritative state and contracts. Route handlers use a durable repository and command boundaries; committed event envelopes are delivered from an SQLite outbox. `apps/web` retains the Phase 1 synchronization contract. See [ARCHITECTURE.md](ARCHITECTURE.md).
 
+## Runtime supervision prototype
+
+`prototypes/phase-2b-worker-supervisor` is a repaired, opt-in process-supervision candidate. It launches only its bundled deterministic worker and is not enabled by the API. The Phase 2A database remains authoritative for tasks, workflow checkpoints, audits, idempotency, and outbox publication; the prototype's separate migrated SQLite database contains only OS-process lifecycle state and operational metrics. See the [prototype guide](prototypes/phase-2b-worker-supervisor/README.md).
+
 ## Fresh Windows setup
 
 Prerequisites: Git, Python 3.11+, Node.js 20+, and pnpm 9+ (`corepack enable`). From PowerShell:
@@ -98,6 +102,7 @@ agents/manifests/  Versioned permanent-agent definitions
 apps/api/          FastAPI contracts, repository, simulator, tests
 apps/web/          React/Vite PWA and tests
 docs/              Product, API, event, manifest, roadmap, testing docs
+prototypes/        Opt-in engineering candidates; never active by default
 .github/workflows/ CI checks
 ```
 

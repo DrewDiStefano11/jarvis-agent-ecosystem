@@ -23,3 +23,9 @@ Sequence numbers are durable and monotonic within an event-session ID. Reset cre
 - Approval storage will gain durable transactions, idempotency keys, identities, and policy evaluation. Audit storage will become append-only and tamper-evident.
 
 These are planned seams, not active features. Real adapters must remain unavailable until their own threat models, approval policies, fixtures, and integration tests exist.
+
+## Runtime prototype boundary
+
+The opt-in worker-supervisor prototype under `prototypes/phase-2b-worker-supervisor` is an OS-process lifecycle candidate, not a second task orchestrator. It owns a prototype-local, Alembic-migrated operational store for supervisor leases, worker process identity, lifecycle events, and counters. It does not read or write domain tasks, workflow checkpoints, audit records, idempotency claims, or outbox envelopes.
+
+Production integration must inject the existing control-plane execution pipeline behind the fixed worker boundary and publish domain changes through the existing repository/unit-of-work/outbox path. The prototype must not be wired into FastAPI startup until that adapter and its migrations, contracts, health fields, and integration tests are reviewed together.
