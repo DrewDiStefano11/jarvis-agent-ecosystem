@@ -6,6 +6,8 @@ Phase 2A keeps orchestration deterministic while moving authoritative control-pl
 
 SQLite is authoritative. Thin route handlers call repository/service boundaries and `SimulatorEngine`; mutations, append-only audit data, checkpoints, and outbox envelopes are committed before WebSocket publication. WAL, enforced foreign keys, a five-second busy timeout, and short-lived sessions support reliable local Windows development.
 
+`TaskLeaseRepository` extends that persistence boundary for Phase 2B. Worker registration and fenced task ownership use the existing SQLAlchemy session factory, system sequence, append-only audit, and transactional outbox. Lease recovery runs within the API lifecycle; validated workflow checkpoints remain the recovery position. The standalone PR #5 SQLite database, CLI, audit schema, and worker loop are intentionally not duplicated in production.
+
 React is a separate client. Its controlled store loads snapshots over HTTP and treats WebSocket messages as ordered invalidation/state notifications. Duplicate events are ignored; gaps trigger an HTTP resynchronization. Disconnection activates polling and visibly marks state as last-known. Views contain presentation and interaction logic only.
 
 HTTP handles queries, commands, resynchronization, and structured errors. WebSocket provides snapshots on connection plus low-latency, schema-versioned event envelopes. Sequence numbers are monotonic for one simulator session and restart on reset.

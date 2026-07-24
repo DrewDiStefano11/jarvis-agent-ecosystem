@@ -56,7 +56,10 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
         "task_agents",
         "task_blockers",
         "task_dependencies",
+        "task_attempts",
+        "task_leases",
         "tasks",
+        "workers",
         "workflow_checkpoints",
         "workflow_runs",
     }
@@ -76,7 +79,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
         for item in inspector.get_foreign_keys("workflow_checkpoints")
     } == {("root_task_id",), ("workflow_run_id",)}
     with engine.connect() as connection:
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260720_01"
+        assert connection.scalar(text("select version_num from alembic_version")) == "20260723_02"
     engine.dispose()
     command.downgrade(config, "base")
     downgraded_tables = set(inspect(create_engine(database_url(path))).get_table_names())
@@ -85,12 +88,17 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     command.current(config)
     with create_database_engine(database_url(path)).connect() as connection:
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260720_01"
+        assert connection.scalar(text("select version_num from alembic_version")) == "20260723_02"
     revision = root / "migrations" / "versions" / "20260720_01_durable_control_plane.py"
     source = revision.read_text(encoding="utf-8")
     assert "Base.metadata" not in source
     assert "create_all" not in source
     assert "drop_all" not in source
+    lease_revision = root / "migrations" / "versions" / "20260723_02_task_leases.py"
+    lease_source = lease_revision.read_text(encoding="utf-8")
+    assert "Base.metadata" not in lease_source
+    assert "create_all" not in lease_source
+    assert "drop_all" not in lease_source
 
 
 def test_state_and_idempotency_survive_application_recreation(tmp_path: Path) -> None:

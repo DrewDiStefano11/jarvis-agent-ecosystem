@@ -2,6 +2,8 @@
 
 Every `EventEnvelope` includes `eventId`, `schemaVersion`, `eventType`, `timestamp`, `sequenceNumber`, `correlationId`, optional `taskId`/`agentId`, `source`, and typed payload data. Event families are `agent.status.changed`, `task.*`, `approval.*`, `system.*`, `temporary_agent.*`, and `error.*`. A `system.snapshot` is sent immediately after connection.
 
+Phase 2B adds `worker.registered`, `worker.draining`, `worker.stopped`, `task.lease.acquired`, `task.lease.renewed`, `task.lease.released`, and `task.lease.expired`. Completion and failure continue to use compatible `task.completed`, `task.retrying`, and `task.failed` names. Lease events contain the worker ID, attempt number, expiration/checkpoint where applicable, and a non-secret token fingerprint; the bearer token is never published.
+
 Sequence numbers strictly increase per simulator session. Clients ignore `sequence <= lastSequence`; a gap (`sequence != lastSequence + 1`) requires HTTP resynchronization. Reset cancels the runner, reseeds state, and restarts sequencing.
 
 Representative valid agent transitions include `idle → assigned → planning`, planning into thinking/research/review/delivery, `researching ↔ executing_tool`, `researching → waiting_for_agent`, `reviewing → researching|delivering`, `failed → retrying → planning|researching`, active states → paused, and paused → stored previous state. Same-state updates are allowed for progress only. Direct `idle → reviewing`, `completed → researching`, and `failed → delivering` are invalid. `app/core/transitions.py` is the executable transition map.

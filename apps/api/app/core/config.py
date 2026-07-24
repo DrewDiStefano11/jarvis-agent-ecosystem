@@ -18,6 +18,10 @@ class Settings(BaseSettings):
     outbox_poll_interval_ms: int = Field(250, alias="JARVIS_OUTBOX_POLL_INTERVAL_MS", ge=10)
     outbox_max_attempts: int = Field(10, alias="JARVIS_OUTBOX_MAX_ATTEMPTS", ge=1)
     idempotency_lease_seconds: int = Field(30, alias="JARVIS_IDEMPOTENCY_LEASE_SECONDS", ge=1)
+    task_lease_seconds: int = Field(30, alias="JARVIS_TASK_LEASE_SECONDS", ge=1, le=3600)
+    task_lease_recovery_interval_ms: int = Field(
+        1000, alias="JARVIS_TASK_LEASE_RECOVERY_INTERVAL_MS", ge=50, le=60000
+    )
     checkpoint_every_step: bool = Field(True, alias="JARVIS_CHECKPOINT_EVERY_STEP")
     web_origin: str = Field("http://localhost:5173", alias="WEB_ORIGIN")
 

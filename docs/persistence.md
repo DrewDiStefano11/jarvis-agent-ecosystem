@@ -10,4 +10,8 @@ SQLite is suitable for one local control-plane process. PostgreSQL can later rep
 
 Failed outbox rows remain stored after their configured retry ceiling. Health exposes an exhausted count and degrades while any exhausted record remains; dispatcher selection excludes those rows without deleting their audit evidence.
 
+Phase 2B extends the same database and transaction model with `workers`, `task_leases`, and `task_attempts`. `task_leases.task_id` is the unique active-ownership boundary; each acquisition creates an immutable attempt and a random fencing token. SQLite `BEGIN IMMEDIATE` serializes claim selection, while guarded task-state updates and unique constraints prevent double acquisition. Priority ordering is urgent-to-low, then FIFO and task ID; incomplete `requires` dependencies exclude a task.
+
+Lease acquisition, renewal, release, completion, failure, cancellation, and expiration each commit the task row/payload, attempt record, append-only audit, system sequence, and outbox envelope together. Routes contain no SQL. Lease tokens are treated as capabilities and are not stored in emitted payloads beyond a SHA-256 fingerprint. Short write transactions, WAL, and the existing busy timeout bound contention for concurrent local workers.
+
 Back up only while the API is stopped, or use a SQLite-aware backup tool. Never copy only a live `.db` file while WAL sidecars may contain committed pages. Do not store credentials in this database.

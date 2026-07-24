@@ -1,6 +1,6 @@
 # Jarvis Agent Ecosystem
 
-Jarvis Phase 2A is a local deterministic simulation with a durable SQLite control plane. Tasks, approvals, audit history, notifications, system state, event delivery, and workflow checkpoints survive backend restarts while all agents and external actions remain simulated.
+Jarvis is a local deterministic simulation with a durable SQLite control plane. Tasks, approvals, audit history, notifications, system state, event delivery, workflow checkpoints, and Phase 2B fenced task leases survive backend restarts while all agents and external actions remain simulated.
 
 ## What works in Phase 2A
 
@@ -11,8 +11,9 @@ Jarvis Phase 2A is a local deterministic simulation with a durable SQLite contro
 - deterministic departments, five permanent agents, tasks, approvals, artifacts, notifications, and audit fixtures
 - installable PWA metadata, offline shell, reconnection states, HTTP refresh fallback, and a 320px mobile layout
 - YAML agent manifests validated by Pydantic
-- SQLite persistence through typed SQLAlchemy models and Alembic revision `20260720_01`
+- SQLite persistence through typed SQLAlchemy models and Alembic revision `20260723_02`
 - transactional outbox, durable idempotency keys, workflow runs, per-step checkpoints, and safe restart recovery
+- registered worker lifecycle, atomic task acquisition, renewable fencing tokens, attempt history, cancellation revocation, and expired-lease recovery
 
 ## Explicit non-capabilities
 
@@ -101,4 +102,4 @@ docs/              Product, API, event, manifest, roadmap, testing docs
 .github/workflows/ CI checks
 ```
 
-Runtime data defaults to `apps/api/data/jarvis.db` and is ignored by Git. See [persistence](docs/persistence.md), [migrations](docs/migrations.md), and [recovery](docs/recovery.md).
+Runtime data defaults to `apps/api/data/jarvis.db` and is ignored by Git. See [persistence](docs/persistence.md), [migrations](docs/migrations.md), [recovery](docs/recovery.md), and [task leases](docs/task-leases.md).
