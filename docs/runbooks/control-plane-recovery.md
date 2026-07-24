@@ -1,7 +1,7 @@
 # Local Control-Plane Recovery Runbook
 
-**Document basis (SHA reviewed):** 7bcddc8d964ebc32672ec1e6ecf1a873a7d4af49
-**Last verified against:** July 24, 2024
+**Document basis (SHA reviewed):** 567c59a6ce47f73383c093e55e72715b7998e958
+**Last verified against:** July 24, 2026
 
 > **Warning:**
 > * Use only against the intended local development/runtime environment.
@@ -107,13 +107,20 @@ Before recovery, collect the following into a text file or issue:
 
 1. **Identify writers:** Identify any running API or Worker instances and stop them gracefully (Ctrl+C).
 2. **Locate database:** Look at your `JARVIS_DATABASE_URL` environment variable or defaults (e.g., local sqlite file).
-3. **Copy files:** For SQLite, copy the `.db` file, `.db-wal`, and `.db-shm` files if they exist.
+3. **Copy files:** Stop or quiesce all writers first. For SQLite, copy the `.db` file, `.db-wal`, and `.db-shm` files if they exist, or use a SQLite-supported backup procedure if available.
+   **Unix shell:**
    ```bash
-   cp jarvis.db jarvis.db.backup_20240724_abc123
-   cp jarvis.db-wal jarvis.db-wal.backup_20240724_abc123 # if exists
-   cp jarvis.db-shm jarvis.db-shm.backup_20240724_abc123 # if exists
+   cp jarvis.db jarvis.db.backup_20260724_abc123
+   cp jarvis.db-wal jarvis.db-wal.backup_20260724_abc123 # if exists
+   cp jarvis.db-shm jarvis.db-shm.backup_20260724_abc123 # if exists
    ```
-4. **Verify copy:** Check that the copied file has a nonzero size (`ls -lh`).
+   **PowerShell:**
+   ```powershell
+   Copy-Item jarvis.db -Destination jarvis.db.backup_20260724_abc123
+   Copy-Item jarvis.db-wal -Destination jarvis.db-wal.backup_20260724_abc123 -ErrorAction SilentlyContinue
+   Copy-Item jarvis.db-shm -Destination jarvis.db-shm.backup_20260724_abc123 -ErrorAction SilentlyContinue
+   ```
+4. **Verify copy:** Check that the copied file has a nonzero size (`ls -lh` or `Get-Item`).
 5. **Security:** Never commit the backup file to Git. Redact secrets if sharing it.
 
 ## Application will not start
@@ -158,14 +165,14 @@ Before recovery, collect the following into a text file or issue:
   1. Inspect the durable workflow (`workflow_runs`) and the latest checkpoint (`workflow_checkpoints`).
   2. Inspect the latest `audit_events`.
   3. Go to the UI System page and trigger the explicit "Resume" command.
-  4. The orchestrator validates the checkpoint and resumes from the exact uncommitted step.
+  4. The orchestrator validates the checkpoint and resumes from the exact uncommitted step (Implemented and verified).
   5. **Prohibited shortcut:** Never manually update a workflow row to `completed` via SQL.
 
 ## Expired or stuck task leases
 
 * **Diagnosis:** Task is held by a worker that has died, or attempt count is inconsistent.
 * **Recovery:**
-  1. The API runs a bounded background sweep to reclaim expired leases automatically.
+  1. The API runs a bounded background sweep to reclaim expired leases automatically (Implemented and verified).
   2. If a lease appears permanently stuck, verify the system time and the lease duration settings.
   3. If a worker process is gone, wait for the lease to expire (default `JARVIS_TASK_LEASE_SECONDS`). The task will automatically requeue.
   4. **Prohibited:** PID absence alone does not authorize manual database deletion of a lease row. Wait for the control plane to expire it naturally.

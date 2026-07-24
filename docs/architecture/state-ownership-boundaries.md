@@ -1,8 +1,8 @@
 # State Ownership and Authority Boundaries
 
 **Status:** Current architecture reference
-**Document basis (SHA reviewed):** 7bcddc8d964ebc32672ec1e6ecf1a873a7d4af49
-**Last verified against:** July 24, 2024
+**Document basis (SHA reviewed):** 567c59a6ce47f73383c093e55e72715b7998e958
+**Last verified against:** July 24, 2026
 **Intended audience:** Core contributors, code reviewers, and autonomous agents
 
 > **Warning:** This document does not replace exact code and migration review. If the current implementation differs from these rules, this document must be revalidated and updated, or the implementation must be corrected. Future implementation changes require these documents to be revalidated.
@@ -112,7 +112,7 @@ The system operates under a strict state-ownership model designed to prevent spl
 | Departments | Control plane | `departments` table | Repository/API | Any | InMemoryRepository, Frontend store | DB | Frontend state | Implemented | `app.db.models.DepartmentRow` |
 | Permanent agents | Control plane | `agents` table | Repository/API | Any | InMemoryRepository, Frontend store | DB | UI presence/sprites | Implemented | `app.db.models.AgentRow` |
 | Agent capabilities | Control plane | DB via properties | Repository/API | Any | Derived from agents | DB | Frontend representation | Implemented | `app.db.models.AgentRow` |
-| Agent status | Control plane (derived) | Derived | Core transitions | Any | InMemoryRepository, Frontend store | DB / Transitions | Process memory | Implemented | `app.core.transitions` |
+| Agent status | Control plane | `agents` table | Repository/API | Any | InMemoryRepository, Frontend store | DB | Frontend display state | Implemented | `app.db.models.AgentRow` |
 | Tasks | Control plane | `tasks` table | Repository/API | Any | InMemoryRepository, Frontend store | DB | Worker memory, process PID | Implemented | `app.db.models.TaskRow` |
 | Task assignments | Control plane | `task_agents` table | Repository/API | Any | Frontend store | DB | Worker supervisor memory | Implemented | `app.db.models.TaskAgentRow` |
 | Task dependencies | Control plane | `task_dependencies` | Repository/API | Any | Frontend store | DB | Context Assembler requests | Implemented | `app.db.models.TaskDependencyRow` |
@@ -135,8 +135,8 @@ The system operates under a strict state-ownership model designed to prevent spl
 | Context Assembly model requests | Context Assembler | `context_assemblies`| Assembler API | LLM Providers | N/A | DB | Generated text output | Implemented | `app.db.models.ContextAssemblyRow` |
 | Audit records | Control plane | `audit_events` | API | Auditing | InMemoryRepository, Frontend | DB | Transient logs | Implemented | `app.db.models.AuditEventRow` |
 | Idempotency records | Control plane | `idempotency_records`| API | API | N/A | DB | In-memory sets | Implemented | `app.db.models.IdempotencyRecordRow`|
-| Outbox events | Outbox dispatcher | `outbox_events` | API / Repositories| Dispatcher | N/A | DB | Broker unacknowledged queue| Implemented | `app.db.models.OutboxEventRow` |
-| Published-event status | Outbox dispatcher | `outbox_events` | Dispatcher | Dispatcher | N/A | DB | WebSocket connections | Implemented | `app.db.models.OutboxEventRow` |
+| Outbox events | Control plane | `outbox_events` | API / Repositories| Dispatcher / API | N/A | DB | Broker unacknowledged queue| Implemented | `app.db.models.OutboxEventRow` |
+| Published-event status | Control plane | `outbox_events` | Dispatcher | Dispatcher | N/A | DB | WebSocket connections | Implemented | `app.db.models.OutboxEventRow` |
 | Event broker subscriptions | Event broker | Memory | Broker API | Dispatcher | Ephemeral connection maps| Snapshot / DB | Durable routing rules | Implemented | Memory-only |
 | WebSocket connection state | Event broker | Memory | Client | Server | N/A | N/A (reconnects) | Durable session markers | Implemented | Memory-only |
 | Frontend stores | Frontend | Client memory | WebSocket / HTTP | React | UI projections | Backend snapshot | Authoritative domain state | Implemented | `apps/web` |
@@ -156,8 +156,9 @@ The system operates under a strict state-ownership model designed to prevent spl
 ### 7.1 Departments and agents
 * **Authoritative records:** Owned by the application control plane and durably stored in the `departments` and `agents` database tables.
 * **Assignment and capability relationships:** Managed durably in the database.
-* **Agent online/busy status:** Derived from authoritative tasks, assignments, and workflow statuses. It is not a direct durable field for agents.
-* **Frontend caching:** The frontend may cache agent records but must treat them as read-only projections.
+* **Agent online/busy status:** The control plane strictly governs agent status transitions and persists fields such as `status`, `previous_status`, `current_task_id`, `progress`, `status_message`, and `deployment_status` directly in the database.
+* **Derived values:** Any summary aggregations are projections, but the core status fields are durable.
+* **Frontend caching:** The frontend may cache agent records but must treat them as read-only projections. Frontend display state is not authoritative.
 * **Bootstrap records:** Initial seed data interacts with user-modified data. Startup logic preserves user modifications while ensuring required system roles exist.
 * **Non-authority:** What must not be inferred from UI sprites, animations, or UI presence is durable business logic. Visuals are display-only projections.
 
@@ -230,7 +231,9 @@ The system operates under a strict state-ownership model designed to prevent spl
 ### 7.8 Transactional outbox
 * **Intended atomic relationship:** Outbox events commit in the exact same database transaction as the domain and audit changes.
 * **Pending vs published state:** A row is pending until the dispatcher successfully delivers it and marks it published/removes it.
-* **Dispatcher ownership:** The outbox dispatcher component owns the polling and retry logic for the `outbox_events` table.
+* **Authoritative ownership:** The durable database/outbox repository is the authoritative source for outbox records. Domain/API transactions are the creators of committed outbox rows.
+* **Dispatcher role:** The dispatcher/event broker acts strictly as the delivery mechanism and publication-status updater. It does not own durable outbox truth.
+* **Client role:** WebSocket clients are non-authoritative recipients of outbox messages.
 * **Retry behavior:** Events are retried up to a maximum attempt limit.
 * **Event identity:** Event IDs are stable across retries to permit client deduplication.
 * **Delivery semantics:** At-least-once delivery based on current implementation.
