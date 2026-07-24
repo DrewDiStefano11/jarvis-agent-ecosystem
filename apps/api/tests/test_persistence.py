@@ -1728,7 +1728,7 @@ def test_seeded_audit_history_survives_blank_startup_and_recreation(tmp_path: Pa
         first_audit = first.get("/api/audit-events").json()["data"]
         assert any(item["id"] == "audit-1" for item in first_audit)
         assert any(
-            item.id == "audit-1" for item in first.app.state.repository.snapshot()["auditEvents"]
+            item["id"] == "audit-1" for item in first.app.state.repository.snapshot()["auditEvents"]
         )
         with first.websocket_connect("/ws/events") as socket:
             snapshot = socket.receive_json()
