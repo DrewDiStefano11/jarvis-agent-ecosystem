@@ -5,6 +5,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.context import ContextAssemblerStatus
+
 AgentStatus = Literal[
     "idle",
     "assigned",
@@ -219,7 +221,7 @@ class SystemStatus(ContractModel):
     lastSynchronizedAt: datetime
     storageBackend: str = "sqlite"
     databaseHealthy: bool = True
-    databaseRevision: str = "20260723_02"
+    databaseRevision: str = "20260724_03"
     schemaCurrent: bool = True
     eventSessionId: str
     outboxPendingCount: int = 0
@@ -229,6 +231,7 @@ class SystemStatus(ContractModel):
     lastCheckpointId: str | None = None
     lastStartupAt: datetime | None = None
     lastCleanShutdown: datetime | None = None
+    contextAssembler: ContextAssemblerStatus = Field(default_factory=ContextAssemblerStatus)
     activeWorkerCount: int = 0
     activeLeaseCount: int = 0
     expiredLeaseCount: int = 0

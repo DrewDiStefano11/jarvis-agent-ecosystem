@@ -40,6 +40,7 @@ class EventBroker:
         task_id: str | None = None,
         agent_id: str | None = None,
         correlation_id: str = "phase-1-demo",
+        source: str = "simulator",
         audit: dict[str, object] | None = None,
         idempotency: IdempotencyResult | None = None,
     ) -> EventEnvelope:
@@ -56,6 +57,7 @@ class EventBroker:
             correlationId=correlation_id,
             taskId=task_id,
             agentId=agent_id,
+            source=source,
             payload=payload,
         )
         envelope = event.model_dump(mode="json")
@@ -70,6 +72,7 @@ class EventBroker:
                     audit.get("previous"),
                     audit.get("new"),
                     audit.get("payload"),
+                    correlation_id=event.correlationId,
                 )
             try:
                 self.repository.enqueue_event(envelope, idempotency)

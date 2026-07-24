@@ -1,6 +1,6 @@
 # Jarvis Agent Ecosystem
 
-Jarvis is a local deterministic simulation with a durable SQLite control plane. Tasks, approvals, audit history, notifications, system state, event delivery, workflow checkpoints, and Phase 2B fenced task leases survive backend restarts while all agents and external actions remain simulated.
+Jarvis combines the Phase 2A local deterministic simulation and durable SQLite control plane with Phase 2B fenced task leases and a production-integrated Context Assembler. Tasks, approvals, task ownership, context manifests, audit history, notifications, system state, event delivery, and workflow checkpoints survive backend restarts while all agents, model calls, tools, and external actions remain simulated or unavailable.
 
 ## What works in Phase 2A
 
@@ -11,17 +11,18 @@ Jarvis is a local deterministic simulation with a durable SQLite control plane. 
 - deterministic departments, five permanent agents, tasks, approvals, artifacts, notifications, and audit fixtures
 - installable PWA metadata, offline shell, reconnection states, HTTP refresh fallback, and a 320px mobile layout
 - YAML agent manifests validated by Pydantic
-- SQLite persistence through typed SQLAlchemy models and Alembic revision `20260723_02`
+- SQLite persistence through typed SQLAlchemy models and Alembic head `20260724_03`
 - transactional outbox, durable idempotency keys, workflow runs, per-step checkpoints, and safe restart recovery
+- deterministic context assembly with provenance checks, trust ordering, redaction, injection signals, bounded truncation, durable manifests, and review gating
 - registered worker lifecycle, atomic task acquisition, renewable fencing tokens, attempt history, cancellation revocation, and expired-lease recovery
 
 ## Explicit non-capabilities
 
-No real AI models, autonomous agents, email, calendars, cloud files, browser/desktop automation, shell execution, financial services, authentication, databases, or production infrastructure are included. Telemetry, tools, files, reports, and temporary agents are labeled simulations. LangGraph, Prefect, PostgreSQL, Redis, Phaser, Ollama, and all real integrations are deferred.
+No real AI models, autonomous workers, email, calendars, cloud files, browser/desktop automation, shell execution, financial services, authentication, external database servers, or production infrastructure are included. Context is assembled but never sent to a provider. Telemetry, tools, files, reports, and temporary agents are labeled simulations. LangGraph, Prefect, PostgreSQL, Redis, Phaser, Ollama, and all real integrations are deferred.
 
 ## Architecture
 
-`apps/api` owns authoritative state and contracts. Route handlers use a durable repository and command boundaries; committed event envelopes are delivered from an SQLite outbox. `apps/web` retains the Phase 1 synchronization contract. See [ARCHITECTURE.md](ARCHITECTURE.md).
+`apps/api` owns authoritative state and contracts. Route handlers use services, a durable repository, and explicit command boundaries; committed event envelopes are delivered from an SQLite outbox. `apps/web` retains the Phase 1 synchronization contract. See [ARCHITECTURE.md](ARCHITECTURE.md) and [Context assembler](docs/context-assembler.md).
 
 ## Fresh Windows setup
 
@@ -30,7 +31,7 @@ Prerequisites: Git, Python 3.11+, Node.js 20+, and pnpm 9+ (`corepack enable`). 
 ```powershell
 git clone <private-repository-url> jarvis-agent-ecosystem
 Set-Location jarvis-agent-ecosystem
-git switch feature/phase-2-durable-control-plane
+git switch main
 
 Set-Location apps/api
 python -m venv .venv

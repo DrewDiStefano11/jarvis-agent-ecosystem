@@ -14,10 +14,18 @@ from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.context import ContextAssembler
 from app.core.config import Settings
 from app.core.errors import DomainError
 from app.core.transitions import InvalidTransitionError, validate_transition
 from app.db.session import create_database_engine, create_session_factory
+from app.models.context import (
+    ContextAssembly,
+    ContextAssemblyEventPayload,
+    ContextAssemblyListResponse,
+    ContextAssemblyResponse,
+    CreateContextAssemblyRequest,
+)
 from app.models.domain import (
     AcquireTaskLeaseRequest,
     Agent,
@@ -46,7 +54,7 @@ from app.repositories.task_leases import TaskLeaseRepository
 from app.services.events import EventBroker
 from app.simulator.engine import SimulatorEngine
 
-DATABASE_REVISION = "20260723_02"
+DATABASE_REVISION = "20260724_03"
 
 
 def _upgrade_database(settings: Settings) -> None:
@@ -90,6 +98,12 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         broker,
         delay_ms if delay_ms is not None else int(os.getenv("SIMULATOR_DELAY_MS", "800")),
     )
+    context_assembler = ContextAssembler(
+        maximum_sources=settings.context_maximum_sources,
+        maximum_tokens=settings.context_maximum_tokens,
+        maximum_total_characters=settings.context_maximum_total_characters,
+        cross_project_context_allowed=settings.context_cross_project_allowed,
+    )
     if restored_workflow_state:
         active = repository.active_workflow()
         simulator.control.state = restored_workflow_state
@@ -102,6 +116,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     app.state.repository = repository
     app.state.broker = broker
     app.state.simulator = simulator
+    app.state.context_assembler = context_assembler
     app.state.settings = settings
     app.state.engine = engine
     app.state.task_leases = task_leases
@@ -219,6 +234,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     async def health() -> ApiResponse:
         database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
         outbox_exhausted_count = repository.outbox_exhausted_count() if database_reachable else 0
+        context_status = repository.context_assembler_status()
         lease_counts = (
             task_leases.health_counts()
             if database_reachable and schema_current
@@ -247,6 +263,8 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "outboxDispatcherRunning": broker.dispatcher_running,
                 "outboxExhaustedCount": outbox_exhausted_count,
                 "recoveryRequired": repository._system.recovery_status == "required",
+                "contextAssemblerReady": database_reachable and schema_current,
+                "contextAssemblyCount": context_status.totalAssemblies if database_reachable else 0,
                 **lease_counts,
                 "simulated": True,
             }
@@ -274,6 +292,9 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             or lease_counts["expiredLeaseCount"] > 0
             or lease_counts["staleWorkerCount"] > 0
         )
+        context_status = repository.context_assembler_status()
+        if not database_reachable or not schema_current:
+            context_status = context_status.model_copy(update={"state": "unavailable"})
         return SystemStatus(
             status="degraded" if degraded else "healthy",
             environment=settings.app_env,
@@ -304,6 +325,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             lastCheckpointId=repository._system.last_checkpoint_id,
             lastStartupAt=repository._system.last_successful_startup,
             lastCleanShutdown=repository._system.last_clean_shutdown,
+            contextAssembler=context_status,
             **lease_counts,
         )
 
@@ -520,6 +542,102 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     @app.post("/api/tasks/{task_id}/cancel", response_model=ApiResponse)
     async def cancel_task(task_id: str) -> ApiResponse:
         return ApiResponse(data=await task_action(task_id, "cancel"))
+
+    @app.get("/api/context/assemblies", response_model=ContextAssemblyListResponse)
+    async def context_assemblies(taskId: str | None = None) -> ApiResponse:
+        items = list(repository.context_assemblies.values())
+        if taskId is not None:
+            items = [item for item in items if item.taskId == taskId]
+        return ApiResponse(data=items)
+
+    @app.get(
+        "/api/context/assemblies/{assembly_id}",
+        response_model=ContextAssemblyResponse,
+    )
+    async def context_assembly(assembly_id: str) -> ApiResponse:
+        return ApiResponse(
+            data=repository.require(
+                repository.context_assemblies,
+                assembly_id,
+                "context_assembly",
+            )
+        )
+
+    @app.post(
+        "/api/context/assemblies",
+        response_model=ContextAssemblyResponse,
+        status_code=201,
+    )
+    async def create_context_assembly(
+        request: Request,
+        body: CreateContextAssemblyRequest,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    ) -> ApiResponse | JSONResponse:
+        payload = body.model_dump(mode="json")
+        replay = replay_idempotent(
+            request,
+            idempotency_key,
+            "context-assembly.create",
+            payload,
+        )
+        if replay is not None:
+            return ApiResponse(data=ContextAssembly.model_validate(replay))
+
+        task = repository.require(repository.tasks, body.taskId, "task")
+        assert isinstance(task, Task)
+        item = context_assembler.assemble(task, body)
+        existing = repository.context_assemblies.get(item.id)
+        if existing is not None:
+            completion = idempotency_result(
+                request,
+                idempotency_key,
+                "context-assembly.create",
+                payload,
+                existing,
+                200,
+                existing.id,
+            )
+            if completion is not None:
+                repository.complete_idempotency(completion)
+            response = ApiResponse(data=existing)
+            return JSONResponse(
+                status_code=200,
+                content=response.model_dump(mode="json"),
+            )
+
+        repository.context_assemblies[item.id] = item
+        event_payload = ContextAssemblyEventPayload(
+            assemblyId=item.id,
+            status=item.status,
+            requestHash=item.requestHash,
+            includedSourceCount=item.report.includedSourceCount,
+            excludedSourceCount=item.report.excludedSourceCount,
+            redactionCount=item.report.redactionCount,
+            injectionFindingCount=item.report.injectionFindingCount,
+            conflictCount=item.report.conflictCount,
+        ).model_dump(mode="json")
+        await broker.emit(
+            "context.assembly.created",
+            event_payload,
+            task_id=item.taskId,
+            correlation_id=item.id,
+            source="context-assembler",
+            audit={
+                "summary": f"Context assembly {item.status}: {item.id}",
+                "new": item.status,
+                "payload": event_payload,
+            },
+            idempotency=idempotency_result(
+                request,
+                idempotency_key,
+                "context-assembly.create",
+                payload,
+                item,
+                201,
+                item.id,
+            ),
+        )
+        return ApiResponse(data=item)
 
     @app.get("/api/workers", response_model=ApiResponse)
     async def workers() -> ApiResponse:

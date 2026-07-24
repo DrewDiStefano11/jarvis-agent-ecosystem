@@ -19,9 +19,15 @@ The CSS office is a projection of agent/task state, never a source of truth. Age
 - LangGraph can replace deterministic decision steps behind the simulator/orchestrator interface.
 - Prefect can replace in-process scheduling while commands and events remain stable.
 - PostgreSQL can later implement the repository protocols without changing API/domain models. This phase needs no Redis or external broker.
+- Tool adapters can connect approved email, calendar, files, browser, and Windows capabilities without granting route handlers direct access.
+- Approval storage will gain identities and policy evaluation. Audit storage can later become tamper-evident.
 
 Sequence numbers are durable and monotonic within an event-session ID. Reset creates a new session; clients reset duplicate detection when that ID changes.
-- Tool adapters can connect approved email, calendar, files, browser, and Windows capabilities without granting route handlers direct access.
-- Approval storage will gain durable transactions, idempotency keys, identities, and policy evaluation. Audit storage will become append-only and tamper-evident.
+
+## Context assembly
+
+The Phase 2B Context Assembler is an integrated deterministic service, not a runtime or provider. Pydantic context contracts validate the public boundary. The assembler has no database, filesystem, network, model, or tool access; it accepts bounded content and returns a sanitized provider-neutral request, manifest, and report. Every supplied source remains structurally untrusted regardless of its ordering trust level.
+
+The repository persists assemblies in the same command transaction as their append-only audit, idempotent response, and outbox event. This makes recovery binary: no row exists before commit; after commit the assembly is complete and replayable. Context metrics are projections of persisted assemblies. See [docs/context-assembler.md](docs/context-assembler.md).
 
 These are planned seams, not active features. Real adapters must remain unavailable until their own threat models, approval policies, fixtures, and integration tests exist.
