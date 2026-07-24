@@ -116,6 +116,25 @@ class ArtifactRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ContextAssemblyRow(Base):
+    __tablename__ = "context_assemblies"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), index=True)
+    project_id: Mapped[str] = mapped_column(String(120), index=True)
+    status: Mapped[str] = mapped_column(String(40), index=True)
+    input_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    request_hash: Mapped[str] = mapped_column(String(64), index=True)
+    policy_version: Mapped[str] = mapped_column(String(80))
+    included_source_count: Mapped[int] = mapped_column(Integer)
+    excluded_source_count: Mapped[int] = mapped_column(Integer)
+    redaction_count: Mapped[int] = mapped_column(Integer)
+    injection_finding_count: Mapped[int] = mapped_column(Integer)
+    conflict_count: Mapped[int] = mapped_column(Integer)
+    schema_version: Mapped[str] = mapped_column(String(20), default="1.0")
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class NotificationRow(Base):
     __tablename__ = "notifications"
     id: Mapped[str] = mapped_column(String(80), primary_key=True)

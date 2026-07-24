@@ -20,4 +20,8 @@ Emergency stop is idempotent while already active. Repeated calls do not create 
 
 The `20260720_01` migration is frozen as explicit table, index, unique-constraint, and foreign-key operations and does not import live application metadata. Blank installations persist the deterministic seeded audit fixture before serving requests; audit endpoints and snapshots retain it across application recreation.
 
+Context assembly is a synchronous atomic command rather than a durable workflow. Interruption before commit leaves no assembly, audit, outbox, or completed idempotency row. Interruption after commit reloads the complete assembly and replays the stored response; pending publication uses the existing outbox recovery loop. There is no partial context checkpoint and restart never reruns redaction or changes deterministic hashes. Simulator reset preserves stable-task/user-task assemblies and removes generated-child assemblies before deleting their task rows.
+
+Revision `20260723_02` adds the explicit context table, unique input hash, indexes, and task foreign key. It is independently downgradeable to the frozen Phase 2A revision.
+
 Known limitation: the dispatcher is in-process and the database is intended for one local API process. Stable event IDs and frontend duplicate/gap handling make retries safe, but exactly-once delivery to a disconnected browser is not claimed.

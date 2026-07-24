@@ -19,6 +19,17 @@ class Settings(BaseSettings):
     outbox_max_attempts: int = Field(10, alias="JARVIS_OUTBOX_MAX_ATTEMPTS", ge=1)
     idempotency_lease_seconds: int = Field(30, alias="JARVIS_IDEMPOTENCY_LEASE_SECONDS", ge=1)
     checkpoint_every_step: bool = Field(True, alias="JARVIS_CHECKPOINT_EVERY_STEP")
+    context_maximum_sources: int = Field(32, alias="JARVIS_CONTEXT_MAXIMUM_SOURCES", ge=1, le=64)
+    context_maximum_tokens: int = Field(
+        8192, alias="JARVIS_CONTEXT_MAXIMUM_TOKENS", ge=256, le=65_536
+    )
+    context_maximum_total_characters: int = Field(
+        500_000,
+        alias="JARVIS_CONTEXT_MAXIMUM_TOTAL_CHARACTERS",
+        ge=1_000,
+        le=5_000_000,
+    )
+    context_cross_project_allowed: bool = Field(False, alias="JARVIS_CONTEXT_CROSS_PROJECT_ALLOWED")
     web_origin: str = Field("http://localhost:5173", alias="WEB_ORIGIN")
 
     def ensure_runtime_directory(self) -> None:

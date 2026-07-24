@@ -18,6 +18,7 @@ from app.db.models import (
     ApprovalRow,
     ArtifactRow,
     AuditEventRow,
+    ContextAssemblyRow,
     DepartmentRow,
     IdempotencyRecordRow,
     NotificationRow,
@@ -30,6 +31,7 @@ from app.db.models import (
     WorkflowCheckpointRow,
     WorkflowRunRow,
 )
+from app.models.context import ContextAssemblerStatus, ContextAssembly
 from app.models.domain import Agent, Approval, Artifact, AuditEvent, Department, Notification, Task
 from app.services.seed import build_seed
 from app.services.unit_of_work import UnitOfWork
@@ -98,6 +100,7 @@ class SqlAlchemyRepository:
         self.tasks = {x["id"]: Task.model_validate(x) for x in seed["tasks"]}
         self.approvals = {x["id"]: Approval.model_validate(x) for x in seed["approvals"]}
         self.artifacts = {x["id"]: Artifact.model_validate(x) for x in seed["artifacts"]}
+        self.context_assemblies: dict[str, ContextAssembly] = {}
         self.notifications = {
             x["id"]: Notification.model_validate(x) for x in seed["notifications"]
         }
@@ -126,6 +129,12 @@ class SqlAlchemyRepository:
             self.artifacts = {
                 row.id: Artifact.model_validate(row.payload)
                 for row in session.scalars(select(ArtifactRow))
+            }
+            self.context_assemblies = {
+                row.id: ContextAssembly.model_validate(row.payload)
+                for row in session.scalars(
+                    select(ContextAssemblyRow).order_by(ContextAssemblyRow.created_at)
+                )
             }
             self.notifications = {
                 row.id: Notification.model_validate(row.payload)
@@ -307,6 +316,26 @@ class SqlAlchemyRepository:
                     updated_at=item.createdAt,
                 )
             )
+        for item in self.context_assemblies.values():
+            session.merge(
+                ContextAssemblyRow(
+                    id=item.id,
+                    task_id=item.taskId,
+                    project_id=item.projectId,
+                    status=item.status,
+                    input_hash=item.inputHash,
+                    request_hash=item.requestHash,
+                    policy_version=item.policyVersion,
+                    included_source_count=item.report.includedSourceCount,
+                    excluded_source_count=item.report.excludedSourceCount,
+                    redaction_count=item.report.redactionCount,
+                    injection_finding_count=item.report.injectionFindingCount,
+                    conflict_count=item.report.conflictCount,
+                    schema_version=item.schemaVersion,
+                    payload=item.model_dump(mode="json"),
+                    created_at=item.createdAt,
+                )
+            )
         for item in self.notifications.values():
             session.merge(
                 NotificationRow(
@@ -420,6 +449,7 @@ class SqlAlchemyRepository:
         new: str | None = None,
         payload: dict[str, object] | None = None,
         event_session_id: str | None = None,
+        correlation_id: str = "phase-2-demo",
     ) -> AuditEvent:
         item = AuditEvent(
             id=f"audit-{uuid4().hex[:12]}",
@@ -430,7 +460,7 @@ class SqlAlchemyRepository:
             previousState=previous,
             newState=new,
             summary=summary,
-            correlationId="phase-2-demo",
+            correlationId=correlation_id,
             sequenceNumber=sequence,
             payload=payload or {},
             approvalId=str((payload or {}).get("approvalId"))
@@ -441,6 +471,15 @@ class SqlAlchemyRepository:
         if event_session_id:
             self._audit_session_ids[item.id] = event_session_id
         return item
+
+    def complete_idempotency(self, result: IdempotencyResult) -> None:
+        try:
+            with UnitOfWork(self.session_factory) as uow:
+                assert uow.session is not None
+                self._store_idempotency(uow.session, result)
+        except Exception:
+            self.reload()
+            raise
 
     def enqueue_event(
         self,
@@ -537,6 +576,22 @@ class SqlAlchemyRepository:
                 )
                 or 0
             )
+
+    def context_assembler_status(self) -> ContextAssemblerStatus:
+        assemblies = list(self.context_assemblies.values())
+        return ContextAssemblerStatus(
+            totalAssemblies=len(assemblies),
+            completedAssemblies=sum(item.status == "completed" for item in assemblies),
+            reviewRequiredAssemblies=sum(item.status == "review_required" for item in assemblies),
+            includedSources=sum(item.report.includedSourceCount for item in assemblies),
+            excludedSources=sum(item.report.excludedSourceCount for item in assemblies),
+            redactions=sum(item.report.redactionCount for item in assemblies),
+            injectionFindings=sum(item.report.injectionFindingCount for item in assemblies),
+            lastAssemblyAt=max(
+                (item.createdAt for item in assemblies),
+                default=None,
+            ),
+        )
 
     @staticmethod
     def request_hash(payload: Any) -> str:
@@ -905,11 +960,17 @@ class SqlAlchemyRepository:
         }
         historical_audit = list(self.audit)
         historical_audit_sessions = dict(self._audit_session_ids)
+        historical_context_assemblies = {
+            key: value
+            for key, value in self.context_assemblies.items()
+            if not value.taskId.startswith("task-demo-")
+        }
         seed = build_seed()
         seed_artifact_ids = {item["id"] for item in seed["artifacts"]}
         seed_notification_ids = {item["id"] for item in seed["notifications"]}
         self._load_seed_memory()
         self.tasks.update(user_tasks)
+        self.context_assemblies = historical_context_assemblies
         self.audit = historical_audit
         self._audit_session_ids = historical_audit_sessions
         self.reset_sequence()
@@ -923,6 +984,9 @@ class SqlAlchemyRepository:
                 session.execute(delete(TaskAgentRow))
                 session.execute(delete(TaskDependencyRow))
                 session.execute(delete(TaskBlockerRow))
+                session.execute(
+                    delete(ContextAssemblyRow).where(ContextAssemblyRow.task_id.like("task-demo-%"))
+                )
                 session.execute(delete(ArtifactRow).where(ArtifactRow.id.not_in(seed_artifact_ids)))
                 session.execute(delete(TaskRow).where(TaskRow.id.like("task-demo-%")))
                 session.execute(delete(AgentRow).where(AgentRow.is_temporary.is_(True)))

@@ -1,6 +1,6 @@
 # Event contracts and transitions
 
-Every `EventEnvelope` includes `eventId`, `schemaVersion`, `eventType`, `timestamp`, `sequenceNumber`, `correlationId`, optional `taskId`/`agentId`, `source`, and typed payload data. Event families are `agent.status.changed`, `task.*`, `approval.*`, `system.*`, `temporary_agent.*`, and `error.*`. A `system.snapshot` is sent immediately after connection.
+Every `EventEnvelope` includes `eventId`, `schemaVersion`, `eventType`, `timestamp`, `sequenceNumber`, `correlationId`, optional `taskId`/`agentId`, `source`, and typed payload data. Event families are `agent.status.changed`, `task.*`, `approval.*`, `context.*`, `system.*`, `temporary_agent.*`, and `error.*`. A `system.snapshot` is sent immediately after connection.
 
 Sequence numbers strictly increase per simulator session. Clients ignore `sequence <= lastSequence`; a gap (`sequence != lastSequence + 1`) requires HTTP resynchronization. Reset cancels the runner, reseeds state, and restarts sequencing.
 
@@ -17,3 +17,5 @@ Immediate publication and background outbox polling share a dispatch boundary so
 Frontend duplicate detection is scoped to `eventSessionId`. A session change resets the stored sequence before evaluating the new event, so a new session's sequence-zero snapshot and subsequent low-numbered events are accepted.
 
 Reset records its audit as the final monotonically increasing sequence in the old event session, then atomically rotates the active session and resets its counter to zero. The first subsequent event in the new session starts at sequence one.
+
+`context.assembly.created` uses source `context-assembler`, the assembly ID as `correlationId`, and the associated task ID. Its payload contains `assemblyId`, status, request hash, and included/excluded/redaction/injection/conflict counts. Source text, credentials, model messages, and injection excerpts are prohibited from both the event and audit payload. Identical canonical input already stored does not emit another event.
