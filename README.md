@@ -13,6 +13,7 @@ Jarvis Phase 2A is a local deterministic simulation with a durable SQLite contro
 - YAML agent manifests validated by Pydantic
 - SQLite persistence through typed SQLAlchemy models and Alembic revision `20260720_01`
 - transactional outbox, durable idempotency keys, workflow runs, per-step checkpoints, and safe restart recovery
+- a root-confined filesystem sandbox foundation for future file tools (not exposed to agents in this phase)
 
 ## Explicit non-capabilities
 
@@ -21,6 +22,8 @@ No real AI models, autonomous agents, email, calendars, cloud files, browser/des
 ## Architecture
 
 `apps/api` owns authoritative state and contracts. Route handlers use a durable repository and command boundaries; committed event envelopes are delivered from an SQLite outbox. `apps/web` retains the Phase 1 synchronization contract. See [ARCHITECTURE.md](ARCHITECTURE.md).
+
+Future agent-facing file features must use the provider-neutral sandbox boundary rather than host filesystem calls. Its security model, configuration, API, and current limitations are documented in [docs/filesystem-sandbox.md](docs/filesystem-sandbox.md).
 
 ## Fresh Windows setup
 

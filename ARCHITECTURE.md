@@ -10,6 +10,8 @@ React is a separate client. Its controlled store loads snapshots over HTTP and t
 
 HTTP handles queries, commands, resynchronization, and structured errors. WebSocket provides snapshots on connection plus low-latency, schema-versioned event envelopes. Sequence numbers are monotonic for one simulator session and restart on reset.
 
+The provider-neutral `FilesystemSandbox` protocol is the mandatory boundary for future agent-facing file access. The local provider confines relative paths to a configured root, rejects links and traversal, requires explicit destructive intent, and serializes same-root operations. It is dependency-injected through application state but is not exposed as a real agent capability in this phase. See [filesystem sandbox](docs/filesystem-sandbox.md).
+
 The CSS office is a projection of agent/task state, never a source of truth. Agent/task clicks reuse the same details components used elsewhere.
 
 ## Evolution seams

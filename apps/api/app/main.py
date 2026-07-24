@@ -18,6 +18,7 @@ from app.core.config import Settings
 from app.core.errors import DomainError
 from app.core.transitions import InvalidTransitionError, validate_transition
 from app.db.session import create_database_engine, create_session_factory
+from app.filesystem import LocalFilesystemSandbox
 from app.models.domain import (
     Agent,
     ApiResponse,
@@ -53,6 +54,7 @@ def _upgrade_database(settings: Settings) -> None:
 def create_app(delay_ms: int | None = None, database_url: str | None = None) -> FastAPI:
     settings = Settings(JARVIS_DATABASE_URL=database_url) if database_url else Settings()
     settings.ensure_runtime_directory()
+    filesystem_sandbox = LocalFilesystemSandbox(settings.filesystem_sandbox_configuration())
     if settings.auto_migrate:
         _upgrade_database(settings)
     engine = create_database_engine(settings.database_url, settings.sql_echo)
@@ -95,6 +97,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     app.state.simulator = simulator
     app.state.settings = settings
     app.state.engine = engine
+    app.state.filesystem_sandbox = filesystem_sandbox
     app.state.recovery_required = restored_workflow_state == "recovery_required"
 
     def replay_idempotent(
