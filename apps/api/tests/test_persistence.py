@@ -48,6 +48,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
         "approvals",
         "artifacts",
         "audit_events",
+        "context_assemblies",
         "departments",
         "idempotency_records",
         "notifications",
@@ -56,7 +57,10 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
         "task_agents",
         "task_blockers",
         "task_dependencies",
+        "task_attempts",
+        "task_leases",
         "tasks",
+        "workers",
         "workflow_checkpoints",
         "workflow_runs",
     }
@@ -75,9 +79,37 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
         tuple(item["constrained_columns"])
         for item in inspector.get_foreign_keys("workflow_checkpoints")
     } == {("root_task_id",), ("workflow_run_id",)}
+    assert {
+        tuple(item["column_names"])
+        for item in inspector.get_unique_constraints("context_assemblies")
+    } == {("input_hash",)}
+    assert {
+        tuple(item["constrained_columns"])
+        for item in inspector.get_foreign_keys("context_assemblies")
+    } == {("task_id",)}
+    assert {item["name"] for item in inspector.get_indexes("context_assemblies")} == {
+        "ix_context_assemblies_project_id",
+        "ix_context_assemblies_request_hash",
+        "ix_context_assemblies_status",
+        "ix_context_assemblies_task_id",
+    }
     with engine.connect() as connection:
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260720_01"
+        assert connection.scalar(text("select version_num from alembic_version")) == "20260724_03"
     engine.dispose()
+    command.downgrade(config, "20260723_02")
+    lease_engine = create_engine(database_url(path))
+    lease_tables = set(inspect(lease_engine).get_table_names())
+    lease_engine.dispose()
+    assert "context_assemblies" not in lease_tables
+    assert {"task_attempts", "task_leases", "workers"} <= lease_tables
+    command.downgrade(config, "20260720_01")
+    phase_2a_engine = create_engine(database_url(path))
+    phase_2a_tables = set(inspect(phase_2a_engine).get_table_names())
+    phase_2a_engine.dispose()
+    phase_2b_tables = {"context_assemblies", "task_attempts", "task_leases", "workers"}
+    assert not phase_2b_tables & phase_2a_tables
+    assert expected_tables - phase_2b_tables <= phase_2a_tables
+    command.upgrade(config, "head")
     command.downgrade(config, "base")
     downgraded_tables = set(inspect(create_engine(database_url(path))).get_table_names())
     assert not expected_tables & downgraded_tables
@@ -85,12 +117,12 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     command.current(config)
     with create_database_engine(database_url(path)).connect() as connection:
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260720_01"
-    revision = root / "migrations" / "versions" / "20260720_01_durable_control_plane.py"
-    source = revision.read_text(encoding="utf-8")
-    assert "Base.metadata" not in source
-    assert "create_all" not in source
-    assert "drop_all" not in source
+        assert connection.scalar(text("select version_num from alembic_version")) == "20260724_03"
+    for revision in (root / "migrations" / "versions").glob("*.py"):
+        source = revision.read_text(encoding="utf-8")
+        assert "Base.metadata" not in source
+        assert "create_all" not in source
+        assert "drop_all" not in source
 
 
 def test_state_and_idempotency_survive_application_recreation(tmp_path: Path) -> None:

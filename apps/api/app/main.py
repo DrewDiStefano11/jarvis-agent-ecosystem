@@ -14,32 +14,47 @@ from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.context import ContextAssembler
 from app.core.config import Settings
 from app.core.errors import DomainError
 from app.core.transitions import InvalidTransitionError, validate_transition
 from app.db.session import create_database_engine, create_session_factory
+from app.models.context import (
+    ContextAssembly,
+    ContextAssemblyEventPayload,
+    ContextAssemblyListResponse,
+    ContextAssemblyResponse,
+    CreateContextAssemblyRequest,
+)
 from app.models.domain import (
+    AcquireTaskLeaseRequest,
     Agent,
     ApiResponse,
     Approval,
+    CompleteTaskLeaseRequest,
     CreateTaskRequest,
     CreateTemporaryAgentRequest,
     DecisionRequest,
     EditApprovalRequest,
+    FailTaskLeaseRequest,
     FailureRequest,
+    LeaseCommandRequest,
     Notification,
     Office,
     Performance,
+    RegisterWorkerRequest,
+    RenewTaskLeaseRequest,
     ResourceStatus,
     SimulatorControl,
     SystemStatus,
     Task,
 )
 from app.repositories.sqlalchemy import IdempotencyResult, SqlAlchemyRepository
+from app.repositories.task_leases import TaskLeaseRepository
 from app.services.events import EventBroker
 from app.simulator.engine import SimulatorEngine
 
-DATABASE_REVISION = "20260720_01"
+DATABASE_REVISION = "20260724_03"
 
 
 def _upgrade_database(settings: Settings) -> None:
@@ -56,11 +71,13 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     if settings.auto_migrate:
         _upgrade_database(settings)
     engine = create_database_engine(settings.database_url, settings.sql_echo)
+    session_factory = create_session_factory(engine)
     repository = SqlAlchemyRepository(
-        create_session_factory(engine),
+        session_factory,
         settings.idempotency_lease_seconds,
         settings.outbox_max_attempts,
     )
+    task_leases = TaskLeaseRepository(repository, session_factory, settings.task_lease_seconds)
     restored_workflow_state = repository.mark_interrupted_workflow()
     app = FastAPI(
         title="Jarvis Agent Ecosystem Simulator",
@@ -81,6 +98,12 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         broker,
         delay_ms if delay_ms is not None else int(os.getenv("SIMULATOR_DELAY_MS", "800")),
     )
+    context_assembler = ContextAssembler(
+        maximum_sources=settings.context_maximum_sources,
+        maximum_tokens=settings.context_maximum_tokens,
+        maximum_total_characters=settings.context_maximum_total_characters,
+        cross_project_context_allowed=settings.context_cross_project_allowed,
+    )
     if restored_workflow_state:
         active = repository.active_workflow()
         simulator.control.state = restored_workflow_state
@@ -93,8 +116,11 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     app.state.repository = repository
     app.state.broker = broker
     app.state.simulator = simulator
+    app.state.context_assembler = context_assembler
     app.state.settings = settings
     app.state.engine = engine
+    app.state.task_leases = task_leases
+    app.state.lease_recovery_task = None
     app.state.recovery_required = restored_workflow_state == "recovery_required"
 
     def replay_idempotent(
@@ -157,11 +183,33 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         repository.persist()
         await broker.dispatch_pending()
         await broker.start_dispatcher(settings.outbox_poll_interval_ms)
+
+        async def recover_expired_task_leases() -> None:
+            while True:
+                await asyncio.sleep(settings.task_lease_recovery_interval_ms / 1000)
+                database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
+                if not database_reachable or not schema_current:
+                    continue
+                recovered = task_leases.recover_expired_leases()
+                if recovered:
+                    await broker.dispatch_pending()
+
+        database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
+        if database_reachable and schema_current:
+            task_leases.recover_expired_leases()
+            await broker.dispatch_pending()
+        app.state.lease_recovery_task = asyncio.create_task(recover_expired_task_leases())
         if restored_workflow_state == "recovery_required" and settings.simulator_auto_resume:
             await simulator.resume()
 
     @app.on_event("shutdown")
     async def shutdown() -> None:
+        if app.state.lease_recovery_task:
+            app.state.lease_recovery_task.cancel()
+            try:
+                await app.state.lease_recovery_task
+            except asyncio.CancelledError:
+                pass
         if simulator._runner and not simulator._runner.done():
             simulator._stopped = True
             simulator._runner.cancel()
@@ -186,11 +234,24 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     async def health() -> ApiResponse:
         database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
         outbox_exhausted_count = repository.outbox_exhausted_count() if database_reachable else 0
+        context_status = repository.context_assembler_status()
+        lease_counts = (
+            task_leases.health_counts()
+            if database_reachable and schema_current
+            else {
+                "activeWorkerCount": 0,
+                "activeLeaseCount": 0,
+                "expiredLeaseCount": 0,
+                "staleWorkerCount": 0,
+            }
+        )
         degraded = (
             repository._system.recovery_status == "required"
             or not database_reachable
             or not schema_current
             or outbox_exhausted_count > 0
+            or lease_counts["expiredLeaseCount"] > 0
+            or lease_counts["staleWorkerCount"] > 0
         )
         return ApiResponse(
             data={
@@ -202,6 +263,9 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "outboxDispatcherRunning": broker.dispatcher_running,
                 "outboxExhaustedCount": outbox_exhausted_count,
                 "recoveryRequired": repository._system.recovery_status == "required",
+                "contextAssemblerReady": database_reachable and schema_current,
+                "contextAssemblyCount": context_status.totalAssemblies if database_reachable else 0,
+                **lease_counts,
                 "simulated": True,
             }
         )
@@ -210,12 +274,27 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
         outbox_pending_count = repository.outbox_pending_count() if database_reachable else 0
         outbox_exhausted_count = repository.outbox_exhausted_count() if database_reachable else 0
+        lease_counts = (
+            task_leases.health_counts()
+            if database_reachable and schema_current
+            else {
+                "activeWorkerCount": 0,
+                "activeLeaseCount": 0,
+                "expiredLeaseCount": 0,
+                "staleWorkerCount": 0,
+            }
+        )
         degraded = (
             repository._system.recovery_status == "required"
             or not database_reachable
             or not schema_current
             or outbox_exhausted_count > 0
+            or lease_counts["expiredLeaseCount"] > 0
+            or lease_counts["staleWorkerCount"] > 0
         )
+        context_status = repository.context_assembler_status()
+        if not database_reachable or not schema_current:
+            context_status = context_status.model_copy(update={"state": "unavailable"})
         return SystemStatus(
             status="degraded" if degraded else "healthy",
             environment=settings.app_env,
@@ -246,6 +325,8 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             lastCheckpointId=repository._system.last_checkpoint_id,
             lastStartupAt=repository._system.last_successful_startup,
             lastCleanShutdown=repository._system.last_clean_shutdown,
+            contextAssembler=context_status,
+            **lease_counts,
         )
 
     @app.get("/api/system/status", response_model=ApiResponse)
@@ -393,6 +474,10 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         idempotency_payload: object | None = None,
         request: Request | None = None,
     ) -> Task:
+        if action == "cancel":
+            item = task_leases.cancel_task(task_id)
+            await broker.dispatch_pending()
+            return item
         item = repository.require(repository.tasks, task_id, "task")
         assert isinstance(item, Task)
         if action == "pause":
@@ -416,12 +501,6 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "Retry queued from deterministic checkpoint",
                 None,
             )
-        elif action == "cancel":
-            if item.status in {"completed", "cancelled"}:
-                raise DomainError(
-                    "TASK_NOT_CANCELLABLE", f"Task in {item.status} cannot be cancelled.", 409
-                )
-            item.status, item.statusMessage = "cancelled", "Cancelled by user"
         item.updatedAt = datetime.now(UTC)
         await broker.emit(
             f"task.{action}",
@@ -463,6 +542,175 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     @app.post("/api/tasks/{task_id}/cancel", response_model=ApiResponse)
     async def cancel_task(task_id: str) -> ApiResponse:
         return ApiResponse(data=await task_action(task_id, "cancel"))
+
+    @app.get("/api/context/assemblies", response_model=ContextAssemblyListResponse)
+    async def context_assemblies(taskId: str | None = None) -> ApiResponse:
+        items = list(repository.context_assemblies.values())
+        if taskId is not None:
+            items = [item for item in items if item.taskId == taskId]
+        return ApiResponse(data=items)
+
+    @app.get(
+        "/api/context/assemblies/{assembly_id}",
+        response_model=ContextAssemblyResponse,
+    )
+    async def context_assembly(assembly_id: str) -> ApiResponse:
+        return ApiResponse(
+            data=repository.require(
+                repository.context_assemblies,
+                assembly_id,
+                "context_assembly",
+            )
+        )
+
+    @app.post(
+        "/api/context/assemblies",
+        response_model=ContextAssemblyResponse,
+        status_code=201,
+    )
+    async def create_context_assembly(
+        request: Request,
+        body: CreateContextAssemblyRequest,
+        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    ) -> ApiResponse | JSONResponse:
+        payload = body.model_dump(mode="json")
+        replay = replay_idempotent(
+            request,
+            idempotency_key,
+            "context-assembly.create",
+            payload,
+        )
+        if replay is not None:
+            return ApiResponse(data=ContextAssembly.model_validate(replay))
+
+        task = repository.require(repository.tasks, body.taskId, "task")
+        assert isinstance(task, Task)
+        item = context_assembler.assemble(task, body)
+        existing = repository.context_assemblies.get(item.id)
+        if existing is not None:
+            completion = idempotency_result(
+                request,
+                idempotency_key,
+                "context-assembly.create",
+                payload,
+                existing,
+                200,
+                existing.id,
+            )
+            if completion is not None:
+                repository.complete_idempotency(completion)
+            response = ApiResponse(data=existing)
+            return JSONResponse(
+                status_code=200,
+                content=response.model_dump(mode="json"),
+            )
+
+        repository.context_assemblies[item.id] = item
+        event_payload = ContextAssemblyEventPayload(
+            assemblyId=item.id,
+            status=item.status,
+            requestHash=item.requestHash,
+            includedSourceCount=item.report.includedSourceCount,
+            excludedSourceCount=item.report.excludedSourceCount,
+            redactionCount=item.report.redactionCount,
+            injectionFindingCount=item.report.injectionFindingCount,
+            conflictCount=item.report.conflictCount,
+        ).model_dump(mode="json")
+        await broker.emit(
+            "context.assembly.created",
+            event_payload,
+            task_id=item.taskId,
+            correlation_id=item.id,
+            source="context-assembler",
+            audit={
+                "summary": f"Context assembly {item.status}: {item.id}",
+                "new": item.status,
+                "payload": event_payload,
+            },
+            idempotency=idempotency_result(
+                request,
+                idempotency_key,
+                "context-assembly.create",
+                payload,
+                item,
+                201,
+                item.id,
+            ),
+        )
+        return ApiResponse(data=item)
+
+    @app.get("/api/workers", response_model=ApiResponse)
+    async def workers() -> ApiResponse:
+        return ApiResponse(data=task_leases.list_workers())
+
+    @app.post("/api/workers", response_model=ApiResponse, status_code=201)
+    async def register_worker(body: RegisterWorkerRequest) -> ApiResponse:
+        worker = task_leases.register_worker(
+            body.name, body.instanceId, body.leaseSeconds, body.metadata
+        )
+        await broker.dispatch_pending()
+        return ApiResponse(data=worker)
+
+    @app.post("/api/workers/{worker_id}/heartbeat", response_model=ApiResponse)
+    async def heartbeat_worker(worker_id: str) -> ApiResponse:
+        return ApiResponse(data=task_leases.heartbeat_worker(worker_id))
+
+    @app.post("/api/workers/{worker_id}/drain", response_model=ApiResponse)
+    async def drain_worker(worker_id: str) -> ApiResponse:
+        worker = task_leases.drain_worker(worker_id)
+        await broker.dispatch_pending()
+        return ApiResponse(data=worker)
+
+    @app.post("/api/workers/{worker_id}/stop", response_model=ApiResponse)
+    async def stop_worker(worker_id: str) -> ApiResponse:
+        worker = task_leases.stop_worker(worker_id)
+        await broker.dispatch_pending()
+        return ApiResponse(data=worker)
+
+    @app.post("/api/workers/{worker_id}/tasks/acquire", response_model=ApiResponse)
+    async def acquire_task(worker_id: str, body: AcquireTaskLeaseRequest) -> ApiResponse:
+        acquired = task_leases.acquire_task(worker_id, body.leaseSeconds)
+        if acquired is None:
+            return ApiResponse(data=None)
+        task_item, lease = acquired
+        await broker.dispatch_pending()
+        return ApiResponse(data={"task": task_item, "lease": lease})
+
+    @app.post("/api/tasks/{task_id}/lease/renew", response_model=ApiResponse)
+    async def renew_task_lease(task_id: str, body: RenewTaskLeaseRequest) -> ApiResponse:
+        lease = task_leases.renew_lease(
+            task_id,
+            body.workerId,
+            body.leaseToken,
+            body.leaseSeconds,
+            body.checkpointId,
+        )
+        await broker.dispatch_pending()
+        return ApiResponse(data=lease)
+
+    @app.post("/api/tasks/{task_id}/lease/release", response_model=ApiResponse)
+    async def release_task_lease(task_id: str, body: LeaseCommandRequest) -> ApiResponse:
+        item = task_leases.release_lease(task_id, body.workerId, body.leaseToken)
+        await broker.dispatch_pending()
+        return ApiResponse(data=item)
+
+    @app.post("/api/tasks/{task_id}/lease/complete", response_model=ApiResponse)
+    async def complete_task_lease(task_id: str, body: CompleteTaskLeaseRequest) -> ApiResponse:
+        item = task_leases.complete_task(task_id, body.workerId, body.leaseToken, body.result)
+        await broker.dispatch_pending()
+        return ApiResponse(data=item)
+
+    @app.post("/api/tasks/{task_id}/lease/fail", response_model=ApiResponse)
+    async def fail_task_lease(task_id: str, body: FailTaskLeaseRequest) -> ApiResponse:
+        item = task_leases.fail_task(
+            task_id,
+            body.workerId,
+            body.leaseToken,
+            body.error,
+            body.retryable,
+        )
+        await broker.dispatch_pending()
+        return ApiResponse(data=item)
 
     @app.get("/api/approvals", response_model=ApiResponse)
     async def approvals() -> ApiResponse:

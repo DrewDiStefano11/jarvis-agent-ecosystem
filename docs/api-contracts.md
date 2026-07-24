@@ -8,6 +8,9 @@ Routes:
 - Departments: `GET /api/departments`, `GET /api/departments/{id}`
 - Agents: `GET /api/agents`, `GET /api/agents/{id}`, `POST /api/agents/temporary`
 - Tasks: `GET /api/tasks`, `GET /api/tasks/{id}`, `POST /api/tasks`, and `POST /api/tasks/{id}/{pause|resume|retry|cancel}`
+- Context: `GET /api/context/assemblies`, `GET /api/context/assemblies/{id}`, and `POST /api/context/assemblies`
+- Workers: `GET /api/workers`, `POST /api/workers`, `POST /api/workers/{id}/{heartbeat|drain|stop}`, and `POST /api/workers/{id}/tasks/acquire`
+- Task leases: `POST /api/tasks/{id}/lease/{renew|release|complete|fail}`
 - Approvals: `GET /api/approvals`, `GET /api/approvals/{id}`, and `POST /api/approvals/{id}/{approve|reject|edit}`
 - History: `GET /api/audit-events`, `GET /api/artifacts`, `GET /api/notifications`, `POST /api/notifications/{id}/read`
 - Simulator: `POST /api/simulator/{start|pause|resume|reset|failure|approval}`
@@ -19,6 +22,8 @@ Simulator start accepts only idle state with emergency stop inactive. Running, p
 
 Phase 2A mutation routes accept an optional `Idempotency-Key` header for task creation, approval decisions, task retry, temporary-agent creation, simulator start, and reset. Same-key/same-request calls replay the durable response; changed content returns `IDEMPOTENCY_KEY_CONFLICT` (409). System status additively reports storage, migration, event-session, outbox, checkpoint, and recovery fields. Health distinguishes process, database, schema, dispatcher, and recovery state without exposing database paths.
 
+Context creation also accepts `Idempotency-Key`. Its typed request binds an existing task and project to a bounded policy and source set. A new durable assembly returns 201; identical canonical input already stored returns 200 without a duplicate audit or event. `completed` responses include the sanitized `modelRequest`; `review_required` responses withhold it and retain the manifest/report. Stable context errors include `CONTEXT_PROJECT_MISMATCH` (409), configured size/source/token policy errors (422), and the normal task/assembly not-found codes (404). OpenAPI defines the full context request, response, manifest, and model-request shapes.
+
 Reset hashing uses only the stable client action, never event-session or workflow state. An in-progress claim is owned by the request that created it; duplicate in-progress or conflicting requests cannot abandon another request's claim.
 
 For every keyed mutation, the terminal idempotency response is written by the same unit of work as the domain rows, audit entry, checkpoint (when present), and transactional outbox event. A failed commit reloads cached domain state from the database and the owning request abandons only its uncompleted claim; a committed command is immediately replayable even if response delivery or outbox publication is interrupted.
@@ -28,3 +33,9 @@ Pending idempotency claims carry a durable 30-second lease by default (`JARVIS_I
 Failed outbox deliveries are selected only while `publishAttemptCount` is below `JARVIS_OUTBOX_MAX_ATTEMPTS` (default 10). Exhausted rows remain durable and visible as failed for operator inspection but are not retried on later dispatcher polls or restarts.
 
 Health and system status report exhausted outbox rows separately from the compatible aggregate pending count. Any exhausted row degrades health until an operator repairs or explicitly reconciles it; healthy eligible envelopes continue dispatching. Dispatch uses the durable row ID for attempt accounting even when an envelope's embedded ID is corrupted.
+
+Health additively reports context readiness/count. System status additively reports the durable context assembler state and assembly/source/security counts. Review-required content is a domain outcome and does not by itself make the API unhealthy.
+
+Phase 2B workers register a stable `instanceId`, then acquire an eligible task before processing it. Acquisition returns the compatible task plus a capability-bearing `leaseToken`; only the matching worker/token pair may renew, release, complete, or fail that attempt. Tokens are never placed in audit or event payloads—only a one-way fingerprint is recorded. A stale, expired, cancelled, or superseded token returns `TASK_LEASE_LOST` (409). Repeating a successful completion with the same attempt token is idempotent.
+
+Workers in `draining` state cannot acquire work and release their active leases. Cancellation atomically revokes an active lease before returning. Acquisition returns `data: null` for an empty or dependency-blocked queue. Lease duration defaults to `JARVIS_TASK_LEASE_SECONDS`; callers may request a bounded override. Health and system status add active worker, active lease, expired lease, and stale worker counts without changing existing fields.

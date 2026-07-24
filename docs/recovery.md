@@ -18,6 +18,14 @@ Emergency stop checkpoints only active or recoverable workflow state. Invoking i
 
 Emergency stop is idempotent while already active. Repeated calls do not create another checkpoint, audit event, or outbox envelope.
 
+Task leases are independently recoverable ownership records. Startup and a bounded background sweep reclaim every expired active lease. The attempt is closed as `expired`; the task is requeued while retry budget remains or marked failed after exhaustion; audit and outbox evidence commit in the same transaction. A successor receives a new fencing token, so every later renew/release/complete/fail call from the old worker is rejected. Unexpired leases survive process restart unchanged.
+
+Lease renewal may attach an existing validated workflow checkpoint belonging to the leased root task. The checkpoint ID is retained on the attempt and returned to a successor after expiration, keeping the durable workflow checkpoint—not worker memory—as recovery position. A worker must stop processing immediately when renewal reports `TASK_LEASE_LOST`.
+
 The `20260720_01` migration is frozen as explicit table, index, unique-constraint, and foreign-key operations and does not import live application metadata. Blank installations persist the deterministic seeded audit fixture before serving requests; audit endpoints and snapshots retain it across application recreation.
 
-Known limitation: the dispatcher is in-process and the database is intended for one local API process. Stable event IDs and frontend duplicate/gap handling make retries safe, but exactly-once delivery to a disconnected browser is not claimed.
+Context assembly is a synchronous atomic command rather than a durable workflow. Interruption before commit leaves no assembly, audit, outbox, or completed idempotency row. Interruption after commit reloads the complete assembly and replays the stored response; pending publication uses the existing outbox recovery loop. There is no partial context checkpoint and restart never reruns redaction or changes deterministic hashes. Simulator reset preserves stable-task/user-task assemblies and removes generated-child assemblies before deleting their task rows.
+
+Revision `20260724_03` adds the explicit context table, unique input hash, indexes, and task foreign key after the `20260723_02` task-lease revision.
+
+Known limitation: the dispatcher is in-process and the database is intended for one local API process. Stable event IDs and frontend duplicate/gap handling make retries safe, but exactly-once delivery to a disconnected browser is not claimed. Lease fencing prevents concurrent ownership and stale commits inside the control plane; future external side-effect adapters must also enforce the fencing token or an idempotency key, because a process can crash after an external effect but before recording completion.

@@ -12,7 +12,7 @@ from app.db.base import Base
 
 config = context.config
 if config.config_file_name:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 if database_url := os.getenv("JARVIS_DATABASE_URL"):
     config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 database_url = config.get_main_option("sqlalchemy.url")
