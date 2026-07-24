@@ -202,7 +202,7 @@ class ResourceStatus(ContractModel):
 
 
 class SimulatorControl(ContractModel):
-    state: Literal["idle", "running", "paused", "completed", "failed"] = "idle"
+    state: Literal["idle", "running", "paused", "completed", "failed", "recovery_required"] = "idle"
     currentStep: int = 0
     totalSteps: int = 25
     accelerated: bool = False
@@ -217,6 +217,18 @@ class SystemStatus(ContractModel):
     simulator: SimulatorControl
     resources: list[ResourceStatus]
     lastSynchronizedAt: datetime
+    storageBackend: str = "sqlite"
+    databaseHealthy: bool = True
+    databaseRevision: str = "20260720_01"
+    schemaCurrent: bool = True
+    eventSessionId: str
+    outboxPendingCount: int = 0
+    outboxExhaustedCount: int = 0
+    recoveryRequired: bool = False
+    activeWorkflowRunId: str | None = None
+    lastCheckpointId: str | None = None
+    lastStartupAt: datetime | None = None
+    lastCleanShutdown: datetime | None = None
 
 
 class EventEnvelope(ContractModel):
@@ -225,6 +237,7 @@ class EventEnvelope(ContractModel):
     eventType: str
     timestamp: datetime
     sequenceNumber: int
+    eventSessionId: str | None = None
     correlationId: str
     taskId: str | None = None
     agentId: str | None = None

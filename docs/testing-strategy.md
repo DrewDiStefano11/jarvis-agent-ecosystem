@@ -1,5 +1,13 @@
 # Testing strategy
 
+Phase 2A backend tests use isolated temporary SQLite databases. They migrate a blank database, recreate applications against one database, verify durable tasks, approvals, notifications, emergency state, audits, and idempotency, inspect outbox delivery, and interrupt/resume checkpointed workflows. CI upgrades a blank temporary database before Ruff and pytest.
+
+Durability regressions also simulate orphaned idempotency leases with concurrent reclamation, pause/emergency-stop/failure during post-commit WebSocket publication, reset session rotation followed by the first new-session command, repeated restarts of recovery-required or failed work, and clean restart after completion. Tests assert single execution, non-regressing checkpoints, terminal runner completion, atomic failed state, rollback recovery, idle-only start guards, unique workflow-step audits, and monotonic per-session sequence pairs at the database level. Approval tests cover durable expiration, concurrent/repeated decisions, WebSocket delivery, restart, idempotency-claim cleanup, and failed-commit rollback. Health tests cover both an unreachable probe result and an independently detected stale Alembic revision.
+
+Terminal-state tests invoke emergency stop after completed and failed runs to prove their checkpoints and non-resumable statuses cannot regress. Outbox retry tests corrupt a durable envelope deterministically and prove dispatch stops exactly at the configured attempt ceiling across repeated polls and application recreation.
+
+Outbox regressions also cover a ceiling of one, invalid configuration, durable-row attempt accounting when an embedded event ID is missing, healthy-envelope progress beside an exhausted row, truthful degraded health, and serialization between immediate publication and dispatcher polling. Repeated emergency-stop coverage asserts that active and terminal durable state is not duplicated.
+
 Backend tests use FastAPI `TestClient` with 1 ms deterministic delays. They cover health/status/lists, unknown structured errors, task creation/retry, approval/rejection/duplicates/expiry/black risk, emergency stop, temporary agents, invalid transitions, start/pause/resume/reset, failure events, WebSocket snapshot/sequence, completed workflow/audit, and all manifests.
 
 Frontend Vitest/Testing Library tests mock HTTP and WebSocket boundaries while rendering the real store and router. They cover dashboard seed state, agent/task shared details, hierarchy, approval safety, approval refresh, emergency display, mobile navigation, office shared state, duplicate event suppression, and gap-triggered resynchronization. TypeScript strict checking, ESLint, and production build are separate gates.

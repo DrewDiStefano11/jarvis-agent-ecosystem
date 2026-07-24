@@ -4,6 +4,10 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.pyc
+*.db
+*.db-shm
+*.db-wal
+data/
 node_modules/
 .pnpm-store/
 *.egg-info/

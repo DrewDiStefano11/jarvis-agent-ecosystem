@@ -1,4 +1,4 @@
-name: Phase 1 checks
+name: Phase 2A durable control-plane checks
 on: [push, pull_request]
 jobs:
   backend:
@@ -7,20 +7,32 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
+      - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
+        working-directory: apps/api
+      - name: Upgrade a blank SQLite database
+        run: |
+          $databasePath = Join-Path $env:RUNNER_TEMP "jarvis-ci.db"
+          $normalizedPath = $databasePath.Replace('\','/')
+          $env:JARVIS_DATABASE_URL = "sqlite:///$normalizedPath"
+          $parsedPath = python -c "import os; from sqlalchemy.engine import make_url; print(make_url(os.environ['JARVIS_DATABASE_URL']).database)"
+          if ($parsedPath -ne $normalizedPath) { throw "SQLite URL did not preserve the Windows absolute path." }
+          python -m alembic upgrade head
+          python -m alembic current
+          python -m alembic history
         working-directory: apps/api
       - run: ruff format . --check
         working-directory: apps/api
       - run: ruff check .
         working-directory: apps/api
-      - run: pytest -q
+      - run: python -m pytest -q
         working-directory: apps/api
   frontend:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
-        with: {version: 11}
+        with: {version: '11'}
       - uses: actions/setup-node@v4
         with: {node-version: '22', cache: pnpm, cache-dependency-path: apps/web/pnpm-lock.yaml}
       - run: pnpm install --frozen-lockfile
