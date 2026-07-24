@@ -8,6 +8,8 @@ Routes:
 - Departments: `GET /api/departments`, `GET /api/departments/{id}`
 - Agents: `GET /api/agents`, `GET /api/agents/{id}`, `POST /api/agents/temporary`
 - Tasks: `GET /api/tasks`, `GET /api/tasks/{id}`, `POST /api/tasks`, and `POST /api/tasks/{id}/{pause|resume|retry|cancel}`
+- Workers: `GET /api/workers`, `POST /api/workers`, `POST /api/workers/{id}/{heartbeat|drain|stop}`, and `POST /api/workers/{id}/tasks/acquire`
+- Task leases: `POST /api/tasks/{id}/lease/{renew|release|complete|fail}`
 - Approvals: `GET /api/approvals`, `GET /api/approvals/{id}`, and `POST /api/approvals/{id}/{approve|reject|edit}`
 - History: `GET /api/audit-events`, `GET /api/artifacts`, `GET /api/notifications`, `POST /api/notifications/{id}/read`
 - Simulator: `POST /api/simulator/{start|pause|resume|reset|failure|approval}`
@@ -28,3 +30,7 @@ Pending idempotency claims carry a durable 30-second lease by default (`JARVIS_I
 Failed outbox deliveries are selected only while `publishAttemptCount` is below `JARVIS_OUTBOX_MAX_ATTEMPTS` (default 10). Exhausted rows remain durable and visible as failed for operator inspection but are not retried on later dispatcher polls or restarts.
 
 Health and system status report exhausted outbox rows separately from the compatible aggregate pending count. Any exhausted row degrades health until an operator repairs or explicitly reconciles it; healthy eligible envelopes continue dispatching. Dispatch uses the durable row ID for attempt accounting even when an envelope's embedded ID is corrupted.
+
+Phase 2B workers register a stable `instanceId`, then acquire an eligible task before processing it. Acquisition returns the compatible task plus a capability-bearing `leaseToken`; only the matching worker/token pair may renew, release, complete, or fail that attempt. Tokens are never placed in audit or event payloads—only a one-way fingerprint is recorded. A stale, expired, cancelled, or superseded token returns `TASK_LEASE_LOST` (409). Repeating a successful completion with the same attempt token is idempotent.
+
+Workers in `draining` state cannot acquire work and release their active leases. Cancellation atomically revokes an active lease before returning. Acquisition returns `data: null` for an empty or dependency-blocked queue. Lease duration defaults to `JARVIS_TASK_LEASE_SECONDS`; callers may request a bounded override. Health and system status add active worker, active lease, expired lease, and stale worker counts without changing existing fields.

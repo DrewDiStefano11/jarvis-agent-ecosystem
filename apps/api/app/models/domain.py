@@ -219,7 +219,7 @@ class SystemStatus(ContractModel):
     lastSynchronizedAt: datetime
     storageBackend: str = "sqlite"
     databaseHealthy: bool = True
-    databaseRevision: str = "20260720_01"
+    databaseRevision: str = "20260723_02"
     schemaCurrent: bool = True
     eventSessionId: str
     outboxPendingCount: int = 0
@@ -229,6 +229,34 @@ class SystemStatus(ContractModel):
     lastCheckpointId: str | None = None
     lastStartupAt: datetime | None = None
     lastCleanShutdown: datetime | None = None
+    activeWorkerCount: int = 0
+    activeLeaseCount: int = 0
+    expiredLeaseCount: int = 0
+    staleWorkerCount: int = 0
+
+
+class Worker(ContractModel):
+    id: str
+    name: str
+    instanceId: str
+    status: Literal["active", "draining", "stopped"]
+    startedAt: datetime
+    lastHeartbeatAt: datetime
+    stoppedAt: datetime | None = None
+    leaseSeconds: int
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class TaskLease(ContractModel):
+    taskId: str
+    workerId: str
+    leaseToken: str
+    acquiredAt: datetime
+    expiresAt: datetime
+    renewedAt: datetime
+    attemptNumber: int
+    version: int
+    recoveryCheckpointId: str | None = None
 
 
 class EventEnvelope(ContractModel):
@@ -319,6 +347,36 @@ class CreateTaskRequest(ContractModel):
     title: str = Field(min_length=3, max_length=160)
     description: str = Field(min_length=3, max_length=2000)
     priority: Literal["low", "medium", "high", "urgent"] = "medium"
+
+
+class RegisterWorkerRequest(ContractModel):
+    name: str = Field(min_length=1, max_length=160)
+    instanceId: str = Field(min_length=1, max_length=120)
+    leaseSeconds: int | None = Field(default=None, ge=1, le=3600)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AcquireTaskLeaseRequest(ContractModel):
+    leaseSeconds: int | None = Field(default=None, ge=1, le=3600)
+
+
+class LeaseCommandRequest(ContractModel):
+    workerId: str
+    leaseToken: str
+
+
+class RenewTaskLeaseRequest(LeaseCommandRequest):
+    leaseSeconds: int | None = Field(default=None, ge=1, le=3600)
+    checkpointId: str | None = None
+
+
+class CompleteTaskLeaseRequest(LeaseCommandRequest):
+    result: str = Field(max_length=20000)
+
+
+class FailTaskLeaseRequest(LeaseCommandRequest):
+    error: dict[str, Any]
+    retryable: bool = False
 
 
 class CreateTemporaryAgentRequest(ContractModel):

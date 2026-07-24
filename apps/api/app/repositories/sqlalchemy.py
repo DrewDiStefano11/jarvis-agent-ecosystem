@@ -24,8 +24,10 @@ from app.db.models import (
     OutboxEventRow,
     SystemStateRow,
     TaskAgentRow,
+    TaskAttemptRow,
     TaskBlockerRow,
     TaskDependencyRow,
+    TaskLeaseRow,
     TaskRow,
     WorkflowCheckpointRow,
     WorkflowRunRow,
@@ -923,6 +925,26 @@ class SqlAlchemyRepository:
                 session.execute(delete(TaskAgentRow))
                 session.execute(delete(TaskDependencyRow))
                 session.execute(delete(TaskBlockerRow))
+                demo_lease_tokens = list(
+                    session.scalars(
+                        select(TaskLeaseRow.lease_token).where(
+                            or_(
+                                TaskLeaseRow.task_id == "task-demo",
+                                TaskLeaseRow.task_id.like("task-demo-%"),
+                            )
+                        )
+                    )
+                )
+                if demo_lease_tokens:
+                    now = datetime.now(UTC)
+                    session.execute(
+                        update(TaskAttemptRow)
+                        .where(TaskAttemptRow.lease_token.in_(demo_lease_tokens))
+                        .values(ended_at=now, outcome="simulator_reset")
+                    )
+                    session.execute(
+                        delete(TaskLeaseRow).where(TaskLeaseRow.lease_token.in_(demo_lease_tokens))
+                    )
                 session.execute(delete(ArtifactRow).where(ArtifactRow.id.not_in(seed_artifact_ids)))
                 session.execute(delete(TaskRow).where(TaskRow.id.like("task-demo-%")))
                 session.execute(delete(AgentRow).where(AgentRow.is_temporary.is_(True)))

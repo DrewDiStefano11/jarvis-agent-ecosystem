@@ -18,6 +18,10 @@ Emergency stop checkpoints only active or recoverable workflow state. Invoking i
 
 Emergency stop is idempotent while already active. Repeated calls do not create another checkpoint, audit event, or outbox envelope.
 
+Task leases are independently recoverable ownership records. Startup and a bounded background sweep reclaim every expired active lease. The attempt is closed as `expired`; the task is requeued while retry budget remains or marked failed after exhaustion; audit and outbox evidence commit in the same transaction. A successor receives a new fencing token, so every later renew/release/complete/fail call from the old worker is rejected. Unexpired leases survive process restart unchanged.
+
+Lease renewal may attach an existing validated workflow checkpoint belonging to the leased root task. The checkpoint ID is retained on the attempt and returned to a successor after expiration, keeping the durable workflow checkpoint—not worker memory—as recovery position. A worker must stop processing immediately when renewal reports `TASK_LEASE_LOST`.
+
 The `20260720_01` migration is frozen as explicit table, index, unique-constraint, and foreign-key operations and does not import live application metadata. Blank installations persist the deterministic seeded audit fixture before serving requests; audit endpoints and snapshots retain it across application recreation.
 
-Known limitation: the dispatcher is in-process and the database is intended for one local API process. Stable event IDs and frontend duplicate/gap handling make retries safe, but exactly-once delivery to a disconnected browser is not claimed.
+Known limitation: the dispatcher is in-process and the database is intended for one local API process. Stable event IDs and frontend duplicate/gap handling make retries safe, but exactly-once delivery to a disconnected browser is not claimed. Lease fencing prevents concurrent ownership and stale commits inside the control plane; future external side-effect adapters must also enforce the fencing token or an idempotency key, because a process can crash after an external effect but before recording completion.
