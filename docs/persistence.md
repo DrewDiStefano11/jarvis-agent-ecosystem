@@ -8,4 +8,6 @@ Every connection enables foreign keys, WAL, a five-second busy timeout, and a bo
 
 SQLite is suitable for one local control-plane process. PostgreSQL can later replace the SQLAlchemy repository/session implementation while retaining Pydantic contracts and repository protocols.
 
+Failed outbox rows remain stored after their configured retry ceiling. Health exposes an exhausted count and degrades while any exhausted record remains; dispatcher selection excludes those rows without deleting their audit evidence.
+
 Back up only while the API is stopped, or use a SQLite-aware backup tool. Never copy only a live `.db` file while WAL sidecars may contain committed pages. Do not store credentials in this database.

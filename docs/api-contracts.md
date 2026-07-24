@@ -26,3 +26,5 @@ For every keyed mutation, the terminal idempotency response is written by the sa
 Pending idempotency claims carry a durable 30-second lease by default (`JARVIS_IDEMPOTENCY_LEASE_SECONDS`). Same-request retries cannot take an unexpired lease. After expiration, one requester atomically renews the existing claim; ownership is bound to the exact lease token so stale requests cannot abandon or complete a reclaimed claim. Completed responses remain durable and canonical-request conflicts remain unchanged.
 
 Failed outbox deliveries are selected only while `publishAttemptCount` is below `JARVIS_OUTBOX_MAX_ATTEMPTS` (default 10). Exhausted rows remain durable and visible as failed for operator inspection but are not retried on later dispatcher polls or restarts.
+
+Health and system status report exhausted outbox rows separately from the compatible aggregate pending count. Any exhausted row degrades health until an operator repairs or explicitly reconciles it; healthy eligible envelopes continue dispatching. Dispatch uses the durable row ID for attempt accounting even when an envelope's embedded ID is corrupted.

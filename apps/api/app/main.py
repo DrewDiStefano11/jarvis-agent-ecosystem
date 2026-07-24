@@ -185,10 +185,12 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     @app.get("/api/health", response_model=ApiResponse)
     async def health() -> ApiResponse:
         database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
+        outbox_exhausted_count = repository.outbox_exhausted_count() if database_reachable else 0
         degraded = (
             repository._system.recovery_status == "required"
             or not database_reachable
             or not schema_current
+            or outbox_exhausted_count > 0
         )
         return ApiResponse(
             data={
@@ -198,14 +200,24 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "databaseReachable": database_reachable,
                 "schemaCurrent": schema_current,
                 "outboxDispatcherRunning": broker.dispatcher_running,
+                "outboxExhaustedCount": outbox_exhausted_count,
                 "recoveryRequired": repository._system.recovery_status == "required",
                 "simulated": True,
             }
         )
 
     def system_status() -> SystemStatus:
+        database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
+        outbox_pending_count = repository.outbox_pending_count() if database_reachable else 0
+        outbox_exhausted_count = repository.outbox_exhausted_count() if database_reachable else 0
+        degraded = (
+            repository._system.recovery_status == "required"
+            or not database_reachable
+            or not schema_current
+            or outbox_exhausted_count > 0
+        )
         return SystemStatus(
-            status="degraded" if repository._system.recovery_status == "required" else "healthy",
+            status="degraded" if degraded else "healthy",
             environment=settings.app_env,
             seedDataVersion=repository._system.seed_data_version,
             emergencyStop=repository.emergency_stop,
@@ -223,10 +235,12 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             ],
             lastSynchronizedAt=datetime.now(UTC),
             storageBackend="sqlite",
-            databaseHealthy=True,
+            databaseHealthy=database_reachable,
             databaseRevision=DATABASE_REVISION,
+            schemaCurrent=schema_current,
             eventSessionId=repository.event_session_id,
-            outboxPendingCount=repository.outbox_pending_count(),
+            outboxPendingCount=outbox_pending_count,
+            outboxExhaustedCount=outbox_exhausted_count,
             recoveryRequired=repository._system.recovery_status == "required",
             activeWorkflowRunId=repository._system.last_workflow_run_id,
             lastCheckpointId=repository._system.last_checkpoint_id,

@@ -6,6 +6,8 @@ Durability regressions also simulate orphaned idempotency leases with concurrent
 
 Terminal-state tests invoke emergency stop after completed and failed runs to prove their checkpoints and non-resumable statuses cannot regress. Outbox retry tests corrupt a durable envelope deterministically and prove dispatch stops exactly at the configured attempt ceiling across repeated polls and application recreation.
 
+Outbox regressions also cover a ceiling of one, invalid configuration, durable-row attempt accounting when an embedded event ID is missing, healthy-envelope progress beside an exhausted row, truthful degraded health, and serialization between immediate publication and dispatcher polling. Repeated emergency-stop coverage asserts that active and terminal durable state is not duplicated.
+
 Backend tests use FastAPI `TestClient` with 1 ms deterministic delays. They cover health/status/lists, unknown structured errors, task creation/retry, approval/rejection/duplicates/expiry/black risk, emergency stop, temporary agents, invalid transitions, start/pause/resume/reset, failure events, WebSocket snapshot/sequence, completed workflow/audit, and all manifests.
 
 Frontend Vitest/Testing Library tests mock HTTP and WebSocket boundaries while rendering the real store and router. They cover dashboard seed state, agent/task shared details, hierarchy, approval safety, approval refresh, emergency display, mobile navigation, office shared state, duplicate event suppression, and gap-triggered resynchronization. TypeScript strict checking, ESLint, and production build are separate gates.

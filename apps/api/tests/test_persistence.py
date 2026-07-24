@@ -10,9 +10,11 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import create_engine, func, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
 
+from app.core.config import Settings
 from app.db.models import (
     ApprovalRow,
     AuditEventRow,
@@ -592,6 +594,10 @@ def test_health_degrades_for_unreachable_database_or_stale_schema(tmp_path: Path
         assert unavailable["status"] == "degraded"
         assert unavailable["databaseReachable"] is False
         assert unavailable["schemaCurrent"] is False
+        unavailable_system = api.get("/api/system/status").json()["data"]
+        assert unavailable_system["status"] == "degraded"
+        assert unavailable_system["databaseHealthy"] is False
+        assert unavailable_system["schemaCurrent"] is False
         repository.health_probe = original_probe
 
         with app.state.engine.begin() as connection:
@@ -600,6 +606,9 @@ def test_health_degrades_for_unreachable_database_or_stale_schema(tmp_path: Path
         assert stale["status"] == "degraded"
         assert stale["databaseReachable"] is True
         assert stale["schemaCurrent"] is False
+        stale_system = api.get("/api/system/status").json()["data"]
+        assert stale_system["status"] == "degraded"
+        assert stale_system["schemaCurrent"] is False
 
 
 def test_active_failure_is_atomic_terminal_and_survives_repeated_recreation(
@@ -1115,6 +1124,10 @@ def test_emergency_stop_preserves_completed_and_failed_terminal_runs(tmp_path: P
             assert stopped["emergencyStop"] is True
             assert stopped["simulator"]["state"] == terminal_state
             assert stopped["lastCheckpointId"] == checkpoint_id
+            repeated = api.post("/api/system/emergency-stop").json()["data"]
+            assert repeated["emergencyStop"] is True
+            assert repeated["simulator"] == stopped["simulator"]
+            assert repeated["lastCheckpointId"] == stopped["lastCheckpointId"]
 
         with create_engine(url).connect() as connection:
             run = connection.execute(
@@ -1139,31 +1152,85 @@ def test_emergency_stop_preserves_completed_and_failed_terminal_runs(tmp_path: P
             assert recreated.post("/api/simulator/reset").status_code == 200
 
 
-def test_outbox_dispatch_stops_at_configured_retry_limit(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_repeated_emergency_stop_does_not_duplicate_active_checkpoint_or_event(
+    tmp_path: Path,
 ) -> None:
-    url = database_url(tmp_path / "outbox-retry-limit.db")
-    monkeypatch.setenv("JARVIS_OUTBOX_MAX_ATTEMPTS", "2")
+    url = database_url(tmp_path / "repeated-active-emergency.db")
+    with TestClient(create_app(delay_ms=100, database_url=url)) as api:
+        assert api.post("/api/simulator/start").status_code == 200
+        assert api.post("/api/system/emergency-stop").status_code == 200
+        first_status = api.get("/api/system/status").json()["data"]
+        with create_engine(url).connect() as connection:
+            first_counts = (
+                connection.scalar(select(func.count()).select_from(WorkflowCheckpointRow)),
+                connection.scalar(
+                    select(func.count())
+                    .select_from(AuditEventRow)
+                    .where(AuditEventRow.event_type == "system.emergency_stop")
+                ),
+                connection.scalar(
+                    select(func.count())
+                    .select_from(OutboxEventRow)
+                    .where(OutboxEventRow.event_type == "system.emergency_stop")
+                ),
+            )
+
+        assert api.post("/api/system/emergency-stop").status_code == 200
+        repeated_status = api.get("/api/system/status").json()["data"]
+        assert repeated_status["emergencyStop"] is True
+        assert repeated_status["simulator"] == first_status["simulator"]
+        assert repeated_status["lastCheckpointId"] == first_status["lastCheckpointId"]
+        with create_engine(url).connect() as connection:
+            repeated_counts = (
+                connection.scalar(select(func.count()).select_from(WorkflowCheckpointRow)),
+                connection.scalar(
+                    select(func.count())
+                    .select_from(AuditEventRow)
+                    .where(AuditEventRow.event_type == "system.emergency_stop")
+                ),
+                connection.scalar(
+                    select(func.count())
+                    .select_from(OutboxEventRow)
+                    .where(OutboxEventRow.event_type == "system.emergency_stop")
+                ),
+            )
+        assert repeated_counts == first_counts
+
+
+@pytest.mark.parametrize("max_attempts", [1, 2])
+def test_outbox_dispatch_stops_at_configured_retry_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, max_attempts: int
+) -> None:
+    url = database_url(tmp_path / f"outbox-retry-limit-{max_attempts}.db")
+    monkeypatch.setenv("JARVIS_OUTBOX_MAX_ATTEMPTS", str(max_attempts))
     with TestClient(create_app(delay_ms=1, database_url=url)) as api:
-        created = api.post(
+        broken = api.post(
             "/api/tasks",
             json={"title": "Retry ceiling", "description": "Corrupt this durable envelope"},
         )
-        assert created.status_code == 201
-        task_id = created.json()["data"]["id"]
+        healthy = api.post(
+            "/api/tasks",
+            json={"title": "Healthy delivery", "description": "Keep this envelope valid"},
+        )
+        assert broken.status_code == healthy.status_code == 201
+        broken_task_id = broken.json()["data"]["id"]
+        healthy_task_id = healthy.json()["data"]["id"]
 
     engine = create_engine(url)
     with engine.begin() as connection:
-        row = connection.execute(
+        rows = connection.execute(
             select(OutboxEventRow.id, OutboxEventRow.envelope).where(
-                OutboxEventRow.envelope["taskId"].as_string() == task_id
+                OutboxEventRow.envelope["taskId"].as_string().in_([broken_task_id, healthy_task_id])
             )
-        ).one()
-        invalid_envelope = dict(row.envelope)
+        ).all()
+        broken_row = next(row for row in rows if row.envelope["taskId"] == broken_task_id)
+        healthy_row = next(row for row in rows if row.envelope["taskId"] == healthy_task_id)
+        invalid_envelope = dict(broken_row.envelope)
         invalid_envelope.pop("eventType")
+        invalid_envelope.pop("eventId")
         connection.execute(
             update(OutboxEventRow)
-            .where(OutboxEventRow.id == row.id)
+            .where(OutboxEventRow.id == broken_row.id)
             .values(
                 envelope=invalid_envelope,
                 status="failed",
@@ -1171,12 +1238,21 @@ def test_outbox_dispatch_stops_at_configured_retry_limit(
                 last_publish_error=None,
             )
         )
+        connection.execute(
+            update(OutboxEventRow)
+            .where(OutboxEventRow.id == healthy_row.id)
+            .values(
+                status="pending",
+                publish_attempt_count=0,
+                published_at=None,
+                last_publish_error=None,
+            )
+        )
 
     retrying = create_app(delay_ms=1, database_url=url)
-    assert len(retrying.state.repository.pending_outbox()) == 1
-    asyncio.run(retrying.state.broker.dispatch_pending())
-    assert len(retrying.state.repository.pending_outbox()) == 1
-    asyncio.run(retrying.state.broker.dispatch_pending())
+    assert len(retrying.state.repository.pending_outbox()) == 2
+    for _ in range(max_attempts):
+        asyncio.run(retrying.state.broker.dispatch_pending())
     assert retrying.state.repository.pending_outbox() == []
     asyncio.run(retrying.state.broker.dispatch_pending())
     retrying.state.engine.dispose()
@@ -1187,24 +1263,85 @@ def test_outbox_dispatch_stops_at_configured_retry_limit(
                 OutboxEventRow.status,
                 OutboxEventRow.publish_attempt_count,
                 OutboxEventRow.last_publish_error,
-            ).where(OutboxEventRow.id == row.id)
+            ).where(OutboxEventRow.id == broken_row.id)
         ).one()
         assert exhausted.status == "failed"
-        assert exhausted.publish_attempt_count == 2
+        assert exhausted.publish_attempt_count == max_attempts
         assert exhausted.last_publish_error
+        delivered = connection.execute(
+            select(
+                OutboxEventRow.status,
+                OutboxEventRow.publish_attempt_count,
+            ).where(OutboxEventRow.id == healthy_row.id)
+        ).one()
+        assert delivered == ("published", 1)
 
     recreated = create_app(delay_ms=1, database_url=url)
-    assert recreated.state.repository.pending_outbox() == []
-    asyncio.run(recreated.state.broker.dispatch_pending())
-    recreated.state.engine.dispose()
+    with TestClient(recreated) as api:
+        assert recreated.state.repository.pending_outbox() == []
+        health = api.get("/api/health").json()["data"]
+        assert health["status"] == "degraded"
+        assert health["outboxExhaustedCount"] == 1
+        system = api.get("/api/system/status").json()["data"]
+        assert system["status"] == "degraded"
+        assert system["outboxPendingCount"] == 1
+        assert system["outboxExhaustedCount"] == 1
     with engine.connect() as connection:
         assert (
             connection.scalar(
-                select(OutboxEventRow.publish_attempt_count).where(OutboxEventRow.id == row.id)
+                select(OutboxEventRow.publish_attempt_count).where(
+                    OutboxEventRow.id == broken_row.id
+                )
             )
-            == 2
+            == max_attempts
         )
     engine.dispose()
+
+
+def test_invalid_outbox_attempt_limits_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    for value in ("0", "-1", "not-a-number"):
+        monkeypatch.setenv("JARVIS_OUTBOX_MAX_ATTEMPTS", value)
+        with pytest.raises(ValidationError):
+            Settings()
+
+
+@pytest.mark.asyncio
+async def test_immediate_publish_and_dispatcher_do_not_republish_same_row(
+    tmp_path: Path,
+) -> None:
+    url = database_url(tmp_path / "outbox-dispatch-race.db")
+    app = create_app(delay_ms=1, database_url=url)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def send_json(self, _payload: object) -> None:
+            self.calls += 1
+            entered.set()
+            await release.wait()
+
+    client = BlockingClient()
+    app.state.broker.clients.add(client)  # type: ignore[arg-type]
+    emit = asyncio.create_task(app.state.broker.emit("system.dispatch.race", {"active": True}))
+    await entered.wait()
+    dispatch = asyncio.create_task(app.state.broker.dispatch_pending())
+    await asyncio.sleep(0)
+    assert client.calls == 1
+    assert not dispatch.done()
+    release.set()
+    await asyncio.gather(emit, dispatch)
+
+    with create_engine(url).connect() as connection:
+        row = connection.execute(
+            select(OutboxEventRow.status, OutboxEventRow.publish_attempt_count).where(
+                OutboxEventRow.event_type == "system.dispatch.race"
+            )
+        ).one()
+        assert row == ("published", 1)
+    app.state.engine.dispose()
 
 
 def test_rapid_reset_and_restart_create_distinct_workflow_run_ids(tmp_path: Path) -> None:

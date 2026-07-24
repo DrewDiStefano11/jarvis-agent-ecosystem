@@ -18,6 +18,7 @@ class EventBroker:
         self.dispatcher_running = False
         self._dispatcher_task: asyncio.Task[None] | None = None
         self._dispatcher_stop = asyncio.Event()
+        self._dispatch_lock = asyncio.Lock()
 
     def reset_sequence(self) -> None:
         self.sequence = 0
@@ -78,7 +79,11 @@ class EventBroker:
         await self._publish(event)
         return event
 
-    async def _publish(self, event: EventEnvelope) -> None:
+    async def _publish(self, event: EventEnvelope, outbox_id: str | None = None) -> None:
+        async with self._dispatch_lock:
+            await self._publish_unlocked(event, outbox_id)
+
+    async def _publish_unlocked(self, event: EventEnvelope, outbox_id: str | None = None) -> None:
         stale: list[WebSocket] = []
         for client in tuple(self.clients):
             try:
@@ -88,18 +93,18 @@ class EventBroker:
         for client in stale:
             self.disconnect(client)
         if self.repository:
-            self.repository.mark_outbox(event.eventId, True)
+            self.repository.mark_outbox(outbox_id or event.eventId, True)
 
     async def dispatch_pending(self) -> None:
         if not self.repository:
             return
-        for raw in self.repository.pending_outbox():
-            try:
-                event = EventEnvelope.model_validate(raw)
-                await self._publish(event)
-            except Exception as exc:
-                event_id = str(raw.get("eventId", "invalid"))
-                self.repository.mark_outbox(event_id, False, str(exc)[:500])
+        async with self._dispatch_lock:
+            for outbox_id, raw in self.repository.pending_outbox_records():
+                try:
+                    event = EventEnvelope.model_validate(raw)
+                    await self._publish_unlocked(event, outbox_id)
+                except Exception as exc:
+                    self.repository.mark_outbox(outbox_id, False, str(exc)[:500])
 
     async def start_dispatcher(self, poll_interval_ms: int) -> None:
         if self._dispatcher_task and not self._dispatcher_task.done():

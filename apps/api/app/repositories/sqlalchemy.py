@@ -488,9 +488,12 @@ class SqlAlchemyRepository:
             self._pending_checkpoint = None
 
     def pending_outbox(self) -> list[dict[str, Any]]:
+        return [envelope for _, envelope in self.pending_outbox_records()]
+
+    def pending_outbox_records(self) -> list[tuple[str, dict[str, Any]]]:
         with self.session_factory() as session:
             return [
-                row.envelope
+                (row.id, row.envelope)
                 for row in session.scalars(
                     select(OutboxEventRow)
                     .where(
@@ -517,6 +520,20 @@ class SqlAlchemyRepository:
                     select(func.count())
                     .select_from(OutboxEventRow)
                     .where(OutboxEventRow.status != "published")
+                )
+                or 0
+            )
+
+    def outbox_exhausted_count(self) -> int:
+        with self.session_factory() as session:
+            return int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(OutboxEventRow)
+                    .where(
+                        OutboxEventRow.status == "failed",
+                        OutboxEventRow.publish_attempt_count >= self.outbox_max_attempts,
+                    )
                 )
                 or 0
             )

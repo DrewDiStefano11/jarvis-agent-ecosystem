@@ -12,6 +12,8 @@ Discovering an expired pending approval during a decision commits one `approval.
 
 Phase 2A adds `eventSessionId` to each envelope. The complete validated envelope enters the SQLite outbox in the command commit before WebSocket publication. Sequence numbers never repeat inside one session; reset creates a new session. Stable event IDs make retry delivery safe, and one failed client cannot block dispatch.
 
+Immediate publication and background outbox polling share a dispatch boundary so one committed row is not concurrently republished. Corrupted envelopes consume attempts against their durable row identity and stop at the configured ceiling.
+
 Frontend duplicate detection is scoped to `eventSessionId`. A session change resets the stored sequence before evaluating the new event, so a new session's sequence-zero snapshot and subsequent low-numbered events are accepted.
 
 Reset records its audit as the final monotonically increasing sequence in the old event session, then atomically rotates the active session and resets its counter to zero. The first subsequent event in the new session starts at sequence one.

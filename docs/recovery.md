@@ -16,6 +16,8 @@ Graceful shutdown cancels further simulator steps, commits or rolls back the cur
 
 Emergency stop checkpoints only active or recoverable workflow state. Invoking it after completion or failure preserves the terminal run, terminal checkpoint, and non-resumable status while still persisting the system-wide emergency flag.
 
+Emergency stop is idempotent while already active. Repeated calls do not create another checkpoint, audit event, or outbox envelope.
+
 The `20260720_01` migration is frozen as explicit table, index, unique-constraint, and foreign-key operations and does not import live application metadata. Blank installations persist the deterministic seeded audit fixture before serving requests; audit endpoints and snapshots retain it across application recreation.
 
 Known limitation: the dispatcher is in-process and the database is intended for one local API process. Stable event IDs and frontend duplicate/gap handling make retries safe, but exactly-once delivery to a disconnected browser is not claimed.

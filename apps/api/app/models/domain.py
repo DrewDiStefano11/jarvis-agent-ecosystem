@@ -220,8 +220,10 @@ class SystemStatus(ContractModel):
     storageBackend: str = "sqlite"
     databaseHealthy: bool = True
     databaseRevision: str = "20260720_01"
+    schemaCurrent: bool = True
     eventSessionId: str
     outboxPendingCount: int = 0
+    outboxExhaustedCount: int = 0
     recoveryRequired: bool = False
     activeWorkflowRunId: str | None = None
     lastCheckpointId: str | None = None

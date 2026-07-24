@@ -565,6 +565,8 @@ class SimulatorEngine:
 
     async def emergency_stop(self) -> None:
         async with self._step_lock:
+            if self.repository.emergency_stop:
+                return
             checkpointable = bool(
                 self.run_id and self.control.state in {"running", "paused", "recovery_required"}
             )
