@@ -1,19 +1,13 @@
 from __future__ import annotations
 
-import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
-from app.core.config import Settings
-from app.db.session import create_database_engine
 from app.main import create_app
 
 
@@ -118,14 +112,13 @@ def test_group_e_user_modified_seed_record_preservation(tmp_path: Path, monkeypa
     db_path = tmp_path / "modified.db"
     url = database_url(db_path)
 
-    with client(db_url=url) as api:
+    with client(db_url=url):
         pass  # Seed it
 
     import gc
 
     gc.collect()
 
-    from sqlalchemy import create_engine, text
 
     engine = create_engine(url)
     with engine.begin() as conn:
@@ -146,7 +139,7 @@ def test_group_f_system_controlled_field_repair(tmp_path: Path) -> None:
     db_path = tmp_path / "system-repair.db"
     url = database_url(db_path)
 
-    with client(db_url=url) as api:
+    with client(db_url=url):
         from sqlalchemy import create_engine, text
 
         engine = create_engine(url)
@@ -169,7 +162,7 @@ def test_group_h_partial_seed_state(tmp_path: Path) -> None:
     db_path = tmp_path / "partial.db"
     url = database_url(db_path)
 
-    with client(db_url=url) as api:
+    with client(db_url=url):
         from sqlalchemy import create_engine, text
 
         engine = create_engine(url)
@@ -187,7 +180,7 @@ def test_group_i_duplicate_preexisting_seed_like_record(tmp_path: Path) -> None:
     db_path = tmp_path / "duplicate.db"
     url = database_url(db_path)
 
-    with client(db_url=url) as api:
+    with client(db_url=url):
         pass  # Seed is set
 
     with client(db_url=url) as api2:
@@ -223,7 +216,7 @@ def test_group_l_concurrent_application_startup(tmp_path: Path) -> None:
     url = database_url(db_path)
 
     # Run a normal client first to trigger migrations synchronously
-    with client(db_url=url) as api:
+    with client(db_url=url):
         pass
 
     # Then clear the database tables so they're fully empty but schema exists?
@@ -231,7 +224,6 @@ def test_group_l_concurrent_application_startup(tmp_path: Path) -> None:
     # Actually, concurrent bootstrap is just concurrent `client(db_url=url)`.
     # SQLite locks the DB during migrations, so concurrent migrations will fail with "database is locked" or "OperationalError".
     # To test concurrent BOOTSTRAP, we should pre-migrate synchronously, then clear the seed data, then run concurrent boot.
-    from sqlalchemy import create_engine, text
 
     engine = create_engine(url)
     with engine.begin() as conn:
@@ -299,7 +291,7 @@ def test_group_p_restored_database_bootstrap(tmp_path: Path) -> None:
     db_path = tmp_path / "restore_bootstrap.db"
     url = database_url(db_path)
 
-    with client(db_url=url) as api:
+    with client(db_url=url):
         # Initial DB seed
         pass
 

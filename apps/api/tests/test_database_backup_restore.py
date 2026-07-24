@@ -3,14 +3,11 @@ from __future__ import annotations
 import shutil
 import sqlite3
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 
 from app.main import create_app
-from app.db.session import create_database_engine
 
 
 def database_url(path: Path) -> str:
@@ -165,5 +162,5 @@ def test_group_z_ad_corruption_partial_copy(tmp_path: Path) -> None:
 
     url = database_url(db_path)
 
-    with pytest.raises(Exception):
+    with pytest.raises((sqlite3.DatabaseError, sqlite3.OperationalError, Exception)):
         client(db_url=url)
