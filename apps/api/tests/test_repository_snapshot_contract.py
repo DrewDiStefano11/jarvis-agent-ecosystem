@@ -18,10 +18,12 @@ from app.repositories.sqlalchemy import SqlAlchemyRepository
 def database_url(path: Path) -> str:
     return f"sqlite:///{path.as_posix()}"
 
+
 @pytest.fixture
 def temp_db_url(tmp_path: Path) -> str:
     db_path = tmp_path / f"test-{uuid4().hex}.db"
     return database_url(db_path)
+
 
 @pytest.fixture
 def repository(temp_db_url: str) -> SqlAlchemyRepository:
@@ -32,6 +34,7 @@ def repository(temp_db_url: str) -> SqlAlchemyRepository:
 
     # Actually seed data!
     from app.services.seed import build_seed
+
     seed = build_seed()
     repo.departments = {x["id"]: Department.model_validate(x) for x in seed["departments"]}
     repo.agents = {x["id"]: Agent.model_validate(x) for x in seed["agents"]}
@@ -44,8 +47,10 @@ def repository(temp_db_url: str) -> SqlAlchemyRepository:
     yield repo
     engine.dispose()
 
+
 def assert_no_objects(value: object) -> None:
     from pydantic import BaseModel
+
     if isinstance(value, dict):
         for _k, v in value.items():
             assert_no_objects(v)
@@ -56,6 +61,7 @@ def assert_no_objects(value: object) -> None:
         assert not isinstance(value, BaseModel), f"Found BaseModel instance: {type(value)}"
         assert not isinstance(value, datetime), f"Found datetime instance: {type(value)}"
         assert type(value).__name__ not in ("UUID", "set"), f"Found invalid type: {type(value)}"
+
 
 def test_exact_top_level_schema(repository: SqlAlchemyRepository) -> None:
     snapshot = repository.snapshot()
@@ -71,6 +77,7 @@ def test_exact_top_level_schema(repository: SqlAlchemyRepository) -> None:
     }
     assert set(snapshot.keys()) == expected_keys
 
+
 def test_json_safe_serialization(repository: SqlAlchemyRepository) -> None:
     snapshot = repository.snapshot()
     # It should successfully serialize to JSON string
@@ -78,6 +85,7 @@ def test_json_safe_serialization(repository: SqlAlchemyRepository) -> None:
     assert isinstance(json_str, str)
     # Recursively ensure no pydantic models, datetimes, etc are present
     assert_no_objects(snapshot)
+
 
 def test_field_aliases_and_casing(repository: SqlAlchemyRepository) -> None:
     snapshot = repository.snapshot()
@@ -93,6 +101,7 @@ def test_field_aliases_and_casing(repository: SqlAlchemyRepository) -> None:
         first_audit = snapshot["auditEvents"][0]
         assert "eventType" in first_audit
         assert "event_type" not in first_audit
+
 
 def test_mutation_isolation(repository: SqlAlchemyRepository) -> None:
     snapshot = repository.snapshot()
@@ -114,6 +123,7 @@ def test_mutation_isolation(repository: SqlAlchemyRepository) -> None:
     if second_snapshot["auditEvents"]:
         assert second_snapshot["auditEvents"][0]["summary"] != "Mutated summary"
 
+
 def test_snapshot_independence(repository: SqlAlchemyRepository) -> None:
     snap1 = repository.snapshot()
     snap2 = repository.snapshot()
@@ -129,6 +139,7 @@ def test_snapshot_independence(repository: SqlAlchemyRepository) -> None:
     if snap1["tasks"]:
         # Entity dictionaries are distinct
         assert snap1["tasks"][0] is not snap2["tasks"][0]
+
 
 def test_repository_detachment(repository: SqlAlchemyRepository) -> None:
     snap1 = repository.snapshot()
@@ -148,6 +159,7 @@ def test_repository_detachment(repository: SqlAlchemyRepository) -> None:
         snap2 = repository.snapshot()
         assert snap2["tasks"][0]["status"] == "completed"
 
+
 def test_stable_ordering(repository: SqlAlchemyRepository) -> None:
     snap1 = repository.snapshot()
     snap2 = repository.snapshot()
@@ -155,7 +167,10 @@ def test_stable_ordering(repository: SqlAlchemyRepository) -> None:
     assert [t["id"] for t in snap1["tasks"]] == [t["id"] for t in snap2["tasks"]]
     assert [t["id"] for t in snap1["agents"]] == [t["id"] for t in snap2["agents"]]
 
-def test_no_database_reads_writes(repository: SqlAlchemyRepository, monkeypatch: pytest.MonkeyPatch) -> None:
+
+def test_no_database_reads_writes(
+    repository: SqlAlchemyRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
     called = False
 
     def fake_session_factory(*args, **kwargs):
@@ -168,6 +183,7 @@ def test_no_database_reads_writes(repository: SqlAlchemyRepository, monkeypatch:
     _ = repository.snapshot()
 
     assert not called, "Database session was opened during snapshot"
+
 
 def test_legacy_wire_equivalence(repository: SqlAlchemyRepository) -> None:
     # Generate optimized snapshot
@@ -188,6 +204,7 @@ def test_legacy_wire_equivalence(repository: SqlAlchemyRepository) -> None:
     )
 
     from app.main import _json_snapshot
+
     legacy_snapshot = _json_snapshot(legacy_snapshot_raw)
 
     # We serialize both via JSON to account for full wire encoding
@@ -197,6 +214,7 @@ def test_legacy_wire_equivalence(repository: SqlAlchemyRepository) -> None:
     import json
 
     assert json.dumps(optimized_snapshot) == json.dumps(legacy_snapshot)
+
 
 def test_sensitive_field_inspection(repository: SqlAlchemyRepository) -> None:
     snapshot = repository.snapshot()
@@ -208,8 +226,6 @@ def test_sensitive_field_inspection(repository: SqlAlchemyRepository) -> None:
     assert "secret" not in json_str.lower()
     # Ensure no local file paths
     # Just basic sanity checks on fields that shouldn't exist
-
-
 
 
 def test_websocket_integration(monkeypatch: pytest.MonkeyPatch) -> None:

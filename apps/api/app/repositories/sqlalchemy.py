@@ -1041,9 +1041,7 @@ class SqlAlchemyRepository:
             "agents": [
                 item.model_dump(mode="json", by_alias=True) for item in self.agents.values()
             ],
-            "tasks": [
-                item.model_dump(mode="json", by_alias=True) for item in self.tasks.values()
-            ],
+            "tasks": [item.model_dump(mode="json", by_alias=True) for item in self.tasks.values()],
             "approvals": [
                 item.model_dump(mode="json", by_alias=True) for item in self.approvals.values()
             ],
@@ -1053,8 +1051,6 @@ class SqlAlchemyRepository:
             "notifications": [
                 item.model_dump(mode="json", by_alias=True) for item in self.notifications.values()
             ],
-            "auditEvents": [
-                item.model_dump(mode="json", by_alias=True) for item in self.audit
-            ],
+            "auditEvents": [item.model_dump(mode="json", by_alias=True) for item in self.audit],
             "emergencyStop": self.emergency_stop,
         }
