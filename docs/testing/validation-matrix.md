@@ -1,7 +1,7 @@
 # Repository Validation Matrix
 
 * **Status:** Current validation reference
-* **Repository SHA reviewed:** 7bcddc8d964ebc32672ec1e6ecf1a873a7d4af49
+* **Repository SHA reviewed:** 567c59a6ce47f73383c093e55e72715b7998e958
 * **Verification Date:** 2026-07-24
 * **Intended Audience:** Human contributors, Codex, Jules, and future agents
 * **Warning:** This document does not replace reviewing the exact diff and current CI results. Validation requirements must be updated as architecture changes.
@@ -53,7 +53,7 @@ For changes that alter only prose and do not affect executable configuration.
 * **Typical changes:** README, Markdown docs, architecture diagrams.
 * **Minimum checks:** Markdown validation (if available), link/path verification, secret scan, exact changed-file verification, `git diff --check`.
 * **Required evidence:** Changed files match exactly the intended prose changes.
-* **Reviewer:** Any contributor.
+* **Required Review Role:** Any contributor.
 * **Merge-blocking failures:** Extraneous code/config files changed, absolute/machine paths used.
 
 ### Level 1 — Isolated low-risk code
@@ -61,7 +61,7 @@ For narrow implementation changes with no API, persistence, lifecycle, security,
 * **Typical changes:** Utility functions, isolated frontend components without state logic.
 * **Minimum checks:** Format, lint, focused tests, full relevant package tests, changed-file inspection.
 * **Required evidence:** Local command output, exact SHA validation.
-* **Reviewer:** Any contributor.
+* **Required Review Role:** Any contributor.
 * **Merge-blocking failures:** Format/lint errors, failing unit tests, unexpected scope creep.
 
 ### Level 2 — Contract or integration change
@@ -69,7 +69,7 @@ For API, WebSocket, frontend/backend, serialization, or cross-component behavior
 * **Typical changes:** API routes, Pydantic models, WebSocket payload formats, frontend API clients.
 * **Minimum checks:** Contract tests, backend full suite, frontend typecheck/lint/test/build, runtime response checks, restart checks where stateful.
 * **Required evidence:** Proof of backward compatibility or explicit breaking change notice.
-* **Reviewer:** Domain expert (Frontend or Backend).
+* **Required Review Role:** Domain expert (Frontend or Backend).
 * **Merge-blocking failures:** Unintentional schema breaks, frontend typecheck failure on backend changes.
 
 ### Level 3 — Durable-state or lifecycle change
@@ -77,7 +77,7 @@ For migrations, repositories, startup/shutdown, task leases, idempotency, outbox
 * **Typical changes:** Alembic migrations, SQLAlchemy models, task state machines.
 * **Minimum checks:** Blank database, historical upgrade, restart, rollback/fault injection, audit/outbox consistency, concurrency where applicable.
 * **Required evidence:** Database migration output, restart logs, concurrency assertions.
-* **Reviewer:** Backend/Architecture lead.
+* **Required Review Role:** Backend/Architecture lead.
 * **Merge-blocking failures:** Migration head conflicts, audit/outbox inconsistencies, recovery failures.
 
 ### Level 4 — Security or process-control change
@@ -85,29 +85,32 @@ For filesystem sandbox, subprocess launch/termination, credentials, approvals, t
 * **Typical changes:** Worker supervisor, Context Assembler boundaries, path resolution.
 * **Minimum checks:** Adversarial tests, platform-specific tests (Windows), race/failure-window tests, negative authorization tests, secret-leakage checks, independent security review, manual inspection of exact implementation.
 * **Required evidence:** Platform test results, security review sign-off.
-* **Reviewer:** Architecture lead (Drew).
+* **Required Review Role:** Architecture lead (Drew).
 * **Merge-blocking failures:** Unmanaged child processes, path traversal vulnerabilities, TOCTOU races, unredacted secrets.
+
+
+*Note: The reviewer roles listed above are required review responsibilities, not GitHub-enforced roles unless branch protection actually enforces them. Do not imply a review occurred merely because a role is named.*
 
 ## 5. Current repository validation commands
 
 | Validation purpose | Working directory | Exact command | Current CI coverage | Typical duration | Failure meaning | Notes |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| Backend format | `apps/api` | `ruff format . --check` | Yes (Windows) | Fast | Code style violation | |
-| Backend lint | `apps/api` | `ruff check .` | Yes (Windows) | Fast | Static analysis/import violation | |
-| Focused pytest | `apps/api` | `python -m pytest tests/<path>` | No (runs full) | Fast | Specific logic failure | **Current manual validation** |
-| Full backend pytest | `apps/api` | `python -m pytest -q` | Yes (Windows) | Moderate | Backend logic regression | |
-| Alembic head check | `apps/api` | `python -m alembic current` / `history` | Yes (Windows) | Fast | Missing or conflicting migrations | |
-| Blank-database upgrade | `apps/api` | `python -m alembic upgrade head` | Yes (Windows) | Moderate | Schema definitions or migrations are invalid | |
-| Application startup | `apps/api` | `python -m uvicorn app.main:app` | No | Moderate | Lifecycle/startup failure | **Current manual validation** |
-| Clean shutdown | `apps/api` | Ctrl+C after startup | No | Moderate | Lifespan/cleanup error | **Current manual validation** |
-| Frontend typecheck | `apps/web` | `pnpm typecheck` | Yes (Windows) | Moderate | TypeScript compilation failure | |
-| Frontend lint | `apps/web` | `pnpm lint` | Yes (Windows) | Fast | ESLint rule violation | |
-| Frontend tests | `apps/web` | `pnpm test` | Yes (Windows) | Moderate | Frontend logic regression | |
-| Frontend build | `apps/web` | `pnpm build` | Yes (Windows) | Long | Packaging or static asset failure | |
-| Documentation lint | Root | *No dedicated command currently verified* | No | N/A | N/A | **Current gap** |
-| Secret scanning | Root | *No dedicated command currently verified* | No | N/A | N/A | **Current gap** |
-| Conflict markers/diff | Root | `git diff --check` | No | Fast | Unresolved merges or whitespace | **Current manual validation** |
-| Windows validation | Root | CI runs on `windows-latest` | Yes | Env-dependent | Platform incompatibility | |
+| Backend format | `apps/api` | `ruff format . --check` | Yes (Automated in CI Windows) | Fast | Code style violation | |
+| Backend lint | `apps/api` | `ruff check .` | Yes (Automated in CI Windows) | Fast | Static analysis/import violation | |
+| Focused pytest | `apps/api` | `python -m pytest tests/<path>` | Indirect (via full suite) | Fast | Specific logic failure | **Current manual validation** required before push |
+| Full backend pytest | `apps/api` | `python -m pytest -q` | Yes (Automated in CI Windows) | Moderate | Backend logic regression | |
+| Alembic head check | `apps/api` | `python -m alembic current` / `history` | Yes (Automated in CI Windows) | Fast | Missing or conflicting migrations | |
+| Blank-database upgrade | `apps/api` | `python -m alembic upgrade head` | Yes (Automated in CI Windows) | Moderate | Schema definitions or migrations are invalid | |
+| Application startup | `apps/api` | `python -m uvicorn app.main:app` | No | Moderate | Lifecycle/startup failure | **Current manual validation** required |
+| Clean shutdown | `apps/api` | Ctrl+C after startup | No | Moderate | Lifespan/cleanup error | **Current manual validation** required |
+| Frontend typecheck | `apps/web` | `pnpm typecheck` | Yes (Automated in CI Windows) | Moderate | TypeScript compilation failure | |
+| Frontend lint | `apps/web` | `pnpm lint` | Yes (Automated in CI Windows) | Fast | ESLint rule violation | |
+| Frontend tests | `apps/web` | `pnpm test` | Yes (Automated in CI Windows) | Moderate | Frontend logic regression | |
+| Frontend build | `apps/web` | `pnpm build` | Yes (Automated in CI Windows) | Long | Packaging or static asset failure | |
+| Documentation lint | Root | *No dedicated command currently verified* | No | N/A | N/A | **Current gap (manual check required)** |
+| Secret scanning | Root | *No dedicated command currently verified* | No | N/A | N/A | **Current gap (manual check required)** |
+| Conflict markers/diff | Root | `git diff --check` | No | Fast | Unresolved merges or whitespace | **Current manual validation** required |
+| Windows validation | Root | CI runs on `windows-latest` | Yes (Automated in CI) | Env-dependent | Platform incompatibility | |
 
 ## 6. Core checks required for every pull request
 
@@ -144,15 +147,15 @@ For filesystem sandbox, subprocess launch/termination, credentials, approvals, t
 ### Documentation & Infrastructure
 | Change category | Typical paths | Level | Backend format | Backend lint | Focused tests | Full backend suite | Frontend typecheck | Frontend lint | Frontend tests | Frontend build | Secret-leakage scan | Manual review | Required PR evidence |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| Documentation | `docs/`, `README.md` | 0 | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | R | R | Scope inspection |
-| Public documentation | `docs/` | 0 | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | R | R | Scope inspection |
-| Architecture doc | `docs/` | 0 | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | R | R | Scope inspection |
+| Documentation | `docs/`, `README.md` | 1 | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | R | R | Scope inspection |
+| Public documentation | `docs/` | 1 | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | R | R | Scope inspection |
+| Architecture doc | `docs/` | 1 | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | R | R | Scope inspection |
 | Comments only | Any | 0 | N/A | N/A | N/A | N/A | N/A | N/A | N/A | N/A | R | R | Scope inspection |
 | Python format-only | `apps/api/` | 1 | R | C | C | N/A | N/A | N/A | N/A | N/A | N/A | R | Formatting output |
-| Dependency update | `pyproject.toml`, `package.json` | 2/3 | R | R | R | R | R | R | R | R | R | R | Clean install, build |
-| CI workflow | `.github/workflows/` | 4 | N/A | N/A | C | C | C | C | C | R | R | R | Workflow run logic |
-| Test-only change | `apps/api/tests/`, `apps/web/tests/` | 1 | R | R | R | C | C | C | C | C | N/A | R | Test stability |
-| Performance optim. | Any | 1/2 | R | R | R | R | C | C | C | C | N/A | R | Benchmark data |
+| Dependency update | `pyproject.toml`, `package.json` | 3 | R | R | R | R | R | R | R | R | R | R | Clean install, build |
+| CI workflow | `.github/workflows/` | 3 | N/A | N/A | C | C | C | C | C | R | R | R | Workflow run logic |
+| Test-only change | `apps/api/tests/`, `apps/web/tests/` | 3 | R | R | R | C | C | C | C | C | N/A | R | Test stability |
+| Performance optim. | Any | 2 | R | R | R | R | C | C | C | C | N/A | R | Benchmark data |
 
 ### Backend API & Logic
 | Change category | Typical paths | Level | Backend format | Backend lint | Focused tests | Full backend suite | API/OpenAPI contract | WebSocket contract | Manual review | Required PR evidence |
@@ -180,13 +183,13 @@ For filesystem sandbox, subprocess launch/termination, credentials, approvals, t
 ### Realtime & Workflows
 | Change category | Typical paths | Level | WebSocket contract | Audit consistency | Outbox consistency | Restart/persistence | Concurrency/race test | Fault injection |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| WebSocket broker | `apps/api/app/api/` | 2/3 | R | N/A | N/A | R | C | C |
+| WebSocket broker | `apps/api/app/api/` | 3 | R | N/A | N/A | R | C | C |
 | WebSocket payload | `apps/api/app/models/` | 2 | R | N/A | N/A | C | N/A | N/A |
 | Task state | `apps/api/app/models/` | 3 | R | R | R | R | R | C |
 | Workflow/checkpoint logic | `apps/api/app/simulator/` | 3 | R | R | R | R | C | R |
 | Task leases | `apps/api/app/repositories/task_leases.py` | 3 | C | R | R | R | R | R |
 | Worker records | `apps/api/app/models/` | 3 | C | C | C | R | R | C |
-| Application startup/shutdown | `apps/api/app/main.py` | 3 | N/A | N/A | N/A | R | R | C | R |
+| Application startup/shutdown | `apps/api/app/main.py` | 3 | N/A | N/A | N/A | R | R | R |
 
 ### Process Control, Security & Platform
 | Change category | Typical paths | Level | Windows-specific test | Security/adversarial test | Concurrency/race test | Fault injection | Restart/persistence | Manual review |
@@ -298,12 +301,12 @@ For every migration change, require:
 * One Alembic head;
 * Blank database to head;
 * Upgrade from immediately previous revision;
-* Upgrade from relevant historical revision;
-* Representative existing data preservation;
-* Foreign-key and index verification;
-* Downgrade/re-upgrade where supported;
+* Representative historical data preservation;
+* Indexes, foreign keys, and uniqueness constraints;
+* Downgrade behavior where supported;
 * Application startup after migration;
-* Health schema-current result;
+* Health reporting (schema-current result);
+* Atomicity and partial-failure behavior (Do not claim full failure atomicity is proven by merely checking that the version table did not reach head);
 * Windows file-handle cleanup for SQLite;
 * No migration stamping as a substitute for applying schema changes.
 
@@ -417,31 +420,40 @@ PID existence is not lease authority. Worker-supervisor process state cannot rep
 
 For subprocess changes, require:
 * Launch success;
-* Launch failure before process creation;
-* Failure after process creation;
-* Database-registration failure after launch;
-* Process-identity validation;
+* Failure before process creation;
+* Failure after `Popen`;
+* Identity-capture failure;
+* Database-registration failure;
+* Cleanup after partial registration;
+* Process create-time identity;
 * PID reuse protection;
-* Create-time mismatch;
-* Graceful and forced termination;
-* Already-exited process handling;
+* Graceful termination;
+* Forced termination;
+* Already-exited children;
 * Supervisor restart;
 * Unmanaged-child cleanup and orphan detection;
 * Stdout/stderr handling;
 * Windows behavior;
 * No command injection;
 * Exact executable/argument handling;
-* No task-state mutation outside control plane.
+* No task-state ownership by the supervisor.
 
-**Critical failure window:** A child process may already exist when later registration or identity capture fails. Require tests proving that such a child is terminated or safely reconciled.
+**Critical failure window:** A child process may exist before identity capture or database registration completes. Validation must prove that failures during those stages terminate and reap the child or safely reconcile it.
 
 ## 20. Filesystem-security validation rules
 
 For filesystem or path-policy changes, require:
 * Allowed-root enforcement and traversal rejection;
-* Absolute-path handling;
-* Symlink and Windows junction/reparse-point handling;
-* Path replacement race and parent-directory replacement race testing;
+* Absolute and drive-qualified paths;
+* Symlinks;
+* Windows junctions and reparse points;
+* Path replacement races;
+* Parent directory replacement races;
+* Root replacement races;
+* Reserved Windows names;
+* Alternate separators;
+* Windows case-insensitive protected-path comparisons and mixed-case bypass tests;
+* Explicit destructive authorization;
 * File type restrictions;
 * Create/write/read/delete separation;
 * Permission errors and atomicity;
@@ -593,12 +605,12 @@ Linux-only success is insufficient for features expected to run on the user's Wi
 | Subsystem | Expected invariant | Sync approach | Final-state assertions |
 | :--- | :--- | :--- | :--- |
 | Duplicate API cmds | One mutation applied | Idempotency key | One outbox event, exact replica returned |
-| Task acquisition | One worker acquires lease | DB explicit locking | Only one worker holds valid token |
+| Task acquisition | One worker acquires lease | Explicit row/table locking or conditional updates (ensure invariant matches current DB mechanics) | Only one worker holds valid token |
 | Lease renewal/rec. | Renewed or fenced | Conditional update | Lease extended OR token rejected |
 | Approval decisions | Only one valid decision | Unique state check | Final approved/rejected, no dup |
 | Terminal task trans| Cannot complete & cancel | Status precondition | Single terminal state |
-| Outbox dispatch | Message sent once | DB lock/batching | Dispatched flag true, no dup broadcast |
-| Audit insertion | Valid history | Sequential writes | Correct historical order, no orphan |
+| Outbox dispatch | Event dispatched (at-least-once expected unless exactly-once is proven) | DB lock/batching | Dispatched flag true, duplicate broadcast handled by idempotency or expected semantics |
+| Audit insertion | Valid history | Ordered inserts (ensure concurrent appends do not interleave incorrectly) | Correct historical order, no orphan |
 | Bootstrap seeding | Base data exists | Startup lock/check | Exact rows exist without duplicate |
 | Startup migration | DB reaches head | External script | Head reached, no concurrent upgrade error |
 | Filesystem ops | Atomic write/replace | Temp file + rename | Valid complete file OR original file |
@@ -609,21 +621,21 @@ Sequential repeated execution is not a race test.
 
 ## 32. Fault-injection decision table
 
-| Failure point | Rollback/recovery behavior | Records must/must not exist | Evidence required |
+| Failure point | Rollback/recovery behavior | Expected end state | Evidence required |
 | :--- | :--- | :--- | :--- |
-| Validation | Immediate HTTP 422 | No DB or Outbox records | Test log with 422 |
-| Domain write | DB constraint/rollback | No partial domain or audit records| Rollback assertion |
-| Audit insertion | Full transaction rollback| No domain records | Transaction trace |
-| Outbox insertion | Full transaction rollback| No domain or audit records | Rollback trace |
-| Idempotency finish | Operation rolls back | Idempotency key exists as pending | Failed status check |
-| Serialization | 500 error | Records exist, but no response | Error log |
-| Publication | Event remains pending | Domain/Audit exists, Outbox pending| Retry mechanism log |
-| Publication status| May duplicate broadcast| Message dispatched, status pending| Duplicate mitigation log|
-| Startup / Shutdown | Safe cleanup | No orphaned DB connections/processes| Clean process exit |
-| Subprocess launch | Process not spawned | No worker lease or PID | Error propagation log |
-| Post-launch regist.| Orphan process killed | Process terminated, no DB entry | Teardown verification |
-| Path resolution | Access denied | File remains untouched | Auth exception |
-| Backup/Restore | Safely aborts | DB remains in original state | Checksum/state verif. |
+| Validation | Immediate HTTP 422 | Changes rejected cleanly | Test log with 422 |
+| Domain write | DB constraint/rollback | Atomic rollback observed | Rollback assertion |
+| Audit insertion | Full transaction rollback| Rollback preserves data integrity | Transaction trace |
+| Outbox insertion | Full transaction rollback| Rollback of associated domain changes | Rollback trace |
+| Idempotency finish | Operation rolls back | Status correctly reflects failure | Failed status check |
+| Serialization | 500 error | Ensure no false domain commits | Error log |
+| Publication | Event remains pending | Retry mechanism engages | Retry mechanism log |
+| Publication status| May duplicate broadcast| Duplicate mitigation succeeds | Duplicate mitigation log|
+| Startup / Shutdown | Safe cleanup | No leaked resources | Clean process exit |
+| Subprocess launch | Process not spawned | State safely reconciled | Error propagation log |
+| Post-launch regist.| Orphan process killed | Process terminated/reaped | Teardown verification |
+| Path resolution | Access denied | State safely preserved | Auth exception |
+| Backup/Restore | Safely aborts | DB returns to consistent state | Checksum/state verif. |
 
 ## 33. Required pull-request evidence
 
@@ -703,8 +715,8 @@ Passing CI cannot override a merge-blocking architectural or security issue.
 ## 36. Validation gaps currently present
 
 **Current gaps identified:**
-* **No dedicated documentation linting:** Root level checks missing; recommended Markdown linting integration.
-* **No dedicated secret scanning:** Recommended future validation to run automated secret scans in CI.
+* **No dedicated documentation linting:** Root level checks missing; manual verification is required. If a tool is introduced, its exact command should be added. Contributors must not falsely report automated checks.
+* **No dedicated secret scanning:** Automated secret scanning is a current tooling gap; manual secret inspection is required now. If an approved secret-scanning tool is introduced, its exact command should be added. Contributors must not falsely report automated scans.
 * **No Windows end-to-end load tests:** Current tests are integration/unit level; a formal load testing approach is missing.
 * **No browser end-to-end test:** Relies on frontend unit tests and manual preview. Playwright or Cypress recommended.
 * **No multi-process database concurrency test:** Current tests are single-process concurrency. Needed for multi-worker environments.
