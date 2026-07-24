@@ -1,10 +1,9 @@
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
-
-import unicodedata
 
 def _relative_parts(value: str, field_name: str) -> tuple[str, ...]:
     raw = value.strip().replace("\\", "/")
@@ -20,6 +19,7 @@ def _relative_parts(value: str, field_name: str) -> tuple[str, ...]:
     if any(part in {"", ".", ".."} for part in parts):
         raise ValueError(f"{field_name} must not contain empty, dot, or parent segments")
     return parts
+
 
 def canonical_policy_key(parts: tuple[str, ...]) -> tuple[str, ...]:
     """Applies Unicode normalization and case folding for Windows case-insensitive policy."""
@@ -64,7 +64,9 @@ class SandboxConfiguration:
             for value in restricted_directories.split(",")
             if value.strip()
         )
-        temporary_parts = canonical_policy_key(_relative_parts(temporary_directory, "sandbox temporary directory"))
+        temporary_parts = canonical_policy_key(
+            _relative_parts(temporary_directory, "sandbox temporary directory")
+        )
 
         if any(
             temporary_parts[: len(restriction)] == restriction
