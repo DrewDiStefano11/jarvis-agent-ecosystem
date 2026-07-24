@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import sys
 import tempfile
@@ -79,7 +80,60 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     )
     task_leases = TaskLeaseRepository(repository, session_factory, settings.task_lease_seconds)
     restored_workflow_state = repository.mark_interrupted_workflow()
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app: FastAPI):
+        repository._system.last_successful_startup = datetime.now(UTC)
+        repository._system.startup_was_clean = False
+        repository.persist()
+        await broker.dispatch_pending()
+        await broker.start_dispatcher(settings.outbox_poll_interval_ms)
+
+        async def recover_expired_task_leases() -> None:
+            while True:
+                await asyncio.sleep(settings.task_lease_recovery_interval_ms / 1000)
+                database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
+                if not database_reachable or not schema_current:
+                    continue
+                recovered = task_leases.recover_expired_leases()
+                if recovered:
+                    await broker.dispatch_pending()
+
+        database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
+        if database_reachable and schema_current:
+            task_leases.recover_expired_leases()
+            await broker.dispatch_pending()
+        app.state.lease_recovery_task = asyncio.create_task(recover_expired_task_leases())
+        if restored_workflow_state == "recovery_required" and settings.simulator_auto_resume:
+            await simulator.resume()
+        try:
+            yield
+        finally:
+            if getattr(app.state, "lease_recovery_task", None):
+                app.state.lease_recovery_task.cancel()
+                try:
+                    await app.state.lease_recovery_task
+                except asyncio.CancelledError:
+                    pass
+            if (
+                getattr(app.state, "simulator", None)
+                and simulator._runner
+                and not simulator._runner.done()
+            ):
+                simulator._stopped = True
+                simulator._runner.cancel()
+                try:
+                    await simulator._runner
+                except asyncio.CancelledError:
+                    pass
+            await broker.stop_dispatcher()
+            repository._system.last_clean_shutdown = datetime.now(UTC)
+            repository._system.startup_was_clean = True
+            repository.persist()
+            engine.dispose()
+
     app = FastAPI(
+        lifespan=lifespan,
         title="Jarvis Agent Ecosystem Simulator",
         version="0.1.0",
         description="Phase 2A durable deterministic simulator. No real agents or external actions.",
@@ -175,53 +229,6 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             lease_expires_at=claim[2],
             resource_id=resource_id,
         )
-
-    @app.on_event("startup")
-    async def startup() -> None:
-        repository._system.last_successful_startup = datetime.now(UTC)
-        repository._system.startup_was_clean = False
-        repository.persist()
-        await broker.dispatch_pending()
-        await broker.start_dispatcher(settings.outbox_poll_interval_ms)
-
-        async def recover_expired_task_leases() -> None:
-            while True:
-                await asyncio.sleep(settings.task_lease_recovery_interval_ms / 1000)
-                database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
-                if not database_reachable or not schema_current:
-                    continue
-                recovered = task_leases.recover_expired_leases()
-                if recovered:
-                    await broker.dispatch_pending()
-
-        database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
-        if database_reachable and schema_current:
-            task_leases.recover_expired_leases()
-            await broker.dispatch_pending()
-        app.state.lease_recovery_task = asyncio.create_task(recover_expired_task_leases())
-        if restored_workflow_state == "recovery_required" and settings.simulator_auto_resume:
-            await simulator.resume()
-
-    @app.on_event("shutdown")
-    async def shutdown() -> None:
-        if app.state.lease_recovery_task:
-            app.state.lease_recovery_task.cancel()
-            try:
-                await app.state.lease_recovery_task
-            except asyncio.CancelledError:
-                pass
-        if simulator._runner and not simulator._runner.done():
-            simulator._stopped = True
-            simulator._runner.cancel()
-            try:
-                await simulator._runner
-            except asyncio.CancelledError:
-                pass
-        await broker.stop_dispatcher()
-        repository._system.last_clean_shutdown = datetime.now(UTC)
-        repository._system.startup_was_clean = True
-        repository.persist()
-        engine.dispose()
 
     @app.exception_handler(DomainError)
     async def domain_error(_: Request, exc: DomainError) -> JSONResponse:
