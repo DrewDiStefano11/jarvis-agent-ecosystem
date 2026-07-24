@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -949,15 +948,13 @@ class SqlAlchemyRepository:
             raise
 
     def snapshot(self) -> dict[str, object]:
-        return deepcopy(
-            {
-                "departments": list(self.departments.values()),
-                "agents": list(self.agents.values()),
-                "tasks": list(self.tasks.values()),
-                "approvals": list(self.approvals.values()),
-                "artifacts": list(self.artifacts.values()),
-                "notifications": list(self.notifications.values()),
-                "auditEvents": self.audit,
-                "emergencyStop": self.emergency_stop,
-            }
-        )
+        return {
+            "departments": [item.model_dump(mode="json") for item in self.departments.values()],
+            "agents": [item.model_dump(mode="json") for item in self.agents.values()],
+            "tasks": [item.model_dump(mode="json") for item in self.tasks.values()],
+            "approvals": [item.model_dump(mode="json") for item in self.approvals.values()],
+            "artifacts": [item.model_dump(mode="json") for item in self.artifacts.values()],
+            "notifications": [item.model_dump(mode="json") for item in self.notifications.values()],
+            "auditEvents": [item.model_dump(mode="json") for item in self.audit],
+            "emergencyStop": self.emergency_stop,
+        }

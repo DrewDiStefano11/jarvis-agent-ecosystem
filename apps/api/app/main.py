@@ -683,7 +683,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             await broker.emit(
                 "system.snapshot",
                 {
-                    "snapshot": _json_snapshot(repository.snapshot()),
+                    "snapshot": repository.snapshot(),
                     "system": system_status().model_dump(mode="json"),
                 },
             )
@@ -693,7 +693,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                     await broker.emit(
                         "system.snapshot",
                         {
-                            "snapshot": _json_snapshot(repository.snapshot()),
+                            "snapshot": repository.snapshot(),
                             "system": system_status().model_dump(mode="json"),
                         },
                     )
@@ -701,19 +701,6 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             broker.disconnect(websocket)
 
     return app
-
-
-def _json_snapshot(snapshot: dict[str, object]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in snapshot.items():
-        if isinstance(value, list):
-            result[key] = [
-                item.model_dump(mode="json") if hasattr(item, "model_dump") else item
-                for item in value
-            ]
-        else:
-            result[key] = value
-    return result
 
 
 if "pytest" in sys.modules:
