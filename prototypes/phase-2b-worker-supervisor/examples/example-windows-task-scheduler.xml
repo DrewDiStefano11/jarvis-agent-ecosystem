@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <!--
+    EXAMPLE ONLY: DO NOT INSTALL DIRECTLY
+    This file conceptualizes how a real Phase 2B local worker supervisor
+    might be orchestrated via Task Scheduler at user login without requiring
+    administrative privileges or installing a raw system service.
+  -->
+  <RegistrationInfo>
+    <Description>Jarvis Local Worker Supervisor Prototype Example</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+    </LogonTrigger>
+  </Triggers>
+  <Settings>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <!-- Example path to python executable. Do not use without verifying real paths. -->
+      <Command>C:\Path\To\VirtualEnv\Scripts\python.exe</Command>
+      <Arguments>-m jarvis_worker_supervisor run --runtime-dir C:\Path\To\Runtime --scenario healthy</Arguments>
+      <WorkingDirectory>C:\Path\To\ProjectRoot</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>

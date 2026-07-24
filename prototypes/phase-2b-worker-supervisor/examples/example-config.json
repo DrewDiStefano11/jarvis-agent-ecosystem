@@ -1,0 +1,17 @@
+{
+    "runtime_dir": "runtime",
+    "scenario": "healthy",
+    "readiness_timeout_seconds": 10.0,
+    "heartbeat_timeout_seconds": 15.0,
+    "graceful_shutdown_seconds": 10.0,
+    "forced_shutdown_seconds": 5.0,
+    "watchdog_interval_seconds": 1.0,
+    "maximum_restarts": 5,
+    "restart_window_seconds": 60.0,
+    "initial_backoff_seconds": 1.0,
+    "maximum_backoff_seconds": 30.0,
+    "stable_runtime_seconds": 30.0,
+    "jitter_enabled": false,
+    "max_log_bytes": 1048576,
+    "lease_ttl_seconds": 3.0
+}
