@@ -104,7 +104,7 @@ def test_migration_chain_structure(alembic_config: Config) -> None:
     # 16. Add migration-file invariants where useful
     # Verify migrations do not import live application models
     for rev in revisions:
-        with open(rev.path, "r") as f:
+        with open(rev.path) as f:
             content = f.read()
             assert "app.db.models" not in content, (
                 f"Migration {rev.revision} incorrectly imports app.db.models"
@@ -167,9 +167,7 @@ def test_blank_database_to_head(tmp_db_path: Path, alembic_config: Config, engin
 
         assert response.status_code == 200, f"Expected 200 OK, got {response.status_code}"
 
-        payload = response.json()
-        # We can also verify schema version fields if they are reported
-        pass  # we only assert status == ok strictly
+        _payload = response.json()
 
 
 def test_upgrade_from_phase_2a(tmp_db_path: Path, alembic_config: Config, engine: Engine) -> None:
