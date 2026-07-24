@@ -1,8 +1,8 @@
 """Add durable context assemblies.
 
-Revision ID: 20260723_02
-Revises: 20260720_01
-Create Date: 2026-07-23
+Revision ID: 20260724_03
+Revises: 20260723_02
+Create Date: 2026-07-24
 """
 
 from collections.abc import Sequence
@@ -10,8 +10,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "20260723_02"
-down_revision: str | None = "20260720_01"
+revision: str = "20260724_03"
+down_revision: str | None = "20260723_02"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

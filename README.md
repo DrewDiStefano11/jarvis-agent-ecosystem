@@ -1,6 +1,6 @@
 # Jarvis Agent Ecosystem
 
-Jarvis combines the Phase 2A local deterministic simulation and durable SQLite control plane with a production-integrated Phase 2B Context Assembler. Tasks, approvals, context manifests, audit history, notifications, system state, event delivery, and workflow checkpoints survive backend restarts while all agents, model calls, tools, and external actions remain simulated or unavailable.
+Jarvis combines the Phase 2A local deterministic simulation and durable SQLite control plane with Phase 2B fenced task leases and a production-integrated Context Assembler. Tasks, approvals, task ownership, context manifests, audit history, notifications, system state, event delivery, and workflow checkpoints survive backend restarts while all agents, model calls, tools, and external actions remain simulated or unavailable.
 
 ## What works in Phase 2A
 
@@ -11,9 +11,10 @@ Jarvis combines the Phase 2A local deterministic simulation and durable SQLite c
 - deterministic departments, five permanent agents, tasks, approvals, artifacts, notifications, and audit fixtures
 - installable PWA metadata, offline shell, reconnection states, HTTP refresh fallback, and a 320px mobile layout
 - YAML agent manifests validated by Pydantic
-- SQLite persistence through typed SQLAlchemy models and Alembic head `20260723_02`
+- SQLite persistence through typed SQLAlchemy models and Alembic head `20260724_03`
 - transactional outbox, durable idempotency keys, workflow runs, per-step checkpoints, and safe restart recovery
 - deterministic context assembly with provenance checks, trust ordering, redaction, injection signals, bounded truncation, durable manifests, and review gating
+- registered worker lifecycle, atomic task acquisition, renewable fencing tokens, attempt history, cancellation revocation, and expired-lease recovery
 
 ## Explicit non-capabilities
 
@@ -102,4 +103,4 @@ docs/              Product, API, event, manifest, roadmap, testing docs
 .github/workflows/ CI checks
 ```
 
-Runtime data defaults to `apps/api/data/jarvis.db` and is ignored by Git. See [persistence](docs/persistence.md), [migrations](docs/migrations.md), and [recovery](docs/recovery.md).
+Runtime data defaults to `apps/api/data/jarvis.db` and is ignored by Git. See [persistence](docs/persistence.md), [migrations](docs/migrations.md), [recovery](docs/recovery.md), and [task leases](docs/task-leases.md).
