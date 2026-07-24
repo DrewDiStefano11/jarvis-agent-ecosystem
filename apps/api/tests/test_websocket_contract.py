@@ -256,8 +256,8 @@ def test_event_ordering(app_factory, temp_db_path):
             assert seqs[0] < seqs[1] < seqs[2]
 
 
-
 # --- Group H: Multiple simultaneous clients ---
+
 
 def test_multiple_simultaneous_clients(app_factory, temp_db_path):
     import time
