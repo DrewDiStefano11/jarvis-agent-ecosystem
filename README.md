@@ -29,7 +29,7 @@ Prerequisites: Git, Python 3.11+, Node.js 20+, and pnpm 9+ (`corepack enable`). 
 ```powershell
 git clone <private-repository-url> jarvis-agent-ecosystem
 Set-Location jarvis-agent-ecosystem
-git switch feature/phase-1-simulator
+git switch feature/phase-2-durable-control-plane
 
 Set-Location apps/api
 python -m venv .venv
