@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.models.domain import SystemStatus
 from app.models.manifest import load_manifest
 
 
@@ -27,6 +28,11 @@ def test_health_status_and_lists() -> None:
         assert len(api.get("/api/agents").json()["data"]) == 5
         assert len(api.get("/api/departments").json()["data"]) == 4
         assert len(api.get("/api/tasks").json()["data"]) == 4
+
+
+def test_system_status_contract_advertises_current_database_revision() -> None:
+    revision = SystemStatus.model_json_schema()["properties"]["databaseRevision"]
+    assert revision["default"] == "a87a487dd714"
 
 
 def test_unknown_ids_are_structured() -> None:
