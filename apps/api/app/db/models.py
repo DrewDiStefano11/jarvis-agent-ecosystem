@@ -3,7 +3,18 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -46,6 +57,286 @@ class AgentRow(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class IdentityAgentRow(Base):
+    """Authorization identity kept separate from simulator compatibility payloads."""
+
+    __tablename__ = "identity_agents"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    stable_key: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(Text, default="")
+    agent_type: Mapped[str] = mapped_column(String(30), index=True)
+    lifecycle_state: Mapped[str] = mapped_column(String(30), index=True, default="provisioned")
+    operational_status: Mapped[str] = mapped_column(String(30), index=True, default="offline")
+    rank_id: Mapped[str | None] = mapped_column(ForeignKey("identity_ranks.id"), index=True)
+    is_system_agent: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class IdentityRankRow(Base):
+    __tablename__ = "identity_ranks"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    stable_key: Mapped[str] = mapped_column(String(80), unique=True)
+    display_name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(Text, default="")
+    priority_level: Mapped[int] = mapped_column(Integer, unique=True)
+    hierarchy_level: Mapped[int] = mapped_column(Integer, unique=True)
+    delegation_ceiling: Mapped[int | None] = mapped_column(Integer)
+    approval_ceiling: Mapped[float | None] = mapped_column(Numeric(12, 2))
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    __table_args__ = (
+        CheckConstraint("hierarchy_level >= 0"),
+        CheckConstraint("priority_level >= 0"),
+    )
+
+
+class IdentityRoleRow(Base):
+    __tablename__ = "identity_roles"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    stable_key: Mapped[str] = mapped_column(String(80), unique=True)
+    display_name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(Text, default="")
+    role_scope: Mapped[str] = mapped_column(String(30))
+    is_system_role: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class IdentityPermissionRow(Base):
+    __tablename__ = "identity_permissions"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    stable_key: Mapped[str] = mapped_column(String(120), unique=True, index=True)
+    display_name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(Text, default="")
+    resource_type: Mapped[str] = mapped_column(String(60))
+    action: Mapped[str] = mapped_column(String(60))
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    __table_args__ = (UniqueConstraint("resource_type", "action"),)
+
+
+class IdentityCapabilityRow(Base):
+    __tablename__ = "identity_capabilities"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    stable_key: Mapped[str] = mapped_column(String(120), unique=True)
+    display_name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(Text, default="")
+    category: Mapped[str] = mapped_column(String(60))
+    is_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
+class IdentityTeamRow(Base):
+    __tablename__ = "identity_teams"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    stable_key: Mapped[str] = mapped_column(String(80), unique=True)
+    display_name: Mapped[str] = mapped_column(String(160))
+    description: Mapped[str] = mapped_column(Text, default="")
+    team_type: Mapped[str] = mapped_column(String(40))
+    lifecycle_state: Mapped[str] = mapped_column(String(30), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    retired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RolePermissionRow(Base):
+    __tablename__ = "identity_role_permissions"
+    role_id: Mapped[str] = mapped_column(ForeignKey("identity_roles.id"), primary_key=True)
+    permission_id: Mapped[str] = mapped_column(
+        ForeignKey("identity_permissions.id"), primary_key=True
+    )
+    effect: Mapped[str] = mapped_column(String(10), default="allow")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    __table_args__ = (CheckConstraint("effect IN ('allow','deny')"),)
+
+
+class AgentRoleAssignmentRow(Base):
+    __tablename__ = "identity_agent_roles"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("identity_agents.id"), index=True)
+    role_id: Mapped[str] = mapped_column(ForeignKey("identity_roles.id"), index=True)
+    scope_type: Mapped[str] = mapped_column(String(30), default="global")
+    scope_id: Mapped[str | None] = mapped_column(String(120))
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    assigned_by: Mapped[str | None] = mapped_column(ForeignKey("identity_agents.id"))
+    reason: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (UniqueConstraint("agent_id", "role_id", "scope_type", "scope_id"),)
+
+
+class AgentPermissionAssignmentRow(Base):
+    __tablename__ = "identity_agent_permissions"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("identity_agents.id"), index=True)
+    permission_id: Mapped[str] = mapped_column(ForeignKey("identity_permissions.id"), index=True)
+    effect: Mapped[str] = mapped_column(String(10))
+    resource_type: Mapped[str | None] = mapped_column(String(60))
+    resource_id: Mapped[str | None] = mapped_column(String(120))
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    assigned_by: Mapped[str | None] = mapped_column(ForeignKey("identity_agents.id"))
+    reason: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        CheckConstraint("effect IN ('allow','deny')"),
+        UniqueConstraint("agent_id", "permission_id", "effect", "resource_type", "resource_id"),
+    )
+
+
+class AgentCapabilityAssignmentRow(Base):
+    __tablename__ = "identity_agent_capabilities"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("identity_agents.id"), index=True)
+    capability_id: Mapped[str] = mapped_column(ForeignKey("identity_capabilities.id"), index=True)
+    source: Mapped[str] = mapped_column(String(80))
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    assigned_by: Mapped[str | None] = mapped_column(ForeignKey("identity_agents.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (UniqueConstraint("agent_id", "capability_id"),)
+
+
+class TeamMembershipRow(Base):
+    __tablename__ = "identity_team_memberships"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    team_id: Mapped[str] = mapped_column(ForeignKey("identity_teams.id"), index=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("identity_agents.id"), index=True)
+    membership_role: Mapped[str] = mapped_column(String(20), default="member")
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    assigned_by: Mapped[str | None] = mapped_column(ForeignKey("identity_agents.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (UniqueConstraint("team_id", "agent_id"),)
+
+
+class SupervisorRelationshipRow(Base):
+    __tablename__ = "identity_supervisor_relationships"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    supervisor_agent_id: Mapped[str] = mapped_column(ForeignKey("identity_agents.id"), index=True)
+    subordinate_agent_id: Mapped[str] = mapped_column(ForeignKey("identity_agents.id"), index=True)
+    relationship_type: Mapped[str] = mapped_column(String(20))
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    assigned_by: Mapped[str | None] = mapped_column(ForeignKey("identity_agents.id"))
+    reason: Mapped[str] = mapped_column(String(500), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        CheckConstraint("supervisor_agent_id <> subordinate_agent_id"),
+        UniqueConstraint("supervisor_agent_id", "subordinate_agent_id", "relationship_type"),
+    )
+
+
+class ResourceAccessPolicyRow(Base):
+    __tablename__ = "identity_resource_access_policies"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    subject_type: Mapped[str] = mapped_column(String(20), index=True)
+    subject_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    resource_type: Mapped[str] = mapped_column(String(40), index=True)
+    resource_id: Mapped[str] = mapped_column(String(120), index=True)
+    action: Mapped[str] = mapped_column(String(30))
+    effect: Mapped[str] = mapped_column(String(10))
+    access_state: Mapped[str | None] = mapped_column(String(20))
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str] = mapped_column(String(500), default="")
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("identity_agents.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (CheckConstraint("effect IN ('allow','deny')"),)
+
+
+class DelegationPolicyRow(Base):
+    __tablename__ = "identity_delegation_policies"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    delegator_agent_id: Mapped[str] = mapped_column(ForeignKey("identity_agents.id"), index=True)
+    target_agent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("identity_agents.id"), index=True
+    )
+    task_category: Mapped[str] = mapped_column(String(80), index=True)
+    required_capability_id: Mapped[str | None] = mapped_column(
+        ForeignKey("identity_capabilities.id")
+    )
+    scope_type: Mapped[str] = mapped_column(String(30))
+    scope_id: Mapped[str | None] = mapped_column(String(120))
+    maximum_target_rank: Mapped[int | None] = mapped_column(Integer)
+    maximum_delegation_depth: Mapped[int] = mapped_column(Integer, default=1)
+    effect: Mapped[str] = mapped_column(String(10))
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reason: Mapped[str] = mapped_column(String(500), default="")
+    assigned_by: Mapped[str | None] = mapped_column(ForeignKey("identity_agents.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        CheckConstraint("effect IN ('allow','deny')"),
+        CheckConstraint("maximum_delegation_depth >= 0"),
+    )
+
+
+class ApprovalAuthorityPolicyRow(Base):
+    __tablename__ = "identity_approval_authority_policies"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(ForeignKey("identity_agents.id"), index=True)
+    may_request_approval: Mapped[bool] = mapped_column(Boolean, default=False)
+    may_grant_approval: Mapped[bool] = mapped_column(Boolean, default=False)
+    maximum_risk_level: Mapped[str | None] = mapped_column(String(20))
+    maximum_cost_usd: Mapped[float | None] = mapped_column(Numeric(12, 2))
+    action_category: Mapped[str] = mapped_column(String(80), index=True)
+    scope_type: Mapped[str] = mapped_column(String(30))
+    scope_id: Mapped[str | None] = mapped_column(String(120))
+    effect: Mapped[str] = mapped_column(String(10))
+    allow_self_approval: Mapped[bool] = mapped_column(Boolean, default=False)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("identity_agents.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (CheckConstraint("effect IN ('allow','deny')"),)
+
+
+class SeatPriorityPolicyRow(Base):
+    __tablename__ = "identity_seat_priority_policies"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    resource_id: Mapped[str] = mapped_column(String(120), index=True)
+    subject_type: Mapped[str] = mapped_column(String(20))
+    subject_id: Mapped[str] = mapped_column(String(80), index=True)
+    priority_marker: Mapped[str] = mapped_column(String(20))
+    reservation_state: Mapped[str] = mapped_column(String(20), default="unreserved")
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class IdentityAuditEventRow(Base):
+    __tablename__ = "identity_audit_events"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(120), index=True)
+    actor_agent_id: Mapped[str | None] = mapped_column(ForeignKey("identity_agents.id"), index=True)
+    target_type: Mapped[str] = mapped_column(String(40), index=True)
+    target_id: Mapped[str] = mapped_column(String(80), index=True)
+    reason: Mapped[str] = mapped_column(String(500), default="")
+    changes: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    timestamp: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=now_utc, index=True
+    )
 
 
 class TaskRow(Base):

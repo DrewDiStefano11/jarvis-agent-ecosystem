@@ -19,6 +19,8 @@ from app.core.config import Settings
 from app.core.errors import DomainError
 from app.core.transitions import InvalidTransitionError, validate_transition
 from app.db.session import create_database_engine, create_session_factory
+from app.identity.router import router as identity_router
+from app.identity.service import IdentityService
 from app.models.context import (
     ContextAssembly,
     ContextAssemblyEventPayload,
@@ -54,7 +56,7 @@ from app.repositories.task_leases import TaskLeaseRepository
 from app.services.events import EventBroker
 from app.simulator.engine import SimulatorEngine
 
-DATABASE_REVISION = "20260724_03"
+DATABASE_REVISION = "a87a487dd714"
 
 
 def _upgrade_database(settings: Settings) -> None:
@@ -120,6 +122,8 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     app.state.settings = settings
     app.state.engine = engine
     app.state.task_leases = task_leases
+    app.state.identity_service = IdentityService(session_factory)
+    app.include_router(identity_router)
     app.state.lease_recovery_task = None
     app.state.recovery_required = restored_workflow_state == "recovery_required"
 

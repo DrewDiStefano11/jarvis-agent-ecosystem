@@ -17,4 +17,6 @@ Revision `20260723_02` adds worker registrations, unique active task leases, and
 
 Revision `20260724_03` adds durable context assemblies after the task-lease revision, with a task foreign key, unique canonical input hash, request/policy/status fields, security counters, and the validated redacted payload. Upgrade, downgrade-to-Phase-2A, and re-upgrade are covered against isolated temporary databases.
 
+Revision `a87a487dd714` adds the normalized agent identity and authorization schema. It creates identities, ranks, roles, permissions, capabilities, teams, time-bounded assignments, supervisor relationships, delegation and approval-authority boundaries, typed resource access, seat priority policies, and append-only identity audit events. It does not alter the simulator compatibility tables and is reversible.
+
 To intentionally start clean in development, stop the API, back up anything needed, and delete the database plus its `-wal` and `-shm` sidecars from `apps/api/data`; then run `python -m alembic upgrade head`. This destroys local durable state and should never be automated against an uncertain path. Do not edit SQLite tables manually.
