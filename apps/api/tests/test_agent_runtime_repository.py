@@ -5,7 +5,10 @@ from pydantic import ValidationError
 
 from app.agent_runtime.errors import (
     InvalidRuntimeMetadataError,
+    InvalidTransitionError,
+    LedgerReplayError,
     LedgerSequenceError,
+    RunAlreadyExistsError,
     VersionConflictError,
 )
 from app.agent_runtime.repository import InMemoryAgentRuntimeRepository
@@ -222,3 +225,70 @@ def test_missing_parent_policy_is_explicit() -> None:
     assert lineage.missing_parent_id == "missing-parent"
     assert [entry.run_id for entry in lineage.entries] == ["missing-parent"]
     assert lineage.entries[0].exists is False
+
+
+def test_direct_repository_create_run_requires_matching_nonempty_ledger() -> None:
+    service = make_service()
+    created = create_run(service)
+    snapshot = created.snapshot
+    assert snapshot is not None
+    events = service.repository.list_events("run-1")
+    repository = InMemoryAgentRuntimeRepository()
+    repository.create_run(snapshot, events=events)
+    stored = repository.load_run("run-1")
+    assert stored == snapshot
+    events.append(events[0].model_copy())
+    assert len(repository.list_events("run-1")) == 1
+
+
+def test_direct_repository_create_run_rejects_empty_and_malformed_ledgers_without_mutation() -> (
+    None
+):
+    service = make_service()
+    created = create_run(service)
+    snapshot = created.snapshot
+    assert snapshot is not None
+    repository = InMemoryAgentRuntimeRepository()
+    with pytest.raises(LedgerSequenceError):
+        repository.create_run(snapshot)
+    malformed_events = service.repository.list_events("run-1")[1:]
+    with pytest.raises((LedgerSequenceError, LedgerReplayError, InvalidTransitionError)):
+        repository.create_run(snapshot, events=malformed_events)
+    assert repository.load_run("run-1") is None
+
+
+def test_direct_repository_create_run_rejects_mismatched_snapshot_or_unrelated_events() -> None:
+    service = make_service()
+    first = create_run(service)
+    first_snapshot = first.snapshot
+    assert first_snapshot is not None
+    first_events = service.repository.list_events("run-1")
+    second_service = make_service()
+    create_run(second_service, specification=make_spec(run_id="run-2"), command_id="cmd-create-2")
+    second_events = second_service.repository.list_events("run-2")
+    repository = InMemoryAgentRuntimeRepository()
+    with pytest.raises(VersionConflictError):
+        repository.create_run(
+            first_snapshot.model_copy(update={"status_detail": "mutated"}), events=first_events
+        )
+    with pytest.raises(VersionConflictError):
+        repository.create_run(first_snapshot, events=second_events)
+    assert repository.load_run("run-1") is None
+
+
+def test_direct_repository_create_run_rejection_is_atomic_and_duplicate_detection_is_preserved() -> (
+    None
+):
+    service = make_service()
+    first = create_run(service)
+    snapshot = first.snapshot
+    assert snapshot is not None
+    events = service.repository.list_events("run-1")
+    repository = InMemoryAgentRuntimeRepository()
+    repository.create_run(snapshot, events=events)
+    before_snapshot = repository.load_run("run-1")
+    before_events = repository.list_events("run-1")
+    with pytest.raises(RunAlreadyExistsError):
+        repository.create_run(snapshot, events=events)
+    assert repository.load_run("run-1") == before_snapshot
+    assert repository.list_events("run-1") == before_events

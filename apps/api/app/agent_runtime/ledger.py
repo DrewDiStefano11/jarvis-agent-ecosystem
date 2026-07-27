@@ -26,6 +26,7 @@ from app.models.agent_runtime import (
     FailureClassification,
     FailureRecord,
     PauseReason,
+    RecoveryPlan,
     RecoveryStatus,
     RuntimeContract,
     RuntimeEventEnvelope,
@@ -532,12 +533,17 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
             }
         )
     elif event.event_type == AgentRuntimeEventType.RECOVERY_PLANNED:
-        plan = cast(dict[str, object], event.payload["plan"])
+        recorded_plan = _validate_recovery_plan_event(
+            snapshot=snapshot,
+            attempts=attempts,
+            checkpoints=checkpoints,
+            event=event,
+        )
         snapshot = snapshot.model_copy(
             update={
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
-                "status_detail": cast(str, plan["reason"]),
+                "status_detail": recorded_plan.reason,
                 "recovery_status": RecoveryStatus.PLANNED,
             }
         )
@@ -827,6 +833,48 @@ def _validate_attempt_created(
             command_id=event.command_id,
             metadata={"checkpointId": attempt.resumed_from_checkpoint_id},
         )
+
+
+def _validate_recovery_plan_event(
+    *,
+    snapshot: AgentRunSnapshot,
+    attempts: dict[str, AgentRunAttempt],
+    checkpoints: dict[str, AgentRunCheckpoint],
+    event: RuntimeEventEnvelope,
+) -> RecoveryPlan:
+    try:
+        recorded_plan = RecoveryPlan.model_validate(cast(dict[str, object], event.payload["plan"]))
+    except ValidationError as exc:
+        raise LedgerReplayError(
+            "The recovery_planned payload is not a valid recovery plan contract.",
+            run_id=event.run_id,
+            command_id=event.command_id,
+            metadata={"errors": exc.errors(include_url=False)},
+        ) from exc
+    try:
+        expected_plan = derive_recovery_plan(
+            snapshot,
+            list(sorted(attempts.values(), key=lambda item: item.attempt_number)),
+            list(sorted(checkpoints.values(), key=lambda item: item.checkpoint_sequence)),
+        )
+    except RecoveryNotAllowedError as exc:
+        raise LedgerReplayError(
+            exc.message,
+            run_id=event.run_id,
+            command_id=event.command_id,
+            metadata=exc.metadata,
+        ) from exc
+    if recorded_plan != expected_plan:
+        raise LedgerReplayError(
+            "The recorded recovery plan does not match the deterministic expected recovery plan.",
+            run_id=event.run_id,
+            command_id=event.command_id,
+            metadata={
+                "recordedPlan": recorded_plan.model_dump(mode="json"),
+                "expectedPlan": expected_plan.model_dump(mode="json"),
+            },
+        )
+    return recorded_plan
 
 
 def _validate_rule(

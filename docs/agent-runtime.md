@@ -218,6 +218,7 @@ Checkpoint selection is deterministic:
 
 When recovery is active, beginning the next attempt is bound to the currently derived recovery plan:
 
+- a run with `recovery_status=required` must remain blocked until recovery is explicitly planned
 - if the plan selected a checkpoint, the next attempt must use that exact checkpoint ID
 - omitting the checkpoint or supplying an older/different checkpoint is rejected
 - if the plan selected no checkpoint, supplying an arbitrary checkpoint is rejected
@@ -309,6 +310,7 @@ Rules:
 - same command ID with different contents raises `command_conflict`
 - failed commands are not stored as processed
 - duplicate processed commands do not append duplicate events
+- repository commit is authoritative for concurrent idempotency; exact concurrent duplicates return the stored result rather than a stale version conflict
 - checkpoint duplicate handling also supports a stable no-op when the same checkpoint ID and content are submitted again on the same attempt
 
 ## Optimistic concurrency
@@ -391,6 +393,12 @@ The repository contract supports:
 - store processed-command results
 - query runs deterministically
 - atomically commit a command result in the reference implementation
+
+Repository invariants:
+
+- direct `create_run` requires a non-empty authoritative ledger whose replay exactly matches the supplied snapshot
+- direct `save_run` is only allowed when the supplied snapshot exactly matches deterministic ledger replay
+- atomic command commits recheck `(run_id, command_id)` under the repository lock so exact concurrent duplicates return the stored result instead of surfacing a stale version conflict
 
 ## In-memory repository limitations
 

@@ -9,6 +9,7 @@ from app.agent_runtime.ledger import replay_execution_ledger
 from app.models.agent_runtime import (
     AgentRunState,
     AttemptState,
+    BlockAgentRunCommand,
     RecordCheckpointCommand,
     RequestRecoveryPlanCommand,
     RuntimeEventEnvelope,
@@ -47,6 +48,36 @@ def _mutate_attempt_created(
         update.update(event_updates)
     mutated[index] = mutated[index].model_copy(update=update)
     return mutated
+
+
+def _prepare_recovery_planned_run() -> tuple[object, list[RuntimeEventEnvelope]]:
+    service = make_service()
+    prepare_running_run(service)
+    service.record_checkpoint(
+        RecordCheckpointCommand(
+            run_id="run-1",
+            command_id="cmd-checkpoint-1",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="worker-1",
+            checkpoint_id="checkpoint-1",
+            state_reference="checkpoint://state/1",
+            integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+            source_metadata={"source": "test"},
+        )
+    )
+    fail_attempt(service, "run-1", expected_run_version=7, command_id="cmd-fail-1", second=6)
+    planned = service.request_recovery_plan(
+        RequestRecoveryPlanCommand(
+            run_id="run-1",
+            command_id="cmd-plan-1",
+            expected_run_version=8,
+            timestamp=ts(7),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    return planned, service.repository.list_events("run-1")
 
 
 def test_ledger_sequence_begins_at_one_and_is_contiguous() -> None:
@@ -462,3 +493,99 @@ def test_replay_of_valid_recovery_attempt_is_deterministic() -> None:
     assert first is not None and second is not None
     assert first.snapshot == second.snapshot
     assert first.attempts == second.attempts
+
+
+def test_replay_validates_recorded_recovery_plan_exactly() -> None:
+    planned, events = _prepare_recovery_planned_run()
+    replayed = replay_execution_ledger(events)
+    assert replayed is not None
+    assert replayed.snapshot == planned.snapshot
+
+
+def test_replay_rejects_fabricated_recovery_plan_on_manual_block() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    service.block_run(
+        BlockAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-block-manual",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="operator-1",
+            block_code="manual_block",
+            detail="Manual operator block",
+            source_metadata={"source": "test"},
+        )
+    )
+    events = service.repository.list_events("run-1")
+    fabricated = RuntimeEventEnvelope.model_validate(
+        events[-1].model_dump(mode="json")
+        | {
+            "event_id": "event-fabricated-plan",
+            "event_type": "recovery_planned",
+            "sequence_number": 8,
+            "run_version": 8,
+            "payload": {
+                "plan": {
+                    "run_id": "run-1",
+                    "recovery_allowed": True,
+                    "selected_checkpoint": None,
+                    "next_attempt_number": 2,
+                    "expected_starting_state": "claimed",
+                    "required_prior_terminal_attempt_id": "attempt-1",
+                    "reason": "fabricated",
+                    "warnings": [],
+                    "expected_version": 7,
+                    "expected_event_sequence": 7,
+                }
+            },
+        }
+    )
+    with pytest.raises(LedgerReplayError):
+        replay_execution_ledger(events + [fabricated])
+
+
+@pytest.mark.parametrize(
+    "plan_updates",
+    [
+        {"run_id": "other-run"},
+        {"expected_version": 999},
+        {"expected_event_sequence": 999},
+        {"next_attempt_number": 99},
+        {"required_prior_terminal_attempt_id": "attempt-other"},
+        {"reason": "Modified reason"},
+        {"warnings": ["modified warning"]},
+        {
+            "selected_checkpoint": {
+                "checkpoint_id": "checkpoint-other",
+                "run_id": "run-1",
+                "attempt_id": "attempt-1",
+                "checkpoint_sequence": 1,
+                "run_version": 7,
+                "event_sequence": 7,
+                "schema_version": "1.0",
+                "timestamp": ts(5).isoformat(),
+                "state_reference": "checkpoint://other",
+                "integrity_digest": "sha256:bbbbbbbbbbbbbbbb",
+                "resume_cursor": None,
+                "metadata": {},
+            }
+        },
+    ],
+)
+def test_replay_rejects_modified_recovery_plan_fields(plan_updates: dict[str, object]) -> None:
+    _, events = _prepare_recovery_planned_run()
+    broken = [event.model_copy(deep=True) for event in events]
+    payload = dict(broken[-1].payload["plan"])
+    payload.update(plan_updates)
+    broken[-1] = broken[-1].model_copy(update={"payload": {"plan": payload}})
+    with pytest.raises(LedgerReplayError):
+        replay_execution_ledger(broken)
+
+
+def test_replay_rejects_malformed_recovery_plan_payload() -> None:
+    _, events = _prepare_recovery_planned_run()
+    broken = [event.model_copy(deep=True) for event in events]
+    broken[-1] = broken[-1].model_copy(update={"payload": {"plan": {"reason": "only"}}})
+    with pytest.raises(LedgerReplayError):
+        replay_execution_ledger(broken)

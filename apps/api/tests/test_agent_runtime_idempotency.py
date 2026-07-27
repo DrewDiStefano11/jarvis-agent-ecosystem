@@ -1,17 +1,36 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
 import pytest
 
-from app.agent_runtime.errors import CommandConflictError, VersionConflictError
+from app.agent_runtime.errors import (
+    CommandConflictError,
+    LedgerSequenceError,
+    VersionConflictError,
+)
 from app.models.agent_runtime import (
     AbandonAttemptCommand,
     FailAttemptCommand,
     QueueAgentRunCommand,
     RecordCheckpointCommand,
     RequestCancellationCommand,
+    RequestRecoveryPlanCommand,
     TimeoutAttemptCommand,
 )
 from tests.agent_runtime_testkit import create_run, make_service, prepare_running_run, ts
+
+
+def _install_commit_barrier(service, monkeypatch: pytest.MonkeyPatch, *, parties: int = 2) -> None:
+    barrier = Barrier(parties)
+    original_commit = service.repository.commit_command
+
+    def wrapped_commit(*args, **kwargs):
+        barrier.wait()
+        return original_commit(*args, **kwargs)
+
+    monkeypatch.setattr(service.repository, "commit_command", wrapped_commit)
 
 
 def test_exact_duplicate_command_returns_original_result() -> None:
@@ -345,3 +364,146 @@ def test_failure_replay_preserves_resolved_attempt_id_and_conflicting_replay_is_
     assert replay.snapshot.failure.attempt_id == active_attempt_id
     with pytest.raises(CommandConflictError):
         service.handle(conflicting)
+
+
+def test_concurrent_duplicate_state_change_is_atomically_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = make_service()
+    create_run(service)
+    _install_commit_barrier(service, monkeypatch)
+
+    def submit() -> object:
+        return service.queue_run(
+            QueueAgentRunCommand(
+                run_id="run-1",
+                command_id="cmd-queue-concurrent",
+                expected_run_version=1,
+                timestamp=ts(1),
+                actor_reference="scheduler-1",
+                source_metadata={"source": "test"},
+            )
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = [future.result() for future in [executor.submit(submit), executor.submit(submit)]]
+
+    assert len(service.repository.list_events("run-1")) == 2
+    assert [result.snapshot.state.value for result in results] == ["queued", "queued"]
+    assert sorted(result.idempotent_replay for result in results) == [False, True]
+
+
+def test_concurrent_conflicting_command_ids_raise_command_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = make_service()
+    create_run(service)
+    _install_commit_barrier(service, monkeypatch)
+
+    def submit(detail: str) -> object:
+        try:
+            return service.queue_run(
+                QueueAgentRunCommand(
+                    run_id="run-1",
+                    command_id="cmd-queue-conflict",
+                    expected_run_version=1,
+                    timestamp=ts(1),
+                    actor_reference="scheduler-1",
+                    detail=detail,
+                    source_metadata={"source": "test"},
+                )
+            )
+        except Exception as exc:  # noqa: BLE001
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first, second = [
+            future.result()
+            for future in [executor.submit(submit, "first"), executor.submit(submit, "second")]
+        ]
+
+    outcomes = [first, second]
+    assert sum(isinstance(item, CommandConflictError) for item in outcomes) == 1
+    assert sum(hasattr(item, "snapshot") for item in outcomes) == 1
+    assert not any(
+        isinstance(item, VersionConflictError | LedgerSequenceError) for item in outcomes
+    )
+    assert len(service.repository.list_events("run-1")) == 2
+    record = service.repository.get_processed_command("run-1", "cmd-queue-conflict")
+    assert record is not None
+    assert record.result.snapshot is not None
+    assert record.result.snapshot.state.value == "queued"
+
+
+def test_concurrent_duplicate_run_creation_is_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = make_service()
+    _install_commit_barrier(service, monkeypatch)
+
+    def submit() -> object:
+        return create_run(service, command_id="cmd-create-concurrent", timestamp=ts(0))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first, second = [
+            future.result() for future in [executor.submit(submit), executor.submit(submit)]
+        ]
+
+    assert first.snapshot == second.snapshot
+    assert sorted([first.idempotent_replay, second.idempotent_replay]) == [False, True]
+    assert len(service.repository.list_events("run-1")) == 1
+
+
+def test_concurrent_duplicate_recovery_plan_requests_are_idempotent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = make_service()
+    prepare_running_run(service)
+    service.record_checkpoint(
+        RecordCheckpointCommand(
+            run_id="run-1",
+            command_id="cmd-checkpoint-pre-plan",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="worker-1",
+            checkpoint_id="checkpoint-1",
+            state_reference="checkpoint://state/1",
+            integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.fail_attempt(
+        FailAttemptCommand(
+            run_id="run-1",
+            command_id="cmd-fail-before-plan",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="worker-1",
+            failure_category="dependency",
+            failure_detail="Dependency unavailable",
+            source_metadata={"source": "test"},
+        )
+    )
+    _install_commit_barrier(service, monkeypatch)
+
+    def submit() -> object:
+        return service.request_recovery_plan(
+            RequestRecoveryPlanCommand(
+                run_id="run-1",
+                command_id="cmd-plan-concurrent",
+                expected_run_version=8,
+                timestamp=ts(7),
+                actor_reference="operator-1",
+                source_metadata={"source": "test"},
+            )
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first, second = [
+            future.result() for future in [executor.submit(submit), executor.submit(submit)]
+        ]
+
+    assert first.snapshot == second.snapshot
+    assert first.recovery_plan == second.recovery_plan
+    assert sorted([first.idempotent_replay, second.idempotent_replay]) == [False, True]
+    assert len(service.repository.list_events("run-1")) == 9

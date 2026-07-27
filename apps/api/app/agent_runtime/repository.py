@@ -77,7 +77,7 @@ class AgentRuntimeRepository(ExecutionLedgerAppender, Protocol):
         expected_version: int,
         expected_sequence: int,
         create: bool = False,
-    ) -> None: ...
+    ) -> ProcessedCommandRecord | None: ...
 
 
 class InMemoryAgentRuntimeRepository(AgentRuntimeRepository):
@@ -98,10 +98,28 @@ class InMemoryAgentRuntimeRepository(AgentRuntimeRepository):
         with self._lock:
             if snapshot.specification.run_id in self._snapshots:
                 raise RunAlreadyExistsError(run_id=snapshot.specification.run_id)
-            self._snapshots[snapshot.specification.run_id] = snapshot.model_copy(deep=True)
-            self._events[snapshot.specification.run_id] = [
-                item.model_copy(deep=True) for item in events
-            ]
+            proposed_events = [item.model_copy(deep=True) for item in events]
+            if not proposed_events:
+                raise LedgerSequenceError(
+                    "Run creation requires an authoritative non-empty ledger.",
+                    run_id=snapshot.specification.run_id,
+                )
+            aggregate = replay_execution_ledger(proposed_events)
+            if aggregate is None:
+                raise LedgerSequenceError(
+                    "Run creation requires an authoritative non-empty ledger.",
+                    run_id=snapshot.specification.run_id,
+                )
+            if aggregate.snapshot != snapshot:
+                raise VersionConflictError(
+                    "Run creation snapshot must match deterministic ledger replay.",
+                    run_id=snapshot.specification.run_id,
+                    metadata={"reason": "snapshot_ledger_mismatch"},
+                )
+            self._snapshots[snapshot.specification.run_id] = aggregate.snapshot.model_copy(
+                deep=True
+            )
+            self._events[snapshot.specification.run_id] = proposed_events
             self._processed[snapshot.specification.run_id] = {}
 
     def load_run(self, run_id: RunId) -> AgentRunSnapshot | None:
@@ -234,12 +252,20 @@ class InMemoryAgentRuntimeRepository(AgentRuntimeRepository):
         expected_version: int,
         expected_sequence: int,
         create: bool = False,
-    ) -> None:
+    ) -> ProcessedCommandRecord | None:
         run_id = snapshot.specification.run_id
         with self._lock:
             existing_snapshot = self._snapshots.get(run_id)
             existing_events = self._events.get(run_id, [])
             existing_processed = self._processed.get(run_id, {})
+            existing_record = existing_processed.get(processed_command.command_id)
+            if existing_record is not None:
+                if existing_record.command_hash != processed_command.command_hash:
+                    raise CommandConflictError(
+                        run_id=run_id,
+                        command_id=processed_command.command_id,
+                    )
+                return existing_record.model_copy(deep=True)
             if create:
                 if existing_snapshot is not None:
                     raise RunAlreadyExistsError(run_id=run_id)
@@ -274,15 +300,6 @@ class InMemoryAgentRuntimeRepository(AgentRuntimeRepository):
                             "storedSequence": len(existing_events),
                         },
                     )
-            existing_record = existing_processed.get(processed_command.command_id)
-            if (
-                existing_record is not None
-                and existing_record.command_hash != processed_command.command_hash
-            ):
-                raise CommandConflictError(
-                    run_id=run_id,
-                    command_id=processed_command.command_id,
-                )
             appended_events = [item.model_copy(deep=True) for item in events]
             full_events = [item.model_copy(deep=True) for item in existing_events] + appended_events
             aggregate = replay_execution_ledger(full_events)
@@ -303,6 +320,7 @@ class InMemoryAgentRuntimeRepository(AgentRuntimeRepository):
             self._events[run_id] = full_events
             self._snapshots[run_id] = aggregate.snapshot.model_copy(deep=True)
             self._processed[run_id] = next_processed
+            return None
 
     def _replay(self, run_id: RunId):
         with self._lock:

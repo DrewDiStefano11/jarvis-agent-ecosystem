@@ -232,7 +232,7 @@ class AgentRuntimeService:
         record = self._processed_record(
             command.specification.run_id, command.command_id, command, result
         )
-        self.repository.commit_command(
+        existing_record = self.repository.commit_command(
             snapshot=aggregate.snapshot,
             events=(event,),
             processed_command=record,
@@ -240,6 +240,8 @@ class AgentRuntimeService:
             expected_sequence=0,
             create=True,
         )
+        if existing_record is not None:
+            return existing_record.result.model_copy(update={"idempotent_replay": True}, deep=True)
         return result
 
     def queue_run(self, command: QueueAgentRunCommand) -> RuntimeCommandResult:
@@ -846,13 +848,15 @@ class AgentRuntimeService:
             recovery_plan=recovery_plan,
         )
         record = self._processed_record(command.run_id, command.command_id, command, result)
-        self.repository.commit_command(
+        existing_record = self.repository.commit_command(
             snapshot=updated_aggregate.snapshot,
             events=(event,),
             processed_command=record,
             expected_version=aggregate.snapshot.version,
             expected_sequence=aggregate.snapshot.event_sequence_number,
         )
+        if existing_record is not None:
+            return existing_record.result.model_copy(update={"idempotent_replay": True}, deep=True)
         return result
 
     def resolve_lineage(
@@ -1017,13 +1021,15 @@ class AgentRuntimeService:
             events=tuple(new_events),
         )
         record = self._processed_record(command.run_id, command.command_id, command, result)
-        self.repository.commit_command(
+        existing_record = self.repository.commit_command(
             snapshot=updated_aggregate.snapshot,
             events=new_events,
             processed_command=record,
             expected_version=aggregate.snapshot.version,
             expected_sequence=aggregate.snapshot.event_sequence_number,
         )
+        if existing_record is not None:
+            return existing_record.result.model_copy(update={"idempotent_replay": True}, deep=True)
         return result
 
     def _processed_record(
