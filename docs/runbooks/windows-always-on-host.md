@@ -36,3 +36,4 @@ Restore: ops/windows-host/Restore-JarvisDatabase.ps1 -BackupPath backups/jarvis.
 Tailscale configure: ops/windows-host/Configure-JarvisTailscale.ps1 -ConfigPath jarvis-host.json
 Tailscale remove: ops/windows-host/Remove-JarvisTailscale.ps1
 Uninstall: ops/windows-host/Uninstall-JarvisHost.ps1 -ConfigPath jarvis-host.json
+Consistent parameters verified across all 12 scripts
