@@ -137,7 +137,11 @@ A cancellation request stores:
 Policy:
 
 - exact duplicate command replay returns the stored result
+- the runtime compares the stored command hash before replaying a processed cancellation result
+- same `(run_id, command_id)` with different contents raises `command_conflict`
 - a different command ID cannot replace an accepted cancellation reason once cancellation has started
+- entering `cancel_requested` or `cancelling` clears incompatible `pause_reason` and `blocking_reason` snapshot fields
+- pause and block history remains preserved in prior ledger events rather than stale current-state fields
 - cancellation of terminal runs returns a typed conflict
 - no external signal or worker kill is performed here
 
@@ -152,6 +156,8 @@ Examples: waiting for approval, missing dependency, unavailable resource, recove
 Both are nonterminal.
 Both require explicit commands to leave them.
 The ledger keeps the full pause and block history.
+
+When an attempt terminalizes into recovery-required `blocked`, the runtime clears any stale pause metadata from the snapshot and replaces it with a `blocking_reason`. Prior pause history remains visible through earlier ledger events.
 
 ## Checkpoint model
 
@@ -176,7 +182,10 @@ Rules:
 - checkpoint lineage must match the active run and active attempt
 - checkpoint run/event positions must match the checkpoint event position
 - terminal runs reject new checkpoints
-- checkpoint IDs are immutable and cannot be silently reused with different contents
+- checkpoint IDs are globally unique within a run
+- reusing a checkpoint ID on the same attempt with the same stored content is a deterministic no-op
+- reusing a checkpoint ID with different content or from another attempt raises a conflict
+- the runtime compares the stored command hash before replaying a processed checkpoint result
 
 ## Recovery-plan rules
 
@@ -231,7 +240,9 @@ Rules:
 - sequences increase exactly by 1
 - run version increases exactly by 1 for every appended event
 - version and sequence are equal by policy in this foundation
-- timestamps never move backward
+- event timestamps never move backward
+- snapshot timestamp validation is causal rather than one fixed field order
+- `paused_at`, `resumed_at`, and `last_heartbeat_at` are latest-occurrence fields and remain valid across repeated pause/resume cycles
 - events are immutable
 - incompatible schema versions are rejected
 
@@ -254,6 +265,28 @@ Replay rejects:
 - checkpoint lineage mismatches
 - inconsistent run versions
 
+## Timestamp semantics
+
+Snapshot timestamp fields are validated as the latest known occurrence of their event type, not as one permanently increasing left-to-right tuple.
+
+This means repeated legal cycles such as:
+
+- pause -> resume -> pause again
+- pause -> resume -> heartbeat
+- block -> unblock -> block again
+
+remain valid.
+
+The runtime still enforces causal relationships such as:
+
+- timestamps must be timezone-aware UTC
+- no stored timestamp may precede `created_at`
+- `claimed_at` cannot precede `queued_at`
+- `started_at` cannot precede `claimed_at`
+- `last_heartbeat_at` cannot precede `started_at`
+- `completed_at` cannot precede `started_at` or `cancellation_requested_at`
+- event timestamps remain monotonic in ledger order
+
 ## Idempotency
 
 Every state-changing command is scoped by `(run_id, command_id)`.
@@ -261,10 +294,11 @@ Every state-changing command is scoped by `(run_id, command_id)`.
 Rules:
 
 - exact command replay returns the stored result
+- exact replay appends no new event and causes no mutation
 - same command ID with different contents raises `command_conflict`
 - failed commands are not stored as processed
 - duplicate processed commands do not append duplicate events
-- checkpoint duplicate handling also supports stable no-op replay when the same checkpoint ID and content are submitted again
+- checkpoint duplicate handling also supports a stable no-op when the same checkpoint ID and content are submitted again on the same attempt
 
 ## Optimistic concurrency
 

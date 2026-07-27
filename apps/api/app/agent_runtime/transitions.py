@@ -186,7 +186,12 @@ TRANSITION_RULES: dict[AgentRuntimeEventType, TransitionRule] = {
     AgentRuntimeEventType.ATTEMPT_FAILED: TransitionRule(
         event_type=AgentRuntimeEventType.ATTEMPT_FAILED,
         allowed_sources=frozenset(
-            {AgentRunState.STARTING, AgentRunState.RUNNING, AgentRunState.PAUSED}
+            {
+                AgentRunState.STARTING,
+                AgentRunState.RUNNING,
+                AgentRunState.PAUSE_REQUESTED,
+                AgentRunState.PAUSED,
+            }
         ),
         allowed_targets=frozenset({AgentRunState.BLOCKED}),
         required_metadata=frozenset({"failure", "blocking_reason"}),
@@ -196,7 +201,12 @@ TRANSITION_RULES: dict[AgentRuntimeEventType, TransitionRule] = {
     AgentRuntimeEventType.ATTEMPT_TIMED_OUT: TransitionRule(
         event_type=AgentRuntimeEventType.ATTEMPT_TIMED_OUT,
         allowed_sources=frozenset(
-            {AgentRunState.STARTING, AgentRunState.RUNNING, AgentRunState.PAUSED}
+            {
+                AgentRunState.STARTING,
+                AgentRunState.RUNNING,
+                AgentRunState.PAUSE_REQUESTED,
+                AgentRunState.PAUSED,
+            }
         ),
         allowed_targets=frozenset({AgentRunState.BLOCKED}),
         required_metadata=frozenset({"failure", "blocking_reason"}),
@@ -206,7 +216,12 @@ TRANSITION_RULES: dict[AgentRuntimeEventType, TransitionRule] = {
     AgentRuntimeEventType.ATTEMPT_ABANDONED: TransitionRule(
         event_type=AgentRuntimeEventType.ATTEMPT_ABANDONED,
         allowed_sources=frozenset(
-            {AgentRunState.STARTING, AgentRunState.RUNNING, AgentRunState.PAUSED}
+            {
+                AgentRunState.STARTING,
+                AgentRunState.RUNNING,
+                AgentRunState.PAUSE_REQUESTED,
+                AgentRunState.PAUSED,
+            }
         ),
         allowed_targets=frozenset({AgentRunState.BLOCKED}),
         required_metadata=frozenset({"failure", "blocking_reason"}),

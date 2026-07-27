@@ -9,10 +9,13 @@ from app.models.agent_runtime import (
     BeginAttemptCommand,
     ClaimAgentRunCommand,
     CompleteAttemptCommand,
+    ConfirmPauseCommand,
     CreateAgentRunCommand,
     FailAttemptCommand,
     FailureClassification,
     QueueAgentRunCommand,
+    RequestPauseCommand,
+    ResumeAgentRunCommand,
     RuntimeCommandResult,
     StartAttemptCommand,
 )
@@ -227,6 +230,70 @@ def fail_attempt(
     )
 
 
+def request_pause(
+    service: AgentRuntimeService,
+    run_id: str,
+    *,
+    expected_run_version: int,
+    command_id: str = "cmd-pause-request",
+    second: int = 5,
+    reason_code: str = "operator_pause",
+    detail: str = "Pause requested",
+) -> RuntimeCommandResult:
+    return service.request_pause(
+        RequestPauseCommand(
+            run_id=run_id,
+            command_id=command_id,
+            expected_run_version=expected_run_version,
+            timestamp=ts(second),
+            actor_reference="operator-1",
+            reason_code=reason_code,
+            detail=detail,
+            source_metadata={"source": "test"},
+        )
+    )
+
+
+def confirm_pause(
+    service: AgentRuntimeService,
+    run_id: str,
+    *,
+    expected_run_version: int,
+    command_id: str = "cmd-pause-confirm",
+    second: int = 6,
+) -> RuntimeCommandResult:
+    return service.confirm_pause(
+        ConfirmPauseCommand(
+            run_id=run_id,
+            command_id=command_id,
+            expected_run_version=expected_run_version,
+            timestamp=ts(second),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+
+
+def resume_run(
+    service: AgentRuntimeService,
+    run_id: str,
+    *,
+    expected_run_version: int,
+    command_id: str = "cmd-resume",
+    second: int = 7,
+) -> RuntimeCommandResult:
+    return service.resume_run(
+        ResumeAgentRunCommand(
+            run_id=run_id,
+            command_id=command_id,
+            expected_run_version=expected_run_version,
+            timestamp=ts(second),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+
+
 def prepare_running_run(
     service: AgentRuntimeService, *, run_id: str = "run-1"
 ) -> RuntimeCommandResult:
@@ -235,6 +302,30 @@ def prepare_running_run(
     claim_run(service, run_id, expected_run_version=2, command_id=f"cmd-claim-{run_id}")
     begin_attempt(service, run_id, expected_run_version=3, command_id=f"cmd-begin-{run_id}")
     return start_attempt(service, run_id, expected_run_version=5, command_id=f"cmd-start-{run_id}")
+
+
+def prepare_pause_requested_run(
+    service: AgentRuntimeService, *, run_id: str = "run-1"
+) -> RuntimeCommandResult:
+    prepare_running_run(service, run_id=run_id)
+    return request_pause(
+        service,
+        run_id,
+        expected_run_version=6,
+        command_id=f"cmd-pause-request-{run_id}",
+    )
+
+
+def prepare_paused_run(
+    service: AgentRuntimeService, *, run_id: str = "run-1"
+) -> RuntimeCommandResult:
+    prepare_pause_requested_run(service, run_id=run_id)
+    return confirm_pause(
+        service,
+        run_id,
+        expected_run_version=7,
+        command_id=f"cmd-pause-confirm-{run_id}",
+    )
 
 
 def prepare_blocked_run(

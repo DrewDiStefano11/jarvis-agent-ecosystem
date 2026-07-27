@@ -7,23 +7,32 @@ from app.agent_runtime.errors import (
     AttemptLimitExceededError,
     InvalidAttemptStateError,
 )
+from app.agent_runtime.ledger import replay_execution_ledger
 from app.models.agent_runtime import (
     AbandonAttemptCommand,
     AgentRunState,
+    AttemptState,
     CompleteAttemptCommand,
+    FailAttemptCommand,
+    RecordCheckpointCommand,
     RequestRecoveryPlanCommand,
     StartAttemptCommand,
+    TimeoutAttemptCommand,
     UnblockAgentRunCommand,
 )
 from tests.agent_runtime_testkit import (
     begin_attempt,
     claim_run,
     complete_attempt,
+    confirm_pause,
     create_run,
     make_service,
     make_spec,
+    prepare_pause_requested_run,
+    prepare_paused_run,
     prepare_running_run,
     queue_run,
+    request_pause,
     start_attempt,
     ts,
 )
@@ -156,3 +165,135 @@ def test_run_and_attempt_state_consistency_is_preserved() -> None:
     assert completed.snapshot is not None and completed.snapshot.state == AgentRunState.CLAIMED
     attempts = service.repository.load_attempt_history("run-1")
     assert attempts[-1].state.value == "succeeded"
+
+
+def test_paused_attempt_failure_clears_pause_metadata_and_keeps_recovery_consistent() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    service.record_checkpoint(
+        RecordCheckpointCommand(
+            run_id="run-1",
+            command_id="cmd-checkpoint-before-pause",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="worker-1",
+            checkpoint_id="checkpoint-before-pause",
+            state_reference="checkpoint://before-pause",
+            integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+            source_metadata={"source": "test"},
+        )
+    )
+    request_pause(service, "run-1", expected_run_version=7, second=6)
+    confirm_pause(service, "run-1", expected_run_version=8, second=7)
+    failed = service.fail_attempt(
+        FailAttemptCommand(
+            run_id="run-1",
+            command_id="cmd-fail-while-paused",
+            expected_run_version=9,
+            timestamp=ts(8),
+            actor_reference="worker-1",
+            failure_category="dependency",
+            failure_detail="Dependency unavailable while paused",
+            source_metadata={"source": "test"},
+        )
+    )
+    assert failed.snapshot is not None
+    assert failed.snapshot.state == AgentRunState.BLOCKED
+    assert failed.snapshot.pause_reason is None
+    assert failed.snapshot.blocking_reason is not None
+    assert failed.snapshot.blocking_reason.code == "recovery_required"
+    assert failed.snapshot.active_attempt_id is None
+    attempts = service.repository.load_attempt_history("run-1")
+    assert attempts[-1].state == AttemptState.FAILED
+    assert attempts[-1].outcome.value == "failure"
+    recovery = service.request_recovery_plan(
+        RequestRecoveryPlanCommand(
+            run_id="run-1",
+            command_id="cmd-recovery-after-paused-failure",
+            expected_run_version=10,
+            timestamp=ts(9),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    assert recovery.recovery_plan is not None
+    assert recovery.recovery_plan.selected_checkpoint is not None
+    assert recovery.recovery_plan.selected_checkpoint.checkpoint_id == "checkpoint-before-pause"
+    replayed = replay_execution_ledger(service.repository.list_events("run-1"))
+    assert replayed is not None
+    assert replayed.snapshot == recovery.snapshot
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_version", "expected_state"),
+    [
+        (
+            TimeoutAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-timeout-while-paused",
+                expected_run_version=8,
+                timestamp=ts(7),
+                actor_reference="worker-1",
+                source_metadata={"source": "test"},
+            ),
+            8,
+            AttemptState.TIMED_OUT,
+        ),
+        (
+            AbandonAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-abandon-while-paused",
+                expected_run_version=8,
+                timestamp=ts(7),
+                actor_reference="worker-1",
+                source_metadata={"source": "test"},
+            ),
+            8,
+            AttemptState.ABANDONED,
+        ),
+    ],
+)
+def test_paused_attempt_terminalization_clears_pause_metadata(
+    command,
+    expected_version: int,
+    expected_state: AttemptState,
+) -> None:
+    service = make_service()
+    prepare_paused_run(service)
+    command = command.model_copy(update={"expected_run_version": expected_version})
+    result = service.handle(command)
+    assert result.snapshot is not None
+    assert result.snapshot.state == AgentRunState.BLOCKED
+    assert result.snapshot.pause_reason is None
+    assert result.snapshot.blocking_reason is not None
+    attempts = service.repository.load_attempt_history("run-1")
+    assert attempts[-1].state == expected_state
+    replayed = replay_execution_ledger(service.repository.list_events("run-1"))
+    assert replayed is not None
+    assert replayed.snapshot == result.snapshot
+
+
+def test_pause_requested_attempt_failure_clears_pause_metadata() -> None:
+    service = make_service()
+    prepare_pause_requested_run(service)
+    failed = service.fail_attempt(
+        FailAttemptCommand(
+            run_id="run-1",
+            command_id="cmd-fail-while-pause-requested",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="worker-1",
+            failure_category="dependency",
+            failure_detail="Dependency unavailable before pause confirmed",
+            source_metadata={"source": "test"},
+        )
+    )
+    assert failed.snapshot is not None
+    assert failed.snapshot.state == AgentRunState.BLOCKED
+    assert failed.snapshot.pause_reason is None
+    assert failed.snapshot.blocking_reason is not None
+    attempts = service.repository.load_attempt_history("run-1")
+    assert attempts[-1].state == AttemptState.FAILED
+    replayed = replay_execution_ledger(service.repository.list_events("run-1"))
+    assert replayed is not None
+    assert replayed.snapshot == failed.snapshot

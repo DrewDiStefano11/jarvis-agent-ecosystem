@@ -317,6 +317,9 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
                 "status_detail": cancellation.detail,
+                "pause_reason": None,
+                "blocking_reason": None,
+                "recovery_status": RecoveryStatus.NONE,
             }
         )
     elif event.event_type == AgentRuntimeEventType.CANCELLATION_STARTED:
@@ -326,6 +329,9 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
                 "status_detail": cast(str, event.payload["detail"]),
+                "pause_reason": None,
+                "blocking_reason": None,
+                "recovery_status": RecoveryStatus.NONE,
             }
         )
     elif event.event_type == AgentRuntimeEventType.RUN_CANCELLED:
@@ -461,6 +467,7 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 "active_attempt_id": None,
                 "failure": failure,
                 "blocking_reason": block,
+                "pause_reason": None,
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
                 "status_detail": failure.detail,

@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from app.agent_runtime.errors import InvalidTransitionError, TerminalRunImmutableError
+from app.agent_runtime.ledger import replay_execution_ledger
 from app.agent_runtime.transitions import (
     ACTIVE_STATES,
     CANCELLATION_STATES,
@@ -17,9 +18,11 @@ from app.models.agent_runtime import (
     BlockAgentRunCommand,
     ClaimAgentRunCommand,
     CompleteAgentRunCommand,
+    CompleteAttemptCommand,
     ConfirmCancellationCommand,
     ConfirmCancellationStartCommand,
     ConfirmPauseCommand,
+    HeartbeatCommand,
     QueueAgentRunCommand,
     RequestCancellationCommand,
     RequestPauseCommand,
@@ -27,7 +30,14 @@ from app.models.agent_runtime import (
     StartAttemptCommand,
     UnblockAgentRunCommand,
 )
-from tests.agent_runtime_testkit import create_run, make_service, ts
+from tests.agent_runtime_testkit import (
+    create_run,
+    make_service,
+    prepare_pause_requested_run,
+    prepare_paused_run,
+    prepare_running_run,
+    ts,
+)
 
 
 def test_state_classification_sets_cover_required_lifecycle_groups() -> None:
@@ -396,3 +406,302 @@ def test_invalid_unblock_and_duplicate_resume_fail_deterministically() -> None:
                 source_metadata={"source": "test"},
             )
         )
+
+
+@pytest.mark.parametrize(
+    ("prepare", "expected_version", "second"),
+    [
+        (prepare_pause_requested_run, 7, 6),
+        (prepare_paused_run, 8, 7),
+    ],
+)
+def test_cancellation_clears_pause_metadata_from_interrupted_states(
+    prepare, expected_version: int, second: int
+) -> None:
+    service = make_service()
+    prepared = prepare(service)
+    assert prepared.snapshot is not None
+    cancelled = service.request_cancellation(
+        RequestCancellationCommand(
+            run_id="run-1",
+            command_id=f"cmd-cancel-{prepared.snapshot.state.value}",
+            expected_run_version=expected_version,
+            timestamp=ts(second),
+            actor_reference="operator-1",
+            requester_reference="operator-1",
+            reason_code="operator_cancel",
+            detail="Stop the interrupted run",
+            source_metadata={"source": "test"},
+        )
+    )
+    assert cancelled.snapshot is not None
+    assert cancelled.snapshot.state == AgentRunState.CANCEL_REQUESTED
+    assert cancelled.snapshot.pause_reason is None
+    assert cancelled.snapshot.blocking_reason is None
+    assert cancelled.snapshot.cancellation is not None
+    assert cancelled.snapshot.cancellation.reason_code == "operator_cancel"
+    events = service.repository.list_events("run-1")
+    assert events[-1].event_type.value == "cancellation_requested"
+    replayed = replay_execution_ledger(events)
+    assert replayed is not None
+    assert replayed.snapshot == cancelled.snapshot
+
+
+def test_cancellation_clears_block_metadata_from_blocked_state() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    blocked = service.block_run(
+        BlockAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-block",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="operator-1",
+            block_code="waiting_for_approval",
+            detail="Waiting for approval",
+            source_metadata={"source": "test"},
+        )
+    )
+    assert blocked.snapshot is not None and blocked.snapshot.blocking_reason is not None
+    cancelled = service.request_cancellation(
+        RequestCancellationCommand(
+            run_id="run-1",
+            command_id="cmd-cancel-blocked",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="operator-1",
+            requester_reference="operator-1",
+            reason_code="operator_cancel",
+            detail="Stop the blocked run",
+            source_metadata={"source": "test"},
+        )
+    )
+    assert cancelled.snapshot is not None
+    assert cancelled.snapshot.state == AgentRunState.CANCEL_REQUESTED
+    assert cancelled.snapshot.pause_reason is None
+    assert cancelled.snapshot.blocking_reason is None
+    assert cancelled.snapshot.cancellation is not None
+    assert cancelled.snapshot.cancellation.reason_code == "operator_cancel"
+    events = service.repository.list_events("run-1")
+    assert events[-1].event_type.value == "cancellation_requested"
+    replayed = replay_execution_ledger(events)
+    assert replayed is not None
+    assert replayed.snapshot == cancelled.snapshot
+
+
+def test_cancellation_cannot_be_overwritten_by_success() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    service.request_cancellation(
+        RequestCancellationCommand(
+            run_id="run-1",
+            command_id="cmd-cancel-request",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="operator-1",
+            requester_reference="operator-1",
+            reason_code="operator_cancel",
+            detail="Stop the run",
+            source_metadata={"source": "test"},
+        )
+    )
+    with pytest.raises(InvalidTransitionError):
+        service.complete_attempt(
+            CompleteAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-attempt-success-after-cancel",
+                expected_run_version=7,
+                timestamp=ts(6),
+                actor_reference="worker-1",
+                source_metadata={"source": "test"},
+            )
+        )
+
+
+def test_repeated_pause_resume_and_heartbeat_cycles_are_valid() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    service.request_pause(
+        RequestPauseCommand(
+            run_id="run-1",
+            command_id="cmd-pause-request-1",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="operator-1",
+            reason_code="operator_pause",
+            detail="Pause once",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.confirm_pause(
+        ConfirmPauseCommand(
+            run_id="run-1",
+            command_id="cmd-pause-confirm-1",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.resume_run(
+        ResumeAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-resume-1",
+            expected_run_version=8,
+            timestamp=ts(7),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.record_heartbeat(
+        HeartbeatCommand(
+            run_id="run-1",
+            command_id="cmd-heartbeat-1",
+            expected_run_version=9,
+            timestamp=ts(8),
+            actor_reference="worker-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.request_pause(
+        RequestPauseCommand(
+            run_id="run-1",
+            command_id="cmd-pause-request-2",
+            expected_run_version=10,
+            timestamp=ts(9),
+            actor_reference="operator-1",
+            reason_code="operator_pause",
+            detail="Pause twice",
+            source_metadata={"source": "test"},
+        )
+    )
+    paused = service.confirm_pause(
+        ConfirmPauseCommand(
+            run_id="run-1",
+            command_id="cmd-pause-confirm-2",
+            expected_run_version=11,
+            timestamp=ts(10),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    assert paused.snapshot is not None
+    assert paused.snapshot.state == AgentRunState.PAUSED
+    assert paused.snapshot.paused_at == ts(10)
+    assert paused.snapshot.resumed_at == ts(7)
+    assert paused.snapshot.last_heartbeat_at == ts(8)
+    replayed = replay_execution_ledger(service.repository.list_events("run-1"))
+    assert replayed is not None
+    assert replayed.snapshot == paused.snapshot
+
+
+def test_repeated_block_unblock_cycles_are_valid() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    service.block_run(
+        BlockAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-block-1",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="operator-1",
+            block_code="waiting_for_approval",
+            detail="First block",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.unblock_run(
+        UnblockAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-unblock-1",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    blocked = service.block_run(
+        BlockAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-block-2",
+            expected_run_version=8,
+            timestamp=ts(7),
+            actor_reference="operator-1",
+            block_code="dependency_wait",
+            detail="Second block",
+            source_metadata={"source": "test"},
+        )
+    )
+    assert blocked.snapshot is not None
+    assert blocked.snapshot.state == AgentRunState.BLOCKED
+    assert blocked.snapshot.resumed_at == ts(6)
+    assert blocked.snapshot.blocking_reason is not None
+    assert blocked.snapshot.blocking_reason.code == "dependency_wait"
+    replayed = replay_execution_ledger(service.repository.list_events("run-1"))
+    assert replayed is not None
+    assert replayed.snapshot == blocked.snapshot
+
+
+def test_multiple_heartbeats_around_pause_cycles_are_valid() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    service.record_heartbeat(
+        HeartbeatCommand(
+            run_id="run-1",
+            command_id="cmd-heartbeat-before-pause",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="worker-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.request_pause(
+        RequestPauseCommand(
+            run_id="run-1",
+            command_id="cmd-pause-request-1",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="operator-1",
+            reason_code="operator_pause",
+            detail="Pause once",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.confirm_pause(
+        ConfirmPauseCommand(
+            run_id="run-1",
+            command_id="cmd-pause-confirm-1",
+            expected_run_version=8,
+            timestamp=ts(7),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.resume_run(
+        ResumeAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-resume-1",
+            expected_run_version=9,
+            timestamp=ts(8),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    running = service.record_heartbeat(
+        HeartbeatCommand(
+            run_id="run-1",
+            command_id="cmd-heartbeat-after-resume",
+            expected_run_version=10,
+            timestamp=ts(9),
+            actor_reference="worker-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    assert running.snapshot is not None
+    assert running.snapshot.state == AgentRunState.RUNNING
+    assert running.snapshot.last_heartbeat_at == ts(9)
+    assert running.snapshot.paused_at == ts(7)
+    assert running.snapshot.resumed_at == ts(8)
+    replayed = replay_execution_ledger(service.repository.list_events("run-1"))
+    assert replayed is not None
+    assert replayed.snapshot == running.snapshot

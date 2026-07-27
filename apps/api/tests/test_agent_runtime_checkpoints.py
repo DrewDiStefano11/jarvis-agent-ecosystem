@@ -15,14 +15,19 @@ from app.models.agent_runtime import (
     ConfirmCancellationStartCommand,
     RecordCheckpointCommand,
     RequestCancellationCommand,
+    RequestRecoveryPlanCommand,
+    UnblockAgentRunCommand,
 )
 from tests.agent_runtime_testkit import (
+    begin_attempt,
     claim_run,
     create_run,
+    fail_attempt,
     make_service,
     make_spec,
     prepare_running_run,
     queue_run,
+    start_attempt,
     ts,
 )
 
@@ -72,6 +77,49 @@ def test_duplicate_checkpoint_command_is_idempotent() -> None:
     assert len(service.repository.list_events("run-1")) == 7
 
 
+def test_duplicate_checkpoint_id_with_same_attempt_and_identical_content_is_a_no_op() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    attempt_id = service.repository.load_attempt_history("run-1")[-1].attempt_id
+    first = service.record_checkpoint(
+        RecordCheckpointCommand(
+            run_id="run-1",
+            command_id="cmd-checkpoint-1",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="worker-1",
+            checkpoint_id="checkpoint-stable",
+            attempt_id=attempt_id,
+            state_reference="checkpoint://state/1",
+            integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+            resume_cursor="cursor-1",
+            checkpoint_metadata={"step": 1},
+            source_metadata={"source": "test"},
+        )
+    )
+    event_count = len(service.repository.list_events("run-1"))
+    checkpoint_count = len(service.repository.list_checkpoints("run-1"))
+    second = service.record_checkpoint(
+        RecordCheckpointCommand(
+            run_id="run-1",
+            command_id="cmd-checkpoint-2",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="worker-1",
+            checkpoint_id="checkpoint-stable",
+            attempt_id=attempt_id,
+            state_reference="checkpoint://state/1",
+            integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+            resume_cursor="cursor-1",
+            checkpoint_metadata={"step": 1},
+            source_metadata={"source": "test"},
+        )
+    )
+    assert second.snapshot == first.snapshot
+    assert len(service.repository.list_events("run-1")) == event_count
+    assert len(service.repository.list_checkpoints("run-1")) == checkpoint_count
+
+
 def test_duplicate_checkpoint_id_with_different_contents_conflicts() -> None:
     service = make_service()
     prepare_running_run(service)
@@ -88,6 +136,9 @@ def test_duplicate_checkpoint_id_with_different_contents_conflicts() -> None:
             source_metadata={"source": "test"},
         )
     )
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    before_checkpoints = service.repository.list_checkpoints("run-1")
     with pytest.raises(CheckpointSequenceConflictError):
         service.record_checkpoint(
             RecordCheckpointCommand(
@@ -102,6 +153,13 @@ def test_duplicate_checkpoint_id_with_different_contents_conflicts() -> None:
                 source_metadata={"source": "test"},
             )
         )
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
+    assert service.repository.list_checkpoints("run-1") == before_checkpoints
+    assert service.repository.get_processed_command("run-1", "cmd-checkpoint-2") is None
+    replayed = replay_execution_ledger(service.repository.list_events("run-1"))
+    assert replayed is not None
+    assert replayed.snapshot == before_snapshot
 
 
 def test_checkpoint_from_wrong_run_is_rejected_for_attempt_resume() -> None:
@@ -141,6 +199,171 @@ def test_checkpoint_from_wrong_run_is_rejected_for_attempt_resume() -> None:
                 source_metadata={"source": "test"},
             )
         )
+
+
+def test_checkpoint_id_reuse_across_attempts_conflicts_but_new_ids_are_allowed() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    first_attempt_id = service.repository.load_attempt_history("run-1")[-1].attempt_id
+    service.record_checkpoint(
+        RecordCheckpointCommand(
+            run_id="run-1",
+            command_id="cmd-checkpoint-1",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="worker-1",
+            checkpoint_id="checkpoint-shared",
+            attempt_id=first_attempt_id,
+            state_reference="checkpoint://state/1",
+            integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+            source_metadata={"source": "test"},
+        )
+    )
+    fail_attempt(service, "run-1", expected_run_version=7, command_id="cmd-fail-1", second=6)
+    service.request_recovery_plan(
+        RequestRecoveryPlanCommand(
+            run_id="run-1",
+            command_id="cmd-recovery-plan-1",
+            expected_run_version=8,
+            timestamp=ts(7),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.unblock_run(
+        UnblockAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-unblock-1",
+            expected_run_version=9,
+            timestamp=ts(8),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    begin_attempt(service, "run-1", expected_run_version=10, command_id="cmd-begin-2", second=9)
+    start_attempt(service, "run-1", expected_run_version=12, command_id="cmd-start-2", second=10)
+    second_attempt_id = service.repository.load_attempt_history("run-1")[-1].attempt_id
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    before_checkpoints = service.repository.list_checkpoints("run-1")
+    with pytest.raises(CheckpointSequenceConflictError):
+        service.record_checkpoint(
+            RecordCheckpointCommand(
+                run_id="run-1",
+                command_id="cmd-checkpoint-cross-attempt",
+                expected_run_version=13,
+                timestamp=ts(11),
+                actor_reference="worker-1",
+                checkpoint_id="checkpoint-shared",
+                attempt_id=second_attempt_id,
+                state_reference="checkpoint://state/1",
+                integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+                source_metadata={"source": "test"},
+            )
+        )
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
+    assert service.repository.list_checkpoints("run-1") == before_checkpoints
+    assert service.repository.get_processed_command("run-1", "cmd-checkpoint-cross-attempt") is None
+    replayed = replay_execution_ledger(service.repository.list_events("run-1"))
+    assert replayed is not None
+    assert replayed.snapshot == before_snapshot
+
+    allowed = service.record_checkpoint(
+        RecordCheckpointCommand(
+            run_id="run-1",
+            command_id="cmd-checkpoint-second-attempt",
+            expected_run_version=13,
+            timestamp=ts(11),
+            actor_reference="worker-1",
+            checkpoint_id="checkpoint-second-attempt",
+            attempt_id=second_attempt_id,
+            state_reference="checkpoint://state/2",
+            integrity_digest="sha256:bbbbbbbbbbbbbbbb",
+            source_metadata={"source": "test"},
+        )
+    )
+    assert allowed.snapshot is not None
+    assert allowed.snapshot.latest_checkpoint_id == "checkpoint-second-attempt"
+
+
+def test_recovery_selects_the_latest_checkpoint_for_the_active_attempt_lineage() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    first_attempt_id = service.repository.load_attempt_history("run-1")[-1].attempt_id
+    service.record_checkpoint(
+        RecordCheckpointCommand(
+            run_id="run-1",
+            command_id="cmd-checkpoint-1",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="worker-1",
+            checkpoint_id="checkpoint-first-attempt",
+            attempt_id=first_attempt_id,
+            state_reference="checkpoint://state/1",
+            integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+            source_metadata={"source": "test"},
+        )
+    )
+    fail_attempt(service, "run-1", expected_run_version=7, command_id="cmd-fail-1", second=6)
+    service.request_recovery_plan(
+        RequestRecoveryPlanCommand(
+            run_id="run-1",
+            command_id="cmd-recovery-plan-1",
+            expected_run_version=8,
+            timestamp=ts(7),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.unblock_run(
+        UnblockAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-unblock-1",
+            expected_run_version=9,
+            timestamp=ts(8),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    begin_attempt(
+        service,
+        "run-1",
+        expected_run_version=10,
+        command_id="cmd-begin-2",
+        second=9,
+        checkpoint_id="checkpoint-first-attempt",
+    )
+    start_attempt(service, "run-1", expected_run_version=12, command_id="cmd-start-2", second=10)
+    second_attempt_id = service.repository.load_attempt_history("run-1")[-1].attempt_id
+    service.record_checkpoint(
+        RecordCheckpointCommand(
+            run_id="run-1",
+            command_id="cmd-checkpoint-2",
+            expected_run_version=13,
+            timestamp=ts(11),
+            actor_reference="worker-1",
+            checkpoint_id="checkpoint-second-attempt",
+            attempt_id=second_attempt_id,
+            state_reference="checkpoint://state/2",
+            integrity_digest="sha256:bbbbbbbbbbbbbbbb",
+            source_metadata={"source": "test"},
+        )
+    )
+    fail_attempt(service, "run-1", expected_run_version=14, command_id="cmd-fail-2", second=12)
+    result = service.request_recovery_plan(
+        RequestRecoveryPlanCommand(
+            run_id="run-1",
+            command_id="cmd-recovery-plan-2",
+            expected_run_version=15,
+            timestamp=ts(13),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    assert result.recovery_plan is not None
+    assert result.recovery_plan.selected_checkpoint is not None
+    assert result.recovery_plan.selected_checkpoint.checkpoint_id == "checkpoint-second-attempt"
 
 
 def test_checkpoint_after_terminal_state_is_rejected() -> None:

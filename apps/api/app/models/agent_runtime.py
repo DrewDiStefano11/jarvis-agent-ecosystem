@@ -671,26 +671,70 @@ class AgentRunSnapshot(RuntimeContract):
 
     @model_validator(mode="after")
     def _validate_consistency(self) -> AgentRunSnapshot:
-        ordered = [
-            self.created_at,
-            self.queued_at,
-            self.claimed_at,
-            self.started_at,
-            self.last_heartbeat_at,
-            self.paused_at,
-            self.resumed_at,
-            self.cancellation_requested_at,
-            self.completed_at,
-        ]
-        previous: datetime | None = None
-        for item in ordered:
-            if item is None:
-                continue
-            if previous is not None and item < previous:
-                raise ValueError("snapshot timestamps must be monotonically non-decreasing")
-            previous = item
         if self.version != self.event_sequence_number:
             raise ValueError("snapshot version must equal event_sequence_number")
+
+        def ensure_not_before_created(
+            value: datetime | None,
+            *,
+            field_name: str,
+        ) -> None:
+            if value is not None and value < self.created_at:
+                raise ValueError(f"{field_name} must not be earlier than created_at")
+
+        def ensure_order(
+            earlier: datetime | None,
+            later: datetime | None,
+            *,
+            earlier_name: str,
+            later_name: str,
+        ) -> None:
+            if earlier is not None and later is not None and later < earlier:
+                raise ValueError(f"{later_name} must not be earlier than {earlier_name}")
+
+        for field_name, value in (
+            ("queued_at", self.queued_at),
+            ("claimed_at", self.claimed_at),
+            ("started_at", self.started_at),
+            ("last_heartbeat_at", self.last_heartbeat_at),
+            ("paused_at", self.paused_at),
+            ("resumed_at", self.resumed_at),
+            ("cancellation_requested_at", self.cancellation_requested_at),
+            ("completed_at", self.completed_at),
+        ):
+            ensure_not_before_created(value, field_name=field_name)
+
+        ensure_order(
+            self.queued_at,
+            self.claimed_at,
+            earlier_name="queued_at",
+            later_name="claimed_at",
+        )
+        ensure_order(
+            self.claimed_at,
+            self.started_at,
+            earlier_name="claimed_at",
+            later_name="started_at",
+        )
+        ensure_order(
+            self.started_at,
+            self.last_heartbeat_at,
+            earlier_name="started_at",
+            later_name="last_heartbeat_at",
+        )
+        ensure_order(
+            self.started_at,
+            self.completed_at,
+            earlier_name="started_at",
+            later_name="completed_at",
+        )
+        ensure_order(
+            self.cancellation_requested_at,
+            self.completed_at,
+            earlier_name="cancellation_requested_at",
+            later_name="completed_at",
+        )
+
         terminal_states = {
             AgentRunState.CANCELLED,
             AgentRunState.SUCCEEDED,
@@ -710,6 +754,7 @@ class AgentRunSnapshot(RuntimeContract):
                 raise ValueError("non-terminal runs must not define completed_at")
             if self.terminal_outcome is not None:
                 raise ValueError("non-terminal runs must not define terminal_outcome")
+
         if self.state == AgentRunState.PAUSED and self.pause_reason is None:
             raise ValueError("paused runs require pause_reason")
         if (
@@ -718,10 +763,46 @@ class AgentRunSnapshot(RuntimeContract):
             and self.state != AgentRunState.PAUSE_REQUESTED
         ):
             raise ValueError("pause_reason is only retained for pause_requested or paused runs")
+        if self.pause_reason is not None:
+            ensure_not_before_created(
+                self.pause_reason.timestamp,
+                field_name="pause_reason.timestamp",
+            )
+            if self.pause_reason.resume_state == AgentRunState.STARTING:
+                raise ValueError("pause_reason.resume_state must not be starting")
+            if self.state == AgentRunState.PAUSE_REQUESTED:
+                ensure_order(
+                    self.resumed_at,
+                    self.pause_reason.timestamp,
+                    earlier_name="resumed_at",
+                    later_name="pause_reason.timestamp",
+                )
+            if self.state == AgentRunState.PAUSED:
+                ensure_order(
+                    self.pause_reason.timestamp,
+                    self.paused_at,
+                    earlier_name="pause_reason.timestamp",
+                    later_name="paused_at",
+                )
+                ensure_order(
+                    self.resumed_at,
+                    self.paused_at,
+                    earlier_name="resumed_at",
+                    later_name="paused_at",
+                )
+
         if self.state == AgentRunState.BLOCKED and self.blocking_reason is None:
             raise ValueError("blocked runs require blocking_reason")
         if self.state != AgentRunState.BLOCKED and self.blocking_reason is not None:
             raise ValueError("blocking_reason is only retained while blocked")
+        if self.blocking_reason is not None:
+            ensure_not_before_created(
+                self.blocking_reason.timestamp,
+                field_name="blocking_reason.timestamp",
+            )
+            if self.blocking_reason.resume_state == AgentRunState.STARTING:
+                raise ValueError("blocking_reason.resume_state must not be starting")
+
         if self.state in {
             AgentRunState.CANCEL_REQUESTED,
             AgentRunState.CANCELLING,
@@ -729,6 +810,17 @@ class AgentRunSnapshot(RuntimeContract):
         }:
             if self.cancellation is None or self.cancellation_requested_at is None:
                 raise ValueError("cancellation states require cancellation metadata")
+        if self.cancellation is not None:
+            ensure_not_before_created(
+                self.cancellation.timestamp,
+                field_name="cancellation.timestamp",
+            )
+            ensure_order(
+                self.cancellation.timestamp,
+                self.cancellation_requested_at,
+                earlier_name="cancellation.timestamp",
+                later_name="cancellation_requested_at",
+            )
         return self
 
 

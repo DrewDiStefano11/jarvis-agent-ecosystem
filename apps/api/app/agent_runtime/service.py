@@ -549,9 +549,8 @@ class AgentRuntimeService:
 
     def request_cancellation(self, command: RequestCancellationCommand) -> RuntimeCommandResult:
         aggregate = self._load_current(command.run_id)
-        existing = self.repository.get_processed_command(command.run_id, command.command_id)
-        if existing is not None:
-            return existing.result.model_copy(update={"idempotent_replay": True}, deep=True)
+        if existing := self._assert_idempotency(command.run_id, command.command_id, command):
+            return existing
         snapshot = aggregate.snapshot
         self._ensure_expected_version(snapshot, command.expected_run_version, command)
         if snapshot.state in TERMINAL_STATES:
@@ -640,9 +639,8 @@ class AgentRuntimeService:
 
     def record_checkpoint(self, command: RecordCheckpointCommand) -> RuntimeCommandResult:
         aggregate = self._load_current(command.run_id)
-        existing = self.repository.get_processed_command(command.run_id, command.command_id)
-        if existing is not None:
-            return existing.result.model_copy(update={"idempotent_replay": True}, deep=True)
+        if existing := self._assert_idempotency(command.run_id, command.command_id, command):
+            return existing
         snapshot = aggregate.snapshot
         self._ensure_expected_version(snapshot, command.expected_run_version, command)
         if snapshot.state in TERMINAL_STATES:
@@ -671,26 +669,7 @@ class AgentRuntimeService:
             None,
         )
         if existing_checkpoint is not None:
-            probe = AgentRunCheckpoint(
-                checkpoint_id=checkpoint_id,
-                run_id=command.run_id,
-                attempt_id=attempt.attempt_id,
-                checkpoint_sequence=existing_checkpoint.checkpoint_sequence,
-                run_version=existing_checkpoint.run_version,
-                event_sequence=existing_checkpoint.event_sequence,
-                schema_version=existing_checkpoint.schema_version,
-                timestamp=existing_checkpoint.timestamp,
-                state_reference=command.state_reference,
-                integrity_digest=command.integrity_digest,
-                resume_cursor=command.resume_cursor,
-                metadata=command.checkpoint_metadata,
-            )
-            if (
-                probe.state_reference == existing_checkpoint.state_reference
-                and probe.integrity_digest == existing_checkpoint.integrity_digest
-                and probe.resume_cursor == existing_checkpoint.resume_cursor
-                and probe.metadata == existing_checkpoint.metadata
-            ):
+            if self._checkpoint_matches_command(existing_checkpoint, command, attempt.attempt_id):
                 result = RuntimeCommandResult(run_id=command.run_id, snapshot=snapshot, events=())
                 record = self._processed_record(command.run_id, command.command_id, command, result)
                 self.repository.commit_command(
@@ -702,11 +681,14 @@ class AgentRuntimeService:
                 )
                 return result
             raise CheckpointSequenceConflictError(
-                "The checkpoint ID already exists with different contents.",
+                "The checkpoint ID already exists with different contents or lineage.",
                 run_id=command.run_id,
                 attempt_id=attempt.attempt_id,
                 command_id=command.command_id,
-                metadata={"checkpointId": checkpoint_id},
+                metadata={
+                    "checkpointId": checkpoint_id,
+                    "existingAttemptId": existing_checkpoint.attempt_id,
+                },
             )
         checkpoint = AgentRunCheckpoint(
             checkpoint_id=checkpoint_id,
@@ -1127,6 +1109,22 @@ class AgentRuntimeService:
                 metadata={"checkpointId": checkpoint_id},
             )
         return checkpoint
+
+    @staticmethod
+    def _checkpoint_matches_command(
+        checkpoint: AgentRunCheckpoint,
+        command: RecordCheckpointCommand,
+        attempt_id: str,
+    ) -> bool:
+        return (
+            checkpoint.run_id == command.run_id
+            and checkpoint.attempt_id == attempt_id
+            and checkpoint.checkpoint_id == (command.checkpoint_id or checkpoint.checkpoint_id)
+            and checkpoint.state_reference == command.state_reference
+            and checkpoint.integrity_digest == command.integrity_digest
+            and checkpoint.resume_cursor == command.resume_cursor
+            and checkpoint.metadata == command.checkpoint_metadata
+        )
 
     def _validate_parent_lineage(self, specification: AgentRunSpecification) -> None:
         parent_run_id = specification.parent_run_id
