@@ -30,6 +30,17 @@ class ModelCapability(StrEnum):
     VISION = "vision"
 
 
+BUILTIN_ADAPTER_CAPABILITIES = frozenset(
+    {
+        ModelCapability.CHAT,
+        ModelCapability.TEXT_GENERATION,
+        ModelCapability.CODE_GENERATION,
+        ModelCapability.CODE_EDITING,
+        ModelCapability.REASONING,
+    }
+)
+
+
 class ProviderType(StrEnum):
     OLLAMA = "ollama"
     OPENAI_COMPATIBLE = "openai_compatible"

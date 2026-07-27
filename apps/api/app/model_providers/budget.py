@@ -48,6 +48,15 @@ class BudgetTracker:
     def before_attempt(
         self, request: ModelExecutionRequest, *, provider: str | None = None
     ) -> None:
+        if self.budget.maximum_cost_usd is not None and not self.usage.usage_known:
+            raise BudgetExceededError(
+                "cost budget accounting is unavailable after provider omitted usage",
+                provider=provider,
+                model=request.model,
+                task_id=request.task_id,
+                correlation_id=request.correlation_id,
+                metadata={"reason": "usage_unavailable_for_cost_budget"},
+            )
         if self.budget.maximum_cost_usd is not None and (
             request.model is None or request.model not in self.pricing
         ):
@@ -105,6 +114,17 @@ class BudgetTracker:
         values = (response.input_tokens, response.output_tokens, response.total_tokens)
         if any(value is None for value in values):
             self.usage.usage_known = False
+            if self.budget.maximum_cost_usd is not None and (
+                response.input_tokens is None or response.output_tokens is None
+            ):
+                raise BudgetExceededError(
+                    "provider did not report usage required by the cost budget",
+                    provider=response.provider,
+                    model=response.model,
+                    task_id=response.task_id,
+                    correlation_id=response.correlation_id,
+                    metadata={"reason": "usage_unavailable_for_cost_budget"},
+                )
             if self.budget.reject_unknown_usage and any(
                 limit is not None
                 for limit in (

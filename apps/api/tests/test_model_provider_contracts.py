@@ -125,6 +125,95 @@ def test_unknown_usage_is_not_treated_as_zero() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("input_tokens", "output_tokens", "total_tokens"),
+    [
+        (None, None, None),
+        (3, None, None),
+        (None, 2, None),
+        (3, None, 5),
+    ],
+)
+def test_cost_budget_rejects_missing_or_incomplete_usage(
+    input_tokens: int | None,
+    output_tokens: int | None,
+    total_tokens: int | None,
+) -> None:
+    tracker = BudgetTracker(
+        TaskBudget(
+            maximum_requests=3,
+            maximum_cost_usd=1,
+            reject_unknown_usage=False,
+        ),
+        {
+            "fixture-model": ModelPricing(
+                input_per_million_usd=10,
+                output_per_million_usd=20,
+            )
+        },
+    )
+    tracker.before_attempt(request(model="fixture-model"), provider="fixture")
+    secret = "raw-secret-response-value"
+
+    with pytest.raises(BudgetExceededError) as raised:
+        tracker.record(
+            response(
+                content=secret,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+                usage_quality=UsageQuality.UNKNOWN,
+            )
+        )
+
+    details = raised.value.safe_details()
+    assert details["provider"] == "fixture"
+    assert details["model"] == "fixture-model"
+    assert details["task_id"] == "task-1"
+    assert details["correlation_id"] == "corr-1"
+    assert details["metadata"]["reason"] == "usage_unavailable_for_cost_budget"
+    assert secret not in str(details)
+    assert tracker.usage.requests == 1
+    assert not tracker.usage.usage_known
+    with pytest.raises(BudgetExceededError) as blocked:
+        tracker.before_attempt(request(model="fixture-model"), provider="fixture")
+    assert blocked.value.metadata["reason"] == "usage_unavailable_for_cost_budget"
+    assert tracker.usage.requests == 1
+
+
+def test_usage_without_cost_or_token_limit_may_be_unknown() -> None:
+    tracker = BudgetTracker(TaskBudget(maximum_requests=1))
+    tracker.before_attempt(request())
+    cost = tracker.record(
+        response(
+            input_tokens=None,
+            output_tokens=None,
+            total_tokens=None,
+            usage_quality=UsageQuality.UNKNOWN,
+        )
+    )
+    assert cost is None
+    assert not tracker.usage.usage_known
+
+
+def test_cost_budget_accepts_complete_and_explicit_zero_usage() -> None:
+    pricing = {
+        "fixture-model": ModelPricing(
+            input_per_million_usd=10,
+            output_per_million_usd=20,
+        )
+    }
+    complete = BudgetTracker(TaskBudget(maximum_requests=1, maximum_cost_usd=1), pricing)
+    complete.before_attempt(request(model="fixture-model"), provider="fixture")
+    assert complete.record(response()) == pytest.approx(0.00007)
+    assert complete.usage.usage_known
+
+    zero = BudgetTracker(TaskBudget(maximum_requests=1, maximum_cost_usd=1), pricing)
+    zero.before_attempt(request(model="fixture-model"), provider="fixture")
+    assert zero.record(response(input_tokens=0, output_tokens=0, total_tokens=0)) == 0
+    assert zero.usage.usage_known
+
+
 def test_cost_budget_fails_closed_for_missing_pricing_and_response_alias() -> None:
     unpriced = BudgetTracker(TaskBudget(maximum_requests=1, maximum_cost_usd=1))
     with pytest.raises(BudgetExceededError) as preflight:

@@ -9,6 +9,7 @@ from pydantic import SecretStr
 
 from app.model_providers.base import ProviderBase
 from app.model_providers.contracts import (
+    BUILTIN_ADAPTER_CAPABILITIES,
     HealthStatus,
     ModelCapability,
     ModelExecutionRequest,
@@ -56,6 +57,11 @@ class OpenAICompatibleProvider(ProviderBase):
     ) -> None:
         if not api_key.get_secret_value():
             raise ProviderConfigurationError("an API key is required", provider=name)
+        if not capabilities or not capabilities <= BUILTIN_ADAPTER_CAPABILITIES:
+            raise ProviderConfigurationError(
+                "built-in adapter capabilities contain an unsupported value",
+                provider=name,
+            )
         self.name = name
         self.base_url = f"{base_url.rstrip('/')}/"
         self.api_key = api_key

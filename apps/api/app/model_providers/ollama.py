@@ -9,6 +9,7 @@ import httpx
 
 from app.model_providers.base import ProviderBase
 from app.model_providers.contracts import (
+    BUILTIN_ADAPTER_CAPABILITIES,
     HealthStatus,
     ModelCapability,
     ModelExecutionRequest,
@@ -17,7 +18,11 @@ from app.model_providers.contracts import (
     ProviderType,
     UsageQuality,
 )
-from app.model_providers.errors import MalformedProviderResponseError, ModelProviderError
+from app.model_providers.errors import (
+    MalformedProviderResponseError,
+    ModelProviderError,
+    ProviderConfigurationError,
+)
 from app.model_providers.http import translate_http_error
 from app.model_providers.policy import (
     provider_network_health_allowed,
@@ -41,6 +46,11 @@ class OllamaProvider(ProviderBase):
         keep_alive: str | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
+        if not capabilities or not capabilities <= BUILTIN_ADAPTER_CAPABILITIES:
+            raise ProviderConfigurationError(
+                "built-in adapter capabilities contain an unsupported value",
+                provider=name,
+            )
         self.name = name
         self.base_url = base_url.rstrip("/")
         self.is_local = is_loopback_endpoint(base_url)

@@ -44,7 +44,7 @@ class FixtureProvider(ProviderBase):
         local: bool = True,
         healthy: bool = True,
         capabilities: frozenset[ModelCapability] = frozenset({ModelCapability.CHAT}),
-        outcomes: list[Exception | str] | None = None,
+        outcomes: list[Exception | ModelExecutionResponse | str] | None = None,
         available_models: set[str] | None = None,
         availability_unknown: bool = False,
         health_log: list[str] | None = None,
@@ -93,6 +93,8 @@ class FixtureProvider(ProviderBase):
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
+        if isinstance(outcome, ModelExecutionResponse):
+            return outcome
         return ModelExecutionResponse(
             content=outcome,
             provider=self.name,
@@ -395,6 +397,41 @@ async def test_fallback_provider_requires_its_own_cost_pricing_before_execution(
 
 
 @pytest.mark.asyncio
+async def test_unknown_cost_usage_is_not_retried_or_bypassed_by_fallback() -> None:
+    secret = "raw-secret-response-value"
+    first = FixtureProvider(
+        "first",
+        outcomes=[
+            ModelExecutionResponse(
+                content=secret,
+                provider="first",
+                model="first-model",
+                latency_ms=0,
+                task_id="task-1",
+                correlation_id="correlation-1",
+            )
+        ],
+    )
+    second = FixtureProvider("second")
+
+    with pytest.raises(BudgetExceededError) as raised:
+        await router(first, second).execute(
+            request=request(),
+            requirements=RoutingRequirements(allow_fallback=True, maximum_fallbacks=1),
+            budget=TaskBudget(maximum_requests=3, maximum_cost_usd=1),
+            pricing={
+                model: ModelPricing(input_per_million_usd=1, output_per_million_usd=1)
+                for model in ("first-model", "second-model")
+            },
+        )
+
+    assert raised.value.metadata["reason"] == "usage_unavailable_for_cost_budget"
+    assert secret not in str(raised.value.safe_details())
+    assert first.calls == 1
+    assert second.calls == 0
+
+
+@pytest.mark.asyncio
 async def test_retry_then_success_counts_requests_and_backoff() -> None:
     delays: list[float] = []
     provider = FixtureProvider(
@@ -512,4 +549,55 @@ def test_configuration_rejects_invalid_pricing_and_duplicate_priority(
     monkeypatch.setenv("JARVIS_MODEL_PRICING_JSON", "{}")
     monkeypatch.setenv("JARVIS_MODEL_PROVIDER_PRIORITY", "ollama,ollama")
     with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize(
+    "capability",
+    [
+        "tool_calling",
+        "structured_output",
+        "vision",
+    ],
+)
+@pytest.mark.parametrize(
+    "environment_key",
+    [
+        "JARVIS_MODEL_OLLAMA_CAPABILITIES",
+        "JARVIS_MODEL_OPENAI_COMPATIBLE_CAPABILITIES",
+    ],
+)
+def test_configuration_rejects_unsupported_builtin_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+    environment_key: str,
+    capability: str,
+) -> None:
+    monkeypatch.setenv(environment_key, capability)
+    with pytest.raises(ValidationError, match="capabilities contain an unsupported value"):
+        Settings(_env_file=None)
+
+
+def test_configuration_capability_whitespace_case_and_summaries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("JARVIS_MODEL_OLLAMA_ENABLED", "true")
+    monkeypatch.setenv(
+        "JARVIS_MODEL_OLLAMA_CAPABILITIES",
+        " text_generation , chat , code_generation , code_editing , reasoning ",
+    )
+    settings = Settings(_env_file=None)
+    assert build_provider_registry(settings).summaries()[0].capabilities == [
+        ModelCapability.CHAT,
+        ModelCapability.CODE_EDITING,
+        ModelCapability.CODE_GENERATION,
+        ModelCapability.REASONING,
+        ModelCapability.TEXT_GENERATION,
+    ]
+
+    monkeypatch.setenv("JARVIS_MODEL_OLLAMA_CAPABILITIES", "chat,vision")
+    with pytest.raises(ValidationError, match="capabilities contain an unsupported value"):
+        Settings(_env_file=None)
+
+    monkeypatch.setenv("JARVIS_MODEL_OLLAMA_CAPABILITIES", "CHAT")
+    with pytest.raises(ValidationError, match="capabilities contain an unsupported value"):
         Settings(_env_file=None)

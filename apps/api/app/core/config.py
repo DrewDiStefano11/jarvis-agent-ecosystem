@@ -7,6 +7,8 @@ from typing import Literal
 from pydantic import AnyHttpUrl, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.model_providers.contracts import BUILTIN_ADAPTER_CAPABILITIES
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
@@ -109,16 +111,7 @@ class Settings(BaseSettings):
             )
         if self.model_retry_initial_backoff_seconds > self.model_retry_maximum_backoff_seconds:
             raise ValueError("initial model retry backoff cannot exceed maximum backoff")
-        supported_capabilities = {
-            "text_generation",
-            "chat",
-            "code_generation",
-            "code_editing",
-            "reasoning",
-            "tool_calling",
-            "structured_output",
-            "vision",
-        }
+        supported_capabilities = {capability.value for capability in BUILTIN_ADAPTER_CAPABILITIES}
         for label, value in (
             ("Ollama", self.model_ollama_capabilities),
             ("OpenAI-compatible", self.model_openai_compatible_capabilities),

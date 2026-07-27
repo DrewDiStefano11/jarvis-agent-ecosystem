@@ -133,9 +133,11 @@ pricing fails closed with `BudgetExceededError`, including independently for fal
 Without a cost limit, missing pricing is permitted and estimated cost remains unknown.
 
 Unknown token usage is never treated as zero. With token limits configured, the default
-`reject_unknown_usage=true` fails closed. Unknown pricing is never treated as zero under a cost
-limit. Budget state is currently in-memory for one router execution; durable cross-process task
-accounting is deferred.
+`reject_unknown_usage=true` fails closed. A cost limit always requires complete input and output
+token counts, regardless of `reject_unknown_usage`; missing or partial usage makes the tracker
+unaccountable and blocks that response plus every later attempt. Explicit zero counts are valid.
+Unknown pricing is never treated as zero under a cost limit. Budget state is currently in-memory
+for one router execution; durable cross-process task accounting is deferred.
 
 ## Configuration
 
@@ -181,6 +183,14 @@ JARVIS_MODEL_OLLAMA_CAPABILITIES=chat,text_generation,code_generation
 
 This registers provider metadata only during Phase 1.
 
+Built-in Ollama and OpenAI-compatible adapters support exactly `chat`, `text_generation`,
+`code_generation`, `code_editing`, and `reasoning`. Those capabilities use the existing
+string-message and string-response mapping end to end. Whitespace around comma-separated values is
+ignored, while capability names are case-sensitive lowercase enum values. Configuration containing
+`tool_calling`, `structured_output`, `vision`, or any other unsupported value is rejected. The
+broader shared capability enum remains available to fake providers and future adapters. Tool
+calling, structured output, and vision request/response mappings are deferred.
+
 Example compatible endpoint configuration (placeholder only):
 
 ```dotenv
@@ -209,8 +219,8 @@ construction.
 ## Limitations and deferred work
 
 - Persistent task budget accounting across executions and processes is deferred.
-- Streaming, structured tool-call normalization, custom organization/project options, advanced
-  model scoring, aliases, and jitter are deferred.
+- Streaming, tool calling, structured output, vision, custom organization/project options,
+  advanced model scoring, aliases, and jitter are deferred.
 - Provider health is queried for each routing decision; a future bounded cache may be appropriate.
 - Pricing is operator configuration, not authoritative billing.
 - Live built-in provider execution and network health require a future phase-policy change.

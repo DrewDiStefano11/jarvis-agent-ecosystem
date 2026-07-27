@@ -7,12 +7,13 @@ from pydantic import SecretStr
 import app.model_providers.ollama as ollama_module
 import app.model_providers.openai_compatible as openai_module
 from app.model_providers.budget import BudgetTracker, TaskBudget
-from app.model_providers.contracts import HealthStatus, ModelExecutionRequest
+from app.model_providers.contracts import HealthStatus, ModelCapability, ModelExecutionRequest
 from app.model_providers.errors import (
     AuthenticationError,
     InvalidModelRequestError,
     MalformedProviderResponseError,
     ModelUnavailableError,
+    ProviderConfigurationError,
     ProviderExecutionDisabledError,
     ProviderUnavailableError,
     QuotaExhaustedError,
@@ -43,6 +44,67 @@ def mock_client(
     handler: httpx.MockTransport, base_url: str = "https://provider.test/v1"
 ) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=handler, base_url=base_url)
+
+
+@pytest.mark.parametrize(
+    "capability",
+    [
+        ModelCapability.TOOL_CALLING,
+        ModelCapability.STRUCTURED_OUTPUT,
+        ModelCapability.VISION,
+    ],
+)
+def test_builtin_adapter_construction_rejects_unsupported_capabilities(
+    capability: ModelCapability,
+) -> None:
+    with pytest.raises(ProviderConfigurationError):
+        OllamaProvider(default_model="model", capabilities=frozenset({capability}))
+    with pytest.raises(ProviderConfigurationError):
+        OpenAICompatibleProvider(
+            name="remote",
+            base_url="https://provider.test/v1",
+            api_key=SecretStr("fixture-only"),
+            default_model="model",
+            capabilities=frozenset({ModelCapability.CHAT, capability}),
+        )
+
+
+@pytest.mark.parametrize(
+    "capabilities",
+    [
+        frozenset({ModelCapability.CHAT}),
+        frozenset({ModelCapability.TEXT_GENERATION}),
+        frozenset({ModelCapability.CODE_GENERATION}),
+        frozenset({ModelCapability.CODE_EDITING}),
+        frozenset({ModelCapability.REASONING}),
+        frozenset(
+            {
+                ModelCapability.CHAT,
+                ModelCapability.TEXT_GENERATION,
+                ModelCapability.CODE_GENERATION,
+                ModelCapability.CODE_EDITING,
+                ModelCapability.REASONING,
+            }
+        ),
+    ],
+)
+def test_builtin_adapter_construction_accepts_supported_capabilities(
+    capabilities: frozenset[ModelCapability],
+) -> None:
+    assert (
+        OllamaProvider(default_model="model", capabilities=capabilities).capabilities
+        == capabilities
+    )
+    assert (
+        OpenAICompatibleProvider(
+            name="remote",
+            base_url="https://provider.test/v1",
+            api_key=SecretStr("fixture-only"),
+            default_model="model",
+            capabilities=capabilities,
+        ).capabilities
+        == capabilities
+    )
 
 
 @pytest.mark.asyncio
