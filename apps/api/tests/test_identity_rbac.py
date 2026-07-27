@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.core.errors import DomainError
@@ -253,6 +254,37 @@ def test_resource_policies_match_every_active_subject(service, subject_type):
     assert decision.matched_grants[0].startswith("policy:")
 
 
+def test_resource_policy_role_subject_respects_assignment_scope(service):
+    actor = agent(service, "agent.policy.scope")
+    service.transition(actor.id, "active")
+    role = service.create_definition(
+        "role",
+        CreateRoleRequest(
+            stable_key="role.policy.scope", display_name="Scoped", role_scope="resource"
+        ),
+    )
+    service.assign_role(
+        actor.id,
+        AssignRoleRequest(role_id=role.id, scope_type="resource", scope_id="door-a"),
+    )
+    for resource_id in ("door-a", "door-b"):
+        service.create_resource_policy(
+            ResourcePolicyRequest(
+                subject_type="role",
+                subject_id=role.id,
+                resource_type="door",
+                resource_id=resource_id,
+                action="enter",
+                effect="allow",
+            )
+        )
+
+    assert service.check_resource_access(actor.id, "door", "door-a", "enter").allowed
+    outside_scope = service.check_resource_access(actor.id, "door", "door-b", "enter")
+    assert not outside_scope.allowed
+    assert outside_scope.reason_code == "permission_unknown"
+
+
 @pytest.mark.parametrize(
     ("scope_type", "scope_id", "matching_type", "matching_id"),
     [
@@ -402,6 +434,25 @@ def test_global_role_requires_global_assignment(service):
         AssignRoleRequest(role_id=role.id, scope_type="global", scope_id="unexpected")
 
 
+def test_duplicate_global_role_assignment_is_structured_and_atomic(service):
+    actor = agent(service, "agent.role.global.duplicate")
+    role = service.create_definition(
+        "role",
+        CreateRoleRequest(
+            stable_key="role.global.duplicate", display_name="Global", role_scope="global"
+        ),
+    )
+    request = AssignRoleRequest(role_id=role.id)
+    service.assign_role(actor.id, request)
+    before = len(service.audits(0, 100))
+    with pytest.raises(DomainError) as error:
+        service.assign_role(actor.id, request)
+    assert error.value.code == "DUPLICATE_ASSIGNMENT"
+    with service.sessions() as session:
+        assert len(list(session.scalars(select(AgentRoleAssignmentRow)))) == 1
+        assert len(list(session.scalars(select(IdentityAuditEventRow)))) == before
+
+
 def relationship(supervisor, subordinate, kind="secondary", **times):
     return SupervisorRequest(
         supervisor_agent_id=supervisor.id,
@@ -489,6 +540,64 @@ def test_duplicate_hierarchy_is_structured_and_atomic(service, kind):
     with service.sessions() as session:
         assert len(list(session.scalars(select(SupervisorRelationshipRow)))) == 1
         assert len(list(session.scalars(select(IdentityAuditEventRow)))) == before
+
+
+def test_expired_and_revoked_relationships_can_be_recreated(service):
+    supervisor, subordinate = [agent(service, f"agent.relationship.recreate.{key}") for key in "ab"]
+    past = datetime.now(UTC) - timedelta(days=3)
+    expired = service.add_supervisor(
+        relationship(
+            supervisor,
+            subordinate,
+            "secondary",
+            starts_at=past,
+            expires_at=past + timedelta(days=1),
+        )
+    )
+    active = service.add_supervisor(relationship(supervisor, subordinate, "secondary"))
+    with service.sessions.begin() as session:
+        session.get(SupervisorRelationshipRow, active.id).revoked_at = datetime.now(UTC)
+    recreated = service.add_supervisor(relationship(supervisor, subordinate, "secondary"))
+    assert recreated.id not in {expired.id, active.id}
+    with service.sessions() as session:
+        assert len(list(session.scalars(select(SupervisorRelationshipRow)))) == 3
+
+
+@pytest.mark.parametrize("request_type", [CreateRankRequest, CreateRoleRequest, CreateTeamRequest])
+def test_database_backed_definition_keys_reject_more_than_80_characters(request_type):
+    values = {"stable_key": "a" * 81, "display_name": "Too long"}
+    if request_type is CreateRankRequest:
+        values.update(priority_level=1, hierarchy_level=1)
+    elif request_type is CreateRoleRequest:
+        values["role_scope"] = "global"
+    else:
+        values["team_type"] = "delivery"
+    with pytest.raises(ValueError):
+        request_type(**values)
+    assert CreatePermissionRequest(
+        stable_key="p" * 81,
+        display_name="Allowed",
+        resource_type="artifact",
+        action="read",
+    )
+
+
+def test_permission_attachment_effect_is_validated_at_api_boundary(service):
+    app = create_app(database_url=str(service.sessions.kw["bind"].url))
+    schema = app.openapi()
+    parameter = next(
+        item
+        for item in schema["paths"]["/api/identity/roles/{role_id}/permissions/{permission_id}"][
+            "post"
+        ]["parameters"]
+        if item["name"] == "effect"
+    )
+    assert set(parameter["schema"]["enum"]) == {"allow", "deny"}
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/identity/roles/missing/permissions/missing", params={"effect": "invalid"}
+        )
+    assert response.status_code == 422
 
 
 def test_global_and_scoped_permission_uniqueness(service):

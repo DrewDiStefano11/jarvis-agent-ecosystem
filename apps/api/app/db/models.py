@@ -175,7 +175,18 @@ class AgentRoleAssignmentRow(Base):
     reason: Mapped[str] = mapped_column(String(500), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    __table_args__ = (UniqueConstraint("agent_id", "role_id", "scope_type", "scope_id"),)
+    __table_args__ = (
+        UniqueConstraint("agent_id", "role_id", "scope_type", "scope_id"),
+        Index(
+            "uq_identity_agent_roles_global",
+            "agent_id",
+            "role_id",
+            "scope_type",
+            unique=True,
+            sqlite_where=(scope_type == "global") & scope_id.is_(None),
+            postgresql_where=(scope_type == "global") & scope_id.is_(None),
+        ),
+    )
 
 
 class AgentPermissionAssignmentRow(Base):
@@ -252,10 +263,7 @@ class SupervisorRelationshipRow(Base):
     reason: Mapped[str] = mapped_column(String(500), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    __table_args__ = (
-        CheckConstraint("supervisor_agent_id <> subordinate_agent_id"),
-        UniqueConstraint("supervisor_agent_id", "subordinate_agent_id", "relationship_type"),
-    )
+    __table_args__ = (CheckConstraint("supervisor_agent_id <> subordinate_agent_id"),)
 
 
 class ResourceAccessPolicyRow(Base):

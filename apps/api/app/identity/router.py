@@ -1,3 +1,5 @@
+from typing import Literal
+
 from fastapi import APIRouter, Query, Request
 
 from app.models.identity import (
@@ -158,7 +160,12 @@ def assign_role(agent_id: str, body: AssignRoleRequest, request: Request):
     status_code=201,
     response_model=IdentityResponse[RolePermissionIdentity],
 )
-def attach_permission(role_id: str, permission_id: str, request: Request, effect: str = "allow"):
+def attach_permission(
+    role_id: str,
+    permission_id: str,
+    request: Request,
+    effect: Literal["allow", "deny"] = "allow",
+):
     return envelope(
         RolePermissionIdentity.model_validate(
             svc(request).attach_permission(role_id, permission_id, effect)

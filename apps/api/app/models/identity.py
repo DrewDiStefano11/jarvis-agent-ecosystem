@@ -90,6 +90,7 @@ class DefinitionRequest(IdentityModel):
 
 
 class CreateRankRequest(DefinitionRequest):
+    stable_key: str = Field(min_length=2, max_length=80)
     priority_level: int = Field(ge=0)
     hierarchy_level: int = Field(ge=0)
     delegation_ceiling: int | None = Field(default=None, ge=0)
@@ -97,6 +98,7 @@ class CreateRankRequest(DefinitionRequest):
 
 
 class CreateRoleRequest(DefinitionRequest):
+    stable_key: str = Field(min_length=2, max_length=80)
     role_scope: ScopeType
     is_system_role: bool = False
 
@@ -111,6 +113,7 @@ class CreateCapabilityRequest(DefinitionRequest):
 
 
 class CreateTeamRequest(DefinitionRequest):
+    stable_key: str = Field(min_length=2, max_length=80)
     team_type: str = Field(min_length=1, max_length=40)
 
 

@@ -97,6 +97,9 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
         item["name"]: item for item in inspector.get_indexes("identity_agent_permissions")
     }
     assert permission_indexes["uq_identity_agent_permissions_global"]["unique"] == 1
+    role_indexes = {item["name"]: item for item in inspector.get_indexes("identity_agent_roles")}
+    assert role_indexes["uq_identity_agent_roles_global"]["unique"] == 1
+    assert not inspector.get_unique_constraints("identity_supervisor_relationships")
     assert "ck_identity_agent_permissions_resource_scope" in {
         item["name"] for item in inspector.get_check_constraints("identity_agent_permissions")
     }
@@ -121,6 +124,9 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     restored = inspect(create_engine(database_url(path)))
     assert "uq_identity_agent_permissions_global" in {
         item["name"] for item in restored.get_indexes("identity_agent_permissions")
+    }
+    assert "uq_identity_agent_roles_global" in {
+        item["name"] for item in restored.get_indexes("identity_agent_roles")
     }
     command.downgrade(config, "base")
     downgraded_tables = set(inspect(create_engine(database_url(path))).get_table_names())

@@ -233,6 +233,20 @@ class IdentityService:
                     "Assignment scope must match the role's declared scope.",
                     409,
                 )
+            duplicate = uow.session.scalar(
+                select(AgentRoleAssignmentRow.id).where(
+                    AgentRoleAssignmentRow.agent_id == agent_id,
+                    AgentRoleAssignmentRow.role_id == data.role_id,
+                    AgentRoleAssignmentRow.scope_type == data.scope_type,
+                    AgentRoleAssignmentRow.scope_id.is_(None)
+                    if data.scope_id is None
+                    else AgentRoleAssignmentRow.scope_id == data.scope_id,
+                )
+            )
+            if duplicate:
+                raise DomainError(
+                    "DUPLICATE_ASSIGNMENT", "Equivalent assignment already exists.", 409
+                )
             values = data.model_dump()
             values["starts_at"] = values["starts_at"] or now()
             row = AgentRoleAssignmentRow(id=uid("arole"), agent_id=agent_id, **values)
@@ -400,14 +414,7 @@ class IdentityService:
                     .order_by(AgentRoleAssignmentRow.role_id, AgentRoleAssignmentRow.id)
                 ).all()
                 for rp, assignment in role_rows:
-                    scope_matches = assignment.scope_type == "global" or (
-                        assignment.scope_id == resource_id
-                        and (
-                            assignment.scope_type == "resource"
-                            or assignment.scope_type == resource_type
-                        )
-                    )
-                    if not scope_matches:
+                    if not self._role_scope_matches(assignment, resource_type, resource_id):
                         continue
                     (denials if rp.effect == "deny" else grants).append(
                         f"role:{assignment.role_id}"
@@ -459,19 +466,29 @@ class IdentityService:
                         "Retired agents cannot enter hierarchy relationships.",
                         409,
                     )
+            starts_at = data.starts_at or now()
+            expires_at = data.expires_at
+            infinity = datetime.max.replace(tzinfo=UTC)
             duplicate = uow.session.scalar(
                 select(SupervisorRelationshipRow.id).where(
                     SupervisorRelationshipRow.supervisor_agent_id == data.supervisor_agent_id,
                     SupervisorRelationshipRow.subordinate_agent_id == data.subordinate_agent_id,
                     SupervisorRelationshipRow.relationship_type == data.relationship_type,
+                    SupervisorRelationshipRow.revoked_at.is_(None),
+                    SupervisorRelationshipRow.starts_at
+                    < (expires_at if expires_at is not None else infinity),
+                    or_(
+                        SupervisorRelationshipRow.expires_at.is_(None),
+                        SupervisorRelationshipRow.expires_at > starts_at,
+                    ),
                 )
             )
             if duplicate:
                 raise DomainError(
-                    "DUPLICATE_RELATIONSHIP", "Equivalent relationship already exists.", 409
+                    "DUPLICATE_RELATIONSHIP",
+                    "An equivalent relationship overlaps the requested interval.",
+                    409,
                 )
-            starts_at = data.starts_at or now()
-            expires_at = data.expires_at
             if self._reachable_during(
                 uow.session,
                 data.subordinate_agent_id,
@@ -646,7 +663,7 @@ class IdentityService:
                 if rank and rank.is_enabled:
                     subject_pairs.add(("rank", actor.rank_id))
             active_roles = s.scalars(
-                select(AgentRoleAssignmentRow.role_id)
+                select(AgentRoleAssignmentRow)
                 .join(IdentityRoleRow)
                 .where(
                     AgentRoleAssignmentRow.agent_id == actor_id,
@@ -659,7 +676,11 @@ class IdentityService:
                     ),
                 )
             )
-            subject_pairs.update(("role", role_id) for role_id in active_roles)
+            subject_pairs.update(
+                ("role", assignment.role_id)
+                for assignment in active_roles
+                if self._role_scope_matches(assignment, resource_type, resource_id)
+            )
             active_teams = s.scalars(
                 select(TeamMembershipRow.team_id)
                 .join(IdentityTeamRow)
@@ -737,6 +758,17 @@ class IdentityService:
                     reason_code="direct_grant",
                 )
             return base
+
+    @staticmethod
+    def _role_scope_matches(
+        assignment: AgentRoleAssignmentRow,
+        resource_type: str | None,
+        resource_id: str | None,
+    ) -> bool:
+        return assignment.scope_type == "global" or (
+            assignment.scope_id == resource_id
+            and (assignment.scope_type == "resource" or assignment.scope_type == resource_type)
+        )
 
     def audits(self, offset: int, limit: int, event_type: str | None = None):
         with self.sessions() as s:

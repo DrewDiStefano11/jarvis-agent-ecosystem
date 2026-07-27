@@ -301,6 +301,13 @@ def upgrade() -> None:
         batch_op.create_index(
             batch_op.f("ix_identity_agent_roles_role_id"), ["role_id"], unique=False
         )
+        batch_op.create_index(
+            "uq_identity_agent_roles_global",
+            ["agent_id", "role_id", "scope_type"],
+            unique=True,
+            sqlite_where=sa.text("scope_type = 'global' AND scope_id IS NULL"),
+            postgresql_where=sa.text("scope_type = 'global' AND scope_id IS NULL"),
+        )
 
     op.create_table(
         "identity_approval_authority_policies",
@@ -502,7 +509,6 @@ def upgrade() -> None:
             ["identity_agents.id"],
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("supervisor_agent_id", "subordinate_agent_id", "relationship_type"),
     )
     with op.batch_alter_table("identity_supervisor_relationships", schema=None) as batch_op:
         batch_op.create_index(
@@ -592,6 +598,7 @@ def downgrade() -> None:
 
     op.drop_table("identity_approval_authority_policies")
     with op.batch_alter_table("identity_agent_roles", schema=None) as batch_op:
+        batch_op.drop_index("uq_identity_agent_roles_global")
         batch_op.drop_index(batch_op.f("ix_identity_agent_roles_role_id"))
         batch_op.drop_index(batch_op.f("ix_identity_agent_roles_agent_id"))
 
