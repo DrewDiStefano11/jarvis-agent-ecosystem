@@ -7,15 +7,18 @@ if ($PSCmdlet.ShouldProcess("Host", "Stop services")) {
   foreach ($file in $files) {
     $metaPath = Join-Path $cfg.stateDirectory $file
     $meta = Read-JarvisProcessMetadata -Path $metaPath
-    if ($meta.pid) {
-      $verified = Test-JarvisProcessOwnership -PID $meta.pid -ExpectedExecutable $meta.executable -ExpectedWorkingDir $meta.workingDirectory -ExpectedArguments $meta.arguments
+    if ($meta.pid -and [int]$meta.pid) {
+      $verified = Test-JarvisProcessOwnership -PID ([int]$meta.pid) -ExpectedExecutable $meta.executable -ExpectedWorkingDir $meta.workingDirectory -ExpectedArguments $meta.arguments -ExpectedStartTime ([datetime]::Parse($meta.processStartTime))
       if ($verified) {
-        Stop-JarvisOwnedProcess -PID $meta.pid -ExpectedExecutable $meta.executable -ExpectedWorkingDir $meta.workingDirectory -ExpectedArguments $meta.arguments -GracefulTimeoutSec $GracefulTimeoutSec -Force:$Force
+        $result = Stop-JarvisOwnedProcess -PID ([int]$meta.pid) -ExpectedExecutable $meta.executable -ExpectedWorkingDir $meta.workingDirectory -ExpectedArguments $meta.arguments -ExpectedStartTime ([datetime]::Parse($meta.processStartTime)) -GracefulTimeoutSec $GracefulTimeoutSec -Force:$Force
+        Write-Output "Stopped $file: verified=$($result.verified) stopped=$($result.stopped) pid=$($meta.pid)"
+      } else {
+        Write-Output "Metadata for $file exists but process $($meta.pid) is unverified or stale; not terminating."
       }
     }
-    $tmp = $metaPath + ".clear"
-    Write-JarvisProcessMetadata -Path $tmp -Data @{ pid = $null; cleared = (Get-Date -Format 'o') }
-    Move-Item -Path $tmp -Destination $metaPath -Force
+    if (Test-Path $metaPath) {
+      @{ pid = $null; cleared = (Get-Date -Format 'o') } | ConvertTo-Json | Set-Content -Path ($metaPath + ".clear") -NoNewline
+      Move-Item -Path ($metaPath + ".clear") -Destination $metaPath -Force
+    }
   }
-  Write-Output "Host stopped: only verified owned processes terminated."
 }

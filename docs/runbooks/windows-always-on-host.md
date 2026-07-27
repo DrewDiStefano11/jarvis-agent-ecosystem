@@ -56,3 +56,18 @@ Consistent parameters verified across all 12 scripts
 - [ ] Confirm Diagnostics archive excludes database, .env, secrets, tokens; includes redacted config, status, recent logs, manifest.
 - [ ] Confirm Uninstall stops owned processes, removes owned tasks/routes/state; preserves database/config/logs/backups by default; deletes preserved data only with explicit switches; supports -WhatIf.
 - [ ] Confirm no public firewall rules created; backend/frontend bound to localhost; no Tailscale Funnel enabled.
+## Complete Verification Command Reference
+Install: ops/windows-host/Install-JarvisHost.ps1 -ConfigPath jarvis-host.json [-WhatIf]
+Uninstall: ops/windows-host/Uninstall-JarvisHost.ps1 -ConfigPath jarvis-host.json [-WhatIf] [-RemoveBackups] [-RemoveLogs]
+Status: ops/windows-host/Get-JarvisHostStatus.ps1 -ConfigPath jarvis-host.json [-AsJson]
+Preflight: ops/windows-host/Test-JarvisHost.ps1 -ConfigPath jarvis-host.json
+Validation: ops/windows-host/Validate-JarvisHostToolkit.ps1 -ConfigPath jarvis-host.json
+Start: ops/windows-host/Start-JarvisHost.ps1 -ConfigPath jarvis-host.json [-WhatIf]
+Stop: ops/windows-host/Stop-JarvisHost.ps1 -ConfigPath jarvis-host.json [-Force] [-WhatIf]
+Restart: ops/windows-host/Restart-JarvisHost.ps1 -ConfigPath jarvis-host.json [-Force] [-WhatIf]
+Watchdog: ops/windows-host/Invoke-JarvisWatchdog.ps1 -ConfigPath jarvis-host.json [-WhatIf]
+Backup: ops/windows-host/Backup-JarvisDatabase.ps1 -ConfigPath jarvis-host.json [-WhatIf]
+Restore: ops/windows-host/Restore-JarvisDatabase.ps1 -BackupPath <path> [-ConfigPath jarvis-host.json] [-Force]
+Tailscale configure: ops/windows-host/Configure-JarvisTailscale.ps1 -ConfigPath jarvis-host.json [-WhatIf]
+Tailscale remove: ops/windows-host/Remove-JarvisTailscale.ps1 [-WhatIf]
+Diagnostics: scripts/windows/Invoke-JarvisDiagnostics.ps1 [-OutputDir <path>]

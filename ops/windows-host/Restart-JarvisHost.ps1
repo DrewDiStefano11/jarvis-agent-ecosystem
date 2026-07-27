@@ -3,16 +3,19 @@ param([string]$ConfigPath = (Join-Path $PSScriptRoot 'jarvis-host.json'), [switc
 Import-Module (Join-Path $PSScriptRoot 'JarvisHost.Common.psm1') -Force
 $cfg = Import-JarvisHostConfig -Path $ConfigPath
 $lockFile = Join-Path (Resolve-JarvisHostPath -Path $cfg.stateDirectory -BaseDir $env:LOCALAPPDATA) 'restart.lock'
+$lockHandle = $null
 try {
-  New-JarvisHostLock -LockPath $lockFile
+  $lockHandle = New-JarvisHostLock -LockPurpose "restart"
   if ($PSCmdlet.ShouldProcess("Host", "Restart")) {
     $backupDir = Resolve-JarvisHostPath -Path $cfg.backupDirectory -BaseDir $env:LOCALAPPDATA
-    $preBackup = Start-Process -FilePath "python" -ArgumentList "-c", "import sqlite3; src=sqlite3.connect('$($cfg.databasePath)'); dst=sqlite3.connect('$backupDir\pre_restart.db'); src.backup(dst); dst.close()" -PassThru -Wait -WindowStyle Hidden
+    New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
+    $preBackup = $cfg.databasePath + ".pre_" + (Get-Date -Format 'yyyyMMddHHmmss')
+    Copy-Item -Path $cfg.databasePath -Destination $preBackup -Force -ErrorAction SilentlyContinue
     . $PSScriptRoot\Stop-JarvisHost.ps1 -ConfigPath $ConfigPath -Force:$Force
     Start-Sleep -Seconds 2
     . $PSScriptRoot\Start-JarvisHost.ps1 -ConfigPath $ConfigPath
-    Write-Output "Restart completed."
+    Write-Output "Restart completed. Pre-restart safety backup: $preBackup"
   }
 } finally {
-  Remove-JarvisHostLock -LockPath $lockFile
+  if ($lockHandle) { Remove-JarvisHostLock -LockHandle $lockHandle }
 }
