@@ -49,10 +49,15 @@ def utc(value: datetime) -> datetime:
 
 
 def effective_interval(data) -> tuple[datetime, datetime | None]:
-    return (
-        utc(data.starts_at) if data.starts_at is not None else now(),
-        utc(data.expires_at) if data.expires_at is not None else None,
-    )
+    starts_at = utc(data.starts_at) if data.starts_at is not None else now()
+    expires_at = utc(data.expires_at) if data.expires_at is not None else None
+    if expires_at is not None and expires_at <= starts_at:
+        raise DomainError(
+            "INVALID_EFFECTIVE_INTERVAL",
+            "expires_at must occur after the effective starts_at.",
+            422,
+        )
+    return starts_at, expires_at
 
 
 class IdentityService:
@@ -410,6 +415,15 @@ class IdentityService:
                         matched_denials=[],
                         decisive_rule="definition",
                         reason_code="permission_unknown",
+                        **base,
+                    )
+                if resource_type is not None and resource_type != permission.resource_type:
+                    return AuthorizationDecision(
+                        allowed=False,
+                        matched_grants=[],
+                        matched_denials=[],
+                        decisive_rule="definition",
+                        reason_code="resource_type_mismatch",
                         **base,
                     )
                 active = and_(

@@ -406,7 +406,7 @@ def test_role_permissions_respect_assignment_scope(
         CreatePermissionRequest(
             stable_key=f"scope.{scope_type}",
             display_name="Use",
-            resource_type="asset",
+            resource_type=matching_type,
             action="use",
         ),
     )
@@ -1141,6 +1141,126 @@ def test_permission_assignment_rejects_mismatched_resource_type_atomically(servi
         assert assignments[0].resource_type == "room"
         assert len(list(session.scalars(select(IdentityAuditEventRow)))) == before + 1
     assert service.check_permission(actor.id, permission.stable_key, "room", "room-a").allowed
+
+
+@pytest.mark.parametrize("grant_source", ["direct", "role"])
+def test_permission_evaluation_rejects_mismatched_resource_type(service, grant_source):
+    actor = agent(service, f"agent.permission.evaluate.{grant_source}")
+    service.transition(actor.id, "active")
+    permission = service.create_definition(
+        "permission",
+        CreatePermissionRequest(
+            stable_key=f"room.evaluate.{grant_source}",
+            display_name="Evaluate room",
+            resource_type="room",
+            action=f"evaluate-{grant_source}",
+        ),
+    )
+    if grant_source == "direct":
+        service.assign_permission(
+            actor.id,
+            AssignPermissionRequest(permission_id=permission.id, effect="allow"),
+        )
+    else:
+        role = service.create_definition(
+            "role",
+            CreateRoleRequest(
+                stable_key=f"role.permission.evaluate.{grant_source}",
+                display_name="Evaluate room",
+                role_scope="global",
+            ),
+        )
+        service.attach_permission(role.id, permission.id, "allow")
+        service.assign_role(actor.id, AssignRoleRequest(role_id=role.id))
+
+    mismatch = service.check_permission(
+        actor.id,
+        permission.stable_key,
+        resource_type="artifact",
+        resource_id="artifact-a",
+    )
+    matching = service.check_permission(
+        actor.id,
+        permission.stable_key,
+        resource_type="room",
+        resource_id="room-a",
+    )
+
+    assert not mismatch.allowed
+    assert mismatch.matched_grants == []
+    assert mismatch.matched_denials == []
+    assert mismatch.decisive_rule == "definition"
+    assert mismatch.reason_code == "resource_type_mismatch"
+    assert matching.allowed
+
+
+def test_omitted_start_rejects_already_expired_effective_windows_atomically(service):
+    target = agent(service, "agent.interval.target")
+    service.transition(target.id, "active")
+    supervisor = agent(service, "agent.interval.supervisor")
+    role = service.create_definition(
+        "role",
+        CreateRoleRequest(stable_key="role.interval", display_name="Interval", role_scope="global"),
+    )
+    permission = service.create_definition(
+        "permission",
+        CreatePermissionRequest(
+            stable_key="artifact.interval",
+            display_name="Interval",
+            resource_type="artifact",
+            action="use",
+        ),
+    )
+    expired = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+    app = create_app(database_url=str(service.sessions.kw["bind"].url))
+    requests = [
+        (
+            f"/api/identity/agents/{target.id}/roles",
+            {"role_id": role.id, "expires_at": expired},
+        ),
+        (
+            f"/api/identity/agents/{target.id}/permissions",
+            {
+                "permission_id": permission.id,
+                "effect": "allow",
+                "expires_at": expired,
+            },
+        ),
+        (
+            "/api/identity/hierarchy",
+            {
+                "supervisor_agent_id": supervisor.id,
+                "subordinate_agent_id": target.id,
+                "relationship_type": "secondary",
+                "expires_at": expired,
+            },
+        ),
+        (
+            "/api/identity/access-policies",
+            {
+                "subject_type": "all",
+                "resource_type": "artifact",
+                "resource_id": "artifact-interval",
+                "action": "use",
+                "effect": "allow",
+                "expires_at": expired,
+            },
+        ),
+    ]
+    before = len(service.audits(0, 100))
+    with TestClient(app) as client:
+        responses = [client.post(path, json=body) for path, body in requests]
+
+    assert {response.status_code for response in responses} == {422}
+    assert {response.json()["error"]["code"] for response in responses} == {
+        "INVALID_EFFECTIVE_INTERVAL"
+    }
+    with service.sessions() as session:
+        assert not list(session.scalars(select(AgentRoleAssignmentRow)))
+        assert not list(session.scalars(select(AgentPermissionAssignmentRow)))
+        assert not list(session.scalars(select(SupervisorRelationshipRow)))
+        assert not list(session.scalars(select(ResourceAccessPolicyRow)))
+        assert len(list(session.scalars(select(IdentityAuditEventRow)))) == before
 
 
 def test_expired_and_revoked_permission_assignments_can_be_renewed(service):
