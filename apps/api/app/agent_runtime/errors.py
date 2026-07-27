@@ -124,3 +124,8 @@ class InvalidRuntimeMetadataError(AgentRuntimeError):
 class InvalidRuntimeIdentifierError(AgentRuntimeError):
     code = "invalid_runtime_identifier"
     default_message = "Runtime identifiers are invalid."
+
+
+class RuntimePersistenceError(AgentRuntimeError):
+    code = "runtime_persistence_error"
+    default_message = "Runtime persistence failed safely."

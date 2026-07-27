@@ -236,10 +236,32 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.exception_handler(AgentRuntimeError)
     async def runtime_error(_: Request, exc: AgentRuntimeError) -> JSONResponse:
-        status = 404 if exc.code == "run_not_found" else 409
+        missing_codes = {"run_not_found", "attempt_not_found"}
+        input_codes = {"invalid_runtime_metadata", "invalid_runtime_identifier"}
+        internal_codes = {"ledger_replay_error", "runtime_persistence_error"}
+        status = (
+            404
+            if exc.code in missing_codes
+            else 400
+            if exc.code in input_codes
+            else 500
+            if exc.code in internal_codes
+            else 409
+        )
         return JSONResponse(
             status_code=status,
-            content={"error": {"code": exc.code, "message": exc.default_message, "details": {}}},
+            content={
+                "error": {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "details": {
+                        "runId": exc.run_id,
+                        "attemptId": exc.attempt_id,
+                        "commandId": exc.command_id,
+                        "metadata": exc.metadata,
+                    },
+                }
+            },
         )
 
     @app.exception_handler(DomainError)

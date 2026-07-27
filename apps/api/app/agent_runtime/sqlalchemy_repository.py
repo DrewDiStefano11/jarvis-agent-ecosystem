@@ -16,6 +16,7 @@ from app.agent_runtime.errors import (
     LedgerSequenceError,
     RunAlreadyExistsError,
     RunNotFoundError,
+    RuntimePersistenceError,
     VersionConflictError,
 )
 from app.agent_runtime.ledger import replay_execution_ledger
@@ -329,10 +330,23 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 self._store_audit(s, processed_command, snapshot, events)
                 s.flush()
                 return None
-        except IntegrityError as e:
-            raise VersionConflictError(
-                "Concurrent runtime mutation rejected.", run_id=run_id
-            ) from e
+        except IntegrityError as exc:
+            # A duplicate processed-command constraint is the only integrity race
+            # that is safely recoverable at this boundary.  Every other database
+            # integrity failure is rolled back and surfaced as a persistence error.
+            persisted = self.get_processed_command(run_id, processed_command.command_id)
+            if persisted is not None:
+                if persisted.command_hash != processed_command.command_hash:
+                    raise CommandConflictError(
+                        run_id=run_id,
+                        command_id=processed_command.command_id,
+                    ) from exc
+                return persisted
+            raise RuntimePersistenceError(
+                run_id=run_id,
+                command_id=processed_command.command_id,
+                metadata={"constraint": "runtime_transaction"},
+            ) from exc
 
     def _store(self, s, x):
         s.add(
