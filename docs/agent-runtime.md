@@ -1,0 +1,426 @@
+# Agent runtime execution ledger foundation
+
+## Purpose
+
+The agent runtime package is a backend-only domain foundation for representing, validating, recording, replaying, and explaining the lifecycle of one Jarvis agent execution run.
+
+It is intentionally isolated from:
+
+- FastAPI routes
+- SQLAlchemy persistence
+- model providers
+- identity and RBAC
+- task schedulers and workers
+- tool execution
+- network calls
+- office or frontend state
+
+The package provides deterministic contracts, an append-only execution ledger, optimistic concurrency rules, idempotent command handling, a reference in-memory repository, and a pure recovery planner.
+
+## Terminology
+
+- **run**: one authoritative agent execution lifecycle.
+- **attempt**: one bounded execution attempt inside a run.
+- **ledger**: the ordered append-only event history for one run.
+- **snapshot**: the current authoritative state derived from the ledger.
+- **checkpoint**: an immutable recovery marker tied to one run, one attempt, one version, and one ledger position.
+- **recovery plan**: a pure decision that says whether another attempt may start and from which checkpoint.
+- **processed command**: an idempotency record for one run-scoped command ID.
+
+## Run lifecycle
+
+States:
+
+- `created`
+- `queued`
+- `claimed`
+- `starting`
+- `running`
+- `pause_requested`
+- `paused`
+- `blocked`
+- `cancel_requested`
+- `cancelling`
+- `cancelled`
+- `succeeded`
+- `failed`
+- `timed_out`
+- `abandoned`
+
+Categories:
+
+- pre-execution: `created`, `queued`, `claimed`
+- active: `starting`, `running`
+- interrupted: `pause_requested`, `paused`, `blocked`
+- cancellation: `cancel_requested`, `cancelling`
+- terminal: `cancelled`, `succeeded`, `failed`, `timed_out`, `abandoned`
+
+Terminal states are immutable.
+
+## Transition rules
+
+One authoritative transition table lives in `app/agent_runtime/transitions.py`.
+Service methods and replay both rely on that single definition.
+
+Each event rule declares:
+
+- allowed source states
+- allowed target states
+- required payload metadata
+- whether an attempt must exist
+- whether an active attempt must exist
+- whether checkpoint creation is allowed
+- whether the event is terminal
+- whether the event increments run version
+
+Illegal transitions raise typed domain errors instead of silently mutating state.
+
+## State diagram
+
+```text
+created -> queued -> claimed -> starting -> running -> claimed -> succeeded
+                                      |          |
+                                      |          +-> pause_requested -> paused -> running|claimed|queued
+                                      |          +-> blocked -> claimed|running
+                                      |          +-> cancel_requested -> cancelling -> cancelled
+                                      |          +-> blocked(recovery_required) after attempt_failed|timed_out|abandoned
+                                      |
+                                      +-> cancel_requested -> cancelled   (pre-start immediate path)
+
+created|queued|claimed|blocked -> failed|timed_out|abandoned
+```
+
+## Attempt lifecycle
+
+Attempt states:
+
+- `created`
+- `starting`
+- `running`
+- `paused`
+- `cancelled`
+- `succeeded`
+- `failed`
+- `timed_out`
+- `abandoned`
+
+Rules:
+
+- attempt numbers start at 1
+- attempt numbers never repeat inside one run
+- only one attempt may be active at a time
+- a terminal attempt never becomes active again
+- the runtime never auto-retries; a future orchestrator must request another attempt explicitly
+
+## Cancellation protocol
+
+Two supported patterns exist.
+
+### Pre-start immediate cancellation
+
+`created|queued|claimed -> cancel_requested -> cancelled`
+
+The cancellation request is still written to the ledger before terminal cancellation.
+
+### Active cancellation handshake
+
+`running|starting|paused|blocked(with active attempt) -> cancel_requested -> cancelling -> cancelled`
+
+A cancellation request stores:
+
+- command ID
+- reason code
+- human-safe detail
+- requester reference
+- timestamp
+
+Policy:
+
+- exact duplicate command replay returns the stored result
+- a different command ID cannot replace an accepted cancellation reason once cancellation has started
+- cancellation of terminal runs returns a typed conflict
+- no external signal or worker kill is performed here
+
+## Pause versus blocked semantics
+
+`paused` means deliberate suspension.
+Examples: operator pause, policy pause, scheduling pause.
+
+`blocked` means progress cannot continue without an explicit dependency or recovery action.
+Examples: waiting for approval, missing dependency, unavailable resource, recovery required.
+
+Both are nonterminal.
+Both require explicit commands to leave them.
+The ledger keeps the full pause and block history.
+
+## Checkpoint model
+
+Each checkpoint is immutable and includes:
+
+- checkpoint ID
+- run ID
+- attempt ID
+- checkpoint sequence
+- run version
+- event sequence
+- schema version
+- timestamp
+- opaque state reference
+- integrity digest
+- optional resume cursor
+- safe metadata
+
+Rules:
+
+- checkpoint sequences begin at 1 and increase by 1
+- checkpoint lineage must match the active run and active attempt
+- checkpoint run/event positions must match the checkpoint event position
+- terminal runs reject new checkpoints
+- checkpoint IDs are immutable and cannot be silently reused with different contents
+
+## Recovery-plan rules
+
+Recovery planning is pure and fail-closed.
+
+Allowed only when:
+
+- the snapshot matches ledger replay
+- the run is blocked with `recovery_required`
+- no attempt is active
+- the latest attempt is `failed`, `timed_out`, or `abandoned`
+- maximum attempts have not been exhausted
+- checkpoint lineage is valid
+
+Denied when:
+
+- the run is terminal
+- the attempt limit is exhausted
+- the ledger is inconsistent
+- the snapshot disagrees with replay
+- an active attempt still exists
+- checkpoint lineage is invalid
+
+Checkpoint selection is deterministic:
+
+1. latest valid checkpoint from the latest terminal attempt
+2. otherwise latest valid checkpoint from earlier attempts
+3. otherwise no checkpoint, with a warning that the next attempt restarts from the attempt boundary
+
+## Ledger sequence rules
+
+Each runtime event envelope includes:
+
+- `event_id`
+- `event_type`
+- `event_schema_version`
+- `run_id`
+- optional `attempt_id`
+- `sequence_number`
+- `run_version`
+- `timestamp`
+- optional `actor_reference`
+- optional `command_id`
+- optional `correlation_id`
+- optional `causation_id`
+- safe payload
+- safe metadata
+
+Rules:
+
+- sequence numbers begin at 1
+- sequences increase exactly by 1
+- run version increases exactly by 1 for every appended event
+- version and sequence are equal by policy in this foundation
+- timestamps never move backward
+- events are immutable
+- incompatible schema versions are rejected
+
+## Replay behavior
+
+Deterministic replay is:
+
+`ordered runtime events -> authoritative snapshot + attempt history + checkpoint history`
+
+Replay rejects:
+
+- sequence gaps
+- duplicate sequences
+- out-of-order events
+- mismatched run IDs
+- mismatched active attempt IDs
+- backward timestamps
+- incompatible event schema versions
+- transitions after terminal state
+- checkpoint lineage mismatches
+- inconsistent run versions
+
+## Idempotency
+
+Every state-changing command is scoped by `(run_id, command_id)`.
+
+Rules:
+
+- exact command replay returns the stored result
+- same command ID with different contents raises `command_conflict`
+- failed commands are not stored as processed
+- duplicate processed commands do not append duplicate events
+- checkpoint duplicate handling also supports stable no-op replay when the same checkpoint ID and content are submitted again
+
+## Optimistic concurrency
+
+Every state-changing command carries `expected_run_version`.
+
+Rules:
+
+- the current snapshot version must match before commit
+- repository commit also verifies the expected ledger sequence
+- failed version checks must not partially mutate snapshot, events, or processed-command state
+
+## Error codes
+
+The runtime package defines stable typed errors including:
+
+- `run_not_found`
+- `run_already_exists`
+- `invalid_transition`
+- `terminal_run_immutable`
+- `version_conflict`
+- `command_conflict`
+- `attempt_not_found`
+- `active_attempt_exists`
+- `attempt_limit_exceeded`
+- `invalid_attempt_state`
+- `checkpoint_not_allowed`
+- `checkpoint_sequence_conflict`
+- `checkpoint_lineage_error`
+- `ledger_sequence_error`
+- `ledger_replay_error`
+- `recovery_not_allowed`
+- `invalid_runtime_metadata`
+- `invalid_runtime_identifier`
+
+Each typed error carries a stable code plus safe run/attempt/command references and safe metadata.
+
+## Parent and child lineage
+
+Runs may optionally reference a parent run ID.
+
+Policy:
+
+- a run cannot parent itself
+- lineage traversal is bounded to avoid infinite graphs
+- cycles are rejected during validated run creation
+- lineage order is deterministic: immediate parent first, then older ancestors
+- missing parents are allowed as unresolved opaque references
+- missing ancestors are surfaced explicitly during lineage resolution
+- lineage does not imply authorization, cancellation propagation, or failure propagation
+- this package does not autonomously create child runs
+
+## Query behavior
+
+The in-memory reference repository supports deterministic filtering by:
+
+- run ID
+- task ID
+- agent ID
+- state
+- terminal versus nonterminal
+- correlation ID
+- parent run ID
+- creation time range
+
+Ordering is stable by `(created_at, run_id)` and pagination uses bounded offset semantics.
+
+## Repository protocol
+
+The repository contract supports:
+
+- create run
+- load run
+- save run with expected version
+- append events
+- list events
+- load attempt history
+- list checkpoints
+- look up processed commands
+- store processed-command results
+- query runs deterministically
+- atomically commit a command result in the reference implementation
+
+## In-memory repository limitations
+
+The in-memory repository is a real reference implementation for tests and future adapter development, but it is not durable.
+
+Limitations:
+
+- process memory only
+- no crash persistence
+- no transactional outbox rows
+- no multi-process coordination
+- no production durability guarantees
+
+It still enforces:
+
+- optimistic version checks
+- append-only events
+- deterministic ordering
+- deep-copy safety
+- run-scoped command idempotency
+
+## Integration boundaries
+
+Future integrations may attach this package to:
+
+- durable task and lease ownership
+- identity references and authorization decisions
+- model routing
+- context assembly
+- tool invocation
+- checkpoint storage adapters
+- audit and observability pipelines
+- a transactional outbox publisher
+
+Those integrations are deferred on purpose. This package uses opaque IDs and safe metadata only.
+
+## Examples
+
+### Create and queue a run
+
+1. `create_run`
+2. `queue_run`
+3. `claim_run`
+4. `begin_attempt`
+5. `start_attempt`
+
+### Fail an attempt and plan recovery
+
+1. `attempt_failed`
+2. snapshot becomes `blocked` with `recovery_required`
+3. `request_recovery_plan`
+4. `unblock_run`
+5. `begin_attempt` with a selected checkpoint reference
+
+### Cancel before execution starts
+
+1. `request_cancellation`
+2. ledger records `cancellation_requested`
+3. same command appends `run_cancelled`
+
+## Explicit non-goals
+
+This package does **not** implement:
+
+- real agent execution
+- model selection or provider execution
+- tool execution
+- network calls
+- shell commands
+- browser automation
+- RBAC or identity evaluation
+- approval workflows
+- SQLAlchemy rows or migrations
+- FastAPI routes
+- application startup wiring
+- frontend controls or office visuals
+- message-broker publication
+- autonomous orchestration
