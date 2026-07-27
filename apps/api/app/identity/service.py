@@ -146,7 +146,17 @@ class IdentityService:
         with UnitOfWork(self.sessions) as uow:
             assert uow.session
             row = self._agent(uow.session, agent_id)
-            for key, value in data.model_dump(exclude_unset=True).items():
+            changes = data.model_dump(exclude_unset=True)
+            if row.lifecycle_state == "retired" and (
+                changes.get("is_enabled") is True
+                or ("operational_status" in changes and changes["operational_status"] != "offline")
+            ):
+                raise DomainError(
+                    "RETIRED_AGENT_STATE_CONFLICT",
+                    "Retired agents must remain disabled and offline.",
+                    409,
+                )
+            for key, value in changes.items():
                 setattr(row, key, value)
             row.version += 1
             row.updated_at = now()
@@ -155,7 +165,7 @@ class IdentityService:
                 "agent.updated",
                 "agent",
                 row.id,
-                changes=data.model_dump(exclude_unset=True),
+                changes=changes,
             )
             return row
 

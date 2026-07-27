@@ -83,6 +83,55 @@ def test_agent_patch_rejects_explicit_nulls(service):
     assert response.status_code == 422
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"is_enabled": True},
+        {"operational_status": "available"},
+        {"is_enabled": True, "operational_status": "available"},
+    ],
+)
+def test_retired_agent_patch_preserves_terminal_state_atomically(service, payload):
+    row = agent(service, "agent.retired-patch")
+    service.transition(row.id, "active")
+    retired = service.transition(row.id, "retired")
+    version = retired.version
+    audit_count = len(service.audits(0, 100))
+    app = create_app(database_url=str(service.sessions.kw["bind"].url))
+
+    with TestClient(app) as client:
+        response = client.patch(f"/api/identity/agents/{row.id}", json=payload)
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "RETIRED_AGENT_STATE_CONFLICT"
+    persisted = service.get_agent(row.id)
+    assert persisted.lifecycle_state == "retired"
+    assert persisted.is_enabled is False
+    assert persisted.operational_status == "offline"
+    assert persisted.version == version
+    assert len(service.audits(0, 100)) == audit_count
+
+
+def test_retired_agent_patch_allows_metadata_without_relaxing_terminal_state(service):
+    row = agent(service, "agent.retired-metadata")
+    service.transition(row.id, "active")
+    service.transition(row.id, "retired")
+    app = create_app(database_url=str(service.sessions.kw["bind"].url))
+
+    with TestClient(app) as client:
+        response = client.patch(
+            f"/api/identity/agents/{row.id}",
+            json={"display_name": "Retired agent", "description": "Archived"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["display_name"] == "Retired agent"
+    persisted = service.get_agent(row.id)
+    assert persisted.lifecycle_state == "retired"
+    assert persisted.is_enabled is False
+    assert persisted.operational_status == "offline"
+
+
 def test_duplicate_and_invalid_stable_key(service):
     agent(service, "agent.unique")
     with pytest.raises(DomainError) as duplicate:
