@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC
+from datetime import UTC, datetime
+from hashlib import sha256
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -26,6 +27,8 @@ from app.db.models import (
     AgentRuntimeEventRow,
     AgentRuntimeProcessedCommandRow,
     AgentRuntimeRunRow,
+    AuditEventRow,
+    OutboxEventRow,
 )
 from app.models.agent_runtime import (
     AgentRunAttempt,
@@ -141,6 +144,13 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
             ):
                 if v is not None:
                     st = st.where(c == v)
+            if q.correlation_id is not None:
+                # Correlation is canonical specification data rather than a duplicate projection.
+                st = st.where(AgentRuntimeRunRow.specification_json.contains(q.correlation_id))
+            if q.created_from is not None:
+                st = st.where(AgentRuntimeRunRow.created_at >= q.created_from)
+            if q.created_to is not None:
+                st = st.where(AgentRuntimeRunRow.created_at <= q.created_to)
             if q.terminal is not None:
                 st = st.where(
                     AgentRuntimeRunRow.state.in_([x.value for x in TERMINAL_STATES])
@@ -191,7 +201,11 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                         if prior.processed_at.tzinfo is None
                         else prior.processed_at,
                     )
-                row = s.get(AgentRuntimeRunRow, run_id)
+                row = s.scalar(
+                    select(AgentRuntimeRunRow)
+                    .where(AgentRuntimeRunRow.run_id == run_id)
+                    .with_for_update()
+                )
                 old = []
                 if create:
                     if row:
@@ -210,7 +224,12 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                         raise RunNotFoundError(run_id=run_id)
                     if row.version != expected_version:
                         raise VersionConflictError(
-                            run_id=run_id, command_id=processed_command.command_id
+                            run_id=run_id,
+                            command_id=processed_command.command_id,
+                            metadata={
+                                "expectedVersion": expected_version,
+                                "storedVersion": row.version,
+                            },
                         )
                     old = [
                         load(e.envelope_json, RuntimeEventEnvelope)
@@ -221,7 +240,14 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                         )
                     ]
                     if len(old) != expected_sequence:
-                        raise LedgerSequenceError(run_id=run_id)
+                        raise LedgerSequenceError(
+                            run_id=run_id,
+                            command_id=processed_command.command_id,
+                            metadata={
+                                "expectedSequence": expected_sequence,
+                                "storedSequence": len(old),
+                            },
+                        )
                 ag = replay_execution_ledger(old + list(events))
                 if not ag or ag.snapshot != snapshot:
                     raise LedgerReplayError("Ledger/projection mismatch", run_id=run_id)
@@ -256,6 +282,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                     row.latest_checkpoint_id = snapshot.latest_checkpoint_id
                     row.recovery_status = snapshot.recovery_status.value
                     row.terminal_at = snapshot.completed_at
+                    row.updated_at = datetime.now(UTC)
                     row.snapshot_json = dump(snapshot)
                 for e in events:
                     s.add(
@@ -277,6 +304,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                             envelope_json=dump(e),
                         )
                     )
+                    self._store_outbox(s, e)
                 s.query(AgentRuntimeCheckpointRow).filter_by(run_id=run_id).delete()
                 s.query(AgentRuntimeAttemptRow).filter_by(run_id=run_id).delete()
                 for x in ag.attempts:
@@ -299,6 +327,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                         )
                     )
                 self._store(s, processed_command)
+                self._store_audit(s, processed_command, snapshot, events)
                 s.flush()
                 return None
         except IntegrityError as e:
@@ -315,6 +344,61 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 command_type="runtime",
                 result_json=dump(x.result),
                 processed_at=x.recorded_at,
+            )
+        )
+
+    @staticmethod
+    def _runtime_session_id(run_id: str) -> str:
+        return f"runtime-{sha256(run_id.encode()).hexdigest()[:64]}"
+
+    def _store_outbox(self, session: Session, event: RuntimeEventEnvelope) -> None:
+        session.add(
+            OutboxEventRow(
+                id=event.event_id,
+                event_type=f"agent_runtime.{event.event_type.value}",
+                envelope={"runtimeEvent": event.model_dump(mode="json")},
+                correlation_id=(event.correlation_id or event.run_id)[:80],
+                event_session_id=self._runtime_session_id(event.run_id),
+                sequence_number=event.sequence_number,
+                status="pending",
+                created_at=event.timestamp,
+                published_at=None,
+                publish_attempt_count=0,
+                last_publish_error=None,
+            )
+        )
+
+    def _store_audit(
+        self,
+        session: Session,
+        command: ProcessedCommandRecord,
+        snapshot: AgentRunSnapshot,
+        events: object,
+    ) -> None:
+        event_list = list(events)
+        audit_id = f"runtime-{sha256((command.run_id + command.command_id).encode()).hexdigest()}"
+        session.add(
+            AuditEventRow(
+                id=audit_id,
+                event_type="agent_runtime.command",
+                actor="runtime-control-plane",
+                agent_id=None,
+                task_id=None,
+                approval_id=None,
+                previous_state=None,
+                new_state=snapshot.state.value,
+                correlation_id=(snapshot.specification.correlation_id or command.run_id)[:80],
+                sequence_number=snapshot.event_sequence_number,
+                event_session_id=self._runtime_session_id(command.run_id),
+                timestamp=command.recorded_at,
+                payload={
+                    "commandId": command.command_id,
+                    "runId": command.run_id,
+                    "taskId": snapshot.specification.task_id,
+                    "targetAgentId": snapshot.specification.agent_id,
+                    "eventIds": [event.event_id for event in event_list],
+                },
+                schema_version="1.0",
             )
         )
 
