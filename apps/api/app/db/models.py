@@ -640,6 +640,7 @@ class AgentRuntimeRunRow(Base):
     run_id: Mapped[str] = mapped_column(String(120), primary_key=True)
     task_id: Mapped[str] = mapped_column(String(120), index=True)
     agent_id: Mapped[str] = mapped_column(String(120), index=True)
+    correlation_id: Mapped[str | None] = mapped_column(String(120), index=True)
     parent_run_id: Mapped[str | None] = mapped_column(String(120), index=True)
     state: Mapped[str] = mapped_column(String(40), index=True)
     version: Mapped[int] = mapped_column(Integer)

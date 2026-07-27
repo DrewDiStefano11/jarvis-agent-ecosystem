@@ -139,14 +139,12 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 (AgentRuntimeRunRow.run_id, q.run_id),
                 (AgentRuntimeRunRow.task_id, q.task_id),
                 (AgentRuntimeRunRow.agent_id, q.agent_id),
+                (AgentRuntimeRunRow.correlation_id, q.correlation_id),
                 (AgentRuntimeRunRow.parent_run_id, q.parent_run_id),
                 (AgentRuntimeRunRow.state, None if not q.state else q.state.value),
             ):
                 if v is not None:
                     st = st.where(c == v)
-            if q.correlation_id is not None:
-                # Correlation is canonical specification data rather than a duplicate projection.
-                st = st.where(AgentRuntimeRunRow.specification_json.contains(q.correlation_id))
             if q.created_from is not None:
                 st = st.where(AgentRuntimeRunRow.created_at >= q.created_from)
             if q.created_to is not None:
@@ -257,6 +255,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                             run_id=run_id,
                             task_id=snapshot.specification.task_id,
                             agent_id=snapshot.specification.agent_id,
+                            correlation_id=snapshot.specification.correlation_id,
                             parent_run_id=snapshot.specification.parent_run_id,
                             state=snapshot.state.value,
                             version=snapshot.version,

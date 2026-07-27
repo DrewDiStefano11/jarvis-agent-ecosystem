@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Request
+from fastapi import APIRouter, Body, Depends, Request
 
 from app.agent_runtime.service import AgentRuntimeService
 from app.models.agent_runtime import (
@@ -15,7 +15,6 @@ from app.models.agent_runtime import (
     AgentRunQuery,
     AgentRunQueryResult,
     AgentRunSnapshot,
-    AgentRunState,
     BeginAttemptCommand,
     BlockAgentRunCommand,
     ClaimAgentRunCommand,
@@ -79,25 +78,9 @@ def service(request: Request) -> AgentRuntimeService:
 @router.get("/runs", response_model=AgentRunQueryResult)
 def list_runs(
     request: Request,
-    state: AgentRunState | None = None,
-    agent_id: str | None = None,
-    task_id: str | None = None,
-    parent_run_id: str | None = None,
-    terminal: bool | None = None,
-    offset: int = 0,
-    limit: int = 50,
-):
-    return service(request).repository.query_runs(
-        AgentRunQuery(
-            state=state,
-            agent_id=agent_id,
-            task_id=task_id,
-            parent_run_id=parent_run_id,
-            terminal=terminal,
-            offset=offset,
-            limit=limit,
-        )
-    )
+    query: Annotated[AgentRunQuery, Depends()],
+) -> AgentRunQueryResult:
+    return service(request).repository.query_runs(query)
 
 
 @router.get("/runs/{run_id}", response_model=AgentRunSnapshot)
