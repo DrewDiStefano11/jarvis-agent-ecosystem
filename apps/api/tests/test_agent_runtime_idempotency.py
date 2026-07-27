@@ -658,3 +658,162 @@ def test_unexplained_snapshot_ledger_mismatch_still_fails_closed() -> None:
                 source_metadata={"source": "test"},
             )
         )
+
+
+def test_command_processing_does_not_invoke_fallback_clock_when_timestamp_is_present() -> None:
+    from app.agent_runtime.repository import InMemoryAgentRuntimeRepository
+    from app.agent_runtime.service import AgentRuntimeService
+    from app.models.agent_runtime import (
+        BeginAttemptCommand,
+        ClaimAgentRunCommand,
+        StartAttemptCommand,
+    )
+    from tests.agent_runtime_testkit import SequenceFactory
+
+    def raising_clock():
+        raise AssertionError("fallback clock should not be called")
+
+    service = AgentRuntimeService(
+        InMemoryAgentRuntimeRepository(),
+        utc_clock=raising_clock,
+        run_id_factory=SequenceFactory("run"),
+        attempt_id_factory=SequenceFactory("attempt"),
+        event_id_factory=SequenceFactory("event"),
+        checkpoint_id_factory=SequenceFactory("checkpoint"),
+    )
+    create_run(service)
+    service.queue_run(
+        QueueAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-queue-timestamp",
+            expected_run_version=1,
+            timestamp=ts(1),
+            actor_reference="scheduler-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.claim_run(
+        ClaimAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-claim-timestamp",
+            expected_run_version=2,
+            timestamp=ts(2),
+            actor_reference="scheduler-1",
+            executor_reference="worker-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.begin_attempt(
+        BeginAttemptCommand(
+            run_id="run-1",
+            command_id="cmd-begin-timestamp",
+            expected_run_version=3,
+            timestamp=ts(3),
+            actor_reference="worker-1",
+            executor_reference="worker-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.start_attempt(
+        StartAttemptCommand(
+            run_id="run-1",
+            command_id="cmd-start-timestamp",
+            expected_run_version=5,
+            timestamp=ts(4),
+            actor_reference="worker-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.record_checkpoint(
+        RecordCheckpointCommand(
+            run_id="run-1",
+            command_id="cmd-checkpoint-timestamp",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="worker-1",
+            checkpoint_id="checkpoint-1",
+            state_reference="checkpoint://state/1",
+            integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.fail_attempt(
+        FailAttemptCommand(
+            run_id="run-1",
+            command_id="cmd-fail-timestamp",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="worker-1",
+            failure_category="dependency",
+            failure_detail="Dependency unavailable",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.request_recovery_plan(
+        RequestRecoveryPlanCommand(
+            run_id="run-1",
+            command_id="cmd-plan-timestamp",
+            expected_run_version=8,
+            timestamp=ts(7),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+
+    cancellation_service = AgentRuntimeService(
+        InMemoryAgentRuntimeRepository(),
+        utc_clock=raising_clock,
+        run_id_factory=SequenceFactory("run"),
+        attempt_id_factory=SequenceFactory("attempt"),
+        event_id_factory=SequenceFactory("event"),
+        checkpoint_id_factory=SequenceFactory("checkpoint"),
+    )
+    prepare_running_run(cancellation_service)
+    cancellation_service.request_cancellation(
+        RequestCancellationCommand(
+            run_id="run-1",
+            command_id="cmd-cancel-timestamp",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="operator-1",
+            requester_reference="operator-1",
+            reason_code="operator_cancel",
+            detail="Stop the run",
+            source_metadata={"source": "test"},
+        )
+    )
+
+
+def test_processed_record_fallback_clock_is_called_only_when_timestamp_is_absent() -> None:
+    from app.agent_runtime.repository import InMemoryAgentRuntimeRepository
+    from app.agent_runtime.service import AgentRuntimeService
+    from app.models.agent_runtime import RuntimeCommandResult
+    from tests.agent_runtime_testkit import SequenceFactory
+
+    calls = {"count": 0}
+
+    def counting_clock():
+        calls["count"] += 1
+        return ts(99)
+
+    service = AgentRuntimeService(
+        InMemoryAgentRuntimeRepository(),
+        utc_clock=counting_clock,
+        run_id_factory=SequenceFactory("run"),
+        attempt_id_factory=SequenceFactory("attempt"),
+        event_id_factory=SequenceFactory("event"),
+        checkpoint_id_factory=SequenceFactory("checkpoint"),
+    )
+
+    class CommandWithoutTimestamp:
+        def model_dump(self, **kwargs):
+            return {"command": "synthetic"}
+
+    record = service._processed_record(
+        "run-1",
+        "cmd-synthetic",
+        CommandWithoutTimestamp(),
+        RuntimeCommandResult(run_id="run-1"),
+    )
+    assert calls["count"] == 1
+    assert record.recorded_at == ts(99)

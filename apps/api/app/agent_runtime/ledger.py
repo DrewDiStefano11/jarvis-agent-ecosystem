@@ -686,6 +686,12 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
         active_attempt = _get_active_attempt(event, snapshot, attempts)
         failure = cast(FailureRecord, validated_payload["failure"])
         block = cast(BlockingReason, validated_payload["blocking_reason"])
+        _validate_attempt_terminal_failure_payload(
+            event=event,
+            active_attempt=active_attempt,
+            failure=failure,
+            block=block,
+        )
         terminal_state = {
             AgentRuntimeEventType.ATTEMPT_FAILED: AttemptState.FAILED,
             AgentRuntimeEventType.ATTEMPT_TIMED_OUT: AttemptState.TIMED_OUT,
@@ -1175,6 +1181,59 @@ def _first_nonterminal_attempt(
         if attempt.state not in terminal_states:
             return attempt
     return None
+
+
+def _validate_attempt_terminal_failure_payload(
+    *,
+    event: RuntimeEventEnvelope,
+    active_attempt: AgentRunAttempt,
+    failure: FailureRecord,
+    block: BlockingReason,
+) -> None:
+    if failure.attempt_id is None:
+        raise LedgerReplayError(
+            "Attempt terminal failure payloads must reference the active attempt.",
+            run_id=event.run_id,
+            attempt_id=active_attempt.attempt_id,
+            command_id=event.command_id,
+            metadata={"eventType": event.event_type.value, "payloadSection": "failure"},
+        )
+    if failure.attempt_id != active_attempt.attempt_id:
+        raise LedgerReplayError(
+            "Attempt terminal failure payloads must reference the authoritative active attempt.",
+            run_id=event.run_id,
+            attempt_id=active_attempt.attempt_id,
+            command_id=event.command_id,
+            metadata={
+                "eventType": event.event_type.value,
+                "payloadSection": "failure",
+                "failureAttemptId": failure.attempt_id,
+            },
+        )
+    if block.code != "recovery_required":
+        raise LedgerReplayError(
+            "Attempt terminal failure payloads must use the recovery_required block code.",
+            run_id=event.run_id,
+            attempt_id=active_attempt.attempt_id,
+            command_id=event.command_id,
+            metadata={
+                "eventType": event.event_type.value,
+                "payloadSection": "blocking_reason",
+                "blockCode": block.code,
+            },
+        )
+    if block.resume_state != AgentRunState.CLAIMED:
+        raise LedgerReplayError(
+            "Attempt terminal failure payloads must resume recovery to claimed.",
+            run_id=event.run_id,
+            attempt_id=active_attempt.attempt_id,
+            command_id=event.command_id,
+            metadata={
+                "eventType": event.event_type.value,
+                "payloadSection": "blocking_reason",
+                "resumeState": block.resume_state,
+            },
+        )
 
 
 def _validate_recovery_plan_event(

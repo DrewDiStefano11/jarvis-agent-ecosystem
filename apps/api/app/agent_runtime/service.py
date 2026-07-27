@@ -1054,12 +1054,15 @@ class AgentRuntimeService:
         result: RuntimeCommandResult,
     ) -> ProcessedCommandRecord:
         command_hash = stable_hash(command.model_dump(mode="json", exclude_none=False))
+        recorded_at = getattr(command, "timestamp", None)
+        if recorded_at is None:
+            recorded_at = self.utc_clock()
         return ProcessedCommandRecord(
             run_id=run_id,
             command_id=command_id,
             command_hash=command_hash,
             result=result,
-            recorded_at=getattr(command, "timestamp", self.utc_clock()),
+            recorded_at=recorded_at,
         )
 
     def _assert_idempotency(

@@ -160,7 +160,7 @@ Both are nonterminal.
 Both require explicit commands to leave them.
 The ledger keeps the full pause and block history.
 
-When an attempt terminalizes into recovery-required `blocked`, the runtime clears any stale pause metadata from the snapshot and replaces it with a `blocking_reason`. Prior pause history remains visible through earlier ledger events.
+When an attempt terminalizes into recovery-required `blocked`, the runtime clears any stale pause metadata from the snapshot and replaces it with a `blocking_reason`. That block must use code `recovery_required`, resume toward `claimed`, and the nested failure record must reference the authoritative active attempt. Prior pause history remains visible through earlier ledger events.
 
 ## Checkpoint model
 

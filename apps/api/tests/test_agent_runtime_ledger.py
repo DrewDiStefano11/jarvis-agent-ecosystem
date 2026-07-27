@@ -842,6 +842,243 @@ def test_replay_rejects_malformed_failure_and_blocking_reason_payloads() -> None
 
 
 @pytest.mark.parametrize(
+    ("event_type", "replacement"),
+    [
+        (
+            "attempt_failed",
+            {
+                "failure": {
+                    "category": "dependency",
+                    "detail": "Dependency unavailable",
+                    "timestamp": ts(5).isoformat(),
+                    "attempt_id": "attempt-1",
+                    "metadata": {},
+                },
+                "blocking_reason": {
+                    "code": "wrong_code",
+                    "detail": "Invalid block",
+                    "timestamp": ts(5).isoformat(),
+                    "resume_state": AgentRunState.CLAIMED.value,
+                    "metadata": {},
+                },
+            },
+        ),
+        (
+            "attempt_timed_out",
+            {
+                "failure": {
+                    "category": "timeout",
+                    "detail": "Attempt timed out",
+                    "timestamp": ts(5).isoformat(),
+                    "attempt_id": "attempt-1",
+                    "metadata": {},
+                },
+                "blocking_reason": {
+                    "code": "recovery_required",
+                    "detail": "Recovery required",
+                    "timestamp": ts(5).isoformat(),
+                    "resume_state": AgentRunState.RUNNING.value,
+                    "metadata": {},
+                },
+            },
+        ),
+        (
+            "attempt_abandoned",
+            {
+                "failure": {
+                    "category": "internal",
+                    "detail": "Attempt abandoned",
+                    "timestamp": ts(5).isoformat(),
+                    "attempt_id": "attempt-1",
+                    "metadata": {},
+                },
+                "blocking_reason": {
+                    "code": "recovery_required",
+                    "detail": "Recovery required",
+                    "timestamp": ts(5).isoformat(),
+                    "resume_state": AgentRunState.PAUSED.value,
+                    "metadata": {},
+                },
+            },
+        ),
+    ],
+)
+def test_replay_rejects_invalid_recovery_block_semantics(
+    event_type: str,
+    replacement: dict[str, object],
+) -> None:
+    source_events = {
+        "attempt_failed": _prepare_blocked_run_events(),
+        "attempt_timed_out": _prepare_run_terminal_failure_events("run_timed_out")[:-1],
+        "attempt_abandoned": _prepare_run_terminal_failure_events("run_abandoned")[:-1],
+    }[event_type]
+    invalid_events = _mutate_event_payload(
+        source_events,
+        event_type=event_type,
+        replace_payload=replacement,
+    )
+    with pytest.raises(LedgerReplayError) as exc_info:
+        replay_execution_ledger(invalid_events)
+    assert exc_info.value.metadata["payloadSection"] == "blocking_reason"
+
+
+@pytest.mark.parametrize(
+    ("event_type", "failure_attempt_id"),
+    [
+        ("attempt_failed", None),
+        ("attempt_failed", "attempt-older"),
+        ("attempt_timed_out", "attempt-older"),
+        ("attempt_abandoned", "attempt-missing"),
+    ],
+)
+def test_replay_rejects_failure_records_not_referencing_active_attempt(
+    event_type: str,
+    failure_attempt_id: str | None,
+) -> None:
+    source_events = {
+        "attempt_failed": _prepare_blocked_run_events(),
+        "attempt_timed_out": _prepare_run_terminal_failure_events("run_timed_out")[:-1],
+        "attempt_abandoned": _prepare_run_terminal_failure_events("run_abandoned")[:-1],
+    }[event_type]
+    invalid_events = _mutate_event_payload(
+        source_events,
+        event_type=event_type,
+        replace_payload={
+            "failure": {
+                "category": {
+                    "attempt_failed": "dependency",
+                    "attempt_timed_out": "timeout",
+                    "attempt_abandoned": "internal",
+                }[event_type],
+                "detail": {
+                    "attempt_failed": "Dependency unavailable",
+                    "attempt_timed_out": "Attempt timed out",
+                    "attempt_abandoned": "Attempt abandoned",
+                }[event_type],
+                "timestamp": ts(5).isoformat(),
+                "attempt_id": failure_attempt_id,
+                "metadata": {},
+            },
+            "blocking_reason": {
+                "code": "recovery_required",
+                "detail": "Recovery required",
+                "timestamp": ts(5).isoformat(),
+                "resume_state": AgentRunState.CLAIMED.value,
+                "metadata": {},
+            },
+        },
+    )
+    with pytest.raises(LedgerReplayError) as exc_info:
+        replay_execution_ledger(invalid_events)
+    assert exc_info.value.metadata["payloadSection"] == "failure"
+
+
+@pytest.mark.parametrize("event_type", ["attempt_failed", "attempt_timed_out", "attempt_abandoned"])
+def test_repository_append_rejects_invalid_recovery_blocks_without_mutation(
+    event_type: str,
+) -> None:
+    service = make_service()
+    prepare_running_run(service)
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    before_attempts = service.repository.load_attempt_history("run-1")
+    invalid_event = RuntimeEventEnvelope.model_validate(
+        before_events[-1].model_dump(mode="json")
+        | {
+            "event_id": f"event-{event_type}",
+            "event_type": event_type,
+            "sequence_number": len(before_events) + 1,
+            "run_version": len(before_events) + 1,
+            "attempt_id": before_events[-1].attempt_id,
+            "timestamp": ts(99).isoformat(),
+            "payload": {
+                "failure": {
+                    "category": "dependency",
+                    "detail": "Dependency unavailable",
+                    "timestamp": ts(99).isoformat(),
+                    "attempt_id": "attempt-1",
+                    "metadata": {},
+                },
+                "blocking_reason": {
+                    "code": "wrong_code",
+                    "detail": "Invalid block",
+                    "timestamp": ts(99).isoformat(),
+                    "resume_state": AgentRunState.CLAIMED.value,
+                    "metadata": {},
+                },
+            },
+        }
+    )
+    with pytest.raises(LedgerReplayError):
+        service.repository.append_events(
+            "run-1", [invalid_event], expected_sequence=len(before_events)
+        )
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
+    assert service.repository.load_attempt_history("run-1") == before_attempts
+
+
+@pytest.mark.parametrize("event_type", ["attempt_failed", "attempt_timed_out", "attempt_abandoned"])
+def test_valid_attempt_terminal_histories_replay_and_remain_recoverable(event_type: str) -> None:
+    service = make_service()
+    prepare_running_run(service)
+    service.record_checkpoint(
+        RecordCheckpointCommand(
+            run_id="run-1",
+            command_id="cmd-checkpoint-before-terminal",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="worker-1",
+            checkpoint_id="checkpoint-terminal",
+            state_reference="checkpoint://terminal",
+            integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+            source_metadata={"source": "test"},
+        )
+    )
+    if event_type == "attempt_failed":
+        service.fail_attempt(
+            FailAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-terminal-fail",
+                expected_run_version=7,
+                timestamp=ts(6),
+                actor_reference="worker-1",
+                failure_category="dependency",
+                failure_detail="Dependency unavailable",
+                source_metadata={"source": "test"},
+            )
+        )
+    elif event_type == "attempt_timed_out":
+        service.timeout_attempt(
+            TimeoutAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-terminal-timeout",
+                expected_run_version=7,
+                timestamp=ts(6),
+                actor_reference="worker-1",
+                source_metadata={"source": "test"},
+            )
+        )
+    else:
+        service.abandon_attempt(
+            AbandonAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-terminal-abandon",
+                expected_run_version=7,
+                timestamp=ts(6),
+                actor_reference="worker-1",
+                source_metadata={"source": "test"},
+            )
+        )
+    replayed = replay_execution_ledger(service.repository.list_events("run-1"))
+    assert replayed is not None
+    assert replayed.snapshot.state == AgentRunState.BLOCKED
+    assert replayed.snapshot.blocking_reason is not None
+    assert replayed.snapshot.blocking_reason.code == "recovery_required"
+    assert replayed.snapshot.blocking_reason.resume_state == AgentRunState.CLAIMED
+
+
+@pytest.mark.parametrize(
     "payload_updates",
     [
         {"attempt_number": 2},
