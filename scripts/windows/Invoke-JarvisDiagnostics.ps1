@@ -1,1 +1,1 @@
-# Sanitized bundle: excludes secrets, .env, DB, credentials, user content, tokens.
+# Real diagnostics: creates temp bundle, redacts secrets, excludes DB/.env/credentials, produces archive.

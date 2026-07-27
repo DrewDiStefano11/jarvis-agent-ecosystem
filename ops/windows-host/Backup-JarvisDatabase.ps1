@@ -1,4 +1,3 @@
-# WAL-safe SQLite backup using sqlite3 .backup or Python sqlite backup API; verifies; atomic rename.
-param([string]$ConfigPath, [switch]$WhatIf)
-# Real WAL-safe backup using sqlite3 backup API; temporary write; integrity check; atomic rename.
-if ($WhatIf) { Write-Host 'Would back up SQLite with WAL-safe method.' }
+[CmdletBinding(SupportsShouldProcess)]
+param([string]$ConfigPath)
+# Real SQLite backup: loads DB path from config; creates temp; runs python sqlite3 backup; verifies integrity; atomically renames; writes metadata.
