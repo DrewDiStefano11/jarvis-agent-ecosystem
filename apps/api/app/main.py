@@ -14,12 +14,11 @@ from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.context import ContextAssembler
-from app.agent_runtime.repository import InMemoryAgentRuntimeRepository
+from app.agent_runtime.errors import AgentRuntimeError
+from app.agent_runtime.router import router as agent_runtime_router
 from app.agent_runtime.service import AgentRuntimeService
 from app.agent_runtime.sqlalchemy_repository import SqlAlchemyAgentRuntimeRepository
-from app.agent_runtime.router import router as agent_runtime_router
-from app.agent_runtime.errors import AgentRuntimeError
+from app.context import ContextAssembler
 from app.core.config import Settings
 from app.core.errors import DomainError
 from app.core.transitions import InvalidTransitionError, validate_transition
@@ -238,7 +237,10 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     @app.exception_handler(AgentRuntimeError)
     async def runtime_error(_: Request, exc: AgentRuntimeError) -> JSONResponse:
         status = 404 if exc.code == "run_not_found" else 409
-        return JSONResponse(status_code=status, content={"error": {"code": exc.code, "message": exc.default_message, "details": {}}})
+        return JSONResponse(
+            status_code=status,
+            content={"error": {"code": exc.code, "message": exc.default_message, "details": {}}},
+        )
 
     @app.exception_handler(DomainError)
     async def domain_error(_: Request, exc: DomainError) -> JSONResponse:
