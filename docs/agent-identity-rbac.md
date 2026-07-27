@@ -41,9 +41,11 @@ flowchart TD
 
 Explicit applicable denial always wins; there are no wildcards, score comparisons, rank superusers, display-name checks, or permissive exception fallbacks. Failure to evaluate returns `evaluation_failed`. Decisions return safe matched-source identifiers and a reason code. Resource-specific policy denial overrides broader permission grants. Unknown resources acquire no policy grant.
 
+Role scope is an authorization boundary, not a default. A role assignment's `scope_type` must exactly match the role definition's `role_scope`: global roles are assigned globally without a `scope_id`, while project, team, and resource roles require a non-empty `scope_id` of that same type. No narrower-scope substitution is currently supported. A mismatch returns `ROLE_SCOPE_MISMATCH` with HTTP 409.
+
 ## Hierarchy
 
-Relationships are `primary`, `secondary`, `temporary`, or `functional`. Self-supervision, duplicate relationships, more than one active primary supervisor, and direct or multi-hop cycles are rejected. Traversal is deterministic and bounded to 100 levels.
+Relationships are `primary`, `secondary`, `temporary`, or `functional`. Self-supervision, duplicate relationships, more than one primary supervisor during overlapping effective intervals, and direct or multi-hop cycles are rejected. Cycle traversal intersects every edge's half-open interval (`starts_at <= time < expires_at`), with a missing expiration extending indefinitely; therefore scheduled non-overlapping reverse links are permitted while any concurrently effective path is rejected. Expired and revoked links do not block replacements. Traversal is deterministic and bounded to 100 levels.
 
 ```mermaid
 flowchart LR

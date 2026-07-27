@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -8,7 +9,9 @@ from sqlalchemy import select
 
 from app.core.errors import DomainError
 from app.db.models import (
+    AgentPermissionAssignmentRow,
     AgentRoleAssignmentRow,
+    IdentityAuditEventRow,
     SupervisorRelationshipRow,
     TeamMembershipRow,
 )
@@ -365,3 +368,233 @@ def test_authorization_evidence_and_openapi_bodies_are_deterministic(service):
             "application/json"
         ]["schema"]
         assert body_schema["$ref"].endswith(f"/{model}")
+
+
+@pytest.mark.parametrize("role_scope", ["project", "team", "resource"])
+def test_scoped_roles_cannot_be_assigned_globally(service, role_scope):
+    actor = agent(service, f"agent.role.{role_scope}")
+    role = service.create_definition(
+        "role",
+        CreateRoleRequest(
+            stable_key=f"role.{role_scope}", display_name="Scoped", role_scope=role_scope
+        ),
+    )
+    with pytest.raises(DomainError) as error:
+        service.assign_role(actor.id, AssignRoleRequest(role_id=role.id))
+    assert error.value.code == "ROLE_SCOPE_MISMATCH"
+    assignment = service.assign_role(
+        actor.id,
+        AssignRoleRequest(role_id=role.id, scope_type=role_scope, scope_id=f"{role_scope}-1"),
+    )
+    assert assignment.scope_type == role_scope
+
+
+def test_global_role_requires_global_assignment(service):
+    actor = agent(service, "agent.role.global")
+    role = service.create_definition(
+        "role",
+        CreateRoleRequest(stable_key="role.global", display_name="Global", role_scope="global"),
+    )
+    assert service.assign_role(actor.id, AssignRoleRequest(role_id=role.id)).scope_id is None
+    with pytest.raises(ValueError):
+        AssignRoleRequest(role_id=role.id, scope_type="team")
+    with pytest.raises(ValueError):
+        AssignRoleRequest(role_id=role.id, scope_type="global", scope_id="unexpected")
+
+
+def relationship(supervisor, subordinate, kind="secondary", **times):
+    return SupervisorRequest(
+        supervisor_agent_id=supervisor.id,
+        subordinate_agent_id=subordinate.id,
+        relationship_type=kind,
+        **times,
+    )
+
+
+def test_future_overlapping_and_open_ended_cycles_are_rejected(service):
+    a, b, c = [agent(service, f"agent.future.{key}") for key in "abc"]
+    future = datetime.now(UTC) + timedelta(days=2)
+    end = future + timedelta(days=2)
+    service.add_supervisor(relationship(a, b, starts_at=future, expires_at=end))
+    service.add_supervisor(relationship(b, c, starts_at=future))
+    with pytest.raises(DomainError) as error:
+        service.add_supervisor(relationship(c, a, starts_at=future + timedelta(hours=1)))
+    assert error.value.code == "HIERARCHY_CYCLE"
+
+
+def test_nonoverlapping_hierarchy_intervals_do_not_form_cycle(service):
+    a, b = [agent(service, f"agent.nonoverlap.{key}") for key in "ab"]
+    future = datetime.now(UTC) + timedelta(days=2)
+    service.add_supervisor(
+        relationship(a, b, starts_at=future, expires_at=future + timedelta(days=1))
+    )
+    assert service.add_supervisor(
+        relationship(
+            b, a, starts_at=future + timedelta(days=1), expires_at=future + timedelta(days=2)
+        )
+    )
+
+
+def test_expired_primary_allows_replacement_but_overlaps_conflict(service):
+    first, second, third, child = [agent(service, f"agent.primary.{key}") for key in "abcd"]
+    past = datetime.now(UTC) - timedelta(days=3)
+    service.add_supervisor(
+        relationship(first, child, "primary", starts_at=past, expires_at=past + timedelta(days=1))
+    )
+    replacement = service.add_supervisor(relationship(second, child, "primary"))
+    assert replacement.supervisor_agent_id == second.id
+    with pytest.raises(DomainError) as error:
+        service.add_supervisor(relationship(third, child, "primary"))
+    assert error.value.code == "PRIMARY_SUPERVISOR_EXISTS"
+
+
+def test_revoked_and_nonoverlapping_future_primary_allow_replacement(service):
+    first, second, child = [agent(service, f"agent.primary.replacement.{key}") for key in "abc"]
+    future = datetime.now(UTC) + timedelta(days=3)
+    original = service.add_supervisor(
+        relationship(
+            first,
+            child,
+            "primary",
+            starts_at=future,
+            expires_at=future + timedelta(days=1),
+        )
+    )
+    service.add_supervisor(
+        relationship(second, child, "primary", starts_at=future + timedelta(days=1))
+    )
+    with service.sessions.begin() as session:
+        session.get(SupervisorRelationshipRow, original.id).revoked_at = datetime.now(UTC)
+    third = agent(service, "agent.primary.replacement.third")
+    assert service.add_supervisor(
+        relationship(
+            third,
+            child,
+            "primary",
+            starts_at=future,
+            expires_at=future + timedelta(hours=12),
+        )
+    )
+
+
+@pytest.mark.parametrize("kind", ["primary", "secondary", "temporary", "functional"])
+def test_duplicate_hierarchy_is_structured_and_atomic(service, kind):
+    supervisor, subordinate = [agent(service, f"agent.duplicate.{kind}.{key}") for key in "ab"]
+    request = relationship(supervisor, subordinate, kind)
+    service.add_supervisor(request)
+    before = len(service.audits(0, 100))
+    with pytest.raises(DomainError) as error:
+        service.add_supervisor(request)
+    assert error.value.code == "DUPLICATE_RELATIONSHIP"
+    with service.sessions() as session:
+        assert len(list(session.scalars(select(SupervisorRelationshipRow)))) == 1
+        assert len(list(session.scalars(select(IdentityAuditEventRow)))) == before
+
+
+def test_global_and_scoped_permission_uniqueness(service):
+    actor = agent(service, "agent.permission.unique")
+    service.transition(actor.id, "active")
+    permission = service.create_definition(
+        "permission",
+        CreatePermissionRequest(
+            stable_key="artifact.read", display_name="Read", resource_type="artifact", action="read"
+        ),
+    )
+    for effect in ("allow", "deny"):
+        request = AssignPermissionRequest(permission_id=permission.id, effect=effect)
+        service.assign_permission(actor.id, request)
+        with pytest.raises(DomainError) as error:
+            service.assign_permission(actor.id, request)
+        assert error.value.code == "DUPLICATE_ASSIGNMENT"
+    for resource_id in ("one", "two"):
+        service.assign_permission(
+            actor.id,
+            AssignPermissionRequest(
+                permission_id=permission.id,
+                effect="allow",
+                resource_type="artifact",
+                resource_id=resource_id,
+            ),
+        )
+    with pytest.raises(DomainError):
+        service.assign_permission(
+            actor.id,
+            AssignPermissionRequest(
+                permission_id=permission.id,
+                effect="allow",
+                resource_type="artifact",
+                resource_id="one",
+            ),
+        )
+    with service.sessions() as session:
+        assert len(list(session.scalars(select(AgentPermissionAssignmentRow)))) == 4
+
+
+def test_identity_openapi_has_typed_success_envelopes(service):
+    schema = create_app(database_url=str(service.sessions.kw["bind"].url)).openapi()
+    operations = [
+        operation
+        for path, item in schema["paths"].items()
+        if path.startswith("/api/identity")
+        for operation in item.values()
+        if isinstance(operation, dict) and "responses" in operation
+    ]
+    assert operations
+    for operation in operations:
+        success = operation["responses"].get("200") or operation["responses"].get("201")
+        response_schema = success["content"]["application/json"]["schema"]
+        assert response_schema.get("$ref")
+        envelope = schema["components"]["schemas"][response_schema["$ref"].rsplit("/", 1)[-1]]
+        assert set(envelope["properties"]) == {"data", "meta"}
+    serialized = str(schema)
+    assert "AgentIdentity" in serialized
+    assert "AuthorizationDecision" in serialized
+
+
+def test_patch_cors_preflight_and_existing_methods(service):
+    app = create_app(database_url=str(service.sessions.kw["bind"].url))
+
+    async def preflight(method):
+        messages = []
+        request_sent = False
+
+        async def receive():
+            nonlocal request_sent
+            if not request_sent:
+                request_sent = True
+                return {"type": "http.request", "body": b"", "more_body": False}
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            messages.append(message)
+
+        headers = [
+            (b"origin", b"http://localhost:5173"),
+            (b"access-control-request-method", method.encode()),
+            (b"access-control-request-headers", b"content-type"),
+        ]
+        await app(
+            {
+                "type": "http",
+                "asgi": {"version": "3.0"},
+                "http_version": "1.1",
+                "method": "OPTIONS",
+                "scheme": "http",
+                "path": "/api/identity/agents/example",
+                "raw_path": b"/api/identity/agents/example",
+                "query_string": b"",
+                "headers": headers,
+                "client": ("test", 123),
+                "server": ("test", 80),
+                "root_path": "",
+            },
+            receive,
+            send,
+        )
+        start = next(message for message in messages if message["type"] == "http.response.start")
+        return start["status"], dict(start["headers"])
+
+    for method in ("GET", "POST", "PATCH"):
+        status, headers = asyncio.run(preflight(method))
+        assert status == 200
+        assert method.encode() in headers[b"access-control-allow-methods"]

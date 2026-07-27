@@ -93,6 +93,13 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
         "ix_context_assemblies_status",
         "ix_context_assemblies_task_id",
     }
+    permission_indexes = {
+        item["name"]: item for item in inspector.get_indexes("identity_agent_permissions")
+    }
+    assert permission_indexes["uq_identity_agent_permissions_global"]["unique"] == 1
+    assert "ck_identity_agent_permissions_resource_scope" in {
+        item["name"] for item in inspector.get_check_constraints("identity_agent_permissions")
+    }
     with engine.connect() as connection:
         assert connection.scalar(text("select version_num from alembic_version")) == "a87a487dd714"
     engine.dispose()
@@ -101,6 +108,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     lease_tables = set(inspect(lease_engine).get_table_names())
     lease_engine.dispose()
     assert "context_assemblies" not in lease_tables
+    assert "identity_agent_permissions" not in lease_tables
     assert {"task_attempts", "task_leases", "workers"} <= lease_tables
     command.downgrade(config, "20260720_01")
     phase_2a_engine = create_engine(database_url(path))
@@ -110,6 +118,10 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     assert not phase_2b_tables & phase_2a_tables
     assert expected_tables - phase_2b_tables <= phase_2a_tables
     command.upgrade(config, "head")
+    restored = inspect(create_engine(database_url(path)))
+    assert "uq_identity_agent_permissions_global" in {
+        item["name"] for item in restored.get_indexes("identity_agent_permissions")
+    }
     command.downgrade(config, "base")
     downgraded_tables = set(inspect(create_engine(database_url(path))).get_table_names())
     assert not expected_tables & downgraded_tables

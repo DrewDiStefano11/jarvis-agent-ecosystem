@@ -229,6 +229,11 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("revoked_at", sa.DateTime(timezone=True), nullable=True),
         sa.CheckConstraint("effect IN ('allow','deny')"),
+        sa.CheckConstraint(
+            "(resource_type IS NULL AND resource_id IS NULL) OR "
+            "(resource_type IS NOT NULL AND resource_id IS NOT NULL)",
+            name="ck_identity_agent_permissions_resource_scope",
+        ),
         sa.ForeignKeyConstraint(
             ["agent_id"],
             ["identity_agents.id"],
@@ -252,6 +257,13 @@ def upgrade() -> None:
             batch_op.f("ix_identity_agent_permissions_permission_id"),
             ["permission_id"],
             unique=False,
+        )
+        batch_op.create_index(
+            "uq_identity_agent_permissions_global",
+            ["agent_id", "permission_id", "effect"],
+            unique=True,
+            sqlite_where=sa.text("resource_type IS NULL AND resource_id IS NULL"),
+            postgresql_where=sa.text("resource_type IS NULL AND resource_id IS NULL"),
         )
 
     op.create_table(
@@ -585,6 +597,7 @@ def downgrade() -> None:
 
     op.drop_table("identity_agent_roles")
     with op.batch_alter_table("identity_agent_permissions", schema=None) as batch_op:
+        batch_op.drop_index("uq_identity_agent_permissions_global")
         batch_op.drop_index(batch_op.f("ix_identity_agent_permissions_permission_id"))
         batch_op.drop_index(batch_op.f("ix_identity_agent_permissions_agent_id"))
 

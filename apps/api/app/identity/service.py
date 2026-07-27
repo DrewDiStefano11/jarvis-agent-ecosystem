@@ -44,6 +44,10 @@ def uid(prefix: str) -> str:
     return f"{prefix}-{uuid4().hex}"
 
 
+def utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
 class IdentityService:
     def __init__(self, sessions: sessionmaker[Session]) -> None:
         self.sessions = sessions
@@ -221,6 +225,14 @@ class IdentityService:
                 raise DomainError("ROLE_NOT_FOUND", "Role was not found.", 404)
             if not role.is_enabled:
                 raise DomainError("ROLE_DISABLED", "Disabled roles cannot be assigned.", 409)
+            # Role definitions are authorization boundaries: assignments may not widen or
+            # reinterpret them. Exact scope matching is the intentionally conservative policy.
+            if data.scope_type != role.role_scope:
+                raise DomainError(
+                    "ROLE_SCOPE_MISMATCH",
+                    "Assignment scope must match the role's declared scope.",
+                    409,
+                )
             values = data.model_dump()
             values["starts_at"] = values["starts_at"] or now()
             row = AgentRoleAssignmentRow(id=uid("arole"), agent_id=agent_id, **values)
@@ -265,6 +277,23 @@ class IdentityService:
                 )
             if not permission:
                 raise DomainError("PERMISSION_NOT_FOUND", "Permission was not found.", 404)
+            duplicate = uow.session.scalar(
+                select(AgentPermissionAssignmentRow.id).where(
+                    AgentPermissionAssignmentRow.agent_id == agent_id,
+                    AgentPermissionAssignmentRow.permission_id == data.permission_id,
+                    AgentPermissionAssignmentRow.effect == data.effect,
+                    AgentPermissionAssignmentRow.resource_type.is_(None)
+                    if data.resource_type is None
+                    else AgentPermissionAssignmentRow.resource_type == data.resource_type,
+                    AgentPermissionAssignmentRow.resource_id.is_(None)
+                    if data.resource_id is None
+                    else AgentPermissionAssignmentRow.resource_id == data.resource_id,
+                )
+            )
+            if duplicate:
+                raise DomainError(
+                    "DUPLICATE_ASSIGNMENT", "Equivalent assignment already exists.", 409
+                )
             values = data.model_dump()
             values["starts_at"] = values["starts_at"] or now()
             row = AgentPermissionAssignmentRow(id=uid("aperm"), agent_id=agent_id, **values)
@@ -430,7 +459,26 @@ class IdentityService:
                         "Retired agents cannot enter hierarchy relationships.",
                         409,
                     )
-            if self._reachable(uow.session, data.subordinate_agent_id, data.supervisor_agent_id):
+            duplicate = uow.session.scalar(
+                select(SupervisorRelationshipRow.id).where(
+                    SupervisorRelationshipRow.supervisor_agent_id == data.supervisor_agent_id,
+                    SupervisorRelationshipRow.subordinate_agent_id == data.subordinate_agent_id,
+                    SupervisorRelationshipRow.relationship_type == data.relationship_type,
+                )
+            )
+            if duplicate:
+                raise DomainError(
+                    "DUPLICATE_RELATIONSHIP", "Equivalent relationship already exists.", 409
+                )
+            starts_at = data.starts_at or now()
+            expires_at = data.expires_at
+            if self._reachable_during(
+                uow.session,
+                data.subordinate_agent_id,
+                data.supervisor_agent_id,
+                starts_at,
+                expires_at,
+            ):
                 raise DomainError(
                     "HIERARCHY_CYCLE", "Relationship would create a hierarchy cycle.", 409
                 )
@@ -440,6 +488,16 @@ class IdentityService:
                         SupervisorRelationshipRow.subordinate_agent_id == data.subordinate_agent_id,
                         SupervisorRelationshipRow.relationship_type == "primary",
                         SupervisorRelationshipRow.revoked_at.is_(None),
+                        SupervisorRelationshipRow.starts_at
+                        < (
+                            expires_at
+                            if expires_at is not None
+                            else datetime.max.replace(tzinfo=UTC)
+                        ),
+                        or_(
+                            SupervisorRelationshipRow.expires_at.is_(None),
+                            SupervisorRelationshipRow.expires_at > starts_at,
+                        ),
                     )
                 )
                 if existing:
@@ -447,7 +505,7 @@ class IdentityService:
                         "PRIMARY_SUPERVISOR_EXISTS", "Agent already has a primary supervisor.", 409
                     )
             values = data.model_dump()
-            values["starts_at"] = values["starts_at"] or now()
+            values["starts_at"] = starts_at
             row = SupervisorRelationshipRow(id=uid("rel"), **values)
             uow.session.add(row)
             self._audit(
@@ -458,32 +516,62 @@ class IdentityService:
                 data.assigned_by,
                 data.reason,
             )
+            try:
+                uow.session.flush()
+            except IntegrityError as exc:
+                raise DomainError(
+                    "DUPLICATE_RELATIONSHIP", "Equivalent relationship already exists.", 409
+                ) from exc
             return row
 
-    def _reachable(self, s: Session, start: str, target: str) -> bool:
-        frontier = [start]
-        seen = set()
-        t = now()
+    def _reachable_during(
+        self,
+        s: Session,
+        start: str,
+        target: str,
+        interval_start: datetime,
+        interval_end: datetime | None,
+    ) -> bool:
+        """Return whether a path exists at any instant in the proposed interval.
+
+        Each traversal state carries the intersection of all edge intervals in its path,
+        preventing non-concurrent scheduled edges from producing a false cycle.
+        """
+        frontier = [(start, interval_start, interval_end)]
+        seen: set[tuple[str, datetime, datetime | None]] = set()
+        infinity = datetime.max.replace(tzinfo=UTC)
         for _ in range(MAX_HIERARCHY_DEPTH):
             if not frontier:
                 return False
-            if target in frontier:
-                return True
-            seen.update(frontier)
-            frontier = list(
-                s.scalars(
-                    select(SupervisorRelationshipRow.subordinate_agent_id).where(
-                        SupervisorRelationshipRow.supervisor_agent_id.in_(frontier),
+            next_frontier = []
+            for node, path_start, path_end in frontier:
+                if node == target:
+                    return True
+                state = (node, path_start, path_end)
+                if state in seen:
+                    continue
+                seen.add(state)
+                edges = s.scalars(
+                    select(SupervisorRelationshipRow).where(
+                        SupervisorRelationshipRow.supervisor_agent_id == node,
                         SupervisorRelationshipRow.revoked_at.is_(None),
-                        SupervisorRelationshipRow.starts_at <= t,
+                        SupervisorRelationshipRow.starts_at
+                        < (path_end if path_end is not None else infinity),
                         or_(
                             SupervisorRelationshipRow.expires_at.is_(None),
-                            SupervisorRelationshipRow.expires_at > t,
+                            SupervisorRelationshipRow.expires_at > path_start,
                         ),
-                        SupervisorRelationshipRow.subordinate_agent_id.not_in(seen),
                     )
                 )
-            )
+                for edge in edges:
+                    overlap_start = max(utc(path_start), utc(edge.starts_at))
+                    ends = [utc(x) for x in (path_end, edge.expires_at) if x is not None]
+                    overlap_end = min(ends) if ends else None
+                    if overlap_end is None or overlap_start < overlap_end:
+                        next_frontier.append(
+                            (edge.subordinate_agent_id, overlap_start, overlap_end)
+                        )
+            frontier = next_frontier
         raise DomainError(
             "HIERARCHY_DEPTH_EXCEEDED", "Hierarchy traversal exceeded its safe depth.", 409
         )

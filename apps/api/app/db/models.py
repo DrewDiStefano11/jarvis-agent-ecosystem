@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -193,7 +194,21 @@ class AgentPermissionAssignmentRow(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         CheckConstraint("effect IN ('allow','deny')"),
+        CheckConstraint(
+            "(resource_type IS NULL AND resource_id IS NULL) OR "
+            "(resource_type IS NOT NULL AND resource_id IS NOT NULL)",
+            name="ck_identity_agent_permissions_resource_scope",
+        ),
         UniqueConstraint("agent_id", "permission_id", "effect", "resource_type", "resource_id"),
+        Index(
+            "uq_identity_agent_permissions_global",
+            "agent_id",
+            "permission_id",
+            "effect",
+            unique=True,
+            sqlite_where=resource_type.is_(None) & resource_id.is_(None),
+            postgresql_where=resource_type.is_(None) & resource_id.is_(None),
+        ),
     )
 
 

@@ -90,7 +90,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         CORSMiddleware,
         allow_origins=[settings.web_origin],
         allow_credentials=True,
-        allow_methods=["GET", "POST"],
+        allow_methods=["GET", "POST", "PATCH"],
         allow_headers=["Content-Type", "Idempotency-Key"],
     )
     broker = EventBroker(repository)
