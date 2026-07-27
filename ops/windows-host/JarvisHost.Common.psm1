@@ -21,3 +21,5 @@ Export-ModuleMember -Function Import-JarvisHostConfig, Test-JarvisHostConfig, Re
 function Resolve-JarvisHostPath { param([string]$Path, [string]$Base) if ([System.IO.Path]::IsPathRooted($Path)) { return $Path } else { return Join-Path $Base $Path } }
 function Exit-JarvisHostLock { param([string]$LockFile) if (Test-Path $LockFile) { Remove-Item $LockFile -Force -ErrorAction SilentlyContinue } }
 function Test-JarvisHostConfig { param([string]$Path) $cfg = Import-JarvisHostConfig -Path $Path; return ($null -ne $cfg.repoPath -and $cfg.backendPort -gt 0) }
+function Get-ProcessCreationTime { param([int]$PID) (Get-Process -Id $PID -ErrorAction SilentlyContinue).StartTime }
+function Compare-ProcessOwnership { param([int]$PID, [string]$ExpectedExe) $p = Get-Process -Id $PID -ErrorAction SilentlyContinue; return ($p -and $p.Path -eq $ExpectedExe -and $null -ne $p.StartTime) }
