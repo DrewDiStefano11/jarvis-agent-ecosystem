@@ -147,64 +147,112 @@ def upgrade() -> None:
             {"id": ROLE_ID, "timestamp": timestamp},
         )
     for permission_id, *_ in permissions:
+        existing = connection.execute(
+            sa.text("SELECT effect FROM identity_role_permissions WHERE role_id = :role_id AND permission_id = :permission_id"),
+            {"role_id": ROLE_ID, "permission_id": permission_id},
+        ).first()
+        if existing is None:
+            connection.execute(
+                sa.text(
+                    "INSERT INTO identity_role_permissions (role_id, permission_id, effect, created_at) VALUES (:role_id, :permission_id, 'allow', :timestamp)"
+                ),
+                {"role_id": ROLE_ID, "permission_id": permission_id, "timestamp": timestamp},
+            )
+        elif existing.effect != "allow":
+            raise RuntimeError(f"Runtime authorization bootstrap conflict: role-permission link {permission_id} has effect {existing.effect}, expected 'allow'")
+    role_assignment_id = "assign-runtime-local-operator-role"
+    existing_assignment = connection.execute(
+        sa.text("SELECT * FROM identity_agent_roles WHERE id = :id OR (agent_id = :agent_id AND role_id = :role_id AND scope_type = 'global')"),
+        {"id": role_assignment_id, "agent_id": OPERATOR_ID, "role_id": ROLE_ID},
+    ).mappings().first()
+    if existing_assignment is None:
         connection.execute(
             sa.text(
-                "INSERT OR IGNORE INTO identity_role_permissions (role_id, permission_id, effect, created_at) VALUES (:role_id, :permission_id, 'allow', :timestamp)"
+                "INSERT INTO identity_agent_roles (id, agent_id, role_id, scope_type, scope_id, starts_at, expires_at, assigned_by, reason, created_at, revoked_at) VALUES (:id, :agent_id, :role_id, 'global', NULL, :timestamp, NULL, NULL, 'Runtime bootstrap', :timestamp, NULL)"
             ),
-            {"role_id": ROLE_ID, "permission_id": permission_id, "timestamp": timestamp},
+            {"id": role_assignment_id, "agent_id": OPERATOR_ID, "role_id": ROLE_ID, "timestamp": timestamp},
         )
-    connection.execute(
-        sa.text(
-            "INSERT OR IGNORE INTO identity_agent_roles (id, agent_id, role_id, scope_type, scope_id, starts_at, expires_at, assigned_by, reason, created_at, revoked_at) VALUES ('assign-runtime-local-operator-role', :agent_id, :role_id, 'global', NULL, :timestamp, NULL, NULL, 'Runtime bootstrap', :timestamp, NULL)"
-        ),
-        {"agent_id": OPERATOR_ID, "role_id": ROLE_ID, "timestamp": timestamp},
-    )
+    else:
+        if existing_assignment["id"] != role_assignment_id:
+            raise RuntimeError(f"Runtime authorization bootstrap conflict: role assignment ID collision for {role_assignment_id}")
+        if existing_assignment["agent_id"] != OPERATOR_ID or existing_assignment["role_id"] != ROLE_ID:
+            raise RuntimeError(f"Runtime authorization bootstrap conflict: role assignment key collision")
+        if existing_assignment["scope_type"] != "global" or existing_assignment["scope_id"] is not None:
+            raise RuntimeError(f"Runtime authorization bootstrap conflict: role assignment scope mismatch")
+        if existing_assignment["revoked_at"] is not None:
+            raise RuntimeError(f"Runtime authorization bootstrap conflict: role assignment is revoked")
     for key in ("agent_runtime.control", "agent_runtime.recovery"):
-        connection.execute(
-            sa.text(
-                "INSERT OR IGNORE INTO identity_agent_capabilities (id, agent_id, capability_id, source, starts_at, expires_at, assigned_by, created_at, revoked_at) VALUES (:id, :agent_id, :capability_id, 'runtime-bootstrap', :timestamp, NULL, NULL, :timestamp, NULL)"
-            ),
-            {
-                "id": f"assign-runtime-local-{key.rsplit('.', 1)[1]}",
-                "agent_id": OPERATOR_ID,
-                "capability_id": _capability_id(key),
-                "timestamp": timestamp,
-            },
-        )
+        cap_assignment_id = f"assign-runtime-local-{key.rsplit('.', 1)[1]}"
+        cap_id = _capability_id(key)
+        existing_cap = connection.execute(
+            sa.text("SELECT * FROM identity_agent_capabilities WHERE id = :id OR (agent_id = :agent_id AND capability_id = :capability_id AND source = 'runtime-bootstrap')"),
+            {"id": cap_assignment_id, "agent_id": OPERATOR_ID, "capability_id": cap_id},
+        ).mappings().first()
+        if existing_cap is None:
+            connection.execute(
+                sa.text(
+                    "INSERT INTO identity_agent_capabilities (id, agent_id, capability_id, source, starts_at, expires_at, assigned_by, created_at, revoked_at) VALUES (:id, :agent_id, :capability_id, 'runtime-bootstrap', :timestamp, NULL, NULL, :timestamp, NULL)"
+                ),
+                {"id": cap_assignment_id, "agent_id": OPERATOR_ID, "capability_id": cap_id, "timestamp": timestamp},
+            )
+        else:
+            if existing_cap["id"] != cap_assignment_id:
+                raise RuntimeError(f"Runtime authorization bootstrap conflict: capability assignment ID collision for {cap_assignment_id}")
+            if existing_cap["agent_id"] != OPERATOR_ID or existing_cap["capability_id"] != cap_id:
+                raise RuntimeError(f"Runtime authorization bootstrap conflict: capability assignment key collision")
+            if existing_cap["source"] != "runtime-bootstrap":
+                raise RuntimeError(f"Runtime authorization bootstrap conflict: capability assignment source mismatch")
+            if existing_cap["revoked_at"] is not None:
+                raise RuntimeError(f"Runtime authorization bootstrap conflict: capability assignment is revoked")
 
 
 def downgrade() -> None:
     connection = op.get_bind()
+    # Delete capability assignments first (exact IDs)
     connection.execute(
         sa.text(
-            "DELETE FROM identity_agent_capabilities WHERE agent_id = :id AND source = 'runtime-bootstrap'"
+            "DELETE FROM identity_agent_capabilities WHERE id IN ('assign-runtime-local-control', 'assign-runtime-local-recovery')"
         ),
-        {"id": OPERATOR_ID},
     )
+    # Delete role assignment (exact ID)
     connection.execute(
         sa.text(
-            "DELETE FROM identity_agent_roles WHERE id = 'assign-runtime-local-operator-role' AND agent_id = :id"
+            "DELETE FROM identity_agent_roles WHERE id = 'assign-runtime-local-operator-role'"
         ),
-        {"id": OPERATOR_ID},
     )
-    connection.execute(
-        sa.text("DELETE FROM identity_role_permissions WHERE role_id = :id"), {"id": ROLE_ID}
-    )
+    # Delete role-permission links (exact composite keys)
+    for operation in OPERATION_CAPABILITIES:
+        for scope, (_, _) in SCOPE_DEFINITIONS.items():
+            permission_id = _permission_id(operation, scope)
+            connection.execute(
+                sa.text("DELETE FROM identity_role_permissions WHERE role_id = :role_id AND permission_id = :permission_id"),
+                {"role_id": ROLE_ID, "permission_id": permission_id},
+            )
+    # Delete built-in role (exact ID and stable_key)
     connection.execute(
         sa.text(
             "DELETE FROM identity_roles WHERE id = :id AND stable_key = 'role.runtime-local-operator'"
         ),
         {"id": ROLE_ID},
     )
+    # Delete built-in operator (exact ID and stable_key)
     connection.execute(
         sa.text(
             "DELETE FROM identity_agents WHERE id = :id AND stable_key = 'agent.runtime-local-operator'"
         ),
         {"id": OPERATOR_ID},
     )
+    # Delete capability definitions (exact IDs)
     connection.execute(
         sa.text(
             "DELETE FROM identity_capabilities WHERE id IN ('cap-runtime-control', 'cap-runtime-recovery')"
         )
     )
-    connection.execute(sa.text("DELETE FROM identity_permissions WHERE id LIKE 'perm-runtime-%'"))
+    # Delete permission definitions (exact IDs)
+    for operation in OPERATION_CAPABILITIES:
+        for scope, (_, _) in SCOPE_DEFINITIONS.items():
+            permission_id = _permission_id(operation, scope)
+            connection.execute(
+                sa.text("DELETE FROM identity_permissions WHERE id = :id"),
+                {"id": permission_id},
+            )

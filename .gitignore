@@ -1,20 +1,41 @@
-.env
-.venv/
+```
+# Python
 __pycache__/
-.pytest_cache/
-.ruff_cache/
 *.pyc
-*.db
-*.db-shm
-*.db-wal
-data/
-node_modules/
-.pnpm-store/
+*.pyo
+*.pyd
+*.py~
+*.pyc~
+*.pyo~
+*.pyd~
 *.egg-info/
-*.tsbuildinfo
-dist/
-coverage/
+.eggs/
+.venv/
+venv/
+.env
+.env.local
+.env.*
+
+# Testing
 .coverage
-apps/web/public/mockServiceWorker.js
-apps/web/vite.config.js
-apps/web/vite.config.d.ts
+coverage/
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.hypothesis/
+
+# Build and distribution
+build/
+dist/
+*.egg
+*.whl
+*.tar.gz
+*.zip
+
+# Logs
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db
+```
