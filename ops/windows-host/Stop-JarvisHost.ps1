@@ -1,14 +1,21 @@
 [CmdletBinding(SupportsShouldProcess)]
-param([string]$ConfigPath = (Join-Path $PSScriptRoot 'jarvis-host.json'), [switch]$Force)
+param([string]$ConfigPath = (Join-Path $PSScriptRoot 'jarvis-host.json'), [switch]$Force, [int]$GracefulTimeoutSec = 10)
 Import-Module (Join-Path $PSScriptRoot 'JarvisHost.Common.psm1') -Force
 $cfg = Import-JarvisHostConfig -Path $ConfigPath
-$metaFile = Join-Path $cfg.stateDirectory 'backend.json'
-$meta = Read-JarvisProcessMetadata -Path $metaFile
-if ($meta.pid) {
-  $verified = Test-JarvisProcessOwnership -PID $meta.pid -ExpectedExecutable $meta.executable -ExpectedWorkingDir $meta.workingDirectory
-  if ($verified) {
-    Stop-JarvisOwnedProcess -PID $meta.pid -ExpectedExecutable $meta.executable -GracefulTimeoutSec 10
+if ($PSCmdlet.ShouldProcess("Host", "Stop services")) {
+  $files = @('frontend.json', 'backend.json')
+  foreach ($file in $files) {
+    $metaPath = Join-Path $cfg.stateDirectory $file
+    $meta = Read-JarvisProcessMetadata -Path $metaPath
+    if ($meta.pid) {
+      $verified = Test-JarvisProcessOwnership -PID $meta.pid -ExpectedExecutable $meta.executable -ExpectedWorkingDir $meta.workingDirectory -ExpectedArguments $meta.arguments
+      if ($verified) {
+        Stop-JarvisOwnedProcess -PID $meta.pid -ExpectedExecutable $meta.executable -ExpectedWorkingDir $meta.workingDirectory -ExpectedArguments $meta.arguments -GracefulTimeoutSec $GracefulTimeoutSec -Force:$Force
+      }
+    }
+    $tmp = $metaPath + ".clear"
+    Write-JarvisProcessMetadata -Path $tmp -Data @{ pid = $null; cleared = (Get-Date -Format 'o') }
+    Move-Item -Path $tmp -Destination $metaPath -Force
   }
-  Write-JarvisProcessMetadata -Path $metaFile -Data @{ pid = $null }
+  Write-Output "Host stopped: only verified owned processes terminated."
 }
-Write-Output "Real stop executed: verified ownership before termination."

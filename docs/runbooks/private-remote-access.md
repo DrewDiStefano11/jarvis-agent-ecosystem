@@ -11,3 +11,7 @@ Access from authorized tailnet device; test WebSocket upgrade.
 No Funnel; no router forwarding; loopback binding preserved; ACL recommendations included.
 ## Security Constraints
 - Tailscale Serve only; no Funnel; loopback preserved; no public firewall rules.
+## Commands
+Configure: Configure-JarvisTailscale.ps1 -ConfigPath jarvis-host.json
+Remove: Remove-JarvisTailscale.ps1
+Verification: Check tailnet URL after Serve setup; test WebSocket upgrade via same-origin private route.

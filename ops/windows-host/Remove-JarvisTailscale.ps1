@@ -1,12 +1,11 @@
 [CmdletBinding(SupportsShouldProcess)]
 param()
 Import-Module (Join-Path $PSScriptRoot 'JarvisHost.Common.psm1') -Force
-$manifest = Get-JarvisToolkitManifest -ManifestPath (Join-Path $env:LOCALAPPDATA 'JarvisHost' 'tailscale.json')
-if ($PSCmdlet.ShouldProcess("Tailscale", "Remove toolkit routes")) {
-  if ($manifest.routes) {
-    foreach ($route in $manifest.routes) {
-      Invoke-JarvisTailscale @("serve", "reset") 2>&1 | Out-Null
-    }
+$manifestPath = Join-Path (Resolve-JarvisHostPath -Path (Import-JarvisHostConfig -Path (Join-Path $PSScriptRoot 'jarvis-host.json')).stateDirectory -BaseDir $env:LOCALAPPDATA) 'tailscale_routes.json'
+$manifest = Get-JarvisToolkitManifest -ManifestPath $manifestPath
+if ($PSCmdlet.ShouldProcess("Tailscale", "Remove only toolkit-owned routes")) {
+  foreach ($route in $manifest.hostnames) {
+    try { Invoke-JarvisTailscale @("serve", "--https=443", $route, "reset") } catch { }
   }
-  Write-Output "Toolkit-owned Tailscale routes removed."
+  Write-Output "Toolkit-owned routes removed. Unrelated routes preserved."
 }

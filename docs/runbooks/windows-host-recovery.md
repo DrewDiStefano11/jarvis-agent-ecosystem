@@ -13,3 +13,8 @@ Watchdog latch requires operator reset.
 Requires stop; uses Restore-JarvisDatabase.ps1 with rollback.
 ## Rollback
 - Restore database from verified backup; rollback to safety backup on failure.
+## Commands
+Status: Get-JarvisHostStatus.ps1
+Diagnostics: scripts/windows/Invoke-JarvisDiagnostics.ps1
+Restore: Restore-JarvisDatabase.ps1 -BackupPath <path>
+Watchdog latch reset: Remove crash_loop.json in state directory.
