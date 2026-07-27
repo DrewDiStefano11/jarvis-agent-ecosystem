@@ -47,6 +47,10 @@ class AgentRuntimeRepository(ExecutionLedgerAppender, Protocol):
 
     def load_run(self, run_id: RunId) -> AgentRunSnapshot | None: ...
 
+    def load_run_state(
+        self, run_id: RunId
+    ) -> tuple[AgentRunSnapshot, list[RuntimeEventEnvelope]] | None: ...
+
     def save_run(self, snapshot: AgentRunSnapshot, *, expected_version: int) -> None: ...
 
     def list_events(self, run_id: RunId) -> list[RuntimeEventEnvelope]: ...
@@ -126,6 +130,16 @@ class InMemoryAgentRuntimeRepository(AgentRuntimeRepository):
         with self._lock:
             snapshot = self._snapshots.get(run_id)
             return None if snapshot is None else snapshot.model_copy(deep=True)
+
+    def load_run_state(
+        self, run_id: RunId
+    ) -> tuple[AgentRunSnapshot, list[RuntimeEventEnvelope]] | None:
+        with self._lock:
+            snapshot = self._snapshots.get(run_id)
+            events = self._events.get(run_id)
+            if snapshot is None or events is None:
+                return None
+            return snapshot.model_copy(deep=True), [item.model_copy(deep=True) for item in events]
 
     def save_run(self, snapshot: AgentRunSnapshot, *, expected_version: int) -> None:
         with self._lock:

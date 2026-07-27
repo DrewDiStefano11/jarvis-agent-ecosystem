@@ -636,3 +636,25 @@ def test_exact_duplicate_recovery_plan_survives_precommit_race_without_ledger_se
     assert all(hasattr(item, "snapshot") for item in [first, second])
     assert sorted([first.idempotent_replay, second.idempotent_replay]) == [False, True]
     assert len(service.repository.list_events("run-1")) == 9
+
+
+def test_unexplained_snapshot_ledger_mismatch_still_fails_closed() -> None:
+    service = make_service()
+    create_run(service)
+    with service.repository._lock:
+        stored = service.repository._snapshots["run-1"]
+        service.repository._snapshots["run-1"] = stored.model_copy(
+            update={"status_detail": "corrupted outside ledger"},
+            deep=True,
+        )
+    with pytest.raises(VersionConflictError):
+        service.queue_run(
+            QueueAgentRunCommand(
+                run_id="run-1",
+                command_id="cmd-queue-corrupted",
+                expected_run_version=1,
+                timestamp=ts(1),
+                actor_reference="scheduler-1",
+                source_metadata={"source": "test"},
+            )
+        )

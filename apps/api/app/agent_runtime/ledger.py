@@ -439,6 +439,26 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
         )
     elif event.event_type == AgentRuntimeEventType.RUN_RESUMED:
         target = cast(AgentRunState, validated_payload["target_state"])
+        if snapshot.pause_reason is None:
+            raise LedgerReplayError(
+                "Resuming requires a stored pause reason.",
+                run_id=event.run_id,
+                command_id=event.command_id,
+                metadata={"eventType": event.event_type.value, "payloadSection": "target_state"},
+            )
+        if target != snapshot.pause_reason.resume_state:
+            raise LedgerReplayError(
+                "The resume target does not match the stored pause resume state.",
+                run_id=event.run_id,
+                attempt_id=snapshot.active_attempt_id,
+                command_id=event.command_id,
+                metadata={
+                    "eventType": event.event_type.value,
+                    "payloadSection": "target_state",
+                    "expectedTargetState": snapshot.pause_reason.resume_state,
+                    "actualTargetState": target,
+                },
+            )
         active_attempt = _get_optional_active_attempt(snapshot, attempts)
         if target == AgentRunState.RUNNING:
             if active_attempt is None:
@@ -449,6 +469,14 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 )
             attempts[active_attempt.attempt_id] = active_attempt.model_copy(
                 update={"state": AttemptState.RUNNING, "version": event.run_version}
+            )
+        elif active_attempt is not None:
+            raise LedgerReplayError(
+                "Non-running resume targets must not retain an active attempt.",
+                run_id=event.run_id,
+                attempt_id=active_attempt.attempt_id,
+                command_id=event.command_id,
+                metadata={"targetState": target},
             )
         snapshot = snapshot.model_copy(
             update={
@@ -479,6 +507,26 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
         )
     elif event.event_type == AgentRuntimeEventType.RUN_UNBLOCKED:
         target = cast(AgentRunState, validated_payload["target_state"])
+        if snapshot.blocking_reason is None:
+            raise LedgerReplayError(
+                "Unblocking requires a stored blocking reason.",
+                run_id=event.run_id,
+                command_id=event.command_id,
+                metadata={"eventType": event.event_type.value, "payloadSection": "target_state"},
+            )
+        if target != snapshot.blocking_reason.resume_state:
+            raise LedgerReplayError(
+                "The unblock target does not match the stored blocking resume state.",
+                run_id=event.run_id,
+                attempt_id=snapshot.active_attempt_id,
+                command_id=event.command_id,
+                metadata={
+                    "eventType": event.event_type.value,
+                    "payloadSection": "target_state",
+                    "expectedTargetState": snapshot.blocking_reason.resume_state,
+                    "actualTargetState": target,
+                },
+            )
         active_attempt = _get_optional_active_attempt(snapshot, attempts)
         if target == AgentRunState.RUNNING:
             if active_attempt is None:
@@ -489,6 +537,14 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 )
             attempts[active_attempt.attempt_id] = active_attempt.model_copy(
                 update={"state": AttemptState.RUNNING, "version": event.run_version}
+            )
+        elif active_attempt is not None:
+            raise LedgerReplayError(
+                "Non-running unblock targets must not retain an active attempt.",
+                run_id=event.run_id,
+                attempt_id=active_attempt.attempt_id,
+                command_id=event.command_id,
+                metadata={"targetState": target},
             )
         snapshot = snapshot.model_copy(
             update={
@@ -664,6 +720,36 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
             }
         )
     elif event.event_type == AgentRuntimeEventType.RUN_SUCCEEDED:
+        latest_attempt = _latest_attempt(attempts)
+        if latest_attempt is None:
+            raise LedgerReplayError(
+                "A run cannot succeed before an attempt succeeds.",
+                run_id=event.run_id,
+                command_id=event.command_id,
+            )
+        if snapshot.active_attempt_id is not None:
+            raise LedgerReplayError(
+                "A run cannot succeed while an attempt remains active.",
+                run_id=event.run_id,
+                attempt_id=snapshot.active_attempt_id,
+                command_id=event.command_id,
+            )
+        if latest_attempt.state != AttemptState.SUCCEEDED:
+            raise LedgerReplayError(
+                "A run can only succeed after the latest attempt succeeded.",
+                run_id=event.run_id,
+                attempt_id=latest_attempt.attempt_id,
+                command_id=event.command_id,
+                metadata={"attemptState": latest_attempt.state},
+            )
+        if event.attempt_id is not None and event.attempt_id != latest_attempt.attempt_id:
+            raise LedgerReplayError(
+                "The run success event must reference the latest successful attempt.",
+                run_id=event.run_id,
+                attempt_id=event.attempt_id,
+                command_id=event.command_id,
+                metadata={"latestAttemptId": latest_attempt.attempt_id},
+            )
         snapshot = snapshot.model_copy(
             update={
                 "state": AgentRunState.SUCCEEDED,
@@ -683,6 +769,15 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
         AgentRuntimeEventType.RUN_ABANDONED,
     }:
         failure = cast(FailureRecord, validated_payload["failure"])
+        nonterminal_attempt = _first_nonterminal_attempt(attempts)
+        if snapshot.active_attempt_id is not None or nonterminal_attempt is not None:
+            raise LedgerReplayError(
+                "Run terminal failure events require every attempt to be terminal first.",
+                run_id=event.run_id,
+                attempt_id=snapshot.active_attempt_id
+                or (None if nonterminal_attempt is None else nonterminal_attempt.attempt_id),
+                command_id=event.command_id,
+            )
         state = {
             AgentRuntimeEventType.RUN_FAILED: AgentRunState.FAILED,
             AgentRuntimeEventType.RUN_TIMED_OUT: AgentRunState.TIMED_OUT,
@@ -1058,6 +1153,28 @@ def _validate_attempt_created(
             command_id=event.command_id,
             metadata={"checkpointId": attempt.resumed_from_checkpoint_id},
         )
+
+
+def _latest_attempt(attempts: dict[str, AgentRunAttempt]) -> AgentRunAttempt | None:
+    if not attempts:
+        return None
+    return sorted(attempts.values(), key=lambda item: item.attempt_number)[-1]
+
+
+def _first_nonterminal_attempt(
+    attempts: dict[str, AgentRunAttempt],
+) -> AgentRunAttempt | None:
+    terminal_states = {
+        AttemptState.CANCELLED,
+        AttemptState.SUCCEEDED,
+        AttemptState.FAILED,
+        AttemptState.TIMED_OUT,
+        AttemptState.ABANDONED,
+    }
+    for attempt in sorted(attempts.values(), key=lambda item: item.attempt_number):
+        if attempt.state not in terminal_states:
+            return attempt
+    return None
 
 
 def _validate_recovery_plan_event(

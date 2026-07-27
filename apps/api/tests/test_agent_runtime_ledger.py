@@ -12,16 +12,24 @@ from app.agent_runtime.errors import (
 )
 from app.agent_runtime.ledger import replay_execution_ledger
 from app.models.agent_runtime import (
+    AbandonAgentRunCommand,
+    AbandonAttemptCommand,
     AgentRunState,
     AttemptState,
     BlockAgentRunCommand,
+    CompleteAgentRunCommand,
+    CompleteAttemptCommand,
     ConfirmPauseCommand,
+    FailAgentRunCommand,
+    FailAttemptCommand,
     RecordCheckpointCommand,
     RequestCancellationCommand,
     RequestPauseCommand,
     RequestRecoveryPlanCommand,
     ResumeAgentRunCommand,
     RuntimeEventEnvelope,
+    TimeoutAgentRunCommand,
+    TimeoutAttemptCommand,
     UnblockAgentRunCommand,
 )
 from tests.agent_runtime_testkit import (
@@ -114,6 +122,145 @@ def _prepare_recovery_planned_run() -> tuple[object, list[RuntimeEventEnvelope]]
     return planned, service.repository.list_events("run-1")
 
 
+def _prepare_claimed_after_failed_attempt_events() -> list[RuntimeEventEnvelope]:
+    service = make_service()
+    prepare_running_run(service)
+    service.record_checkpoint(
+        RecordCheckpointCommand(
+            run_id="run-1",
+            command_id="cmd-checkpoint-1",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="worker-1",
+            checkpoint_id="checkpoint-1",
+            state_reference="checkpoint://state/1",
+            integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+            source_metadata={"source": "test"},
+        )
+    )
+    fail_attempt(service, "run-1", expected_run_version=7, command_id="cmd-fail-1", second=6)
+    service.request_recovery_plan(
+        RequestRecoveryPlanCommand(
+            run_id="run-1",
+            command_id="cmd-plan-1",
+            expected_run_version=8,
+            timestamp=ts(7),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.unblock_run(
+        UnblockAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-unblock-1",
+            expected_run_version=9,
+            timestamp=ts(8),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    return service.repository.list_events("run-1")
+
+
+def _prepare_run_succeeded_events() -> list[RuntimeEventEnvelope]:
+    service = make_service()
+    prepare_running_run(service)
+    service.complete_attempt(
+        CompleteAttemptCommand(
+            run_id="run-1",
+            command_id="cmd-attempt-succeeded",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="worker-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.complete_run(
+        CompleteAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-run-succeeded",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="worker-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    return service.repository.list_events("run-1")
+
+
+def _prepare_run_terminal_failure_events(event_type: str) -> list[RuntimeEventEnvelope]:
+    service = make_service()
+    prepare_running_run(service)
+    if event_type == "run_failed":
+        service.fail_attempt(
+            FailAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-attempt-failed",
+                expected_run_version=6,
+                timestamp=ts(5),
+                actor_reference="worker-1",
+                failure_category="dependency",
+                failure_detail="Dependency unavailable",
+                source_metadata={"source": "test"},
+            )
+        )
+        service.fail_run(
+            FailAgentRunCommand(
+                run_id="run-1",
+                command_id="cmd-run-failed",
+                expected_run_version=7,
+                timestamp=ts(6),
+                actor_reference="worker-1",
+                failure_category="dependency",
+                failure_detail="Dependency unavailable",
+                source_metadata={"source": "test"},
+            )
+        )
+    elif event_type == "run_timed_out":
+        service.timeout_attempt(
+            TimeoutAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-attempt-timeout",
+                expected_run_version=6,
+                timestamp=ts(5),
+                actor_reference="worker-1",
+                source_metadata={"source": "test"},
+            )
+        )
+        service.timeout_run(
+            TimeoutAgentRunCommand(
+                run_id="run-1",
+                command_id="cmd-run-timeout",
+                expected_run_version=7,
+                timestamp=ts(6),
+                actor_reference="worker-1",
+                source_metadata={"source": "test"},
+            )
+        )
+    else:
+        service.abandon_attempt(
+            AbandonAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-attempt-abandon",
+                expected_run_version=6,
+                timestamp=ts(5),
+                actor_reference="worker-1",
+                source_metadata={"source": "test"},
+            )
+        )
+        service.abandon_run(
+            AbandonAgentRunCommand(
+                run_id="run-1",
+                command_id="cmd-run-abandon",
+                expected_run_version=7,
+                timestamp=ts(6),
+                actor_reference="worker-1",
+                source_metadata={"source": "test"},
+            )
+        )
+    return service.repository.list_events("run-1")
+
+
 def _prepare_pause_requested_events() -> list[RuntimeEventEnvelope]:
     service = make_service()
     prepare_running_run(service)
@@ -126,6 +273,45 @@ def _prepare_pause_requested_events() -> list[RuntimeEventEnvelope]:
             actor_reference="operator-1",
             reason_code="operator_pause",
             detail="Pause the run",
+            source_metadata={"source": "test"},
+        )
+    )
+    return service.repository.list_events("run-1")
+
+
+def _prepare_preexecution_resumed_events() -> list[RuntimeEventEnvelope]:
+    service = make_service()
+    create_run(service)
+    queue_run(service, "run-1", expected_run_version=1)
+    service.request_pause(
+        RequestPauseCommand(
+            run_id="run-1",
+            command_id="cmd-pause-request-pre",
+            expected_run_version=2,
+            timestamp=ts(2),
+            actor_reference="operator-1",
+            reason_code="operator_pause",
+            detail="Pause before claim",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.confirm_pause(
+        ConfirmPauseCommand(
+            run_id="run-1",
+            command_id="cmd-pause-confirm-pre",
+            expected_run_version=3,
+            timestamp=ts(3),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.resume_run(
+        ResumeAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-resume-pre",
+            expected_run_version=4,
+            timestamp=ts(4),
+            actor_reference="operator-1",
             source_metadata={"source": "test"},
         )
     )
@@ -164,6 +350,24 @@ def _prepare_resumed_run_events() -> list[RuntimeEventEnvelope]:
             expected_run_version=8,
             timestamp=ts(7),
             actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    return service.repository.list_events("run-1")
+
+
+def _prepare_blocked_active_run_events() -> list[RuntimeEventEnvelope]:
+    service = make_service()
+    prepare_running_run(service)
+    service.block_run(
+        BlockAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-block-1",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="operator-1",
+            block_code="waiting_for_approval",
+            detail="Blocked for approval",
             source_metadata={"source": "test"},
         )
     )
@@ -465,6 +669,69 @@ def test_replay_rejects_active_cancellation_that_skips_cancelling() -> None:
     ]
     with pytest.raises(InvalidTransitionError):
         replay_execution_ledger(broken)
+
+
+def test_replay_rejects_resume_target_mismatching_pause_reason() -> None:
+    events = _mutate_event_payload(
+        _prepare_resumed_run_events(),
+        event_type="run_resumed",
+        payload_updates={"target_state": AgentRunState.CLAIMED.value},
+    )
+    with pytest.raises(LedgerReplayError):
+        replay_execution_ledger(events)
+
+
+def test_replay_rejects_preexecution_resume_target_mismatch() -> None:
+    events = _mutate_event_payload(
+        _prepare_preexecution_resumed_events(),
+        event_type="run_resumed",
+        payload_updates={"target_state": AgentRunState.RUNNING.value},
+    )
+    with pytest.raises(LedgerReplayError):
+        replay_execution_ledger(events)
+
+
+def test_replay_rejects_unblock_target_mismatching_blocking_reason() -> None:
+    events = _mutate_event_payload(
+        _prepare_unblocked_run_events(),
+        event_type="run_unblocked",
+        payload_updates={"target_state": AgentRunState.CLAIMED.value},
+    )
+    with pytest.raises(LedgerReplayError):
+        replay_execution_ledger(events)
+
+
+def test_repository_append_rejects_invalid_unblock_target_without_mutation() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    service.block_run(
+        BlockAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-block-for-append",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="operator-1",
+            block_code="waiting_for_approval",
+            detail="Blocked for approval",
+            source_metadata={"source": "test"},
+        )
+    )
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    invalid_unblock = RuntimeEventEnvelope.model_validate(
+        before_events[-1].model_dump(mode="json")
+        | {
+            "event_id": "event-invalid-unblock",
+            "event_type": "run_unblocked",
+            "sequence_number": 8,
+            "run_version": 8,
+            "payload": {"target_state": AgentRunState.CLAIMED.value, "detail": "Invalid"},
+        }
+    )
+    with pytest.raises(LedgerReplayError):
+        service.repository.append_events("run-1", [invalid_unblock], expected_sequence=7)
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
 
 
 @pytest.mark.parametrize(
@@ -870,6 +1137,168 @@ def test_replay_of_valid_recovery_attempt_is_deterministic() -> None:
     assert first is not None and second is not None
     assert first.snapshot == second.snapshot
     assert first.attempts == second.attempts
+
+
+def test_replay_rejects_run_success_without_a_succeeded_latest_attempt() -> None:
+    service = make_service()
+    create_run(service)
+    queue_run(service, "run-1", expected_run_version=1)
+    claim_run(service, "run-1", expected_run_version=2)
+    events = service.repository.list_events("run-1")
+    invalid_success = RuntimeEventEnvelope.model_validate(
+        events[-1].model_dump(mode="json")
+        | {
+            "event_id": "event-invalid-run-success",
+            "event_type": "run_succeeded",
+            "sequence_number": 4,
+            "run_version": 4,
+            "attempt_id": None,
+            "timestamp": ts(3).isoformat(),
+            "payload": {"detail": "Invalid success"},
+        }
+    )
+    with pytest.raises(LedgerReplayError):
+        replay_execution_ledger(events + [invalid_success])
+
+
+def test_replay_rejects_run_success_when_latest_attempt_did_not_succeed() -> None:
+    events = _prepare_claimed_after_failed_attempt_events()
+    invalid_success = RuntimeEventEnvelope.model_validate(
+        events[-1].model_dump(mode="json")
+        | {
+            "event_id": "event-invalid-run-success-active",
+            "event_type": "run_succeeded",
+            "sequence_number": len(events) + 1,
+            "run_version": len(events) + 1,
+            "attempt_id": None,
+            "timestamp": ts(99).isoformat(),
+            "payload": {"detail": "Invalid success"},
+        }
+    )
+    with pytest.raises(LedgerReplayError):
+        replay_execution_ledger(events + [invalid_success])
+
+
+def test_replay_rejects_run_success_for_the_wrong_attempt_id() -> None:
+    events = _prepare_run_succeeded_events()
+    invalid_events = [event.model_copy(deep=True) for event in events]
+    invalid_events[-1] = invalid_events[-1].model_copy(update={"attempt_id": "attempt-older"})
+    with pytest.raises(LedgerReplayError):
+        replay_execution_ledger(invalid_events)
+
+
+def test_replay_accepts_valid_attempt_success_followed_by_run_success() -> None:
+    events = _prepare_run_succeeded_events()
+    replayed = replay_execution_ledger(events)
+    assert replayed is not None
+    assert replayed.snapshot.state == AgentRunState.SUCCEEDED
+
+
+def test_repository_append_rejects_invalid_run_success_without_mutation() -> None:
+    service = make_service()
+    create_run(service)
+    queue_run(service, "run-1", expected_run_version=1)
+    claim_run(service, "run-1", expected_run_version=2)
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    invalid_success = RuntimeEventEnvelope.model_validate(
+        before_events[-1].model_dump(mode="json")
+        | {
+            "event_id": "event-invalid-run-success-append",
+            "event_type": "run_succeeded",
+            "sequence_number": 4,
+            "run_version": 4,
+            "timestamp": ts(3).isoformat(),
+            "payload": {"detail": "Invalid success"},
+        }
+    )
+    with pytest.raises(LedgerReplayError):
+        service.repository.append_events("run-1", [invalid_success], expected_sequence=3)
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
+
+
+@pytest.mark.parametrize(
+    "event_type",
+    ["run_failed", "run_timed_out", "run_abandoned"],
+)
+def test_replay_rejects_run_terminal_events_while_attempt_remains_active(event_type: str) -> None:
+    events = _prepare_blocked_active_run_events()
+    invalid_event = RuntimeEventEnvelope.model_validate(
+        events[-1].model_dump(mode="json")
+        | {
+            "event_id": f"event-{event_type}",
+            "event_type": event_type,
+            "sequence_number": len(events) + 1,
+            "run_version": len(events) + 1,
+            "attempt_id": None,
+            "timestamp": ts(99).isoformat(),
+            "payload": {
+                "failure": {
+                    "category": "internal",
+                    "detail": "Terminal failure",
+                    "timestamp": ts(99).isoformat(),
+                    "metadata": {},
+                }
+            },
+        }
+    )
+    with pytest.raises(LedgerReplayError):
+        replay_execution_ledger(events + [invalid_event])
+
+
+@pytest.mark.parametrize(
+    ("event_type", "events_builder"),
+    [
+        ("run_failed", _prepare_running_run_events),
+        ("run_failed", _prepare_pause_requested_events),
+        ("run_timed_out", _prepare_running_run_events),
+        ("run_abandoned", _prepare_pause_requested_events),
+    ],
+)
+def test_run_terminal_events_from_disallowed_active_states_are_rejected(
+    event_type: str,
+    events_builder,
+) -> None:
+    events = events_builder()
+    invalid_event = RuntimeEventEnvelope.model_validate(
+        events[-1].model_dump(mode="json")
+        | {
+            "event_id": f"event-invalid-{event_type}",
+            "event_type": event_type,
+            "sequence_number": len(events) + 1,
+            "run_version": len(events) + 1,
+            "timestamp": ts(99).isoformat(),
+            "payload": {
+                "failure": {
+                    "category": "internal",
+                    "detail": "Terminal failure",
+                    "timestamp": ts(99).isoformat(),
+                    "metadata": {},
+                }
+            },
+        }
+    )
+    with pytest.raises(InvalidTransitionError):
+        replay_execution_ledger(events + [invalid_event])
+
+
+@pytest.mark.parametrize(
+    "event_type",
+    ["run_failed", "run_timed_out", "run_abandoned"],
+)
+def test_replay_accepts_valid_run_terminal_events_after_attempt_terminalization(
+    event_type: str,
+) -> None:
+    events = _prepare_run_terminal_failure_events(event_type)
+    replayed = replay_execution_ledger(events)
+    assert replayed is not None
+    expected_state = {
+        "run_failed": AgentRunState.FAILED,
+        "run_timed_out": AgentRunState.TIMED_OUT,
+        "run_abandoned": AgentRunState.ABANDONED,
+    }[event_type]
+    assert replayed.snapshot.state == expected_state
 
 
 def test_replay_validates_recorded_recovery_plan_exactly() -> None:

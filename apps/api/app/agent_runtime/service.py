@@ -1006,10 +1006,10 @@ class AgentRuntimeService:
         return self._commit(command, aggregate, (event,))
 
     def _load_current(self, run_id: str) -> RuntimeAggregate:
-        snapshot = self.repository.load_run(run_id)
-        if snapshot is None:
+        state = self.repository.load_run_state(run_id)
+        if state is None:
             raise RunNotFoundError(run_id=run_id)
-        events = self.repository.list_events(run_id)
+        snapshot, events = state
         aggregate = replay_execution_ledger(events)
         if aggregate is None:
             raise RunNotFoundError(run_id=run_id)
