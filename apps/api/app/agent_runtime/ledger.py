@@ -638,42 +638,14 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
     elif event.event_type == AgentRuntimeEventType.CHECKPOINT_RECORDED:
         checkpoint = cast(AgentRunCheckpoint, validated_payload["checkpoint"])
         active_attempt = _get_active_attempt(event, snapshot, attempts)
-        if checkpoint.run_id != event.run_id or checkpoint.attempt_id != active_attempt.attempt_id:
-            raise LedgerReplayError(
-                "Checkpoint lineage does not match the active run attempt.",
-                run_id=event.run_id,
-                attempt_id=event.attempt_id,
-                command_id=event.command_id,
-            )
-        if (
-            checkpoint.run_version != event.run_version
-            or checkpoint.event_sequence != event.sequence_number
-        ):
-            raise LedgerReplayError(
-                "Checkpoint position must match the checkpoint event position.",
-                run_id=event.run_id,
-                attempt_id=active_attempt.attempt_id,
-                command_id=event.command_id,
-            )
-        if checkpoint.checkpoint_id in checkpoints:
-            raise LedgerReplayError(
-                "Checkpoint IDs must be unique within a run.",
-                run_id=event.run_id,
-                attempt_id=active_attempt.attempt_id,
-                command_id=event.command_id,
-            )
-        expected_checkpoint_sequence = len(checkpoint_order) + 1
-        if checkpoint.checkpoint_sequence != expected_checkpoint_sequence:
-            raise LedgerReplayError(
-                "Checkpoint sequences must increase by one.",
-                run_id=event.run_id,
-                attempt_id=active_attempt.attempt_id,
-                command_id=event.command_id,
-                metadata={
-                    "expectedCheckpointSequence": expected_checkpoint_sequence,
-                    "actualCheckpointSequence": checkpoint.checkpoint_sequence,
-                },
-            )
+        _validate_checkpoint_recorded(
+            snapshot=snapshot,
+            checkpoints=checkpoints,
+            checkpoint_order=checkpoint_order,
+            event=event,
+            active_attempt=active_attempt,
+            checkpoint=checkpoint,
+        )
         checkpoints[checkpoint.checkpoint_id] = checkpoint
         checkpoint_order.append(checkpoint.checkpoint_id)
         snapshot = snapshot.model_copy(
@@ -1216,6 +1188,83 @@ def _first_nonterminal_attempt(
         if attempt.state not in terminal_states:
             return attempt
     return None
+
+
+def _validate_checkpoint_recorded(
+    *,
+    snapshot: AgentRunSnapshot,
+    checkpoints: dict[str, AgentRunCheckpoint],
+    checkpoint_order: list[str],
+    event: RuntimeEventEnvelope,
+    active_attempt: AgentRunAttempt,
+    checkpoint: AgentRunCheckpoint,
+) -> None:
+    if checkpoint.run_id != event.run_id or checkpoint.attempt_id != active_attempt.attempt_id:
+        raise LedgerReplayError(
+            "Checkpoint lineage does not match the active run attempt.",
+            run_id=event.run_id,
+            attempt_id=event.attempt_id,
+            command_id=event.command_id,
+        )
+    if checkpoint.timestamp != event.timestamp:
+        raise LedgerReplayError(
+            "Checkpoint timestamps must exactly match the enclosing checkpoint event timestamp.",
+            run_id=event.run_id,
+            attempt_id=active_attempt.attempt_id,
+            command_id=event.command_id,
+            metadata={
+                "eventType": event.event_type.value,
+                "eventId": event.event_id,
+                "checkpointId": checkpoint.checkpoint_id,
+                "eventTimestamp": event.timestamp.isoformat(),
+                "checkpointTimestamp": checkpoint.timestamp.isoformat(),
+                "reason": "checkpoint_timestamp_mismatch",
+            },
+        )
+    if checkpoint.timestamp < snapshot.created_at:
+        raise LedgerReplayError(
+            "Checkpoint timestamps must not predate run creation.",
+            run_id=event.run_id,
+            attempt_id=active_attempt.attempt_id,
+            command_id=event.command_id,
+            metadata={
+                "eventType": event.event_type.value,
+                "eventId": event.event_id,
+                "checkpointId": checkpoint.checkpoint_id,
+                "runCreatedAt": snapshot.created_at.isoformat(),
+                "checkpointTimestamp": checkpoint.timestamp.isoformat(),
+                "reason": "checkpoint_timestamp_before_run_creation",
+            },
+        )
+    if (
+        checkpoint.run_version != event.run_version
+        or checkpoint.event_sequence != event.sequence_number
+    ):
+        raise LedgerReplayError(
+            "Checkpoint position must match the checkpoint event position.",
+            run_id=event.run_id,
+            attempt_id=active_attempt.attempt_id,
+            command_id=event.command_id,
+        )
+    if checkpoint.checkpoint_id in checkpoints:
+        raise LedgerReplayError(
+            "Checkpoint IDs must be unique within a run.",
+            run_id=event.run_id,
+            attempt_id=active_attempt.attempt_id,
+            command_id=event.command_id,
+        )
+    expected_checkpoint_sequence = len(checkpoint_order) + 1
+    if checkpoint.checkpoint_sequence != expected_checkpoint_sequence:
+        raise LedgerReplayError(
+            "Checkpoint sequences must increase by one.",
+            run_id=event.run_id,
+            attempt_id=active_attempt.attempt_id,
+            command_id=event.command_id,
+            metadata={
+                "expectedCheckpointSequence": expected_checkpoint_sequence,
+                "actualCheckpointSequence": checkpoint.checkpoint_sequence,
+            },
+        )
 
 
 def _validate_attempt_terminal_failure_payload(

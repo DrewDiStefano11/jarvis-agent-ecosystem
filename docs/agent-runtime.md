@@ -186,10 +186,11 @@ Rules:
 - checkpoint sequences begin at 1 and increase by 1
 - checkpoint lineage must match the active run and active attempt
 - checkpoint run/event positions must match the checkpoint event position
+- checkpoint timestamps must exactly match the enclosing checkpoint event timestamp
 - terminal runs reject new checkpoints
 - checkpoint IDs are globally unique within a run
-- reusing a checkpoint ID on the same attempt with the same stored content is a deterministic no-op
-- reusing a checkpoint ID with different content or from another attempt raises a conflict
+- reusing a checkpoint ID on the same attempt with the same stored content, including the same timestamp, is a deterministic no-op
+- reusing a checkpoint ID with different content, a different timestamp, or from another attempt raises a conflict
 - the runtime compares the stored command hash before replaying a processed checkpoint result
 
 ## Recovery-plan rules

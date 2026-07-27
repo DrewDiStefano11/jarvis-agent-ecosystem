@@ -716,7 +716,13 @@ class AgentRuntimeService:
             None,
         )
         if existing_checkpoint is not None:
-            if self._checkpoint_matches_command(existing_checkpoint, command, attempt.attempt_id):
+            if self._checkpoint_matches_command(
+                existing_checkpoint,
+                command,
+                attempt.attempt_id,
+                snapshot=snapshot,
+                checkpoint_count=len(aggregate.checkpoints),
+            ):
                 result = RuntimeCommandResult(run_id=command.run_id, snapshot=snapshot, events=())
                 record = self._processed_record(command.run_id, command.command_id, command, result)
                 self.repository.commit_command(
@@ -1161,11 +1167,18 @@ class AgentRuntimeService:
         checkpoint: AgentRunCheckpoint,
         command: RecordCheckpointCommand,
         attempt_id: str,
+        *,
+        snapshot: AgentRunSnapshot,
+        checkpoint_count: int,
     ) -> bool:
         return (
             checkpoint.run_id == command.run_id
             and checkpoint.attempt_id == attempt_id
             and checkpoint.checkpoint_id == (command.checkpoint_id or checkpoint.checkpoint_id)
+            and checkpoint.checkpoint_sequence == checkpoint_count
+            and checkpoint.run_version == snapshot.version
+            and checkpoint.event_sequence == snapshot.event_sequence_number
+            and checkpoint.timestamp == command.timestamp
             and checkpoint.state_reference == command.state_reference
             and checkpoint.integrity_digest == command.integrity_digest
             and checkpoint.resume_cursor == command.resume_cursor
