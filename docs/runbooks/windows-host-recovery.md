@@ -18,3 +18,8 @@ Status: Get-JarvisHostStatus.ps1
 Diagnostics: scripts/windows/Invoke-JarvisDiagnostics.ps1
 Restore: Restore-JarvisDatabase.ps1 -BackupPath <path>
 Watchdog latch reset: Remove crash_loop.json in state directory.
+## Recovery Checklist
+- [ ] Confirm stale PID rejected by ownership verification.
+- [ ] Confirm crash-loop latch resets only by removing latch file.
+- [ ] Confirm database restore rolls back to safety backup on verification failure.
+- [ ] Confirm port conflicts reported rather than incorrectly treated as owned processes.

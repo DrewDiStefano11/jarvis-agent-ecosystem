@@ -37,3 +37,22 @@ Tailscale configure: ops/windows-host/Configure-JarvisTailscale.ps1 -ConfigPath 
 Tailscale remove: ops/windows-host/Remove-JarvisTailscale.ps1
 Uninstall: ops/windows-host/Uninstall-JarvisHost.ps1 -ConfigPath jarvis-host.json
 Consistent parameters verified across all 12 scripts
+## Manual Windows Verification Checklist (Mandatory Before Ready)
+- [ ] Run Install-JarvisHost.ps1 with -WhatIf; confirm zero mutation and correct task names.
+- [ ] Verify scheduled tasks exist and contain absolute paths; remove unrelated tasks not affected.
+- [ ] Confirm log, backup, state directories exist and are writable.
+- [ ] Inspect jarvis-host.json; validate required fields.
+- [ ] Run Start-JarvisHost.ps1 with -WhatIf; confirm no mutation.
+- [ ] Start host on real machine; verify backend health check passes; verify frontend health passes.
+- [ ] Confirm PID metadata files contain executable, arguments, working directory, process start time, instance ID, timestamp.
+- [ ] Confirm no unrelated process is killed during Stop.
+- [ ] Confirm Restart creates optional backup, stops safely, verifies health, reports partial failures.
+- [ ] Confirm Watchdog acquires exclusive lock, checks health independently, verifies process ownership, records restart history, sets crash-loop latch, exits with meaningful code, releases lock.
+- [ ] Confirm Backup uses Python sqlite3, writes temporary file, verifies integrity, atomically renames, cleans temporary files, writes structured metadata, applies retention inside backup directory only.
+- [ ] Confirm Restore requires services stopped, creates verified safety backup, restores temporarily, verifies, atomically replaces, verifies after replace, rolls back on failure.
+- [ ] Confirm Tailscale Configure reads CLI syntax, preserves existing routes, writes toolkit manifest, applies only toolkit routes.
+- [ ] Confirm Remove-Tailscale removes only toolkit-owned routes; unrelated routes preserved.
+- [ ] Confirm Status reports healthy/degraded/stopped/unsafe/misconfigured classifications; includes process ownership, health, ports, tasks, disk, Tailscale.
+- [ ] Confirm Diagnostics archive excludes database, .env, secrets, tokens; includes redacted config, status, recent logs, manifest.
+- [ ] Confirm Uninstall stops owned processes, removes owned tasks/routes/state; preserves database/config/logs/backups by default; deletes preserved data only with explicit switches; supports -WhatIf.
+- [ ] Confirm no public firewall rules created; backend/frontend bound to localhost; no Tailscale Funnel enabled.

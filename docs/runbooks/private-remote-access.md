@@ -15,3 +15,10 @@ No Funnel; no router forwarding; loopback binding preserved; ACL recommendations
 Configure: Configure-JarvisTailscale.ps1 -ConfigPath jarvis-host.json
 Remove: Remove-JarvisTailscale.ps1
 Verification: Check tailnet URL after Serve setup; test WebSocket upgrade via same-origin private route.
+## Security Checklist
+- [ ] Tailscale CLI installed and authenticated.
+- [ ] No public firewall rules added by toolkit.
+- [ ] Backend and frontend bound to 127.0.0.1 only.
+- [ ] SQLite database not exposed.
+- [ ] Shell/Ollama/provider ports not exposed.
+- [ ] Only toolkit-owned Serve routes configured.
