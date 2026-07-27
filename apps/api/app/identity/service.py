@@ -290,7 +290,18 @@ class IdentityService:
             row = AgentRoleAssignmentRow(id=uid("arole"), agent_id=agent_id, **values)
             uow.session.add(row)
             self._audit(
-                uow.session, "role.assigned", "agent", agent_id, data.assigned_by, data.reason
+                uow.session,
+                "role.assigned",
+                "agent",
+                agent_id,
+                data.assigned_by,
+                data.reason,
+                {
+                    "assignment_id": row.id,
+                    "role_id": row.role_id,
+                    "scope_type": row.scope_type,
+                    "scope_id": row.scope_id,
+                },
             )
             try:
                 uow.session.flush()

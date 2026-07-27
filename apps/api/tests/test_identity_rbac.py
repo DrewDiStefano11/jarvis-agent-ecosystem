@@ -168,6 +168,36 @@ def test_explicit_deny_overrides_role_grant(service):
     assert not decision.allowed and decision.reason_code == "explicit_denial"
 
 
+def test_role_assignment_audits_identify_role_and_assignment(service):
+    actor = agent(service, "agent.role-audit")
+    roles = [
+        service.create_definition(
+            "role",
+            CreateRoleRequest(
+                stable_key=f"role.audit-{index}",
+                display_name=f"Audit role {index}",
+                role_scope="global",
+            ),
+        )
+        for index in range(2)
+    ]
+    assignments = [
+        service.assign_role(actor.id, AssignRoleRequest(role_id=role.id)) for role in roles
+    ]
+
+    events = service.audits(0, 100, "role.assigned")
+    changes_by_role = {event.changes["role_id"]: event.changes for event in events}
+    assert changes_by_role == {
+        role.id: {
+            "assignment_id": assignment.id,
+            "role_id": role.id,
+            "scope_type": "global",
+            "scope_id": None,
+        }
+        for role, assignment in zip(roles, assignments, strict=True)
+    }
+
+
 def test_unknown_and_inactive_fail_closed(service):
     actor = agent(service, "agent.inactive")
     assert service.check_permission(actor.id, "unknown.action").reason_code == "actor_inactive"
