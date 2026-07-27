@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import cast
+from typing import Any, cast
 
 from pydantic import ValidationError
 
@@ -31,6 +31,8 @@ from app.models.agent_runtime import (
     RuntimeContract,
     RuntimeEventEnvelope,
     TerminalOutcome,
+    validate_identifier,
+    validate_safe_text,
 )
 
 
@@ -111,6 +113,180 @@ def replay_snapshot(events: list[RuntimeEventEnvelope]) -> AgentRunSnapshot | No
     return None if aggregate is None else aggregate.snapshot
 
 
+def _payload_validation_error(
+    event: RuntimeEventEnvelope,
+    *,
+    section: str,
+    exc: Exception,
+) -> LedgerReplayError:
+    metadata: dict[str, Any] = {"eventType": event.event_type, "payloadSection": section}
+    if isinstance(exc, ValidationError):
+        metadata["errors"] = exc.errors(include_url=False)
+    else:
+        metadata["errorType"] = type(exc).__name__
+    return LedgerReplayError(
+        f"The {section} payload is invalid for this event type.",
+        run_id=event.run_id,
+        attempt_id=event.attempt_id,
+        command_id=event.command_id,
+        metadata=metadata,
+    )
+
+
+def _payload_mapping(event: RuntimeEventEnvelope, key: str) -> dict[str, object]:
+    raw = event.payload.get(key)
+    if not isinstance(raw, dict):
+        raise _payload_validation_error(
+            event,
+            section=key,
+            exc=TypeError(f"{key} must be an object"),
+        )
+    return raw
+
+
+def _payload_detail(event: RuntimeEventEnvelope, key: str = "detail") -> str:
+    raw = event.payload.get(key)
+    if not isinstance(raw, str):
+        raise _payload_validation_error(
+            event,
+            section=key,
+            exc=TypeError(f"{key} must be a string"),
+        )
+    try:
+        return validate_safe_text(raw, field_name=f"event.{key}")
+    except (TypeError, ValueError) as exc:
+        raise _payload_validation_error(event, section=key, exc=exc) from exc
+
+
+def _payload_agent_run_state(
+    event: RuntimeEventEnvelope, key: str = "target_state"
+) -> AgentRunState:
+    raw = event.payload.get(key)
+    if not isinstance(raw, str):
+        raise _payload_validation_error(
+            event,
+            section=key,
+            exc=TypeError(f"{key} must be a string"),
+        )
+    try:
+        return AgentRunState(raw)
+    except ValueError as exc:
+        raise _payload_validation_error(event, section=key, exc=exc) from exc
+
+
+def _payload_optional_identifier(
+    event: RuntimeEventEnvelope,
+    key: str,
+    field_name: str,
+    *,
+    max_length: int = 120,
+) -> str | None:
+    raw = event.payload.get(key)
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise _payload_validation_error(
+            event,
+            section=key,
+            exc=TypeError(f"{key} must be a string when present"),
+        )
+    try:
+        return validate_identifier(raw, field_name=field_name, max_length=max_length)
+    except (TypeError, ValueError) as exc:
+        raise _payload_validation_error(event, section=key, exc=exc) from exc
+
+
+def _payload_model(event: RuntimeEventEnvelope, key: str, model_type: type[Any]) -> Any:
+    try:
+        return model_type.model_validate(_payload_mapping(event, key))
+    except LedgerReplayError:
+        raise
+    except (ValidationError, TypeError, ValueError) as exc:
+        raise _payload_validation_error(event, section=key, exc=exc) from exc
+
+
+def _validated_event_payload(event: RuntimeEventEnvelope) -> dict[str, object]:
+    detail_events = {
+        AgentRuntimeEventType.RUN_QUEUED,
+        AgentRuntimeEventType.ATTEMPT_STARTED,
+        AgentRuntimeEventType.HEARTBEAT_RECORDED,
+        AgentRuntimeEventType.RUN_PAUSED,
+        AgentRuntimeEventType.CANCELLATION_STARTED,
+        AgentRuntimeEventType.RUN_CANCELLED,
+        AgentRuntimeEventType.ATTEMPT_SUCCEEDED,
+        AgentRuntimeEventType.RUN_SUCCEEDED,
+    }
+    if event.event_type == AgentRuntimeEventType.RUN_CREATED:
+        specification = _payload_model(event, "specification", AgentRunSpecification)
+        return {
+            "specification": specification,
+            "detail": _payload_detail(event),
+        }
+    if event.event_type in detail_events:
+        return {"detail": _payload_detail(event)}
+    if event.event_type == AgentRuntimeEventType.RUN_CLAIMED:
+        return {
+            "detail": _payload_detail(event),
+            "executor_reference": _payload_optional_identifier(
+                event,
+                "executor_reference",
+                "opaque_reference",
+                max_length=160,
+            ),
+        }
+    if event.event_type == AgentRuntimeEventType.RUN_START_REQUESTED:
+        return {
+            "detail": _payload_detail(event),
+            "executor_reference": _payload_optional_identifier(
+                event,
+                "executor_reference",
+                "opaque_reference",
+                max_length=160,
+            ),
+            "resume_from_checkpoint_id": _payload_optional_identifier(
+                event, "resume_from_checkpoint_id", "checkpoint_id"
+            ),
+        }
+    if event.event_type == AgentRuntimeEventType.ATTEMPT_CREATED:
+        return {"attempt": _payload_model(event, "attempt", AgentRunAttempt)}
+    if event.event_type == AgentRuntimeEventType.PAUSE_REQUESTED:
+        return {"pause": _payload_model(event, "pause", PauseReason)}
+    if event.event_type == AgentRuntimeEventType.RUN_RESUMED:
+        return {
+            "detail": _payload_detail(event),
+            "target_state": _payload_agent_run_state(event),
+        }
+    if event.event_type == AgentRuntimeEventType.RUN_BLOCKED:
+        return {"block": _payload_model(event, "block", BlockingReason)}
+    if event.event_type == AgentRuntimeEventType.RUN_UNBLOCKED:
+        return {
+            "detail": _payload_detail(event),
+            "target_state": _payload_agent_run_state(event),
+        }
+    if event.event_type == AgentRuntimeEventType.CANCELLATION_REQUESTED:
+        return {"cancellation": _payload_model(event, "cancellation", CancellationRecord)}
+    if event.event_type == AgentRuntimeEventType.CHECKPOINT_RECORDED:
+        return {"checkpoint": _payload_model(event, "checkpoint", AgentRunCheckpoint)}
+    if event.event_type in {
+        AgentRuntimeEventType.ATTEMPT_FAILED,
+        AgentRuntimeEventType.ATTEMPT_TIMED_OUT,
+        AgentRuntimeEventType.ATTEMPT_ABANDONED,
+    }:
+        return {
+            "failure": _payload_model(event, "failure", FailureRecord),
+            "blocking_reason": _payload_model(event, "blocking_reason", BlockingReason),
+        }
+    if event.event_type in {
+        AgentRuntimeEventType.RUN_FAILED,
+        AgentRuntimeEventType.RUN_TIMED_OUT,
+        AgentRuntimeEventType.RUN_ABANDONED,
+    }:
+        return {"failure": _payload_model(event, "failure", FailureRecord)}
+    if event.event_type == AgentRuntimeEventType.RECOVERY_PLANNED:
+        return {"plan": _payload_model(event, "plan", RecoveryPlan)}
+    return {}
+
+
 def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -> RuntimeAggregate:
     if current is None:
         return _apply_run_created(event)
@@ -125,7 +301,8 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
     attempt_order = [attempt.attempt_id for attempt in current.attempts]
     checkpoint_order = [checkpoint.checkpoint_id for checkpoint in current.checkpoints]
     snapshot = current.snapshot
-    target_state = _resolve_target_state(snapshot.state, event)
+    validated_payload = _validated_event_payload(event)
+    target_state = _resolve_target_state(snapshot.state, event, validated_payload)
     _validate_rule(
         event,
         source_state=snapshot.state,
@@ -141,7 +318,7 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 "queued_at": event.timestamp,
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
-                "status_detail": cast(str, event.payload["detail"]),
+                "status_detail": cast(str, validated_payload["detail"]),
             }
         )
     elif event.event_type == AgentRuntimeEventType.RUN_CLAIMED:
@@ -151,7 +328,7 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 "claimed_at": event.timestamp,
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
-                "status_detail": cast(str, event.payload["detail"]),
+                "status_detail": cast(str, validated_payload["detail"]),
             }
         )
     elif event.event_type == AgentRuntimeEventType.RUN_START_REQUESTED:
@@ -160,23 +337,12 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 "state": AgentRunState.STARTING,
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
-                "status_detail": cast(str, event.payload["detail"]),
+                "status_detail": cast(str, validated_payload["detail"]),
                 "blocking_reason": None,
             }
         )
     elif event.event_type == AgentRuntimeEventType.ATTEMPT_CREATED:
-        try:
-            attempt = AgentRunAttempt.model_validate(
-                cast(dict[str, object], event.payload["attempt"])
-            )
-        except ValidationError as exc:
-            raise LedgerReplayError(
-                "The attempt_created payload is not a valid attempt contract.",
-                run_id=event.run_id,
-                attempt_id=event.attempt_id,
-                command_id=event.command_id,
-                metadata={"errors": exc.errors(include_url=False)},
-            ) from exc
+        attempt = cast(AgentRunAttempt, validated_payload["attempt"])
         _validate_attempt_created(
             snapshot=snapshot,
             attempts=attempts,
@@ -210,7 +376,7 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 "started_at": snapshot.started_at or event.timestamp,
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
-                "status_detail": cast(str, event.payload["detail"]),
+                "status_detail": cast(str, validated_payload["detail"]),
             }
         )
     elif event.event_type == AgentRuntimeEventType.HEARTBEAT_RECORDED:
@@ -226,11 +392,11 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 "last_heartbeat_at": event.timestamp,
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
-                "status_detail": cast(str, event.payload["detail"]),
+                "status_detail": cast(str, validated_payload["detail"]),
             }
         )
     elif event.event_type == AgentRuntimeEventType.PAUSE_REQUESTED:
-        pause = PauseReason.model_validate(cast(dict[str, object], event.payload["pause"]))
+        pause = cast(PauseReason, validated_payload["pause"])
         snapshot = snapshot.model_copy(
             update={
                 "state": AgentRunState.PAUSE_REQUESTED,
@@ -252,11 +418,11 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 "paused_at": event.timestamp,
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
-                "status_detail": cast(str, event.payload["detail"]),
+                "status_detail": cast(str, validated_payload["detail"]),
             }
         )
     elif event.event_type == AgentRuntimeEventType.RUN_RESUMED:
-        target = AgentRunState(cast(str, event.payload["target_state"]))
+        target = cast(AgentRunState, validated_payload["target_state"])
         active_attempt = _get_optional_active_attempt(snapshot, attempts)
         if target == AgentRunState.RUNNING:
             if active_attempt is None:
@@ -275,11 +441,11 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 "resumed_at": event.timestamp,
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
-                "status_detail": cast(str, event.payload["detail"]),
+                "status_detail": cast(str, validated_payload["detail"]),
             }
         )
     elif event.event_type == AgentRuntimeEventType.RUN_BLOCKED:
-        block = BlockingReason.model_validate(cast(dict[str, object], event.payload["block"]))
+        block = cast(BlockingReason, validated_payload["block"])
         active_attempt = _get_optional_active_attempt(snapshot, attempts)
         if active_attempt is not None:
             attempts[active_attempt.attempt_id] = active_attempt.model_copy(
@@ -296,7 +462,7 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
             }
         )
     elif event.event_type == AgentRuntimeEventType.RUN_UNBLOCKED:
-        target = AgentRunState(cast(str, event.payload["target_state"]))
+        target = cast(AgentRunState, validated_payload["target_state"])
         active_attempt = _get_optional_active_attempt(snapshot, attempts)
         if target == AgentRunState.RUNNING:
             if active_attempt is None:
@@ -315,13 +481,11 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 "resumed_at": event.timestamp,
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
-                "status_detail": cast(str, event.payload["detail"]),
+                "status_detail": cast(str, validated_payload["detail"]),
             }
         )
     elif event.event_type == AgentRuntimeEventType.CANCELLATION_REQUESTED:
-        cancellation = CancellationRecord.model_validate(
-            cast(dict[str, object], event.payload["cancellation"])
-        )
+        cancellation = cast(CancellationRecord, validated_payload["cancellation"])
         snapshot = snapshot.model_copy(
             update={
                 "state": AgentRunState.CANCEL_REQUESTED,
@@ -341,7 +505,7 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 "state": AgentRunState.CANCELLING,
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
-                "status_detail": cast(str, event.payload["detail"]),
+                "status_detail": cast(str, validated_payload["detail"]),
                 "pause_reason": None,
                 "blocking_reason": None,
                 "recovery_status": RecoveryStatus.NONE,
@@ -367,16 +531,14 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 "terminal_outcome": TerminalOutcome.CANCELLED,
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
-                "status_detail": cast(str, event.payload["detail"]),
+                "status_detail": cast(str, validated_payload["detail"]),
                 "blocking_reason": None,
                 "pause_reason": None,
                 "recovery_status": RecoveryStatus.NONE,
             }
         )
     elif event.event_type == AgentRuntimeEventType.CHECKPOINT_RECORDED:
-        checkpoint = AgentRunCheckpoint.model_validate(
-            cast(dict[str, object], event.payload["checkpoint"])
-        )
+        checkpoint = cast(AgentRunCheckpoint, validated_payload["checkpoint"])
         active_attempt = _get_active_attempt(event, snapshot, attempts)
         if checkpoint.run_id != event.run_id or checkpoint.attempt_id != active_attempt.attempt_id:
             raise LedgerReplayError(
@@ -440,7 +602,7 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 "active_attempt_id": None,
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
-                "status_detail": cast(str, event.payload["detail"]),
+                "status_detail": cast(str, validated_payload["detail"]),
                 "recovery_status": RecoveryStatus.NONE,
             }
         )
@@ -450,10 +612,8 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
         AgentRuntimeEventType.ATTEMPT_ABANDONED,
     }:
         active_attempt = _get_active_attempt(event, snapshot, attempts)
-        failure = FailureRecord.model_validate(cast(dict[str, object], event.payload["failure"]))
-        block = BlockingReason.model_validate(
-            cast(dict[str, object], event.payload["blocking_reason"])
-        )
+        failure = cast(FailureRecord, validated_payload["failure"])
+        block = cast(BlockingReason, validated_payload["blocking_reason"])
         terminal_state = {
             AgentRuntimeEventType.ATTEMPT_FAILED: AttemptState.FAILED,
             AgentRuntimeEventType.ATTEMPT_TIMED_OUT: AttemptState.TIMED_OUT,
@@ -495,7 +655,7 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 "terminal_outcome": TerminalOutcome.SUCCESS,
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
-                "status_detail": cast(str, event.payload["detail"]),
+                "status_detail": cast(str, validated_payload["detail"]),
                 "blocking_reason": None,
                 "pause_reason": None,
                 "recovery_status": RecoveryStatus.NONE,
@@ -506,7 +666,7 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
         AgentRuntimeEventType.RUN_TIMED_OUT,
         AgentRuntimeEventType.RUN_ABANDONED,
     }:
-        failure = FailureRecord.model_validate(cast(dict[str, object], event.payload["failure"]))
+        failure = cast(FailureRecord, validated_payload["failure"])
         state = {
             AgentRuntimeEventType.RUN_FAILED: AgentRunState.FAILED,
             AgentRuntimeEventType.RUN_TIMED_OUT: AgentRunState.TIMED_OUT,
@@ -538,6 +698,7 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
             attempts=attempts,
             checkpoints=checkpoints,
             event=event,
+            recorded_plan=cast(RecoveryPlan, validated_payload["plan"]),
         )
         snapshot = snapshot.model_copy(
             update={
@@ -555,10 +716,11 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
             metadata={"eventType": event.event_type},
         )
 
-    return RuntimeAggregate(
+    return _build_validated_aggregate(
         snapshot=snapshot,
-        attempts=tuple(sorted(attempts.values(), key=lambda item: item.attempt_number)),
-        checkpoints=tuple(sorted(checkpoints.values(), key=lambda item: item.checkpoint_sequence)),
+        attempts=attempts,
+        checkpoints=checkpoints,
+        event=event,
     )
 
 
@@ -570,9 +732,8 @@ def _apply_run_created(event: RuntimeEventEnvelope) -> RuntimeAggregate:
         attempts={},
         active_attempt_id=None,
     )
-    specification = AgentRunSpecification.model_validate(
-        cast(dict[str, object], event.payload["specification"])
-    )
+    validated_payload = _validated_event_payload(event)
+    specification = cast(AgentRunSpecification, validated_payload["specification"])
     if specification.run_id != event.run_id:
         raise LedgerReplayError(
             "Run specification must match the enclosing event run ID.",
@@ -594,10 +755,55 @@ def _apply_run_created(event: RuntimeEventEnvelope) -> RuntimeAggregate:
         active_attempt_id=None,
         latest_checkpoint_id=None,
         created_at=specification.created_at,
-        status_detail=cast(str | None, event.payload.get("detail")),
+        status_detail=cast(str | None, validated_payload.get("detail")),
         recovery_status=RecoveryStatus.NONE,
     )
-    return RuntimeAggregate(snapshot=snapshot, attempts=(), checkpoints=())
+    return _build_validated_aggregate(
+        snapshot=snapshot,
+        attempts={},
+        checkpoints={},
+        event=event,
+    )
+
+
+def _build_validated_aggregate(
+    *,
+    snapshot: AgentRunSnapshot,
+    attempts: dict[str, AgentRunAttempt],
+    checkpoints: dict[str, AgentRunCheckpoint],
+    event: RuntimeEventEnvelope,
+) -> RuntimeAggregate:
+    try:
+        validated_snapshot = AgentRunSnapshot.model_validate(
+            snapshot.model_dump(mode="python", round_trip=True, warnings=False)
+        )
+        validated_attempts = tuple(
+            AgentRunAttempt.model_validate(
+                attempt.model_dump(mode="python", round_trip=True, warnings=False)
+            )
+            for attempt in sorted(attempts.values(), key=lambda item: item.attempt_number)
+        )
+        validated_checkpoints = tuple(
+            AgentRunCheckpoint.model_validate(
+                checkpoint.model_dump(mode="python", round_trip=True, warnings=False)
+            )
+            for checkpoint in sorted(
+                checkpoints.values(), key=lambda item: item.checkpoint_sequence
+            )
+        )
+        return RuntimeAggregate(
+            snapshot=validated_snapshot,
+            attempts=validated_attempts,
+            checkpoints=validated_checkpoints,
+        )
+    except ValidationError as exc:
+        raise LedgerReplayError(
+            "The replayed aggregate contains invalid contract values.",
+            run_id=event.run_id,
+            attempt_id=event.attempt_id,
+            command_id=event.command_id,
+            metadata={"errors": exc.errors(include_url=False), "eventType": event.event_type},
+        ) from exc
 
 
 def _validate_attempt_created(
@@ -841,16 +1047,8 @@ def _validate_recovery_plan_event(
     attempts: dict[str, AgentRunAttempt],
     checkpoints: dict[str, AgentRunCheckpoint],
     event: RuntimeEventEnvelope,
+    recorded_plan: RecoveryPlan,
 ) -> RecoveryPlan:
-    try:
-        recorded_plan = RecoveryPlan.model_validate(cast(dict[str, object], event.payload["plan"]))
-    except ValidationError as exc:
-        raise LedgerReplayError(
-            "The recovery_planned payload is not a valid recovery plan contract.",
-            run_id=event.run_id,
-            command_id=event.command_id,
-            metadata={"errors": exc.errors(include_url=False)},
-        ) from exc
     try:
         expected_plan = derive_recovery_plan(
             snapshot,
@@ -961,7 +1159,9 @@ def _validate_rule(
 
 
 def _resolve_target_state(
-    current_state: AgentRunState, event: RuntimeEventEnvelope
+    current_state: AgentRunState,
+    event: RuntimeEventEnvelope,
+    validated_payload: dict[str, object],
 ) -> AgentRunState:
     if event.event_type == AgentRuntimeEventType.HEARTBEAT_RECORDED:
         return current_state
@@ -972,9 +1172,9 @@ def _resolve_target_state(
     if event.event_type == AgentRuntimeEventType.RECOVERY_PLANNED:
         return current_state
     if event.event_type == AgentRuntimeEventType.RUN_RESUMED:
-        return AgentRunState(cast(str, event.payload["target_state"]))
+        return cast(AgentRunState, validated_payload["target_state"])
     if event.event_type == AgentRuntimeEventType.RUN_UNBLOCKED:
-        return AgentRunState(cast(str, event.payload["target_state"]))
+        return cast(AgentRunState, validated_payload["target_state"])
     target_map = {
         AgentRuntimeEventType.RUN_QUEUED: AgentRunState.QUEUED,
         AgentRuntimeEventType.RUN_CLAIMED: AgentRunState.CLAIMED,

@@ -10,17 +10,24 @@ from app.models.agent_runtime import (
     AgentRunState,
     AttemptState,
     BlockAgentRunCommand,
+    ConfirmPauseCommand,
     RecordCheckpointCommand,
+    RequestCancellationCommand,
+    RequestPauseCommand,
     RequestRecoveryPlanCommand,
+    ResumeAgentRunCommand,
     RuntimeEventEnvelope,
     UnblockAgentRunCommand,
 )
 from tests.agent_runtime_testkit import (
     begin_attempt,
+    claim_run,
+    create_run,
     fail_attempt,
     make_service,
     prepare_blocked_run,
     prepare_running_run,
+    queue_run,
     start_attempt,
     ts,
 )
@@ -47,6 +54,28 @@ def _mutate_attempt_created(
     if event_updates:
         update.update(event_updates)
     mutated[index] = mutated[index].model_copy(update=update)
+    return mutated
+
+
+def _mutate_event_payload(
+    events: list[RuntimeEventEnvelope],
+    *,
+    event_type: str,
+    payload_updates: dict[str, object] | None = None,
+    replace_payload: dict[str, object] | None = None,
+    occurrence: int = 0,
+) -> list[RuntimeEventEnvelope]:
+    mutated = [event.model_copy(deep=True) for event in events]
+    indices = [
+        position for position, event in enumerate(mutated) if event.event_type.value == event_type
+    ]
+    index = indices[occurrence]
+    payload = dict(mutated[index].payload)
+    if replace_payload is not None:
+        payload = replace_payload
+    elif payload_updates is not None:
+        payload.update(payload_updates)
+    mutated[index] = mutated[index].model_copy(update={"payload": payload})
     return mutated
 
 
@@ -78,6 +107,161 @@ def _prepare_recovery_planned_run() -> tuple[object, list[RuntimeEventEnvelope]]
         )
     )
     return planned, service.repository.list_events("run-1")
+
+
+def _prepare_pause_requested_events() -> list[RuntimeEventEnvelope]:
+    service = make_service()
+    prepare_running_run(service)
+    service.request_pause(
+        RequestPauseCommand(
+            run_id="run-1",
+            command_id="cmd-pause-request-1",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="operator-1",
+            reason_code="operator_pause",
+            detail="Pause the run",
+            source_metadata={"source": "test"},
+        )
+    )
+    return service.repository.list_events("run-1")
+
+
+def _prepare_resumed_run_events() -> list[RuntimeEventEnvelope]:
+    service = make_service()
+    prepare_running_run(service)
+    service.request_pause(
+        RequestPauseCommand(
+            run_id="run-1",
+            command_id="cmd-pause-request-1",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="operator-1",
+            reason_code="operator_pause",
+            detail="Pause the run",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.confirm_pause(
+        ConfirmPauseCommand(
+            run_id="run-1",
+            command_id="cmd-pause-confirm-1",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.resume_run(
+        ResumeAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-resume-1",
+            expected_run_version=8,
+            timestamp=ts(7),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    return service.repository.list_events("run-1")
+
+
+def _prepare_unblocked_run_events() -> list[RuntimeEventEnvelope]:
+    service = make_service()
+    prepare_running_run(service)
+    service.block_run(
+        BlockAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-block-1",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="operator-1",
+            block_code="waiting_for_approval",
+            detail="Blocked for approval",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.unblock_run(
+        UnblockAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-unblock-1",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    return service.repository.list_events("run-1")
+
+
+def _prepare_cancellation_request_events() -> list[RuntimeEventEnvelope]:
+    service = make_service()
+    prepare_running_run(service)
+    service.request_cancellation(
+        RequestCancellationCommand(
+            run_id="run-1",
+            command_id="cmd-cancel-request-1",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="operator-1",
+            requester_reference="operator-1",
+            reason_code="operator_cancel",
+            detail="Stop the run",
+            source_metadata={"source": "test"},
+        )
+    )
+    return service.repository.list_events("run-1")
+
+
+def _prepare_checkpoint_events() -> list[RuntimeEventEnvelope]:
+    service = make_service()
+    prepare_running_run(service)
+    service.record_checkpoint(
+        RecordCheckpointCommand(
+            run_id="run-1",
+            command_id="cmd-checkpoint-1",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="worker-1",
+            checkpoint_id="checkpoint-1",
+            state_reference="checkpoint://state/1",
+            integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+            source_metadata={"source": "test"},
+        )
+    )
+    return service.repository.list_events("run-1")
+
+
+def _prepare_blocked_run_events() -> list[RuntimeEventEnvelope]:
+    service = make_service()
+    prepare_blocked_run(service)
+    return service.repository.list_events("run-1")
+
+
+def _prepare_created_run_events() -> list[RuntimeEventEnvelope]:
+    service = make_service()
+    create_run(service)
+    return service.repository.list_events("run-1")
+
+
+def _prepare_queued_run_events() -> list[RuntimeEventEnvelope]:
+    service = make_service()
+    create_run(service)
+    queue_run(service, "run-1", expected_run_version=1)
+    return service.repository.list_events("run-1")
+
+
+def _prepare_claimed_run_events() -> list[RuntimeEventEnvelope]:
+    service = make_service()
+    create_run(service)
+    queue_run(service, "run-1", expected_run_version=1)
+    claim_run(service, "run-1", expected_run_version=2)
+    return service.repository.list_events("run-1")
+
+
+def _prepare_running_run_events() -> list[RuntimeEventEnvelope]:
+    service = make_service()
+    prepare_running_run(service)
+    return service.repository.list_events("run-1")
 
 
 def test_ledger_sequence_begins_at_one_and_is_contiguous() -> None:
@@ -195,6 +379,161 @@ def test_replay_rejects_incompatible_schema_version() -> None:
     broken = [events[0].model_copy(update={"event_schema_version": "2.0"})]
     with pytest.raises(LedgerReplayError):
         replay_execution_ledger(broken)
+
+
+@pytest.mark.parametrize(
+    ("event_type", "events_builder"),
+    [
+        ("run_queued", _prepare_queued_run_events),
+        ("run_claimed", _prepare_claimed_run_events),
+        ("run_start_requested", _prepare_running_run_events),
+        ("run_unblocked", _prepare_unblocked_run_events),
+    ],
+)
+@pytest.mark.parametrize(
+    "detail",
+    [42, "   ", "x" * 2001, "bad\nvalue", "Bearer secret-token-value"],
+)
+def test_replay_rejects_invalid_detail_payloads(
+    event_type: str, events_builder, detail: object
+) -> None:
+    events = _mutate_event_payload(
+        events_builder(),
+        event_type=event_type,
+        payload_updates={"detail": detail},
+    )
+    with pytest.raises(LedgerReplayError) as exc_info:
+        replay_execution_ledger(events)
+    assert exc_info.value.code == "ledger_replay_error"
+    assert exc_info.value.metadata["eventType"] == event_type
+    assert exc_info.value.metadata["payloadSection"] == "detail"
+    assert "secret-token-value" not in str(exc_info.value.metadata)
+
+
+def test_replay_rejects_invalid_resume_and_unblock_target_states() -> None:
+    with pytest.raises(LedgerReplayError):
+        replay_execution_ledger(
+            _mutate_event_payload(
+                _prepare_resumed_run_events(),
+                event_type="run_resumed",
+                payload_updates={"target_state": "not-a-state"},
+            )
+        )
+    with pytest.raises(LedgerReplayError):
+        replay_execution_ledger(
+            _mutate_event_payload(
+                _prepare_unblocked_run_events(),
+                event_type="run_unblocked",
+                payload_updates={"target_state": 42},
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("events_builder", "event_type", "replace_payload", "section"),
+    [
+        (
+            _prepare_created_run_events,
+            "run_created",
+            {"specification": 42, "detail": "Run created"},
+            "specification",
+        ),
+        (
+            _prepare_claimed_run_events,
+            "run_claimed",
+            {"detail": "Claimed for execution", "executor_reference": 42},
+            "executor_reference",
+        ),
+        (_prepare_running_run_events, "attempt_created", {"attempt": 42}, "attempt"),
+        (_prepare_resumed_run_events, "pause_requested", {"pause": 42}, "pause"),
+        (_prepare_unblocked_run_events, "run_blocked", {"block": 42}, "block"),
+        (
+            _prepare_cancellation_request_events,
+            "cancellation_requested",
+            {"cancellation": 42},
+            "cancellation",
+        ),
+        (_prepare_checkpoint_events, "checkpoint_recorded", {"checkpoint": 42}, "checkpoint"),
+        (
+            _prepare_blocked_run_events,
+            "attempt_failed",
+            {"failure": 42, "blocking_reason": 42},
+            "failure",
+        ),
+        (
+            lambda: _prepare_recovery_planned_run()[1],
+            "recovery_planned",
+            {"plan": 42},
+            "plan",
+        ),
+    ],
+)
+def test_replay_rejects_invalid_payload_sections(
+    events_builder,
+    event_type: str,
+    replace_payload: dict[str, object],
+    section: str,
+) -> None:
+    events = _mutate_event_payload(
+        events_builder(),
+        event_type=event_type,
+        replace_payload=replace_payload,
+    )
+    with pytest.raises(LedgerReplayError) as exc_info:
+        replay_execution_ledger(events)
+    assert exc_info.value.code == "ledger_replay_error"
+    assert exc_info.value.metadata["eventType"] == event_type
+    assert exc_info.value.metadata["payloadSection"] == section
+
+
+def test_replay_accepts_valid_extra_safe_payload_metadata() -> None:
+    events = _mutate_event_payload(
+        _prepare_pause_requested_events(),
+        event_type="pause_requested",
+        replace_payload={
+            "pause": {
+                "code": "operator_pause",
+                "detail": "Pause the run",
+                "timestamp": ts(5).isoformat(),
+                "requested_by": "operator-1",
+                "resume_state": "running",
+                "metadata": {"note": "safe"},
+            }
+        },
+    )
+    replayed = replay_execution_ledger(events)
+    assert replayed is not None
+    assert replayed.snapshot.pause_reason is not None
+    assert replayed.snapshot.pause_reason.metadata["note"] == "safe"
+
+
+def test_replay_rejects_malformed_failure_and_blocking_reason_payloads() -> None:
+    failure_events = _mutate_event_payload(
+        _prepare_blocked_run_events(),
+        event_type="attempt_failed",
+        replace_payload={"failure": 42, "blocking_reason": {}},
+    )
+    with pytest.raises(LedgerReplayError) as failure_exc:
+        replay_execution_ledger(failure_events)
+    assert failure_exc.value.metadata["payloadSection"] == "failure"
+
+    blocking_events = _mutate_event_payload(
+        _prepare_blocked_run_events(),
+        event_type="attempt_failed",
+        replace_payload={
+            "failure": {
+                "category": "dependency",
+                "detail": "Dependency unavailable",
+                "timestamp": ts(5).isoformat(),
+                "attempt_id": "attempt-1",
+                "metadata": {},
+            },
+            "blocking_reason": 42,
+        },
+    )
+    with pytest.raises(LedgerReplayError) as block_exc:
+        replay_execution_ledger(blocking_events)
+    assert block_exc.value.metadata["payloadSection"] == "blocking_reason"
 
 
 @pytest.mark.parametrize(
@@ -589,3 +928,28 @@ def test_replay_rejects_malformed_recovery_plan_payload() -> None:
     broken[-1] = broken[-1].model_copy(update={"payload": {"plan": {"reason": "only"}}})
     with pytest.raises(LedgerReplayError):
         replay_execution_ledger(broken)
+
+
+@pytest.mark.parametrize(
+    "events_builder",
+    [
+        _prepare_created_run_events,
+        _prepare_queued_run_events,
+        _prepare_claimed_run_events,
+        _prepare_running_run_events,
+        _prepare_resumed_run_events,
+        _prepare_unblocked_run_events,
+        _prepare_cancellation_request_events,
+        _prepare_checkpoint_events,
+        _prepare_blocked_run_events,
+        lambda: _prepare_recovery_planned_run()[1],
+    ],
+)
+def test_representative_valid_ledgers_replay_deterministically(events_builder) -> None:
+    events = events_builder()
+    first = replay_execution_ledger(events)
+    second = replay_execution_ledger(events)
+    assert first is not None and second is not None
+    assert first.snapshot == second.snapshot
+    assert first.attempts == second.attempts
+    assert first.checkpoints == second.checkpoints
