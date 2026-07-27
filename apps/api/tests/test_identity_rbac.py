@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from app.core.errors import DomainError
 from app.db.models import (
+    AgentCapabilityAssignmentRow,
     AgentPermissionAssignmentRow,
     AgentRoleAssignmentRow,
     IdentityAuditEventRow,
@@ -26,6 +27,7 @@ from app.models.identity import (
     AssignRoleRequest,
     AuthorizationDecision,
     CreateAgentRequest,
+    CreateCapabilityRequest,
     CreatePermissionRequest,
     CreateRankRequest,
     CreateRoleRequest,
@@ -69,6 +71,39 @@ def test_lifecycle_is_audited_and_retirement_terminal(service):
         "agent.suspended",
         "agent.retired",
     }
+
+
+def test_agent_list_capability_filter_uses_assignment_agent_join(service):
+    assigned = agent(service, "agent.capability-assigned")
+    assigner = agent(service, "agent.capability-assigner")
+    capability = service.create_definition(
+        "capability",
+        CreateCapabilityRequest(
+            stable_key="capability.filtered",
+            display_name="Filtered capability",
+            category="tool",
+        ),
+    )
+    with service.sessions.begin() as session:
+        session.add(
+            AgentCapabilityAssignmentRow(
+                id="capability-filter-assignment",
+                agent_id=assigned.id,
+                capability_id=capability.id,
+                source="test",
+                assigned_by=assigner.id,
+            )
+        )
+    app = create_app(database_url=str(service.sessions.kw["bind"].url))
+
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/identity/agents",
+            params={"capability": capability.stable_key},
+        )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["data"]] == [assigned.id]
 
 
 def test_agent_patch_rejects_explicit_nulls(service):

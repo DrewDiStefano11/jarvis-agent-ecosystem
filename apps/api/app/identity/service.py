@@ -121,8 +121,14 @@ class IdentityService:
             if capability:
                 t = now()
                 query = (
-                    query.join(AgentCapabilityAssignmentRow)
-                    .join(IdentityCapabilityRow)
+                    query.join(
+                        AgentCapabilityAssignmentRow,
+                        AgentCapabilityAssignmentRow.agent_id == IdentityAgentRow.id,
+                    )
+                    .join(
+                        IdentityCapabilityRow,
+                        IdentityCapabilityRow.id == AgentCapabilityAssignmentRow.capability_id,
+                    )
                     .where(
                         IdentityCapabilityRow.stable_key == capability,
                         IdentityCapabilityRow.is_enabled,
