@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from copy import deepcopy
 from threading import RLock
 from typing import Protocol
 
 from app.agent_runtime.errors import (
     CommandConflictError,
+    InvalidRuntimeMetadataError,
     LedgerSequenceError,
     RunAlreadyExistsError,
     RunNotFoundError,
@@ -15,6 +16,7 @@ from app.agent_runtime.errors import (
 from app.agent_runtime.ledger import replay_execution_ledger
 from app.agent_runtime.transitions import TERMINAL_STATES
 from app.models.agent_runtime import (
+    DEFAULT_LINEAGE_DEPTH_LIMIT,
     AgentRunAttempt,
     AgentRunCheckpoint,
     AgentRunQuery,
@@ -25,6 +27,49 @@ from app.models.agent_runtime import (
     RunId,
     RuntimeEventEnvelope,
 )
+
+
+def validate_lineage_invariant(
+    run_id: RunId,
+    parent_run_id: RunId | None,
+    *,
+    lookup: Callable[[str], AgentRunSnapshot | None],
+    depth_limit: int = DEFAULT_LINEAGE_DEPTH_LIMIT,
+) -> None:
+    if parent_run_id is None:
+        return
+    chain: list[str] = [run_id]
+    current_parent: str | None = parent_run_id
+    depth = 0
+    while current_parent is not None:
+        if current_parent in chain:
+            raise InvalidRuntimeMetadataError(
+                "Run lineage contains a cycle.",
+                run_id=run_id,
+                metadata={
+                    "reason": "lineage_cycle",
+                    "parentRunId": parent_run_id,
+                    "cyclePath": tuple(chain + [current_parent]),
+                    "depthLimit": depth_limit,
+                },
+            )
+        if depth >= depth_limit:
+            raise InvalidRuntimeMetadataError(
+                "Run lineage exceeded the bounded traversal depth.",
+                run_id=run_id,
+                metadata={
+                    "reason": "lineage_depth_exceeded",
+                    "parentRunId": parent_run_id,
+                    "cyclePath": tuple(chain + [current_parent]),
+                    "depthLimit": depth_limit,
+                },
+            )
+        chain.append(current_parent)
+        parent_snapshot = lookup(current_parent)
+        if parent_snapshot is None:
+            return
+        current_parent = parent_snapshot.specification.parent_run_id
+        depth += 1
 
 
 class ExecutionLedgerAppender(Protocol):
@@ -120,6 +165,11 @@ class InMemoryAgentRuntimeRepository(AgentRuntimeRepository):
                     run_id=snapshot.specification.run_id,
                     metadata={"reason": "snapshot_ledger_mismatch"},
                 )
+            validate_lineage_invariant(
+                snapshot.specification.run_id,
+                snapshot.specification.parent_run_id,
+                lookup=self._snapshots.get,
+            )
             self._snapshots[snapshot.specification.run_id] = aggregate.snapshot.model_copy(
                 deep=True
             )
@@ -292,6 +342,11 @@ class InMemoryAgentRuntimeRepository(AgentRuntimeRepository):
                             "expectedSequence": expected_sequence,
                         },
                     )
+                validate_lineage_invariant(
+                    snapshot.specification.run_id,
+                    snapshot.specification.parent_run_id,
+                    lookup=self._snapshots.get,
+                )
             else:
                 if existing_snapshot is None:
                     raise RunNotFoundError(run_id=run_id)

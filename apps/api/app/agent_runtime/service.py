@@ -24,7 +24,7 @@ from app.agent_runtime.errors import (
 )
 from app.agent_runtime.ledger import RuntimeAggregate, apply_event, replay_execution_ledger
 from app.agent_runtime.recovery import derive_recovery_plan
-from app.agent_runtime.repository import AgentRuntimeRepository
+from app.agent_runtime.repository import AgentRuntimeRepository, validate_lineage_invariant
 from app.agent_runtime.transitions import TERMINAL_STATES
 from app.models.agent_runtime import (
     DEFAULT_LINEAGE_DEPTH_LIMIT,
@@ -1278,31 +1278,12 @@ class AgentRuntimeService:
             )
 
     def _validate_parent_lineage(self, specification: AgentRunSpecification) -> None:
-        parent_run_id = specification.parent_run_id
-        if parent_run_id is None:
-            return
-        visited = {specification.run_id}
-        current_parent = parent_run_id
-        depth = 0
-        while current_parent is not None and depth < DEFAULT_LINEAGE_DEPTH_LIMIT:
-            if current_parent in visited:
-                raise InvalidRuntimeMetadataError(
-                    "Run lineage contains a cycle.",
-                    run_id=specification.run_id,
-                    metadata={"parentRunId": current_parent},
-                )
-            visited.add(current_parent)
-            parent_snapshot = self.repository.load_run(current_parent)
-            if parent_snapshot is None:
-                return
-            current_parent = parent_snapshot.specification.parent_run_id
-            depth += 1
-        if current_parent is not None:
-            raise InvalidRuntimeMetadataError(
-                "Run lineage exceeded the bounded traversal depth.",
-                run_id=specification.run_id,
-                metadata={"depthLimit": DEFAULT_LINEAGE_DEPTH_LIMIT},
-            )
+        validate_lineage_invariant(
+            specification.run_id,
+            specification.parent_run_id,
+            lookup=self.repository.load_run,
+            depth_limit=DEFAULT_LINEAGE_DEPTH_LIMIT,
+        )
 
     def _build_event(
         self,
