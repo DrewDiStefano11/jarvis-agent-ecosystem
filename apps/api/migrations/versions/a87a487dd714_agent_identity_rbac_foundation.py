@@ -202,7 +202,7 @@ def upgrade() -> None:
             ["identity_capabilities.id"],
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("agent_id", "capability_id"),
+        sa.UniqueConstraint("agent_id", "capability_id", "starts_at"),
     )
     with op.batch_alter_table("identity_agent_capabilities", schema=None) as batch_op:
         batch_op.create_index(
@@ -553,7 +553,7 @@ def upgrade() -> None:
             ["identity_teams.id"],
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("team_id", "agent_id"),
+        sa.UniqueConstraint("team_id", "agent_id", "starts_at"),
     )
     with op.batch_alter_table("identity_team_memberships", schema=None) as batch_op:
         batch_op.create_index(

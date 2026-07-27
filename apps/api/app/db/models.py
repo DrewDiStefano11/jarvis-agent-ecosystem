@@ -243,7 +243,7 @@ class AgentCapabilityAssignmentRow(Base):
     assigned_by: Mapped[str | None] = mapped_column(ForeignKey("identity_agents.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    __table_args__ = (UniqueConstraint("agent_id", "capability_id"),)
+    __table_args__ = (UniqueConstraint("agent_id", "capability_id", "starts_at"),)
 
 
 class TeamMembershipRow(Base):
@@ -257,7 +257,7 @@ class TeamMembershipRow(Base):
     assigned_by: Mapped[str | None] = mapped_column(ForeignKey("identity_agents.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    __table_args__ = (UniqueConstraint("team_id", "agent_id"),)
+    __table_args__ = (UniqueConstraint("team_id", "agent_id", "starts_at"),)
 
 
 class SupervisorRelationshipRow(Base):
