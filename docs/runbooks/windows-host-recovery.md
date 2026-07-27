@@ -1,3 +1,2 @@
 # Recovery
-Conservative uninstall; backups preserved; no automatic database modifications.
-Crash loops, stale PIDs, port conflicts, restore procedure, power/reboot.
+Stale PIDs, port conflicts, health failures, crash loops, database restore, Tailscale failure, reboot.

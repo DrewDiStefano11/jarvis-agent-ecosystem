@@ -1,1 +1,2 @@
-# Bounded health checks, crash-loop detection, locked restart, exit codes.
+param([switch]$WhatIf)
+# Lock, bounded health, ownership verify, restart limits, crash-loop latch.

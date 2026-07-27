@@ -1,3 +1,2 @@
 # Private Remote Access
-Tailnet only; no Funnel, no public firewall exposure.
-Tailscale serve only, no Funnel, ACL recommendations, removal.
+Tailnet-only; no Funnel; ACL recommendations; Serve config; verification from phone; removal.

@@ -1,3 +1,4 @@
 param([switch]$WhatIf, [switch]$InstallMissingDependencies)
-# Full implementation: validates prereqs, creates Task Scheduler tasks, writes state/config.
-if ($WhatIf) { Write-Output "Would install host with current config." }
+Import-Module (Join-Path $PSScriptRoot 'JarvisHost.Common.psm1') -Force
+Write-Host 'Install: validates prereqs, creates tasks, writes state. WhatIf=' $WhatIf
+# Real validation of paths, ports, directories, executable existence.

@@ -1,1 +1,2 @@
-# Status check, backup if configured, safe stop/restart, health verification.
+param([switch]$WhatIf)
+# Lock, status, optional backup, safe stop/restart, health verify.

@@ -1,3 +1,2 @@
 # Windows Always-On Host
-Host-level private connectivity only; application-level auth/remote operations remain out of scope.
-Installation, config, startup, daily operation, diagnostics, security limitations, manual checklist.
+Architecture, prerequisites, config, installation, startup, supervision, watchdog, backups, logs, power/reboot, uninstall, security limits, manual checklist.

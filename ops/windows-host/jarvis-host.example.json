@@ -1,1 +1,24 @@
-{"repoPath":"C:\\jarvis","backendPort":8000,"frontendPort":3000,"watchdogIntervalSec":60}
+{
+  "repoPath":"C:\\jarvis-agent-ecosystem",
+  "backendWorkingDir":"C:\\jarvis-agent-ecosystem",
+  "frontendWorkingDir":"C:\\jarvis-agent-ecosystem/apps/web",
+  "backendExecutable":"C:\\Users\\user\\.venv\\Scripts\\python.exe",
+  "backendArguments":"-m apps.api.main",
+  "frontendExecutable":"C:\\Program Files\\nodejs\\node.exe",
+  "frontendArguments":"node server.js",
+  "backendPort":8000,
+  "frontendPort":3000,
+  "backendHealthUrl":"http://127.0.0.1:8000/health",
+  "frontendHealthUrl":"http://127.0.0.1:3000",
+  "databasePath":"C:\\jarvis-agent-ecosystem\\jarvis.db",
+  "backupDirectory":"C:\\jarvis-backups",
+  "logDirectory":"C:\\jarvis-logs",
+  "stateDirectory":"%LOCALAPPDATA%\\JarvisHost",
+  "watchdogIntervalSec":60,
+  "healthTimeoutSec":10,
+  "maxRestartsWithinWindow":5,
+  "restartCooldownSec":300,
+  "scheduledTaskNames":{"startup":"JarvisHost-Startup","watchdog":"JarvisHost-Watchdog","backup":"JarvisHost-Backup"},
+  "tailscaleServeHostnames":"jarvis",
+  "tailscaleServeLocalTarget":"http://127.0.0.1:3000"
+}

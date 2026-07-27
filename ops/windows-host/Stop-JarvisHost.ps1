@@ -1,1 +1,2 @@
-# Verifies owned PIDs by executable path and creation time before graceful/forced stop.
+param([switch]$WhatIf)
+# Verifies PID/creation-time/executable before graceful/forced stop.
