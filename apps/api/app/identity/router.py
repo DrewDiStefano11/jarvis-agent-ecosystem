@@ -72,38 +72,51 @@ def retire(agent_id: str, request: Request):
     return envelope(AgentIdentity.model_validate(svc(request).transition(agent_id, "retired")))  # noqa: F405
 
 
-_DEFINITIONS = {
-    "ranks": CreateRankRequest,
-    "roles": CreateRoleRequest,
-    "permissions": CreatePermissionRequest,
-    "capabilities": CreateCapabilityRequest,
-    "teams": CreateTeamRequest,
-}  # noqa: F405
-for plural, schema in _DEFINITIONS.items():
-    kind = plural[:-1] if plural != "capabilities" else "capability"
+def _create_definition(kind: str, body, request: Request):
+    return envelope(svc(request).create_definition(kind, body))
 
-    def make_create(kind, schema):
-        async def create(request: Request):
-            body = schema.model_validate(await request.json())
-            return envelope(svc(request).create_definition(kind, body))
 
-        return create
+@router.post("/ranks", status_code=201)
+def create_rank(body: CreateRankRequest, request: Request):
+    return _create_definition("rank", body, request)
 
-    def make_list(kind):
+
+@router.post("/roles", status_code=201)
+def create_role(body: CreateRoleRequest, request: Request):
+    return _create_definition("role", body, request)
+
+
+@router.post("/permissions", status_code=201)
+def create_permission(body: CreatePermissionRequest, request: Request):
+    return _create_definition("permission", body, request)
+
+
+@router.post("/capabilities", status_code=201)
+def create_capability(body: CreateCapabilityRequest, request: Request):
+    return _create_definition("capability", body, request)
+
+
+@router.post("/teams", status_code=201)
+def create_team(body: CreateTeamRequest, request: Request):
+    return _create_definition("team", body, request)
+
+
+for plural, kind in {
+    "ranks": "rank",
+    "roles": "role",
+    "permissions": "permission",
+    "capabilities": "capability",
+    "teams": "team",
+}.items():
+
+    def make_list(definition_kind):
         def listing(
             request: Request, offset: int = Query(0, ge=0), limit: int = Query(50, ge=1, le=100)
         ):
-            return envelope(svc(request).list_definitions(kind, offset, limit))
+            return envelope(svc(request).list_definitions(definition_kind, offset, limit))
 
         return listing
 
-    router.add_api_route(
-        f"/{plural}",
-        make_create(kind, schema),
-        methods=["POST"],
-        status_code=201,
-        name=f"create_identity_{kind}",
-    )
     router.add_api_route(
         f"/{plural}", make_list(kind), methods=["GET"], name=f"list_identity_{plural}"
     )

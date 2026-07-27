@@ -94,7 +94,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
         "ix_context_assemblies_task_id",
     }
     with engine.connect() as connection:
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260724_03"
+        assert connection.scalar(text("select version_num from alembic_version")) == "a87a487dd714"
     engine.dispose()
     command.downgrade(config, "20260723_02")
     lease_engine = create_engine(database_url(path))
@@ -117,7 +117,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     command.current(config)
     with create_database_engine(database_url(path)).connect() as connection:
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260724_03"
+        assert connection.scalar(text("select version_num from alembic_version")) == "a87a487dd714"
     for revision in (root / "migrations" / "versions").glob("*.py"):
         source = revision.read_text(encoding="utf-8")
         assert "Base.metadata" not in source

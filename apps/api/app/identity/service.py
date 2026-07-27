@@ -22,6 +22,7 @@ from app.db.models import (
     ResourceAccessPolicyRow,
     RolePermissionRow,
     SupervisorRelationshipRow,
+    TeamMembershipRow,
 )
 from app.models.identity import AuthorizationDecision
 from app.services.unit_of_work import UnitOfWork
@@ -338,7 +339,12 @@ class IdentityService:
                         AgentPermissionAssignmentRow.expires_at > t,
                     ),
                 )
-                for a in s.scalars(select(AgentPermissionAssignmentRow).where(active)):
+                direct_rows = s.scalars(
+                    select(AgentPermissionAssignmentRow)
+                    .where(active)
+                    .order_by(AgentPermissionAssignmentRow.id)
+                )
+                for a in direct_rows:
                     applicable = (a.resource_type is None or a.resource_type == resource_type) and (
                         a.resource_id is None or a.resource_id == resource_id
                     )
@@ -362,8 +368,18 @@ class IdentityService:
                             AgentRoleAssignmentRow.expires_at > t,
                         ),
                     )
+                    .order_by(AgentRoleAssignmentRow.role_id, AgentRoleAssignmentRow.id)
                 ).all()
                 for rp, assignment in role_rows:
+                    scope_matches = assignment.scope_type == "global" or (
+                        assignment.scope_id == resource_id
+                        and (
+                            assignment.scope_type == "resource"
+                            or assignment.scope_type == resource_type
+                        )
+                    )
+                    if not scope_matches:
+                        continue
                     (denials if rp.effect == "deny" else grants).append(
                         f"role:{assignment.role_id}"
                     )
@@ -477,6 +493,7 @@ class IdentityService:
             self._agent(s, agent_id)
             result = []
             frontier = [agent_id]
+            t = now()
             for _ in range(MAX_HIERARCHY_DEPTH):
                 children = list(
                     s.scalars(
@@ -484,6 +501,11 @@ class IdentityService:
                         .where(
                             SupervisorRelationshipRow.supervisor_agent_id.in_(frontier),
                             SupervisorRelationshipRow.revoked_at.is_(None),
+                            SupervisorRelationshipRow.starts_at <= t,
+                            or_(
+                                SupervisorRelationshipRow.expires_at.is_(None),
+                                SupervisorRelationshipRow.expires_at > t,
+                            ),
                         )
                         .order_by(SupervisorRelationshipRow.subordinate_agent_id)
                     )
@@ -516,17 +538,70 @@ class IdentityService:
     def check_resource_access(
         self, actor_id: str, resource_type: str, resource_id: str, action: str
     ) -> AuthorizationDecision:
-        base = self.check_permission(
-            actor_id, f"{resource_type}.{action}", resource_type, resource_id
-        )
         with self.sessions() as s:
             actor = s.get(IdentityAgentRow, actor_id)
+            permission = s.scalar(
+                select(IdentityPermissionRow).where(
+                    IdentityPermissionRow.resource_type == resource_type,
+                    IdentityPermissionRow.action == action,
+                    IdentityPermissionRow.is_enabled,
+                )
+            )
+            permission_key = permission.stable_key if permission else f"{resource_type}.{action}"
+            base = self.check_permission(actor_id, permission_key, resource_type, resource_id)
             if not actor or actor.lifecycle_state != "active" or not actor.is_enabled:
                 return base
             t = now()
+            subject_pairs: set[tuple[str, str | None]] = {("all", None), ("agent", actor_id)}
+            if actor.rank_id:
+                rank = s.get(IdentityRankRow, actor.rank_id)
+                if rank and rank.is_enabled:
+                    subject_pairs.add(("rank", actor.rank_id))
+            active_roles = s.scalars(
+                select(AgentRoleAssignmentRow.role_id)
+                .join(IdentityRoleRow)
+                .where(
+                    AgentRoleAssignmentRow.agent_id == actor_id,
+                    IdentityRoleRow.is_enabled,
+                    AgentRoleAssignmentRow.revoked_at.is_(None),
+                    AgentRoleAssignmentRow.starts_at <= t,
+                    or_(
+                        AgentRoleAssignmentRow.expires_at.is_(None),
+                        AgentRoleAssignmentRow.expires_at > t,
+                    ),
+                )
+            )
+            subject_pairs.update(("role", role_id) for role_id in active_roles)
+            active_teams = s.scalars(
+                select(TeamMembershipRow.team_id)
+                .join(IdentityTeamRow)
+                .where(
+                    TeamMembershipRow.agent_id == actor_id,
+                    IdentityTeamRow.lifecycle_state == "active",
+                    TeamMembershipRow.revoked_at.is_(None),
+                    TeamMembershipRow.starts_at <= t,
+                    or_(
+                        TeamMembershipRow.expires_at.is_(None),
+                        TeamMembershipRow.expires_at > t,
+                    ),
+                )
+            )
+            subject_pairs.update(("team", team_id) for team_id in active_teams)
+            subject_predicate = or_(
+                *[
+                    and_(
+                        ResourceAccessPolicyRow.subject_type == subject_type,
+                        ResourceAccessPolicyRow.subject_id.is_(None)
+                        if subject_id is None
+                        else ResourceAccessPolicyRow.subject_id == subject_id,
+                    )
+                    for subject_type, subject_id in sorted(subject_pairs)
+                ]
+            )
             policies = list(
                 s.scalars(
-                    select(ResourceAccessPolicyRow).where(
+                    select(ResourceAccessPolicyRow)
+                    .where(
                         ResourceAccessPolicyRow.resource_type == resource_type,
                         ResourceAccessPolicyRow.resource_id == resource_id,
                         ResourceAccessPolicyRow.action == action,
@@ -536,14 +611,9 @@ class IdentityService:
                             ResourceAccessPolicyRow.expires_at.is_(None),
                             ResourceAccessPolicyRow.expires_at > t,
                         ),
-                        or_(
-                            and_(
-                                ResourceAccessPolicyRow.subject_type == "agent",
-                                ResourceAccessPolicyRow.subject_id == actor_id,
-                            ),
-                            ResourceAccessPolicyRow.subject_type == "all",
-                        ),
+                        subject_predicate,
                     )
+                    .order_by(ResourceAccessPolicyRow.id)
                 )
             )
             denies = [
@@ -560,10 +630,12 @@ class IdentityService:
                     resource_type=resource_type,
                     resource_id=resource_id,
                     matched_grants=base.matched_grants + allows,
-                    matched_denials=denies,
+                    matched_denials=base.matched_denials + denies,
                     decisive_rule="resource_deny",
                     reason_code="resource_denial",
                 )
+            if base.matched_denials:
+                return base
             if allows:
                 return AuthorizationDecision(
                     allowed=True,
