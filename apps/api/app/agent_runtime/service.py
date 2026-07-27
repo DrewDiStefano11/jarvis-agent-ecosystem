@@ -73,6 +73,7 @@ from app.models.agent_runtime import (
     TimeoutAgentRunCommand,
     TimeoutAttemptCommand,
     UnblockAgentRunCommand,
+    build_run_created_payload,
     stable_hash,
 )
 
@@ -219,10 +220,7 @@ class AgentRuntimeService:
             event_type=AgentRuntimeEventType.RUN_CREATED,
             sequence_number=1,
             run_version=1,
-            payload={
-                "specification": command.specification.model_dump(mode="json"),
-                "detail": "Run created",
-            },
+            payload=build_run_created_payload(command.specification.model_dump(mode="json")),
         )
         aggregate = replay_execution_ledger([event])
         assert aggregate is not None
@@ -540,6 +538,16 @@ class AgentRuntimeService:
             return existing
         snapshot = aggregate.snapshot
         self._ensure_expected_version(snapshot, command.expected_run_version, command)
+        if snapshot.recovery_status == RecoveryStatus.REQUIRED:
+            raise RecoveryNotAllowedError(
+                "Recovery-required runs must remain blocked until recovery is planned.",
+                run_id=command.run_id,
+                command_id=command.command_id,
+                metadata={
+                    "state": snapshot.state,
+                    "recoveryStatus": snapshot.recovery_status,
+                },
+            )
         if snapshot.blocking_reason is None:
             raise InvalidTransitionError(
                 "Unblocking requires an active block.",

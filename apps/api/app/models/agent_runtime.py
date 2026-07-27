@@ -17,6 +17,8 @@ MAX_METADATA_DEPTH = 5
 MAX_METADATA_KEYS = 64
 MAX_METADATA_ITEMS = 128
 MAX_METADATA_JSON_LENGTH = 20_000
+MAX_EVENT_PAYLOAD_JSON_LENGTH = MAX_METADATA_JSON_LENGTH
+RUN_CREATED_EVENT_DETAIL = "Run created"
 SUPPORTED_EVENT_SCHEMA_VERSION = "1.0"
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 100
@@ -252,6 +254,18 @@ def canonical_json(value: Any) -> str:
 
 def stable_hash(value: Any) -> str:
     return sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def build_run_created_payload(specification: dict[str, Any]) -> dict[str, Any]:
+    return {"specification": specification, "detail": RUN_CREATED_EVENT_DETAIL}
+
+
+def validate_run_created_payload_size(specification: dict[str, Any]) -> None:
+    if (
+        len(canonical_json(build_run_created_payload(specification)))
+        > MAX_EVENT_PAYLOAD_JSON_LENGTH
+    ):
+        raise ValueError("run specification exceeds the run_created event payload size limit")
 
 
 RunId = Annotated[
@@ -508,6 +522,7 @@ class AgentRunSpecification(RuntimeContract):
             raise ValueError("parent_run_id must not reference the same run")
         if self.deadline is not None and self.deadline <= self.created_at:
             raise ValueError("deadline must be later than created_at")
+        validate_run_created_payload_size(self.model_dump(mode="json"))
         return self
 
 

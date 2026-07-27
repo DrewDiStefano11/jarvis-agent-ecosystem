@@ -4,9 +4,9 @@ import pytest
 
 from app.agent_runtime.errors import (
     ActiveAttemptExistsError,
-    AttemptLimitExceededError,
     AttemptNotFoundError,
     InvalidAttemptStateError,
+    RecoveryNotAllowedError,
 )
 from app.agent_runtime.ledger import replay_execution_ledger
 from app.models.agent_runtime import (
@@ -112,19 +112,16 @@ def test_attempt_limit_is_enforced() -> None:
             source_metadata={"source": "test"},
         )
     )
-    service.unblock_run(
-        UnblockAgentRunCommand(
-            run_id="run-1",
-            command_id="cmd-unblock",
-            expected_run_version=7,
-            timestamp=ts(6),
-            actor_reference="operator-1",
-            source_metadata={"source": "test"},
-        )
-    )
-    with pytest.raises(AttemptLimitExceededError):
-        begin_attempt(
-            service, "run-1", expected_run_version=8, command_id="cmd-begin-second", second=7
+    with pytest.raises(RecoveryNotAllowedError):
+        service.request_recovery_plan(
+            RequestRecoveryPlanCommand(
+                run_id="run-1",
+                command_id="cmd-plan",
+                expected_run_version=7,
+                timestamp=ts(6),
+                actor_reference="operator-1",
+                source_metadata={"source": "test"},
+            )
         )
 
 

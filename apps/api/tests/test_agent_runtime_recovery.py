@@ -31,7 +31,12 @@ from tests.agent_runtime_testkit import (
 )
 
 
-def _prepare_planned_recovery_run(service, *, checkpoint_ids: tuple[str, ...] = ("checkpoint-1",)):
+def _prepare_planned_recovery_run(
+    service,
+    *,
+    checkpoint_ids: tuple[str, ...] = ("checkpoint-1",),
+    unblock: bool = True,
+):
     prepare_running_run(service)
     version = 6
     for offset, checkpoint_id in enumerate(checkpoint_ids, start=0):
@@ -66,16 +71,17 @@ def _prepare_planned_recovery_run(service, *, checkpoint_ids: tuple[str, ...] = 
             source_metadata={"source": "test"},
         )
     )
-    service.unblock_run(
-        UnblockAgentRunCommand(
-            run_id="run-1",
-            command_id="cmd-unblock",
-            expected_run_version=fail_version + 2,
-            timestamp=ts(7 + len(checkpoint_ids)),
-            actor_reference="operator-1",
-            source_metadata={"source": "test"},
+    if unblock:
+        service.unblock_run(
+            UnblockAgentRunCommand(
+                run_id="run-1",
+                command_id="cmd-unblock",
+                expected_run_version=fail_version + 2,
+                timestamp=ts(7 + len(checkpoint_ids)),
+                actor_reference="operator-1",
+                source_metadata={"source": "test"},
+            )
         )
-    )
     return plan
 
 
@@ -150,6 +156,60 @@ def test_valid_timed_out_attempt_recovery_is_allowed() -> None:
     )
     assert result.recovery_plan is not None
     assert result.recovery_plan.next_attempt_number == 2
+
+
+def test_unblock_recovery_required_run_is_rejected_without_mutation() -> None:
+    service = make_service()
+    blocked = prepare_blocked_run(service)
+    assert blocked.snapshot is not None
+    assert blocked.snapshot.state.value == "blocked"
+    assert blocked.snapshot.recovery_status.value == "required"
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    before_attempts = service.repository.load_attempt_history("run-1")
+    before_checkpoints = service.repository.list_checkpoints("run-1")
+    before_processed = service.repository.get_processed_command("run-1", "cmd-unblock-too-early")
+    with pytest.raises(RecoveryNotAllowedError):
+        service.unblock_run(
+            UnblockAgentRunCommand(
+                run_id="run-1",
+                command_id="cmd-unblock-too-early",
+                expected_run_version=7,
+                timestamp=ts(6),
+                actor_reference="operator-1",
+                source_metadata={"source": "test"},
+            )
+        )
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
+    assert service.repository.load_attempt_history("run-1") == before_attempts
+    assert service.repository.list_checkpoints("run-1") == before_checkpoints
+    assert (
+        service.repository.get_processed_command("run-1", "cmd-unblock-too-early")
+        == before_processed
+    )
+
+
+def test_recovery_planned_run_can_be_unblocked_and_replayed_idempotently() -> None:
+    service = make_service()
+    _prepare_planned_recovery_run(service, checkpoint_ids=("checkpoint-1",), unblock=False)
+    command = UnblockAgentRunCommand(
+        run_id="run-1",
+        command_id="cmd-unblock-after-plan",
+        expected_run_version=9,
+        timestamp=ts(8),
+        actor_reference="operator-1",
+        source_metadata={"source": "test"},
+    )
+    first = service.unblock_run(command)
+    assert first.snapshot is not None
+    assert first.snapshot.state.value == "claimed"
+    assert first.snapshot.recovery_status.value == "planned"
+    replay = service.unblock_run(command)
+    assert replay.idempotent_replay is True
+    assert replay.snapshot == first.snapshot
+    with pytest.raises(CommandConflictError):
+        service.unblock_run(command.model_copy(update={"timestamp": ts(9)}))
 
 
 def test_recovery_is_denied_for_active_attempts() -> None:

@@ -6,6 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.models.agent_runtime import (
+    MAX_EVENT_PAYLOAD_JSON_LENGTH,
     AgentRunAttempt,
     AgentRunCheckpoint,
     AgentRunSnapshot,
@@ -16,8 +17,33 @@ from app.models.agent_runtime import (
     FailureClassification,
     FailureRecord,
     PauseReason,
+    build_run_created_payload,
+    canonical_json,
 )
-from tests.agent_runtime_testkit import make_spec, ts
+from tests.agent_runtime_testkit import create_run, make_service, make_spec, ts
+
+
+def _metadata_specification(
+    value: str, *, metadata_key_order: tuple[str, ...] = ("pad",)
+) -> dict[str, object]:
+    metadata = {key: value for key in metadata_key_order}
+    spec = make_spec().model_dump()
+    spec["metadata"] = metadata
+    return spec
+
+
+def _find_run_created_metadata_boundary(*, unicode_value: str = "x") -> tuple[int, int]:
+    low = 0
+    high = MAX_EVENT_PAYLOAD_JSON_LENGTH
+    while low < high:
+        mid = (low + high + 1) // 2
+        try:
+            AgentRunSpecification(**_metadata_specification(unicode_value * mid))
+        except ValidationError:
+            high = mid - 1
+        else:
+            low = mid
+    return low, low + 1
 
 
 @pytest.mark.parametrize(
@@ -56,6 +82,54 @@ def test_excessive_metadata_nesting_is_rejected() -> None:
     metadata = {"a": {"b": {"c": {"d": {"e": {"f": 1}}}}}}
     with pytest.raises(ValidationError):
         AgentRunSpecification(**(make_spec().model_dump() | {"metadata": metadata}))
+
+
+def test_run_specification_boundary_that_fits_wrapped_run_created_payload_is_accepted() -> None:
+    accepted, rejected = _find_run_created_metadata_boundary()
+    specification = AgentRunSpecification(**_metadata_specification("x" * accepted))
+    payload = build_run_created_payload(specification.model_dump(mode="json"))
+    assert len(canonical_json(payload)) <= MAX_EVENT_PAYLOAD_JSON_LENGTH
+    service = make_service()
+    created = create_run(service, specification=specification)
+    assert created.snapshot is not None
+    assert created.snapshot.specification.metadata["pad"] == "x" * accepted
+    with pytest.raises(ValidationError):
+        AgentRunSpecification(**_metadata_specification("x" * rejected))
+
+
+def test_run_creation_rejects_metadata_that_overflows_wrapped_event_boundary_without_mutation() -> (
+    None
+):
+    accepted, rejected = _find_run_created_metadata_boundary()
+    assert rejected > accepted
+    service = make_service()
+    with pytest.raises(ValidationError):
+        specification = AgentRunSpecification(**_metadata_specification("x" * rejected))
+        create_run(service, specification=specification)
+    assert service.repository.load_run("run-1") is None
+
+
+def test_run_specification_boundary_is_canonical_and_order_independent() -> None:
+    accepted, _ = _find_run_created_metadata_boundary()
+    value = "x" * max(accepted // 4, 1)
+    ordered = AgentRunSpecification(
+        **_metadata_specification(value, metadata_key_order=("a", "b", "c", "d"))
+    )
+    reordered = AgentRunSpecification(
+        **_metadata_specification(value, metadata_key_order=("d", "c", "b", "a"))
+    )
+    assert len(canonical_json(build_run_created_payload(ordered.model_dump(mode="json")))) == len(
+        canonical_json(build_run_created_payload(reordered.model_dump(mode="json")))
+    )
+
+
+def test_run_specification_boundary_uses_same_unicode_serialization_rule() -> None:
+    accepted, rejected = _find_run_created_metadata_boundary(unicode_value="é")
+    specification = AgentRunSpecification(**_metadata_specification("é" * accepted))
+    payload = build_run_created_payload(specification.model_dump(mode="json"))
+    assert len(canonical_json(payload)) <= MAX_EVENT_PAYLOAD_JSON_LENGTH
+    with pytest.raises(ValidationError):
+        AgentRunSpecification(**_metadata_specification("é" * rejected))
 
 
 def test_invalid_attempt_counts_are_rejected() -> None:

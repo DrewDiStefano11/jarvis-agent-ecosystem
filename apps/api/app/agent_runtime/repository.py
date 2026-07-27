@@ -122,6 +122,21 @@ class InMemoryAgentRuntimeRepository(AgentRuntimeRepository):
                         "storedVersion": existing.version,
                     },
                 )
+            events = [
+                item.model_copy(deep=True) for item in self._events[snapshot.specification.run_id]
+            ]
+            aggregate = replay_execution_ledger(events)
+            if aggregate is None:
+                raise VersionConflictError(
+                    "A run snapshot cannot be saved without an authoritative ledger.",
+                    run_id=snapshot.specification.run_id,
+                )
+            if aggregate.snapshot != snapshot:
+                raise VersionConflictError(
+                    "Direct snapshot saves must match deterministic ledger replay.",
+                    run_id=snapshot.specification.run_id,
+                    metadata={"reason": "snapshot_ledger_mismatch"},
+                )
             self._snapshots[snapshot.specification.run_id] = snapshot.model_copy(deep=True)
 
     def append_events(

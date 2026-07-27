@@ -43,15 +43,60 @@ def test_repository_instances_are_isolated() -> None:
     assert second.load_run("run-1") is None
 
 
-def test_save_run_honors_expected_version() -> None:
+def test_save_run_accepts_only_snapshots_supported_by_the_ledger() -> None:
     service = make_service()
     create_run(service)
     snapshot = service.repository.load_run("run-1")
     assert snapshot is not None
-    updated = snapshot.model_copy(update={"status_detail": "updated"})
-    service.repository.save_run(updated, expected_version=1)
+    service.repository.save_run(snapshot, expected_version=1)
+    assert service.repository.load_run("run-1") == snapshot
+
+
+def test_save_run_rejects_snapshot_only_mutations_without_events() -> None:
+    service = make_service()
+    create_run(service)
+    snapshot = service.repository.load_run("run-1")
+    assert snapshot is not None
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    before_attempts = service.repository.load_attempt_history("run-1")
+    before_checkpoints = service.repository.list_checkpoints("run-1")
+    before_processed = service.repository.get_processed_command("run-1", "cmd-missing")
     with pytest.raises(VersionConflictError):
-        service.repository.save_run(updated, expected_version=0)
+        service.repository.save_run(
+            snapshot.model_copy(update={"status_detail": "mutated without event"}),
+            expected_version=1,
+        )
+    with pytest.raises(VersionConflictError):
+        service.repository.save_run(
+            snapshot.model_copy(update={"queued_at": ts(2)}),
+            expected_version=1,
+        )
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
+    assert service.repository.load_attempt_history("run-1") == before_attempts
+    assert service.repository.list_checkpoints("run-1") == before_checkpoints
+    assert service.repository.get_processed_command("run-1", "cmd-missing") == before_processed
+    service.queue_run(
+        QueueAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-queue",
+            expected_run_version=1,
+            timestamp=ts(1),
+            actor_reference="scheduler-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    assert service.repository.load_run("run-1").state.value == "queued"
+
+
+def test_save_run_honors_expected_version_conflicts() -> None:
+    service = make_service()
+    create_run(service)
+    snapshot = service.repository.load_run("run-1")
+    assert snapshot is not None
+    with pytest.raises(VersionConflictError):
+        service.repository.save_run(snapshot, expected_version=0)
 
 
 def test_append_events_enforces_expected_sequence() -> None:
