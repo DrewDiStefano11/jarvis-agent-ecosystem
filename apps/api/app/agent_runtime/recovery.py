@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from app.agent_runtime.errors import CheckpointLineageError, RecoveryNotAllowedError
-from app.agent_runtime.ledger import replay_execution_ledger
 from app.agent_runtime.transitions import TERMINAL_STATES
 from app.models.agent_runtime import (
     AgentRunAttempt,
@@ -22,6 +21,8 @@ def plan_recovery(
     checkpoints: list[AgentRunCheckpoint],
     events: list[RuntimeEventEnvelope],
 ) -> RecoveryPlan:
+    from app.agent_runtime.ledger import replay_execution_ledger
+
     aggregate = replay_execution_ledger(events)
     if aggregate is None:
         raise RecoveryNotAllowedError(
@@ -47,27 +48,45 @@ def plan_recovery(
             run_id=snapshot.specification.run_id,
             metadata={"reason": "checkpoint_history_mismatch"},
         )
+    return derive_recovery_plan(snapshot, attempts, checkpoints)
+
+
+def derive_recovery_plan(
+    snapshot: AgentRunSnapshot,
+    attempts: list[AgentRunAttempt],
+    checkpoints: list[AgentRunCheckpoint],
+) -> RecoveryPlan:
     if snapshot.state in TERMINAL_STATES:
         raise RecoveryNotAllowedError(
             "Recovery is not allowed for terminal runs.",
             run_id=snapshot.specification.run_id,
             metadata={"state": snapshot.state},
         )
-    if snapshot.state != AgentRunState.BLOCKED:
+    if snapshot.recovery_status not in {RecoveryStatus.REQUIRED, RecoveryStatus.PLANNED}:
         raise RecoveryNotAllowedError(
-            "Recovery is only planned from blocked runs.",
+            "Recovery is not active for this run.",
+            run_id=snapshot.specification.run_id,
+            metadata={
+                "state": snapshot.state,
+                "recoveryStatus": snapshot.recovery_status,
+            },
+        )
+    if snapshot.recovery_status == RecoveryStatus.REQUIRED and (
+        snapshot.state != AgentRunState.BLOCKED or snapshot.blocking_reason is None
+    ):
+        raise RecoveryNotAllowedError(
+            "Recovery-required runs must remain blocked until a plan is derived.",
             run_id=snapshot.specification.run_id,
             metadata={"state": snapshot.state},
         )
-    if snapshot.blocking_reason is None or snapshot.blocking_reason.code != "recovery_required":
+    if (
+        snapshot.recovery_status == RecoveryStatus.REQUIRED
+        and snapshot.blocking_reason.code != "recovery_required"
+    ):
         raise RecoveryNotAllowedError(
             "Recovery requires an explicit recovery_required block.",
             run_id=snapshot.specification.run_id,
-            metadata={
-                "blockCode": None
-                if snapshot.blocking_reason is None
-                else snapshot.blocking_reason.code
-            },
+            metadata={"blockCode": snapshot.blocking_reason.code},
         )
     if snapshot.active_attempt_id is not None:
         raise RecoveryNotAllowedError(

@@ -111,6 +111,7 @@ Rules:
 - only one attempt may be active at a time
 - a terminal attempt never becomes active again
 - the runtime never auto-retries; a future orchestrator must request another attempt explicitly
+- failed, timed-out, and abandoned attempt records preserve the resolved authoritative `attempt_id` in both history and snapshot failure state, even when the command omitted it
 
 ## Cancellation protocol
 
@@ -215,6 +216,13 @@ Checkpoint selection is deterministic:
 2. otherwise latest valid checkpoint from earlier attempts
 3. otherwise no checkpoint, with a warning that the next attempt restarts from the attempt boundary
 
+When recovery is active, beginning the next attempt is bound to the currently derived recovery plan:
+
+- if the plan selected a checkpoint, the next attempt must use that exact checkpoint ID
+- omitting the checkpoint or supplying an older/different checkpoint is rejected
+- if the plan selected no checkpoint, supplying an arbitrary checkpoint is rejected
+- recovery state is only cleared after the validated attempt-creation events commit successfully
+
 ## Ledger sequence rules
 
 Each runtime event envelope includes:
@@ -259,6 +267,9 @@ Replay rejects:
 - out-of-order events
 - mismatched run IDs
 - mismatched active attempt IDs
+- invalid attempt numbering or attempt-limit overflows
+- attempt creation while another attempt is active or while a prior attempt is nonterminal
+- invalid resumed-checkpoint lineage or recovery-checkpoint mismatches
 - backward timestamps
 - incompatible event schema versions
 - transitions after terminal state

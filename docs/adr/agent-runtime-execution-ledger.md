@@ -24,6 +24,8 @@ Create a pure Python runtime-domain package that provides:
 - deterministic replay from events to snapshot
 - optimistic concurrency via expected run version and ledger sequence checks
 - run-scoped idempotent command handling
+- recovery-attempt creation bound to the currently selected recovery checkpoint when recovery is active
+- strict replay-time validation of attempt creation invariants
 - a pure recovery planner
 - repository protocols plus a deterministic in-memory reference implementation
 

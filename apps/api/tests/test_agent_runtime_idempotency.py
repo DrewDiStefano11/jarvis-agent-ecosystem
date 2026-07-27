@@ -4,9 +4,12 @@ import pytest
 
 from app.agent_runtime.errors import CommandConflictError, VersionConflictError
 from app.models.agent_runtime import (
+    AbandonAttemptCommand,
+    FailAttemptCommand,
     QueueAgentRunCommand,
     RecordCheckpointCommand,
     RequestCancellationCommand,
+    TimeoutAttemptCommand,
 )
 from tests.agent_runtime_testkit import create_run, make_service, prepare_running_run, ts
 
@@ -258,3 +261,87 @@ def test_exact_duplicate_checkpoint_replay_returns_original_result_without_new_e
     assert second.idempotent_replay is True
     assert second.snapshot == first.snapshot
     assert len(service.repository.list_events("run-1")) == event_count
+
+
+@pytest.mark.parametrize(
+    ("command", "conflicting"),
+    [
+        (
+            FailAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-fail",
+                expected_run_version=6,
+                timestamp=ts(5),
+                actor_reference="worker-1",
+                failure_category="dependency",
+                failure_detail="Dependency unavailable",
+                source_metadata={"source": "test"},
+            ),
+            FailAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-fail",
+                expected_run_version=6,
+                timestamp=ts(5),
+                actor_reference="worker-1",
+                failure_category="dependency",
+                failure_detail="Different failure detail",
+                source_metadata={"source": "test"},
+            ),
+        ),
+        (
+            TimeoutAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-timeout",
+                expected_run_version=6,
+                timestamp=ts(5),
+                actor_reference="worker-1",
+                source_metadata={"source": "test"},
+            ),
+            TimeoutAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-timeout",
+                expected_run_version=6,
+                timestamp=ts(6),
+                actor_reference="worker-1",
+                source_metadata={"source": "test"},
+            ),
+        ),
+        (
+            AbandonAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-abandon",
+                expected_run_version=6,
+                timestamp=ts(5),
+                actor_reference="worker-1",
+                source_metadata={"source": "test"},
+            ),
+            AbandonAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-abandon",
+                expected_run_version=6,
+                timestamp=ts(5),
+                actor_reference="worker-1",
+                detail="Different abandonment detail",
+                source_metadata={"source": "test"},
+            ),
+        ),
+    ],
+)
+def test_failure_replay_preserves_resolved_attempt_id_and_conflicting_replay_is_rejected(
+    command,
+    conflicting,
+) -> None:
+    service = make_service()
+    prepare_running_run(service)
+    active_attempt_id = service.repository.load_attempt_history("run-1")[-1].attempt_id
+    first = service.handle(command)
+    assert first.snapshot is not None
+    assert first.snapshot.failure is not None
+    assert first.snapshot.failure.attempt_id == active_attempt_id
+    replay = service.handle(command)
+    assert replay.idempotent_replay is True
+    assert replay.snapshot is not None
+    assert replay.snapshot.failure is not None
+    assert replay.snapshot.failure.attempt_id == active_attempt_id
+    with pytest.raises(CommandConflictError):
+        service.handle(conflicting)

@@ -5,6 +5,7 @@ import pytest
 from app.agent_runtime.errors import (
     ActiveAttemptExistsError,
     AttemptLimitExceededError,
+    AttemptNotFoundError,
     InvalidAttemptStateError,
 )
 from app.agent_runtime.ledger import replay_execution_ledger
@@ -297,3 +298,148 @@ def test_pause_requested_attempt_failure_clears_pause_metadata() -> None:
     replayed = replay_execution_ledger(service.repository.list_events("run-1"))
     assert replayed is not None
     assert replayed.snapshot == failed.snapshot
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_attempt_state"),
+    [
+        (
+            FailAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-fail",
+                expected_run_version=6,
+                timestamp=ts(5),
+                actor_reference="worker-1",
+                failure_category="dependency",
+                failure_detail="Dependency unavailable",
+                source_metadata={"source": "test"},
+            ),
+            AttemptState.FAILED,
+        ),
+        (
+            TimeoutAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-timeout",
+                expected_run_version=6,
+                timestamp=ts(5),
+                actor_reference="worker-1",
+                source_metadata={"source": "test"},
+            ),
+            AttemptState.TIMED_OUT,
+        ),
+        (
+            AbandonAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-abandon",
+                expected_run_version=6,
+                timestamp=ts(5),
+                actor_reference="worker-1",
+                source_metadata={"source": "test"},
+            ),
+            AttemptState.ABANDONED,
+        ),
+    ],
+)
+def test_failure_records_preserve_resolved_attempt_id_when_command_omits_attempt_id(
+    command,
+    expected_attempt_state: AttemptState,
+) -> None:
+    service = make_service()
+    prepare_running_run(service)
+    active_attempt_id = service.repository.load_attempt_history("run-1")[-1].attempt_id
+    result = service.handle(command)
+    assert result.snapshot is not None
+    assert result.snapshot.failure is not None
+    assert result.snapshot.failure.attempt_id == active_attempt_id
+    assert result.snapshot.active_attempt_id is None
+    assert result.events[-1].attempt_id == active_attempt_id
+    attempts = service.repository.load_attempt_history("run-1")
+    assert attempts[-1].attempt_id == active_attempt_id
+    assert attempts[-1].state == expected_attempt_state
+    replay = service.handle(command)
+    assert replay.idempotent_replay is True
+    assert replay.snapshot is not None
+    assert replay.snapshot.failure is not None
+    assert replay.snapshot.failure.attempt_id == active_attempt_id
+
+
+@pytest.mark.parametrize(
+    ("command", "expected_attempt_state"),
+    [
+        (
+            FailAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-fail-explicit",
+                expected_run_version=6,
+                timestamp=ts(5),
+                actor_reference="worker-1",
+                attempt_id="attempt-1",
+                failure_category="dependency",
+                failure_detail="Dependency unavailable",
+                source_metadata={"source": "test"},
+            ),
+            AttemptState.FAILED,
+        ),
+        (
+            TimeoutAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-timeout-explicit",
+                expected_run_version=6,
+                timestamp=ts(5),
+                actor_reference="worker-1",
+                attempt_id="attempt-1",
+                source_metadata={"source": "test"},
+            ),
+            AttemptState.TIMED_OUT,
+        ),
+        (
+            AbandonAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-abandon-explicit",
+                expected_run_version=6,
+                timestamp=ts(5),
+                actor_reference="worker-1",
+                attempt_id="attempt-1",
+                source_metadata={"source": "test"},
+            ),
+            AttemptState.ABANDONED,
+        ),
+    ],
+)
+def test_failure_records_preserve_explicit_attempt_id_when_valid(
+    command,
+    expected_attempt_state: AttemptState,
+) -> None:
+    service = make_service()
+    prepare_running_run(service)
+    result = service.handle(command)
+    assert result.snapshot is not None
+    assert result.snapshot.failure is not None
+    assert result.snapshot.failure.attempt_id == "attempt-1"
+    assert result.events[-1].attempt_id == "attempt-1"
+    assert service.repository.load_attempt_history("run-1")[-1].state == expected_attempt_state
+
+
+def test_invalid_explicit_attempt_id_fails_without_mutation() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    before_attempts = service.repository.load_attempt_history("run-1")
+    with pytest.raises(AttemptNotFoundError):
+        service.fail_attempt(
+            FailAttemptCommand(
+                run_id="run-1",
+                command_id="cmd-fail-invalid-attempt",
+                expected_run_version=6,
+                timestamp=ts(5),
+                actor_reference="worker-1",
+                attempt_id="attempt-missing",
+                failure_category="dependency",
+                failure_detail="Dependency unavailable",
+                source_metadata={"source": "test"},
+            )
+        )
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
+    assert service.repository.load_attempt_history("run-1") == before_attempts

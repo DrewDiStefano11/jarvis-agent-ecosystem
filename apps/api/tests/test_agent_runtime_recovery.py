@@ -2,18 +2,26 @@ from __future__ import annotations
 
 import pytest
 
-from app.agent_runtime.errors import CheckpointLineageError, RecoveryNotAllowedError
+from app.agent_runtime.errors import (
+    CheckpointLineageError,
+    CommandConflictError,
+    RecoveryNotAllowedError,
+    VersionConflictError,
+)
 from app.agent_runtime.recovery import plan_recovery
 from app.models.agent_runtime import (
     CompleteAgentRunCommand,
     RecordCheckpointCommand,
     RequestCancellationCommand,
     RequestRecoveryPlanCommand,
+    UnblockAgentRunCommand,
 )
 from tests.agent_runtime_testkit import (
+    begin_attempt,
     claim_run,
     complete_attempt,
     create_run,
+    fail_attempt,
     make_service,
     make_spec,
     prepare_blocked_run,
@@ -21,6 +29,54 @@ from tests.agent_runtime_testkit import (
     queue_run,
     ts,
 )
+
+
+def _prepare_planned_recovery_run(service, *, checkpoint_ids: tuple[str, ...] = ("checkpoint-1",)):
+    prepare_running_run(service)
+    version = 6
+    for offset, checkpoint_id in enumerate(checkpoint_ids, start=0):
+        service.record_checkpoint(
+            RecordCheckpointCommand(
+                run_id="run-1",
+                command_id=f"cmd-{checkpoint_id}",
+                expected_run_version=version + offset,
+                timestamp=ts(5 + offset),
+                actor_reference="worker-1",
+                checkpoint_id=checkpoint_id,
+                state_reference=f"checkpoint://{checkpoint_id}",
+                integrity_digest=f"sha256:{'a' * 16}{offset}",
+                source_metadata={"source": "test"},
+            )
+        )
+    fail_version = 6 + len(checkpoint_ids)
+    fail_attempt(
+        service,
+        "run-1",
+        expected_run_version=fail_version,
+        command_id="cmd-fail-attempt",
+        second=5 + len(checkpoint_ids),
+    )
+    plan = service.request_recovery_plan(
+        RequestRecoveryPlanCommand(
+            run_id="run-1",
+            command_id="cmd-recovery-plan",
+            expected_run_version=fail_version + 1,
+            timestamp=ts(6 + len(checkpoint_ids)),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.unblock_run(
+        UnblockAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-unblock",
+            expected_run_version=fail_version + 2,
+            timestamp=ts(7 + len(checkpoint_ids)),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    return plan
 
 
 def test_valid_failed_attempt_recovery_returns_plan() -> None:
@@ -308,3 +364,116 @@ def test_recovery_checkpoint_selection_is_deterministic() -> None:
     )
     assert plan.selected_checkpoint is not None
     assert plan.selected_checkpoint.checkpoint_id == "checkpoint-2"
+
+
+@pytest.mark.parametrize(
+    "resume_from_checkpoint_id",
+    [None, "checkpoint-1"],
+)
+def test_begin_attempt_requires_the_selected_recovery_checkpoint(
+    resume_from_checkpoint_id: str | None,
+) -> None:
+    service = make_service()
+    plan = _prepare_planned_recovery_run(service, checkpoint_ids=("checkpoint-1", "checkpoint-2"))
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    before_attempts = service.repository.load_attempt_history("run-1")
+    before_checkpoints = service.repository.list_checkpoints("run-1")
+    before_processed = service.repository.get_processed_command("run-1", "cmd-begin-recovery")
+    assert plan.recovery_plan is not None
+    assert plan.recovery_plan.selected_checkpoint is not None
+    with pytest.raises(CheckpointLineageError):
+        begin_attempt(
+            service,
+            "run-1",
+            expected_run_version=11,
+            command_id="cmd-begin-recovery",
+            second=10,
+            checkpoint_id=resume_from_checkpoint_id,
+        )
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
+    assert service.repository.load_attempt_history("run-1") == before_attempts
+    assert service.repository.list_checkpoints("run-1") == before_checkpoints
+    assert (
+        service.repository.get_processed_command("run-1", "cmd-begin-recovery") == before_processed
+    )
+
+
+def test_begin_attempt_accepts_exact_selected_recovery_checkpoint_and_clears_recovery_after_commit() -> (
+    None
+):
+    service = make_service()
+    plan = _prepare_planned_recovery_run(service, checkpoint_ids=("checkpoint-1", "checkpoint-2"))
+    assert plan.recovery_plan is not None
+    assert plan.recovery_plan.selected_checkpoint is not None
+    before = service.repository.load_run("run-1")
+    assert before is not None and before.recovery_status.value == "planned"
+    result = begin_attempt(
+        service,
+        "run-1",
+        expected_run_version=11,
+        command_id="cmd-begin-recovery",
+        second=10,
+        checkpoint_id=plan.recovery_plan.selected_checkpoint.checkpoint_id,
+    )
+    assert result.snapshot is not None
+    assert result.snapshot.recovery_status.value == "none"
+    assert result.snapshot.active_attempt_id is not None
+    attempt = service.repository.load_attempt_history("run-1")[-1]
+    assert (
+        attempt.resumed_from_checkpoint_id == plan.recovery_plan.selected_checkpoint.checkpoint_id
+    )
+    assert result.snapshot.state.value == "starting"
+    replay_plan = begin_attempt(
+        service,
+        "run-1",
+        expected_run_version=11,
+        command_id="cmd-begin-recovery",
+        second=10,
+        checkpoint_id=plan.recovery_plan.selected_checkpoint.checkpoint_id,
+    )
+    assert replay_plan.idempotent_replay is True
+    assert replay_plan.snapshot == result.snapshot
+    with pytest.raises(CommandConflictError):
+        begin_attempt(
+            service,
+            "run-1",
+            expected_run_version=11,
+            command_id="cmd-begin-recovery",
+            second=10,
+            checkpoint_id="checkpoint-1",
+        )
+
+
+def test_begin_attempt_rejects_arbitrary_checkpoint_when_plan_selects_none() -> None:
+    service = make_service()
+    _prepare_planned_recovery_run(service, checkpoint_ids=())
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    with pytest.raises(CheckpointLineageError):
+        begin_attempt(
+            service,
+            "run-1",
+            expected_run_version=9,
+            command_id="cmd-begin-recovery-no-checkpoint",
+            second=8,
+            checkpoint_id="checkpoint-arbitrary",
+        )
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
+
+
+def test_begin_attempt_rejects_stale_expected_version_for_recovery() -> None:
+    service = make_service()
+    plan = _prepare_planned_recovery_run(service, checkpoint_ids=("checkpoint-1",))
+    assert plan.recovery_plan is not None and plan.recovery_plan.selected_checkpoint is not None
+    with pytest.raises(VersionConflictError):
+        begin_attempt(
+            service,
+            "run-1",
+            expected_run_version=7,
+            command_id="cmd-begin-recovery-stale",
+            second=9,
+            checkpoint_id=plan.recovery_plan.selected_checkpoint.checkpoint_id,
+        )

@@ -16,13 +16,14 @@ from app.agent_runtime.errors import (
     InvalidAttemptStateError,
     InvalidRuntimeMetadataError,
     InvalidTransitionError,
+    RecoveryNotAllowedError,
     RunAlreadyExistsError,
     RunNotFoundError,
     TerminalRunImmutableError,
     VersionConflictError,
 )
 from app.agent_runtime.ledger import RuntimeAggregate, replay_execution_ledger
-from app.agent_runtime.recovery import plan_recovery
+from app.agent_runtime.recovery import derive_recovery_plan, plan_recovery
 from app.agent_runtime.repository import AgentRuntimeRepository
 from app.agent_runtime.transitions import TERMINAL_STATES
 from app.models.agent_runtime import (
@@ -59,6 +60,8 @@ from app.models.agent_runtime import (
     ProcessedCommandRecord,
     QueueAgentRunCommand,
     RecordCheckpointCommand,
+    RecoveryPlan,
+    RecoveryStatus,
     RequestCancellationCommand,
     RequestPauseCommand,
     RequestRecoveryPlanCommand,
@@ -310,19 +313,28 @@ class AgentRuntimeService:
                     "maximumAttempts": snapshot.specification.maximum_permitted_attempts,
                 },
             )
-        if command.resume_from_checkpoint_id is not None:
-            checkpoint = self._find_checkpoint(
-                aggregate, command.resume_from_checkpoint_id, command
-            )
-            if checkpoint.run_id != command.run_id:
-                raise CheckpointLineageError(
-                    "The resume checkpoint belongs to another run.",
-                    run_id=command.run_id,
-                    command_id=command.command_id,
-                    metadata={"checkpointId": command.resume_from_checkpoint_id},
-                )
-        attempt_id = command.attempt_id or self.attempt_id_factory()
         next_number = len(aggregate.attempts) + 1
+        expected_recovery_plan = None
+        if snapshot.recovery_status in {RecoveryStatus.REQUIRED, RecoveryStatus.PLANNED}:
+            expected_recovery_plan = derive_recovery_plan(
+                snapshot,
+                list(aggregate.attempts),
+                list(aggregate.checkpoints),
+            )
+            self._validate_recovery_attempt(
+                aggregate,
+                command,
+                expected_recovery_plan=expected_recovery_plan,
+                next_attempt_number=next_number,
+            )
+        elif command.resume_from_checkpoint_id is not None:
+            raise CheckpointLineageError(
+                "A resume checkpoint may only be used for an active recovery plan.",
+                run_id=command.run_id,
+                command_id=command.command_id,
+                metadata={"checkpointId": command.resume_from_checkpoint_id},
+            )
+        attempt_id = command.attempt_id or self.attempt_id_factory()
         attempt = AgentRunAttempt(
             attempt_id=attempt_id,
             run_id=command.run_id,
@@ -726,12 +738,8 @@ class AgentRuntimeService:
             command=command,
             event_type=AgentRuntimeEventType.ATTEMPT_FAILED,
             detail=command.failure_detail,
-            failure=FailureRecord(
-                category=command.failure_category,
-                detail=command.failure_detail,
-                timestamp=command.timestamp,
-                attempt_id=command.attempt_id,
-            ),
+            failure_category=command.failure_category,
+            failure_detail=command.failure_detail,
         )
 
     def timeout_attempt(self, command: TimeoutAttemptCommand) -> RuntimeCommandResult:
@@ -739,12 +747,8 @@ class AgentRuntimeService:
             command=command,
             event_type=AgentRuntimeEventType.ATTEMPT_TIMED_OUT,
             detail=command.detail,
-            failure=FailureRecord(
-                category=FailureClassification.TIMEOUT,
-                detail=command.detail,
-                timestamp=command.timestamp,
-                attempt_id=command.attempt_id,
-            ),
+            failure_category=FailureClassification.TIMEOUT,
+            failure_detail=command.detail,
         )
 
     def abandon_attempt(self, command: AbandonAttemptCommand) -> RuntimeCommandResult:
@@ -752,12 +756,8 @@ class AgentRuntimeService:
             command=command,
             event_type=AgentRuntimeEventType.ATTEMPT_ABANDONED,
             detail=command.detail,
-            failure=FailureRecord(
-                category=FailureClassification.INTERNAL,
-                detail=command.detail,
-                timestamp=command.timestamp,
-                attempt_id=command.attempt_id,
-            ),
+            failure_category=FailureClassification.INTERNAL,
+            failure_detail=command.detail,
         )
 
     def complete_run(self, command: CompleteAgentRunCommand) -> RuntimeCommandResult:
@@ -901,7 +901,8 @@ class AgentRuntimeService:
         | AbandonAttemptCommand,
         event_type: AgentRuntimeEventType,
         detail: str,
-        failure: FailureRecord | None = None,
+        failure_category: FailureClassification | None = None,
+        failure_detail: str | None = None,
     ) -> RuntimeCommandResult:
         aggregate = self._load_current(command.run_id)
         if existing := self._assert_idempotency(command.run_id, command.command_id, command):
@@ -920,7 +921,14 @@ class AgentRuntimeService:
                 metadata={"sourceState": snapshot.state, "targetState": None},
             )
         payload: dict[str, Any] = {"detail": detail}
-        if failure is not None:
+        if failure_category is not None:
+            assert failure_detail is not None
+            failure = FailureRecord(
+                category=failure_category,
+                detail=failure_detail,
+                timestamp=command.timestamp,
+                attempt_id=attempt.attempt_id,
+            )
             block = BlockingReason(
                 code="recovery_required",
                 detail="Recovery planning is required before another attempt may begin.",
@@ -1125,6 +1133,118 @@ class AgentRuntimeService:
             and checkpoint.resume_cursor == command.resume_cursor
             and checkpoint.metadata == command.checkpoint_metadata
         )
+
+    def _validate_recovery_attempt(
+        self,
+        aggregate: RuntimeAggregate,
+        command: BeginAttemptCommand,
+        *,
+        expected_recovery_plan: RecoveryPlan,
+        next_attempt_number: int,
+    ) -> None:
+        snapshot = aggregate.snapshot
+        if expected_recovery_plan.run_id != command.run_id:
+            raise RecoveryNotAllowedError(
+                "The recovery plan does not belong to this run.",
+                run_id=command.run_id,
+                command_id=command.command_id,
+            )
+        if expected_recovery_plan.expected_version != snapshot.version:
+            raise RecoveryNotAllowedError(
+                "The recovery plan version is stale for the current run snapshot.",
+                run_id=command.run_id,
+                command_id=command.command_id,
+                metadata={
+                    "planVersion": expected_recovery_plan.expected_version,
+                    "snapshotVersion": snapshot.version,
+                },
+            )
+        if expected_recovery_plan.expected_event_sequence != snapshot.event_sequence_number:
+            raise RecoveryNotAllowedError(
+                "The recovery plan event sequence is stale for the current run snapshot.",
+                run_id=command.run_id,
+                command_id=command.command_id,
+                metadata={
+                    "planEventSequence": expected_recovery_plan.expected_event_sequence,
+                    "snapshotEventSequence": snapshot.event_sequence_number,
+                },
+            )
+        if expected_recovery_plan.next_attempt_number != next_attempt_number:
+            raise RecoveryNotAllowedError(
+                "The recovery plan no longer matches the next attempt number.",
+                run_id=command.run_id,
+                command_id=command.command_id,
+                metadata={
+                    "planAttemptNumber": expected_recovery_plan.next_attempt_number,
+                    "nextAttemptNumber": next_attempt_number,
+                },
+            )
+        latest_attempt = aggregate.attempts[-1] if aggregate.attempts else None
+        if (
+            latest_attempt is None
+            or expected_recovery_plan.required_prior_terminal_attempt_id
+            != latest_attempt.attempt_id
+        ):
+            raise RecoveryNotAllowedError(
+                "The recovery plan no longer matches the prior terminal attempt.",
+                run_id=command.run_id,
+                command_id=command.command_id,
+                metadata={
+                    "planAttemptId": expected_recovery_plan.required_prior_terminal_attempt_id,
+                    "latestAttemptId": None
+                    if latest_attempt is None
+                    else latest_attempt.attempt_id,
+                },
+            )
+        selected_checkpoint = expected_recovery_plan.selected_checkpoint
+        if selected_checkpoint is None:
+            if command.resume_from_checkpoint_id is not None:
+                raise CheckpointLineageError(
+                    "The recovery plan does not allow a resume checkpoint for the next attempt.",
+                    run_id=command.run_id,
+                    command_id=command.command_id,
+                    metadata={"checkpointId": command.resume_from_checkpoint_id},
+                )
+            return
+        if command.resume_from_checkpoint_id is None:
+            raise CheckpointLineageError(
+                "The recovery plan requires the selected checkpoint for the next attempt.",
+                run_id=command.run_id,
+                command_id=command.command_id,
+                metadata={"checkpointId": selected_checkpoint.checkpoint_id},
+            )
+        if command.resume_from_checkpoint_id != selected_checkpoint.checkpoint_id:
+            raise CheckpointLineageError(
+                "The supplied resume checkpoint does not match the selected recovery checkpoint.",
+                run_id=command.run_id,
+                command_id=command.command_id,
+                metadata={
+                    "checkpointId": command.resume_from_checkpoint_id,
+                    "selectedCheckpointId": selected_checkpoint.checkpoint_id,
+                },
+            )
+        checkpoint = self._find_checkpoint(aggregate, command.resume_from_checkpoint_id, command)
+        if (
+            checkpoint.run_id != command.run_id
+            or checkpoint.attempt_id != selected_checkpoint.attempt_id
+        ):
+            raise CheckpointLineageError(
+                "The supplied resume checkpoint does not match the selected recovery lineage.",
+                run_id=command.run_id,
+                command_id=command.command_id,
+                metadata={
+                    "checkpointId": checkpoint.checkpoint_id,
+                    "checkpointAttemptId": checkpoint.attempt_id,
+                    "selectedAttemptId": selected_checkpoint.attempt_id,
+                },
+            )
+        if checkpoint != selected_checkpoint:
+            raise CheckpointLineageError(
+                "The supplied resume checkpoint does not match the selected recovery checkpoint state.",
+                run_id=command.run_id,
+                command_id=command.command_id,
+                metadata={"checkpointId": checkpoint.checkpoint_id},
+            )
 
     def _validate_parent_lineage(self, specification: AgentRunSpecification) -> None:
         parent_run_id = specification.parent_run_id

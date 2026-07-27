@@ -240,7 +240,14 @@ def test_checkpoint_id_reuse_across_attempts_conflicts_but_new_ids_are_allowed()
             source_metadata={"source": "test"},
         )
     )
-    begin_attempt(service, "run-1", expected_run_version=10, command_id="cmd-begin-2", second=9)
+    begin_attempt(
+        service,
+        "run-1",
+        expected_run_version=10,
+        command_id="cmd-begin-2",
+        second=9,
+        checkpoint_id="checkpoint-shared",
+    )
     start_attempt(service, "run-1", expected_run_version=12, command_id="cmd-start-2", second=10)
     second_attempt_id = service.repository.load_attempt_history("run-1")[-1].attempt_id
     before_snapshot = service.repository.load_run("run-1")

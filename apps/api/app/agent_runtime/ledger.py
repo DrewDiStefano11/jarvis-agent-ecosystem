@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from typing import cast
 
-from app.agent_runtime.errors import InvalidTransitionError, LedgerReplayError, LedgerSequenceError
+from pydantic import ValidationError
+
+from app.agent_runtime.errors import (
+    InvalidTransitionError,
+    LedgerReplayError,
+    LedgerSequenceError,
+    RecoveryNotAllowedError,
+)
+from app.agent_runtime.recovery import derive_recovery_plan
 from app.agent_runtime.transitions import TERMINAL_STATES, TRANSITION_RULES
 from app.models.agent_runtime import (
     SUPPORTED_EVENT_SCHEMA_VERSION,
@@ -152,26 +160,29 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
                 "status_detail": cast(str, event.payload["detail"]),
-                "recovery_status": RecoveryStatus.NONE,
                 "blocking_reason": None,
             }
         )
     elif event.event_type == AgentRuntimeEventType.ATTEMPT_CREATED:
-        attempt = AgentRunAttempt.model_validate(cast(dict[str, object], event.payload["attempt"]))
-        if attempt.run_id != event.run_id or attempt.attempt_id != event.attempt_id:
+        try:
+            attempt = AgentRunAttempt.model_validate(
+                cast(dict[str, object], event.payload["attempt"])
+            )
+        except ValidationError as exc:
             raise LedgerReplayError(
-                "Attempt payload does not match the enclosing event identifiers.",
+                "The attempt_created payload is not a valid attempt contract.",
                 run_id=event.run_id,
                 attempt_id=event.attempt_id,
                 command_id=event.command_id,
-            )
-        if attempt.attempt_id in attempts:
-            raise LedgerReplayError(
-                "Attempt IDs must be unique within a run.",
-                run_id=event.run_id,
-                attempt_id=attempt.attempt_id,
-                command_id=event.command_id,
-            )
+                metadata={"errors": exc.errors(include_url=False)},
+            ) from exc
+        _validate_attempt_created(
+            snapshot=snapshot,
+            attempts=attempts,
+            checkpoints=checkpoints,
+            event=event,
+            attempt=attempt,
+        )
         attempts[attempt.attempt_id] = attempt
         attempt_order.append(attempt.attempt_id)
         snapshot = snapshot.model_copy(
@@ -181,6 +192,7 @@ def apply_event(current: RuntimeAggregate | None, event: RuntimeEventEnvelope) -
                 "version": event.run_version,
                 "event_sequence_number": event.sequence_number,
                 "status_detail": "Attempt created",
+                "recovery_status": RecoveryStatus.NONE,
             }
         )
     elif event.event_type == AgentRuntimeEventType.ATTEMPT_STARTED:
@@ -580,6 +592,241 @@ def _apply_run_created(event: RuntimeEventEnvelope) -> RuntimeAggregate:
         recovery_status=RecoveryStatus.NONE,
     )
     return RuntimeAggregate(snapshot=snapshot, attempts=(), checkpoints=())
+
+
+def _validate_attempt_created(
+    *,
+    snapshot: AgentRunSnapshot,
+    attempts: dict[str, AgentRunAttempt],
+    checkpoints: dict[str, AgentRunCheckpoint],
+    event: RuntimeEventEnvelope,
+    attempt: AgentRunAttempt,
+) -> None:
+    if attempt.run_id != event.run_id or attempt.attempt_id != event.attempt_id:
+        raise LedgerReplayError(
+            "Attempt payload does not match the enclosing event identifiers.",
+            run_id=event.run_id,
+            attempt_id=event.attempt_id,
+            command_id=event.command_id,
+        )
+    if attempt.attempt_id in attempts:
+        raise LedgerReplayError(
+            "Attempt IDs must be unique within a run.",
+            run_id=event.run_id,
+            attempt_id=attempt.attempt_id,
+            command_id=event.command_id,
+        )
+    if snapshot.active_attempt_id is not None:
+        raise LedgerReplayError(
+            "A new attempt cannot be created while another attempt is active.",
+            run_id=event.run_id,
+            attempt_id=snapshot.active_attempt_id,
+            command_id=event.command_id,
+        )
+    expected_number = len(attempts) + 1
+    if attempt.attempt_number != expected_number:
+        raise LedgerReplayError(
+            "Attempt numbers must increase exactly by one.",
+            run_id=event.run_id,
+            attempt_id=attempt.attempt_id,
+            command_id=event.command_id,
+            metadata={
+                "expectedAttemptNumber": expected_number,
+                "actualAttemptNumber": attempt.attempt_number,
+            },
+        )
+    if attempt.attempt_number > snapshot.specification.maximum_permitted_attempts:
+        raise LedgerReplayError(
+            "Attempt creation exceeds the configured maximum permitted attempts.",
+            run_id=event.run_id,
+            attempt_id=attempt.attempt_id,
+            command_id=event.command_id,
+            metadata={
+                "attemptNumber": attempt.attempt_number,
+                "maximumAttempts": snapshot.specification.maximum_permitted_attempts,
+            },
+        )
+    nonterminal_prior = [
+        prior
+        for prior in attempts.values()
+        if prior.state
+        not in {
+            AttemptState.CANCELLED,
+            AttemptState.SUCCEEDED,
+            AttemptState.FAILED,
+            AttemptState.TIMED_OUT,
+            AttemptState.ABANDONED,
+        }
+    ]
+    if nonterminal_prior:
+        raise LedgerReplayError(
+            "A prior attempt must be terminal before another attempt can be created.",
+            run_id=event.run_id,
+            attempt_id=attempt.attempt_id,
+            command_id=event.command_id,
+            metadata={"priorAttemptId": nonterminal_prior[0].attempt_id},
+        )
+    if attempt.state != AttemptState.STARTING:
+        raise LedgerReplayError(
+            "Attempt creation must begin in the starting state.",
+            run_id=event.run_id,
+            attempt_id=attempt.attempt_id,
+            command_id=event.command_id,
+            metadata={"attemptState": attempt.state},
+        )
+    if attempt.version != event.run_version:
+        raise LedgerReplayError(
+            "Attempt version must match the enclosing event version.",
+            run_id=event.run_id,
+            attempt_id=attempt.attempt_id,
+            command_id=event.command_id,
+            metadata={
+                "attemptVersion": attempt.version,
+                "eventVersion": event.run_version,
+            },
+        )
+    if attempt.started_at != event.timestamp:
+        raise LedgerReplayError(
+            "Attempt timestamps must match the enclosing event timestamp.",
+            run_id=event.run_id,
+            attempt_id=attempt.attempt_id,
+            command_id=event.command_id,
+            metadata={
+                "attemptStartedAt": attempt.started_at.isoformat(),
+                "eventTimestamp": event.timestamp.isoformat(),
+            },
+        )
+
+    resumed_checkpoint = None
+    if attempt.resumed_from_checkpoint_id is not None:
+        resumed_checkpoint = checkpoints.get(attempt.resumed_from_checkpoint_id)
+        if resumed_checkpoint is None:
+            raise LedgerReplayError(
+                "The resumed checkpoint does not exist in the replay ledger.",
+                run_id=event.run_id,
+                attempt_id=attempt.attempt_id,
+                command_id=event.command_id,
+                metadata={"checkpointId": attempt.resumed_from_checkpoint_id},
+            )
+        if resumed_checkpoint.run_id != event.run_id:
+            raise LedgerReplayError(
+                "The resumed checkpoint belongs to another run.",
+                run_id=event.run_id,
+                attempt_id=attempt.attempt_id,
+                command_id=event.command_id,
+                metadata={"checkpointId": resumed_checkpoint.checkpoint_id},
+            )
+        if resumed_checkpoint.attempt_id == attempt.attempt_id:
+            raise LedgerReplayError(
+                "Attempts must not resume from their own checkpoint lineage.",
+                run_id=event.run_id,
+                attempt_id=attempt.attempt_id,
+                command_id=event.command_id,
+                metadata={"checkpointId": resumed_checkpoint.checkpoint_id},
+            )
+        if resumed_checkpoint.attempt_id not in attempts:
+            raise LedgerReplayError(
+                "The resumed checkpoint must belong to a prior attempt.",
+                run_id=event.run_id,
+                attempt_id=attempt.attempt_id,
+                command_id=event.command_id,
+                metadata={"checkpointId": resumed_checkpoint.checkpoint_id},
+            )
+
+    if snapshot.recovery_status in {RecoveryStatus.REQUIRED, RecoveryStatus.PLANNED}:
+        try:
+            expected_plan = derive_recovery_plan(
+                snapshot,
+                list(sorted(attempts.values(), key=lambda item: item.attempt_number)),
+                list(sorted(checkpoints.values(), key=lambda item: item.checkpoint_sequence)),
+            )
+        except RecoveryNotAllowedError as exc:
+            raise LedgerReplayError(
+                exc.message,
+                run_id=event.run_id,
+                attempt_id=attempt.attempt_id,
+                command_id=event.command_id,
+                metadata=exc.metadata,
+            ) from exc
+        if (
+            expected_plan.expected_version != snapshot.version
+            or expected_plan.expected_event_sequence != snapshot.event_sequence_number
+        ):
+            raise LedgerReplayError(
+                "The recovery plan is stale for the current replay snapshot.",
+                run_id=event.run_id,
+                attempt_id=attempt.attempt_id,
+                command_id=event.command_id,
+                metadata={
+                    "planVersion": expected_plan.expected_version,
+                    "snapshotVersion": snapshot.version,
+                    "planEventSequence": expected_plan.expected_event_sequence,
+                    "snapshotEventSequence": snapshot.event_sequence_number,
+                },
+            )
+        if expected_plan.next_attempt_number != attempt.attempt_number:
+            raise LedgerReplayError(
+                "The replayed attempt number does not match the expected recovery plan.",
+                run_id=event.run_id,
+                attempt_id=attempt.attempt_id,
+                command_id=event.command_id,
+                metadata={
+                    "planAttemptNumber": expected_plan.next_attempt_number,
+                    "attemptNumber": attempt.attempt_number,
+                },
+            )
+        latest_attempt = list(sorted(attempts.values(), key=lambda item: item.attempt_number))[-1]
+        if expected_plan.required_prior_terminal_attempt_id != latest_attempt.attempt_id:
+            raise LedgerReplayError(
+                "The replayed recovery attempt does not match the required prior terminal attempt.",
+                run_id=event.run_id,
+                attempt_id=attempt.attempt_id,
+                command_id=event.command_id,
+                metadata={
+                    "requiredAttemptId": expected_plan.required_prior_terminal_attempt_id,
+                    "latestAttemptId": latest_attempt.attempt_id,
+                },
+            )
+        if expected_plan.selected_checkpoint is None:
+            if attempt.resumed_from_checkpoint_id is not None:
+                raise LedgerReplayError(
+                    "The recovery plan does not allow a resume checkpoint for this attempt.",
+                    run_id=event.run_id,
+                    attempt_id=attempt.attempt_id,
+                    command_id=event.command_id,
+                    metadata={"checkpointId": attempt.resumed_from_checkpoint_id},
+                )
+        else:
+            if (
+                attempt.resumed_from_checkpoint_id
+                != expected_plan.selected_checkpoint.checkpoint_id
+            ):
+                raise LedgerReplayError(
+                    "The replayed recovery attempt does not use the selected checkpoint.",
+                    run_id=event.run_id,
+                    attempt_id=attempt.attempt_id,
+                    command_id=event.command_id,
+                    metadata={
+                        "checkpointId": attempt.resumed_from_checkpoint_id,
+                        "selectedCheckpointId": expected_plan.selected_checkpoint.checkpoint_id,
+                    },
+                )
+            if resumed_checkpoint != expected_plan.selected_checkpoint:
+                raise LedgerReplayError(
+                    "The replayed recovery checkpoint does not match the selected checkpoint lineage.",
+                    run_id=event.run_id,
+                    attempt_id=attempt.attempt_id,
+                    command_id=event.command_id,
+                    metadata={"checkpointId": attempt.resumed_from_checkpoint_id},
+                )
+    elif attempt.resumed_from_checkpoint_id is not None:
+        raise LedgerReplayError(
+            "A resume checkpoint may only be used for an active recovery attempt.",
+            run_id=event.run_id,
+            attempt_id=attempt.attempt_id,
+            command_id=event.command_id,
+            metadata={"checkpointId": attempt.resumed_from_checkpoint_id},
+        )
 
 
 def _validate_rule(
