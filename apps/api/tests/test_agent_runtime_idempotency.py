@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
-from threading import Barrier
+from threading import Barrier, Event, Lock
 
 import pytest
 
@@ -30,6 +31,53 @@ def _install_commit_barrier(service, monkeypatch: pytest.MonkeyPatch, *, parties
         barrier.wait()
         return original_commit(*args, **kwargs)
 
+    monkeypatch.setattr(service.repository, "commit_command", wrapped_commit)
+
+
+def _run_in_executor(callables: list[Callable[[], object]]) -> list[object]:
+    with ThreadPoolExecutor(max_workers=len(callables)) as executor:
+        futures = [executor.submit(func) for func in callables]
+    results: list[object] = []
+    for future in futures:
+        try:
+            results.append(future.result())
+        except Exception as exc:  # noqa: BLE001
+            results.append(exc)
+    return results
+
+
+def _install_precommit_race(
+    service,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    run_id: str,
+) -> None:
+    stale_aggregate = service._load_current(run_id).model_copy(deep=True)
+    monkeypatch.setattr(
+        service,
+        "_load_current",
+        lambda current_run_id: stale_aggregate.model_copy(deep=True),
+    )
+    original_list_events = service.repository.list_events
+    original_commit = service.repository.commit_command
+    call_lock = Lock()
+    list_event_calls = {"count": 0}
+    first_commit_done = Event()
+
+    def wrapped_list_events(current_run_id: str):
+        with call_lock:
+            list_event_calls["count"] += 1
+            count = list_event_calls["count"]
+        if count == 2:
+            assert first_commit_done.wait(timeout=5)
+        return original_list_events(current_run_id)
+
+    def wrapped_commit(*args, **kwargs):
+        result = original_commit(*args, **kwargs)
+        first_commit_done.set()
+        return result
+
+    monkeypatch.setattr(service.repository, "list_events", wrapped_list_events)
     monkeypatch.setattr(service.repository, "commit_command", wrapped_commit)
 
 
@@ -505,5 +553,86 @@ def test_concurrent_duplicate_recovery_plan_requests_are_idempotent(
 
     assert first.snapshot == second.snapshot
     assert first.recovery_plan == second.recovery_plan
+    assert sorted([first.idempotent_replay, second.idempotent_replay]) == [False, True]
+    assert len(service.repository.list_events("run-1")) == 9
+
+
+def test_exact_duplicate_state_change_survives_precommit_race_without_ledger_sequence_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = make_service()
+    create_run(service)
+    _install_precommit_race(service, monkeypatch, run_id="run-1")
+
+    def submit() -> object:
+        return service.queue_run(
+            QueueAgentRunCommand(
+                run_id="run-1",
+                command_id="cmd-queue-race",
+                expected_run_version=1,
+                timestamp=ts(1),
+                actor_reference="scheduler-1",
+                source_metadata={"source": "test"},
+            )
+        )
+
+    first, second = _run_in_executor([submit, submit])
+    assert not any(
+        isinstance(item, VersionConflictError | LedgerSequenceError) for item in [first, second]
+    )
+    assert all(hasattr(item, "snapshot") for item in [first, second])
+    assert sorted([first.idempotent_replay, second.idempotent_replay]) == [False, True]
+    assert len(service.repository.list_events("run-1")) == 2
+
+
+def test_exact_duplicate_recovery_plan_survives_precommit_race_without_ledger_sequence_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = make_service()
+    prepare_running_run(service)
+    service.record_checkpoint(
+        RecordCheckpointCommand(
+            run_id="run-1",
+            command_id="cmd-checkpoint-before-race",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="worker-1",
+            checkpoint_id="checkpoint-race",
+            state_reference="checkpoint://state/race",
+            integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.fail_attempt(
+        FailAttemptCommand(
+            run_id="run-1",
+            command_id="cmd-fail-before-race",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="worker-1",
+            failure_category="dependency",
+            failure_detail="Dependency unavailable",
+            source_metadata={"source": "test"},
+        )
+    )
+    _install_precommit_race(service, monkeypatch, run_id="run-1")
+
+    def submit() -> object:
+        return service.request_recovery_plan(
+            RequestRecoveryPlanCommand(
+                run_id="run-1",
+                command_id="cmd-plan-race",
+                expected_run_version=8,
+                timestamp=ts(7),
+                actor_reference="operator-1",
+                source_metadata={"source": "test"},
+            )
+        )
+
+    first, second = _run_in_executor([submit, submit])
+    assert not any(
+        isinstance(item, VersionConflictError | LedgerSequenceError) for item in [first, second]
+    )
+    assert all(hasattr(item, "snapshot") for item in [first, second])
     assert sorted([first.idempotent_replay, second.idempotent_replay]) == [False, True]
     assert len(service.repository.list_events("run-1")) == 9

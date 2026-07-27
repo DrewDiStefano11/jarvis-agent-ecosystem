@@ -17,6 +17,9 @@ from app.models.agent_runtime import (
     FailureClassification,
     FailureRecord,
     PauseReason,
+    QueueAgentRunCommand,
+    RecordCheckpointCommand,
+    RuntimeEventEnvelope,
     build_run_created_payload,
     canonical_json,
 )
@@ -82,6 +85,71 @@ def test_excessive_metadata_nesting_is_rejected() -> None:
     metadata = {"a": {"b": {"c": {"d": {"e": {"f": 1}}}}}}
     with pytest.raises(ValidationError):
         AgentRunSpecification(**(make_spec().model_dump() | {"metadata": metadata}))
+
+
+@pytest.mark.parametrize("metadata", [{" a ": 1, "a": 2}, {"a": 2, " a ": 1}])
+def test_colliding_normalized_metadata_keys_are_rejected(metadata: dict[str, int]) -> None:
+    with pytest.raises(ValidationError):
+        AgentRunSpecification(**(make_spec().model_dump() | {"metadata": metadata}))
+
+
+def test_nested_colliding_normalized_metadata_keys_are_rejected() -> None:
+    with pytest.raises(ValidationError):
+        AgentRunSpecification(
+            **(make_spec().model_dump() | {"metadata": {"nested": {" a ": 1, "a": 2}}})
+        )
+
+
+def test_noncolliding_normalized_metadata_keys_remain_valid_and_deterministic() -> None:
+    specification = AgentRunSpecification(
+        **(make_spec().model_dump() | {"metadata": {" a ": 1, "b": {" c ": 2}, "d": 3}})
+    )
+    assert specification.metadata == {"a": 1, "b": {"c": 2}, "d": 3}
+    other = AgentRunSpecification(
+        **(make_spec().model_dump() | {"metadata": {"d": 3, "b": {"c": 2}, "a": 1}})
+    )
+    assert canonical_json(specification.metadata) == canonical_json(other.metadata)
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        lambda: QueueAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-queue",
+            expected_run_version=0,
+            timestamp=ts(1),
+            actor_reference="actor-1",
+            source_metadata={" a ": 1, "a": 2},
+        ),
+        lambda: RecordCheckpointCommand(
+            run_id="run-1",
+            command_id="cmd-checkpoint",
+            expected_run_version=0,
+            timestamp=ts(1),
+            actor_reference="actor-1",
+            state_reference="checkpoint://state/1",
+            integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+            checkpoint_metadata={" a ": 1, "a": 2},
+            source_metadata={"source": "test"},
+        ),
+        lambda: RuntimeEventEnvelope(
+            event_id="event-1",
+            event_type="run_queued",
+            run_id="run-1",
+            sequence_number=1,
+            run_version=1,
+            timestamp=ts(1),
+            payload={"detail": "Queued for execution"},
+            metadata={" a ": 1, "a": 2},
+        ),
+    ],
+)
+def test_ambiguous_metadata_is_rejected_across_command_checkpoint_and_event_contracts(
+    factory,
+) -> None:
+    with pytest.raises(ValidationError):
+        factory()
 
 
 def test_run_specification_boundary_that_fits_wrapped_run_created_payload_is_accepted() -> None:

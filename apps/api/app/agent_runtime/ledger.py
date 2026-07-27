@@ -113,15 +113,31 @@ def replay_snapshot(events: list[RuntimeEventEnvelope]) -> AgentRunSnapshot | No
     return None if aggregate is None else aggregate.snapshot
 
 
+def _sanitized_validation_errors(exc: ValidationError) -> list[dict[str, object]]:
+    sanitized: list[dict[str, object]] = []
+    for item in exc.errors(include_url=False):
+        sanitized.append(
+            {
+                "loc": item.get("loc", ()),
+                "msg": item.get("msg", "Validation error"),
+                "type": item.get("type", "value_error"),
+            }
+        )
+    return sanitized
+
+
 def _payload_validation_error(
     event: RuntimeEventEnvelope,
     *,
     section: str,
     exc: Exception,
 ) -> LedgerReplayError:
-    metadata: dict[str, Any] = {"eventType": event.event_type, "payloadSection": section}
+    metadata: dict[str, Any] = {
+        "eventType": event.event_type.value,
+        "payloadSection": section,
+    }
     if isinstance(exc, ValidationError):
-        metadata["errors"] = exc.errors(include_url=False)
+        metadata["errors"] = _sanitized_validation_errors(exc)
     else:
         metadata["errorType"] = type(exc).__name__
     return LedgerReplayError(
@@ -802,7 +818,10 @@ def _build_validated_aggregate(
             run_id=event.run_id,
             attempt_id=event.attempt_id,
             command_id=event.command_id,
-            metadata={"errors": exc.errors(include_url=False), "eventType": event.event_type},
+            metadata={
+                "errors": _sanitized_validation_errors(exc),
+                "eventType": event.event_type,
+            },
         ) from exc
 
 
@@ -1119,6 +1138,22 @@ def _validate_rule(
             "The event target state is not allowed.",
             run_id=event.run_id,
             attempt_id=event.attempt_id,
+            command_id=event.command_id,
+            metadata={
+                "sourceState": source_state,
+                "targetState": target_state,
+                "eventType": event.event_type,
+            },
+        )
+    if (
+        event.event_type == AgentRuntimeEventType.RUN_CANCELLED
+        and source_state == AgentRunState.CANCEL_REQUESTED
+        and active_attempt_id is not None
+    ):
+        raise InvalidTransitionError(
+            "Active cancellation must transition through cancelling before cancellation is confirmed.",
+            run_id=event.run_id,
+            attempt_id=active_attempt_id,
             command_id=event.command_id,
             metadata={
                 "sourceState": source_state,

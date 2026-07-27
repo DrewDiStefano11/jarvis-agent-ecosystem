@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import warnings
 from datetime import timedelta
 
 import pytest
 
-from app.agent_runtime.errors import LedgerReplayError, LedgerSequenceError
+from app.agent_runtime.errors import (
+    InvalidTransitionError,
+    LedgerReplayError,
+    LedgerSequenceError,
+)
 from app.agent_runtime.ledger import replay_execution_ledger
 from app.models.agent_runtime import (
     AgentRunState,
@@ -410,6 +415,19 @@ def test_replay_rejects_invalid_detail_payloads(
     assert "secret-token-value" not in str(exc_info.value.metadata)
 
 
+def test_replay_rejects_malformed_payloads_without_emitting_serialization_warnings() -> None:
+    events = _mutate_event_payload(
+        _prepare_queued_run_events(),
+        event_type="run_queued",
+        payload_updates={"detail": 42},
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with pytest.raises(LedgerReplayError):
+            replay_execution_ledger(events)
+    assert caught == []
+
+
 def test_replay_rejects_invalid_resume_and_unblock_target_states() -> None:
     with pytest.raises(LedgerReplayError):
         replay_execution_ledger(
@@ -427,6 +445,26 @@ def test_replay_rejects_invalid_resume_and_unblock_target_states() -> None:
                 payload_updates={"target_state": 42},
             )
         )
+
+
+def test_replay_rejects_active_cancellation_that_skips_cancelling() -> None:
+    events = _prepare_cancellation_request_events()
+    broken = events + [
+        RuntimeEventEnvelope.model_validate(
+            events[-1].model_dump(mode="json")
+            | {
+                "event_id": "event-cancel-without-cancelling",
+                "event_type": "run_cancelled",
+                "sequence_number": 8,
+                "run_version": 8,
+                "attempt_id": events[-1].attempt_id,
+                "timestamp": ts(6).isoformat(),
+                "payload": {"detail": "Cancelled without cancelling"},
+            }
+        )
+    ]
+    with pytest.raises(InvalidTransitionError):
+        replay_execution_ledger(broken)
 
 
 @pytest.mark.parametrize(

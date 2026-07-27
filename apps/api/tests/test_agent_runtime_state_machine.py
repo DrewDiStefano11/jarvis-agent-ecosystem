@@ -338,6 +338,117 @@ def test_active_cancellation_handshake_reaches_terminal_state() -> None:
     assert started.snapshot is not None and started.snapshot.state == AgentRunState.CANCELLING
     assert cancelled.snapshot is not None and cancelled.snapshot.state == AgentRunState.CANCELLED
     assert cancelled.snapshot.terminal_outcome.value == "cancelled"
+    assert cancelled.snapshot.completed_at == ts(7)
+    attempts = service.repository.load_attempt_history("run-1")
+    assert attempts[-1].state.value == "cancelled"
+    assert attempts[-1].cancellation_acknowledged_at == ts(7)
+
+
+def test_active_cancellation_cannot_skip_cancelling_state() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    requested = service.request_cancellation(
+        RequestCancellationCommand(
+            run_id="run-1",
+            command_id="cmd-cancel-request-direct",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="operator-1",
+            requester_reference="operator-1",
+            reason_code="operator_cancel",
+            detail="Stop the run",
+            source_metadata={"source": "test"},
+        )
+    )
+    assert requested.snapshot is not None
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    before_processed = service.repository.get_processed_command(
+        "run-1", "cmd-cancel-confirm-direct"
+    )
+    with pytest.raises(InvalidTransitionError):
+        service.confirm_cancellation(
+            ConfirmCancellationCommand(
+                run_id="run-1",
+                command_id="cmd-cancel-confirm-direct",
+                expected_run_version=7,
+                timestamp=ts(6),
+                actor_reference="worker-1",
+                source_metadata={"source": "test"},
+            )
+        )
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
+    assert (
+        service.repository.get_processed_command("run-1", "cmd-cancel-confirm-direct")
+        == before_processed
+    )
+
+
+def test_prestart_cancellation_remains_valid() -> None:
+    service = make_service()
+    create_run(service)
+    cancelled = service.request_cancellation(
+        RequestCancellationCommand(
+            run_id="run-1",
+            command_id="cmd-cancel-prestart",
+            expected_run_version=1,
+            timestamp=ts(1),
+            actor_reference="operator-1",
+            requester_reference="operator-1",
+            reason_code="operator_cancel",
+            detail="Stop before execution",
+            source_metadata={"source": "test"},
+        )
+    )
+    assert cancelled.snapshot is not None
+    assert cancelled.snapshot.state == AgentRunState.CANCELLED
+    assert [event.event_type.value for event in service.repository.list_events("run-1")][-2:] == [
+        "cancellation_requested",
+        "run_cancelled",
+    ]
+
+
+def test_cancellation_start_and_confirmation_commands_are_idempotent() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    service.request_cancellation(
+        RequestCancellationCommand(
+            run_id="run-1",
+            command_id="cmd-cancel-request-dup",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="operator-1",
+            requester_reference="operator-1",
+            reason_code="operator_cancel",
+            detail="Stop the run",
+            source_metadata={"source": "test"},
+        )
+    )
+    start_command = ConfirmCancellationStartCommand(
+        run_id="run-1",
+        command_id="cmd-cancel-start-dup",
+        expected_run_version=7,
+        timestamp=ts(6),
+        actor_reference="worker-1",
+        source_metadata={"source": "test"},
+    )
+    first_start = service.confirm_cancellation_start(start_command)
+    second_start = service.confirm_cancellation_start(start_command)
+    assert second_start.idempotent_replay is True
+    assert second_start.snapshot == first_start.snapshot
+    confirm_command = ConfirmCancellationCommand(
+        run_id="run-1",
+        command_id="cmd-cancel-confirm-dup",
+        expected_run_version=8,
+        timestamp=ts(7),
+        actor_reference="worker-1",
+        source_metadata={"source": "test"},
+    )
+    first_confirm = service.confirm_cancellation(confirm_command)
+    second_confirm = service.confirm_cancellation(confirm_command)
+    assert second_confirm.idempotent_replay is True
+    assert second_confirm.snapshot == first_confirm.snapshot
 
 
 def test_block_and_unblock_are_distinct_from_pause_and_resume() -> None:

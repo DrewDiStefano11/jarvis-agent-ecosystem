@@ -22,8 +22,8 @@ from app.agent_runtime.errors import (
     TerminalRunImmutableError,
     VersionConflictError,
 )
-from app.agent_runtime.ledger import RuntimeAggregate, replay_execution_ledger
-from app.agent_runtime.recovery import derive_recovery_plan, plan_recovery
+from app.agent_runtime.ledger import RuntimeAggregate, apply_event, replay_execution_ledger
+from app.agent_runtime.recovery import derive_recovery_plan
 from app.agent_runtime.repository import AgentRuntimeRepository
 from app.agent_runtime.transitions import TERMINAL_STATES
 from app.models.agent_runtime import (
@@ -647,6 +647,24 @@ class AgentRuntimeService:
             return existing
         snapshot = aggregate.snapshot
         self._ensure_expected_version(snapshot, command.expected_run_version, command)
+        if snapshot.active_attempt_id is None:
+            event = self._build_event(
+                command=command,
+                run_id=command.run_id,
+                event_type=AgentRuntimeEventType.RUN_CANCELLED,
+                sequence_number=snapshot.event_sequence_number + 1,
+                run_version=snapshot.version + 1,
+                payload={"detail": command.detail},
+            )
+            return self._commit(command, aggregate, (event,))
+        if snapshot.state != AgentRunState.CANCELLING:
+            raise InvalidTransitionError(
+                "Active cancellation must be confirmed only after cancellation has started.",
+                run_id=command.run_id,
+                attempt_id=snapshot.active_attempt_id,
+                command_id=command.command_id,
+                metadata={"sourceState": snapshot.state, "targetState": AgentRunState.CANCELLED},
+            )
         attempt = self._require_active_attempt(aggregate, None, command)
         event = self._build_event(
             command=command,
@@ -823,11 +841,10 @@ class AgentRuntimeService:
             return existing
         snapshot = aggregate.snapshot
         self._ensure_expected_version(snapshot, command.expected_run_version, command)
-        recovery_plan = plan_recovery(
+        recovery_plan = derive_recovery_plan(
             snapshot,
             list(aggregate.attempts),
             list(aggregate.checkpoints),
-            self.repository.list_events(command.run_id),
         )
         event = self._build_event(
             command=command,
@@ -837,10 +854,7 @@ class AgentRuntimeService:
             run_version=snapshot.version + 1,
             payload={"plan": recovery_plan.model_dump(mode="json")},
         )
-        updated_aggregate = replay_execution_ledger(
-            self.repository.list_events(command.run_id) + [event]
-        )
-        assert updated_aggregate is not None
+        updated_aggregate = apply_event(aggregate, event)
         result = RuntimeCommandResult(
             run_id=command.run_id,
             snapshot=updated_aggregate.snapshot,
@@ -1012,9 +1026,9 @@ class AgentRuntimeService:
         aggregate: RuntimeAggregate,
         new_events: Sequence[RuntimeEventEnvelope],
     ) -> RuntimeCommandResult:
-        existing_events = self.repository.list_events(command.run_id)
-        updated_aggregate = replay_execution_ledger(existing_events + list(new_events))
-        assert updated_aggregate is not None
+        updated_aggregate = aggregate
+        for event in new_events:
+            updated_aggregate = apply_event(updated_aggregate, event)
         result = RuntimeCommandResult(
             run_id=command.run_id,
             snapshot=updated_aggregate.snapshot,

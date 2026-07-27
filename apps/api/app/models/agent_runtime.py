@@ -220,6 +220,8 @@ def _normalize_safe_json(
             normalized_key = validate_identifier(key, field_name=f"{field_name}.key", max_length=80)
             if _SECRET_KEY_PATTERN.search(normalized_key):
                 raise ValueError(f"{field_name} contains a secret-bearing key name")
+            if normalized_key in normalized:
+                raise ValueError(f"{field_name} contains colliding normalized key names")
             normalized[normalized_key] = _normalize_safe_json(
                 nested,
                 field_name=f"{field_name}.{normalized_key}",

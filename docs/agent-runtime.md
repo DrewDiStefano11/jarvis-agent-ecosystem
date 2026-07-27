@@ -142,6 +142,8 @@ Policy:
 - same `(run_id, command_id)` with different contents raises `command_conflict`
 - a different command ID cannot replace an accepted cancellation reason once cancellation has started
 - entering `cancel_requested` or `cancelling` clears incompatible `pause_reason` and `blocking_reason` snapshot fields
+- active-attempt cancellation must progress through `cancel_requested -> cancelling -> cancelled`
+- `run_cancelled` may be applied directly from `cancel_requested` only when no active attempt exists
 - pause and block history remains preserved in prior ledger events rather than stale current-state fields
 - cancellation of terminal runs returns a typed conflict
 - no external signal or worker kill is performed here
@@ -268,6 +270,7 @@ Replay rejects:
 - out-of-order events
 - mismatched run IDs
 - mismatched active attempt IDs
+- malformed event payload values, including invalid `detail`, `target_state`, or structured payload sections
 - invalid attempt numbering or attempt-limit overflows
 - attempt creation while another attempt is active or while a prior attempt is nonterminal
 - invalid resumed-checkpoint lineage or recovery-checkpoint mismatches
@@ -311,6 +314,7 @@ Rules:
 - failed commands are not stored as processed
 - duplicate processed commands do not append duplicate events
 - repository commit is authoritative for concurrent idempotency; exact concurrent duplicates return the stored result rather than a stale version conflict
+- command handlers build candidate state from the aggregate they originally loaded instead of re-reading a newer ledger before commit
 - checkpoint duplicate handling also supports a stable no-op when the same checkpoint ID and content are submitted again on the same attempt
 
 ## Optimistic concurrency
@@ -399,6 +403,7 @@ Repository invariants:
 - direct `create_run` requires a non-empty authoritative ledger whose replay exactly matches the supplied snapshot
 - direct `save_run` is only allowed when the supplied snapshot exactly matches deterministic ledger replay
 - atomic command commits recheck `(run_id, command_id)` under the repository lock so exact concurrent duplicates return the stored result instead of surfacing a stale version conflict
+- safe metadata normalization rejects colliding keys that canonicalize to the same normalized name instead of silently overwriting one value with another
 
 ## In-memory repository limitations
 
