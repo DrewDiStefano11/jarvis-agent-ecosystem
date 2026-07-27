@@ -314,6 +314,12 @@ class IdentityService:
                 )
             if not permission:
                 raise DomainError("PERMISSION_NOT_FOUND", "Permission was not found.", 404)
+            if data.resource_type is not None and data.resource_type != permission.resource_type:
+                raise DomainError(
+                    "PERMISSION_SCOPE_MISMATCH",
+                    "Assignment resource type must match the permission definition.",
+                    409,
+                )
             self._validate_attribution(uow.session, data.assigned_by)
             starts_at, expires_at = effective_interval(data)
             infinity = datetime.max.replace(tzinfo=UTC)

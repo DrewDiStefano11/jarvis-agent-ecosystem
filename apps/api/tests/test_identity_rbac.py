@@ -1098,6 +1098,51 @@ def test_global_and_scoped_permission_uniqueness(service):
         assert len(list(session.scalars(select(AgentPermissionAssignmentRow)))) == 4
 
 
+def test_permission_assignment_rejects_mismatched_resource_type_atomically(service):
+    actor = agent(service, "agent.permission.scope")
+    service.transition(actor.id, "active")
+    permission = service.create_definition(
+        "permission",
+        CreatePermissionRequest(
+            stable_key="room.enter",
+            display_name="Enter room",
+            resource_type="room",
+            action="enter",
+        ),
+    )
+    app = create_app(database_url=str(service.sessions.kw["bind"].url))
+    before = len(service.audits(0, 100))
+    with TestClient(app) as client:
+        mismatch = client.post(
+            f"/api/identity/agents/{actor.id}/permissions",
+            json={
+                "permission_id": permission.id,
+                "effect": "allow",
+                "resource_type": "door",
+                "resource_id": "door-a",
+            },
+        )
+        valid = client.post(
+            f"/api/identity/agents/{actor.id}/permissions",
+            json={
+                "permission_id": permission.id,
+                "effect": "allow",
+                "resource_type": "room",
+                "resource_id": "room-a",
+            },
+        )
+
+    assert mismatch.status_code == 409
+    assert mismatch.json()["error"]["code"] == "PERMISSION_SCOPE_MISMATCH"
+    assert valid.status_code == 201
+    with service.sessions() as session:
+        assignments = list(session.scalars(select(AgentPermissionAssignmentRow)))
+        assert len(assignments) == 1
+        assert assignments[0].resource_type == "room"
+        assert len(list(session.scalars(select(IdentityAuditEventRow)))) == before + 1
+    assert service.check_permission(actor.id, permission.stable_key, "room", "room-a").allowed
+
+
 def test_expired_and_revoked_permission_assignments_can_be_renewed(service):
     actor = agent(service, "agent.permission.renew")
     service.transition(actor.id, "active")
