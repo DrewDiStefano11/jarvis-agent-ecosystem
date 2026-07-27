@@ -97,6 +97,12 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
         item["name"]: item for item in inspector.get_indexes("identity_agent_permissions")
     }
     assert permission_indexes["uq_identity_agent_permissions_global"]["unique"] == 1
+    assert permission_indexes["uq_identity_agent_permissions_global"]["column_names"] == [
+        "agent_id",
+        "permission_id",
+        "effect",
+        "starts_at",
+    ]
     role_indexes = {item["name"]: item for item in inspector.get_indexes("identity_agent_roles")}
     assert role_indexes["uq_identity_agent_roles_global"]["unique"] == 1
     assert not inspector.get_unique_constraints("identity_supervisor_relationships")

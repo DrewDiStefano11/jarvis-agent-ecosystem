@@ -67,6 +67,18 @@ def test_lifecycle_is_audited_and_retirement_terminal(service):
     }
 
 
+def test_agent_patch_rejects_explicit_nulls(service):
+    app = create_app(database_url=str(service.sessions.kw["bind"].url))
+    update_schema = app.openapi()["components"]["schemas"]["UpdateAgentRequest"]
+    for field in ("display_name", "description", "operational_status", "is_enabled"):
+        property_schema = update_schema["properties"][field]
+        assert property_schema.get("type") != "null"
+        assert not any(branch.get("type") == "null" for branch in property_schema.get("anyOf", []))
+    with TestClient(app) as client:
+        response = client.patch("/api/identity/agents/missing", json={"display_name": None})
+    assert response.status_code == 422
+
+
 def test_duplicate_and_invalid_stable_key(service):
     agent(service, "agent.unique")
     with pytest.raises(DomainError) as duplicate:
@@ -364,6 +376,19 @@ def test_inactive_role_assignments_and_hierarchy_links_are_ignored(service):
     assert service.descendants(actor.id) == []
 
 
+def test_descendants_are_deduplicated_when_hierarchy_converges(service):
+    root, left, right, leaf = [
+        agent(service, f"agent.descendants.converge.{key}") for key in "abcd"
+    ]
+    service.add_supervisor(relationship(root, left))
+    service.add_supervisor(relationship(root, right))
+    service.add_supervisor(relationship(left, leaf))
+    service.add_supervisor(relationship(right, leaf))
+    descendants = service.descendants(root.id)
+    assert set(descendants) == {left.id, right.id, leaf.id}
+    assert descendants.count(leaf.id) == 1
+
+
 def test_authorization_evidence_and_openapi_bodies_are_deterministic(service):
     actor = agent(service, "agent.evidence")
     service.transition(actor.id, "active")
@@ -637,6 +662,41 @@ def test_global_and_scoped_permission_uniqueness(service):
         )
     with service.sessions() as session:
         assert len(list(session.scalars(select(AgentPermissionAssignmentRow)))) == 4
+
+
+def test_expired_and_revoked_permission_assignments_can_be_renewed(service):
+    actor = agent(service, "agent.permission.renew")
+    service.transition(actor.id, "active")
+    permission = service.create_definition(
+        "permission",
+        CreatePermissionRequest(
+            stable_key="artifact.renew",
+            display_name="Renew",
+            resource_type="artifact",
+            action="use",
+        ),
+    )
+    past = datetime.now(UTC) - timedelta(days=3)
+    service.assign_permission(
+        actor.id,
+        AssignPermissionRequest(
+            permission_id=permission.id,
+            effect="allow",
+            starts_at=past,
+            expires_at=past + timedelta(days=1),
+        ),
+    )
+    active = service.assign_permission(
+        actor.id, AssignPermissionRequest(permission_id=permission.id, effect="allow")
+    )
+    with service.sessions.begin() as session:
+        session.get(AgentPermissionAssignmentRow, active.id).revoked_at = datetime.now(UTC)
+    renewed = service.assign_permission(
+        actor.id, AssignPermissionRequest(permission_id=permission.id, effect="allow")
+    )
+    assert renewed.id != active.id
+    with service.sessions() as session:
+        assert len(list(session.scalars(select(AgentPermissionAssignmentRow)))) == 3
 
 
 def test_identity_openapi_has_typed_success_envelopes(service):

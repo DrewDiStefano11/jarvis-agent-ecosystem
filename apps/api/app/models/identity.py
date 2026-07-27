@@ -53,10 +53,12 @@ class CreateAgentRequest(IdentityModel):
 
 
 class UpdateAgentRequest(IdentityModel):
-    display_name: str | None = Field(default=None, min_length=1, max_length=160)
-    description: str | None = Field(default=None, max_length=2000)
-    operational_status: OperationalStatus | None = None
-    is_enabled: bool | None = None
+    # These non-nullable types remain omittable through their defaults, while explicit
+    # JSON null is rejected before a PATCH can reach non-nullable database columns.
+    display_name: str = Field(default=None, min_length=1, max_length=160)
+    description: str = Field(default=None, max_length=2000)
+    operational_status: OperationalStatus = None
+    is_enabled: bool = None
 
 
 class AgentIdentity(IdentityModel):

@@ -247,7 +247,14 @@ def upgrade() -> None:
             ["identity_permissions.id"],
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("agent_id", "permission_id", "effect", "resource_type", "resource_id"),
+        sa.UniqueConstraint(
+            "agent_id",
+            "permission_id",
+            "effect",
+            "resource_type",
+            "resource_id",
+            "starts_at",
+        ),
     )
     with op.batch_alter_table("identity_agent_permissions", schema=None) as batch_op:
         batch_op.create_index(
@@ -260,7 +267,7 @@ def upgrade() -> None:
         )
         batch_op.create_index(
             "uq_identity_agent_permissions_global",
-            ["agent_id", "permission_id", "effect"],
+            ["agent_id", "permission_id", "effect", "starts_at"],
             unique=True,
             sqlite_where=sa.text("resource_type IS NULL AND resource_id IS NULL"),
             postgresql_where=sa.text("resource_type IS NULL AND resource_id IS NULL"),

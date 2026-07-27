@@ -291,11 +291,21 @@ class IdentityService:
                 )
             if not permission:
                 raise DomainError("PERMISSION_NOT_FOUND", "Permission was not found.", 404)
+            starts_at = data.starts_at or now()
+            expires_at = data.expires_at
+            infinity = datetime.max.replace(tzinfo=UTC)
             duplicate = uow.session.scalar(
                 select(AgentPermissionAssignmentRow.id).where(
                     AgentPermissionAssignmentRow.agent_id == agent_id,
                     AgentPermissionAssignmentRow.permission_id == data.permission_id,
                     AgentPermissionAssignmentRow.effect == data.effect,
+                    AgentPermissionAssignmentRow.revoked_at.is_(None),
+                    AgentPermissionAssignmentRow.starts_at
+                    < (expires_at if expires_at is not None else infinity),
+                    or_(
+                        AgentPermissionAssignmentRow.expires_at.is_(None),
+                        AgentPermissionAssignmentRow.expires_at > starts_at,
+                    ),
                     AgentPermissionAssignmentRow.resource_type.is_(None)
                     if data.resource_type is None
                     else AgentPermissionAssignmentRow.resource_type == data.resource_type,
@@ -309,7 +319,7 @@ class IdentityService:
                     "DUPLICATE_ASSIGNMENT", "Equivalent assignment already exists.", 409
                 )
             values = data.model_dump()
-            values["starts_at"] = values["starts_at"] or now()
+            values["starts_at"] = starts_at
             row = AgentPermissionAssignmentRow(id=uid("aperm"), agent_id=agent_id, **values)
             uow.session.add(row)
             self._audit(
@@ -598,6 +608,7 @@ class IdentityService:
             self._agent(s, agent_id)
             result = []
             frontier = [agent_id]
+            seen = {agent_id}
             t = now()
             for _ in range(MAX_HIERARCHY_DEPTH):
                 children = list(
@@ -615,7 +626,11 @@ class IdentityService:
                         .order_by(SupervisorRelationshipRow.subordinate_agent_id)
                     )
                 )
-                frontier = [x for x in children if x not in result]
+                frontier = []
+                for child in children:
+                    if child not in seen:
+                        seen.add(child)
+                        frontier.append(child)
                 result.extend(frontier)
                 if not frontier:
                     return result
