@@ -415,6 +415,16 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
             )
         )
 
+    def health_status(self) -> dict[str, int | bool]:
+        """Bounded health summary; it intentionally never replays every ledger."""
+        with self.sessions() as session:
+            nonterminal = session.scalar(
+                select(func.count())
+                .select_from(AgentRuntimeRunRow)
+                .where(AgentRuntimeRunRow.state.not_in([state.value for state in TERMINAL_STATES]))
+            )
+        return {"configured": True, "nonterminalRunCount": nonterminal or 0}
+
     def integrity_check(self, run_id):
         state = self.load_run_state(run_id)
         if not state:
