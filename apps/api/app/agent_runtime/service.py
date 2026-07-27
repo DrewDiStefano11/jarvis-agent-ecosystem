@@ -190,30 +190,13 @@ class AgentRuntimeService:
         raise TypeError(f"Unsupported command type: {type(command)!r}")
 
     def create_run(self, command: CreateAgentRunCommand) -> RuntimeCommandResult:
-        existing = self.repository.load_run(command.specification.run_id)
-        if existing_record := self.repository.get_processed_command(
-            command.specification.run_id,
-            command.command_id,
-        ):
-            command_hash = stable_hash(command.model_dump(mode="json", exclude_none=False))
-            if existing_record.command_hash != command_hash:
-                raise CommandConflictError(
-                    run_id=command.specification.run_id,
-                    command_id=command.command_id,
-                )
-            return existing_record.result.model_copy(update={"idempotent_replay": True}, deep=True)
-        if existing is not None:
-            raise RunAlreadyExistsError(
-                run_id=command.specification.run_id,
-                command_id=command.command_id,
-            )
         if command.expected_run_version != 0:
             raise VersionConflictError(
                 run_id=command.specification.run_id,
                 command_id=command.command_id,
                 metadata={"expectedVersion": command.expected_run_version, "storedVersion": None},
             )
-        self._validate_parent_lineage(command.specification)
+        # The SQL adapter validates lineage inside the command transaction.
         event = self._build_event(
             command=command,
             run_id=command.specification.run_id,

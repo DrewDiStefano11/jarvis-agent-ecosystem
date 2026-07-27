@@ -633,3 +633,23 @@ class TaskAttemptRow(Base):
         ForeignKey("workflow_checkpoints.id"), nullable=True
     )
     __table_args__ = (UniqueConstraint("task_id", "attempt_number"),)
+
+class AgentRuntimeRunRow(Base):
+    __tablename__="agent_runtime_runs"
+    run_id: Mapped[str]=mapped_column(String(120),primary_key=True); task_id: Mapped[str]=mapped_column(String(120),index=True); agent_id: Mapped[str]=mapped_column(String(120),index=True); parent_run_id: Mapped[str|None]=mapped_column(String(120),index=True); state: Mapped[str]=mapped_column(String(40),index=True); version: Mapped[int]=mapped_column(Integer); event_sequence_number: Mapped[int]=mapped_column(Integer); attempt_count: Mapped[int]=mapped_column(Integer); active_attempt_id: Mapped[str|None]=mapped_column(String(120)); latest_checkpoint_id: Mapped[str|None]=mapped_column(String(120)); recovery_status: Mapped[str]=mapped_column(String(30)); created_at: Mapped[datetime]=mapped_column(DateTime(timezone=True),index=True); updated_at: Mapped[datetime]=mapped_column(DateTime(timezone=True)); deadline: Mapped[datetime|None]=mapped_column(DateTime(timezone=True),index=True); terminal_at: Mapped[datetime|None]=mapped_column(DateTime(timezone=True)); specification_json: Mapped[str]=mapped_column(Text); snapshot_json: Mapped[str]=mapped_column(Text)
+    __table_args__=(Index("ix_agent_runtime_runs_nonterminal","state","created_at"),)
+class AgentRuntimeEventRow(Base):
+    __tablename__="agent_runtime_events"
+    event_id: Mapped[str]=mapped_column(String(120),primary_key=True); run_id: Mapped[str]=mapped_column(ForeignKey("agent_runtime_runs.run_id",ondelete="CASCADE"),index=True); attempt_id: Mapped[str|None]=mapped_column(String(120)); event_type: Mapped[str]=mapped_column(String(80)); schema_version: Mapped[str]=mapped_column(String(20)); sequence_number: Mapped[int]=mapped_column(Integer); run_version: Mapped[int]=mapped_column(Integer); timestamp: Mapped[datetime]=mapped_column(DateTime(timezone=True)); actor_reference: Mapped[str|None]=mapped_column(String(160)); command_id: Mapped[str|None]=mapped_column(String(120)); correlation_id: Mapped[str|None]=mapped_column(String(120)); causation_id: Mapped[str|None]=mapped_column(String(120)); payload_json: Mapped[str]=mapped_column(Text); metadata_json: Mapped[str]=mapped_column(Text); envelope_json: Mapped[str]=mapped_column(Text)
+    __table_args__=(UniqueConstraint("run_id","sequence_number"),UniqueConstraint("run_id","run_version"))
+class AgentRuntimeAttemptRow(Base):
+    __tablename__="agent_runtime_attempts"
+    attempt_id: Mapped[str]=mapped_column(String(120),primary_key=True); run_id: Mapped[str]=mapped_column(ForeignKey("agent_runtime_runs.run_id",ondelete="CASCADE"),index=True); attempt_number: Mapped[int]=mapped_column(Integer); contract_json: Mapped[str]=mapped_column(Text)
+    __table_args__=(UniqueConstraint("run_id","attempt_number"),)
+class AgentRuntimeCheckpointRow(Base):
+    __tablename__="agent_runtime_checkpoints"
+    checkpoint_id: Mapped[str]=mapped_column(String(120),primary_key=True); run_id: Mapped[str]=mapped_column(ForeignKey("agent_runtime_runs.run_id",ondelete="CASCADE"),index=True); attempt_id: Mapped[str]=mapped_column(String(120)); checkpoint_sequence: Mapped[int]=mapped_column(Integer); contract_json: Mapped[str]=mapped_column(Text)
+    __table_args__=(UniqueConstraint("run_id","checkpoint_sequence"),)
+class AgentRuntimeProcessedCommandRow(Base):
+    __tablename__="agent_runtime_processed_commands"
+    run_id: Mapped[str]=mapped_column(ForeignKey("agent_runtime_runs.run_id",ondelete="CASCADE"),primary_key=True); command_id: Mapped[str]=mapped_column(String(120),primary_key=True); command_hash: Mapped[str]=mapped_column(String(64)); command_type: Mapped[str]=mapped_column(String(120)); result_json: Mapped[str]=mapped_column(Text); processed_at: Mapped[datetime]=mapped_column(DateTime(timezone=True))

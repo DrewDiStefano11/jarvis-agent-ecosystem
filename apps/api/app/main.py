@@ -15,6 +15,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.context import ContextAssembler
+from app.agent_runtime.repository import InMemoryAgentRuntimeRepository
+from app.agent_runtime.service import AgentRuntimeService
+from app.agent_runtime.sqlalchemy_repository import SqlAlchemyAgentRuntimeRepository
+from app.agent_runtime.router import router as agent_runtime_router
+from app.agent_runtime.errors import AgentRuntimeError
 from app.core.config import Settings
 from app.core.errors import DomainError
 from app.core.transitions import InvalidTransitionError, validate_transition
@@ -56,7 +61,7 @@ from app.repositories.task_leases import TaskLeaseRepository
 from app.services.events import EventBroker
 from app.simulator.engine import SimulatorEngine
 
-DATABASE_REVISION = "a87a487dd714"
+DATABASE_REVISION = "20260727_04"
 
 
 def _upgrade_database(settings: Settings) -> None:
@@ -123,6 +128,9 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     app.state.engine = engine
     app.state.task_leases = task_leases
     app.state.identity_service = IdentityService(session_factory)
+    app.state.agent_runtime_repository = SqlAlchemyAgentRuntimeRepository(session_factory)
+    app.state.agent_runtime_service = AgentRuntimeService(app.state.agent_runtime_repository)
+    app.include_router(agent_runtime_router)
     app.include_router(identity_router)
     app.state.lease_recovery_task = None
     app.state.recovery_required = restored_workflow_state == "recovery_required"
@@ -226,6 +234,11 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         repository._system.startup_was_clean = True
         repository.persist()
         engine.dispose()
+
+    @app.exception_handler(AgentRuntimeError)
+    async def runtime_error(_: Request, exc: AgentRuntimeError) -> JSONResponse:
+        status = 404 if exc.code == "run_not_found" else 409
+        return JSONResponse(status_code=status, content={"error": {"code": exc.code, "message": exc.default_message, "details": {}}})
 
     @app.exception_handler(DomainError)
     async def domain_error(_: Request, exc: DomainError) -> JSONResponse:
