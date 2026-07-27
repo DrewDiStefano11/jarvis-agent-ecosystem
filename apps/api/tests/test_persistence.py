@@ -13,15 +13,21 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import create_engine, func, inspect, select, text, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.db.models import (
+    AgentCapabilityAssignmentRow,
     ApprovalRow,
     AuditEventRow,
     IdempotencyRecordRow,
+    IdentityAgentRow,
+    IdentityCapabilityRow,
+    IdentityTeamRow,
     OutboxEventRow,
     SystemStateRow,
     TaskRow,
+    TeamMembershipRow,
     WorkflowCheckpointRow,
     WorkflowRunRow,
 )
@@ -93,14 +99,55 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
         "ix_context_assemblies_status",
         "ix_context_assemblies_task_id",
     }
+    permission_indexes = {
+        item["name"]: item for item in inspector.get_indexes("identity_agent_permissions")
+    }
+    assert permission_indexes["uq_identity_agent_permissions_global"]["unique"] == 1
+    assert permission_indexes["uq_identity_agent_permissions_global"]["column_names"] == [
+        "agent_id",
+        "permission_id",
+        "effect",
+        "starts_at",
+    ]
+    role_indexes = {item["name"]: item for item in inspector.get_indexes("identity_agent_roles")}
+    assert role_indexes["uq_identity_agent_roles_global"]["unique"] == 1
+    assert role_indexes["uq_identity_agent_roles_global"]["column_names"] == [
+        "agent_id",
+        "role_id",
+        "scope_type",
+        "starts_at",
+    ]
+    assert (
+        "agent_id",
+        "role_id",
+        "scope_type",
+        "scope_id",
+        "starts_at",
+    ) in {
+        tuple(item["column_names"])
+        for item in inspector.get_unique_constraints("identity_agent_roles")
+    }
+    assert not inspector.get_unique_constraints("identity_supervisor_relationships")
+    assert ("agent_id", "capability_id", "starts_at") in {
+        tuple(item["column_names"])
+        for item in inspector.get_unique_constraints("identity_agent_capabilities")
+    }
+    assert ("team_id", "agent_id", "starts_at") in {
+        tuple(item["column_names"])
+        for item in inspector.get_unique_constraints("identity_team_memberships")
+    }
+    assert "ck_identity_agent_permissions_resource_scope" in {
+        item["name"] for item in inspector.get_check_constraints("identity_agent_permissions")
+    }
     with engine.connect() as connection:
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260724_03"
+        assert connection.scalar(text("select version_num from alembic_version")) == "a87a487dd714"
     engine.dispose()
     command.downgrade(config, "20260723_02")
     lease_engine = create_engine(database_url(path))
     lease_tables = set(inspect(lease_engine).get_table_names())
     lease_engine.dispose()
     assert "context_assemblies" not in lease_tables
+    assert "identity_agent_permissions" not in lease_tables
     assert {"task_attempts", "task_leases", "workers"} <= lease_tables
     command.downgrade(config, "20260720_01")
     phase_2a_engine = create_engine(database_url(path))
@@ -110,6 +157,21 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     assert not phase_2b_tables & phase_2a_tables
     assert expected_tables - phase_2b_tables <= phase_2a_tables
     command.upgrade(config, "head")
+    restored = inspect(create_engine(database_url(path)))
+    assert "uq_identity_agent_permissions_global" in {
+        item["name"] for item in restored.get_indexes("identity_agent_permissions")
+    }
+    assert "uq_identity_agent_roles_global" in {
+        item["name"] for item in restored.get_indexes("identity_agent_roles")
+    }
+    assert ("agent_id", "capability_id", "starts_at") in {
+        tuple(item["column_names"])
+        for item in restored.get_unique_constraints("identity_agent_capabilities")
+    }
+    assert ("team_id", "agent_id", "starts_at") in {
+        tuple(item["column_names"])
+        for item in restored.get_unique_constraints("identity_team_memberships")
+    }
     command.downgrade(config, "base")
     downgraded_tables = set(inspect(create_engine(database_url(path))).get_table_names())
     assert not expected_tables & downgraded_tables
@@ -117,12 +179,127 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     command.current(config)
     with create_database_engine(database_url(path)).connect() as connection:
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260724_03"
+        assert connection.scalar(text("select version_num from alembic_version")) == "a87a487dd714"
     for revision in (root / "migrations" / "versions").glob("*.py"):
         source = revision.read_text(encoding="utf-8")
         assert "Base.metadata" not in source
         assert "create_all" not in source
         assert "drop_all" not in source
+
+
+def test_capability_and_team_assignment_history_can_be_renewed(tmp_path: Path) -> None:
+    path = tmp_path / "identity-renewals.db"
+    url = database_url(path)
+    root = Path(__file__).resolve().parents[1]
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("sqlalchemy.url", url)
+    command.upgrade(config, "head")
+    engine = create_database_engine(url)
+    first_start = datetime.now(UTC) - timedelta(days=2)
+    second_start = datetime.now(UTC)
+
+    with UnitOfWork(lambda: Session(engine)) as uow:
+        assert uow.session
+        uow.session.add_all(
+            [
+                IdentityAgentRow(
+                    id="agent-renewal",
+                    stable_key="agent.renewal",
+                    display_name="Renewal agent",
+                    agent_type="worker",
+                ),
+                IdentityCapabilityRow(
+                    id="capability-renewal",
+                    stable_key="capability.renewal",
+                    display_name="Renewal capability",
+                    category="tool",
+                ),
+                IdentityTeamRow(
+                    id="team-renewal",
+                    stable_key="team.renewal",
+                    display_name="Renewal team",
+                    team_type="functional",
+                ),
+            ]
+        )
+
+    with UnitOfWork(lambda: Session(engine)) as uow:
+        assert uow.session
+        uow.session.add_all(
+            [
+                AgentCapabilityAssignmentRow(
+                    id="capability-assignment-expired",
+                    agent_id="agent-renewal",
+                    capability_id="capability-renewal",
+                    source="test",
+                    starts_at=first_start,
+                    expires_at=first_start + timedelta(hours=1),
+                ),
+                TeamMembershipRow(
+                    id="team-membership-revoked",
+                    team_id="team-renewal",
+                    agent_id="agent-renewal",
+                    starts_at=first_start,
+                    revoked_at=first_start + timedelta(hours=1),
+                ),
+            ]
+        )
+
+    with UnitOfWork(lambda: Session(engine)) as uow:
+        assert uow.session
+        uow.session.add_all(
+            [
+                AgentCapabilityAssignmentRow(
+                    id="capability-assignment-renewed",
+                    agent_id="agent-renewal",
+                    capability_id="capability-renewal",
+                    source="test",
+                    starts_at=second_start,
+                ),
+                TeamMembershipRow(
+                    id="team-membership-renewed",
+                    team_id="team-renewal",
+                    agent_id="agent-renewal",
+                    starts_at=second_start,
+                ),
+            ]
+        )
+
+    with engine.connect() as connection:
+        assert connection.scalar(text("select count(*) from identity_agent_capabilities")) == 2
+        assert connection.scalar(text("select count(*) from identity_team_memberships")) == 2
+
+    with Session(engine) as session:
+        session.add(
+            AgentCapabilityAssignmentRow(
+                id="capability-assignment-duplicate",
+                agent_id="agent-renewal",
+                capability_id="capability-renewal",
+                source="test",
+                starts_at=second_start,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
+
+    with Session(engine) as session:
+        session.add(
+            TeamMembershipRow(
+                id="team-membership-duplicate",
+                team_id="team-renewal",
+                agent_id="agent-renewal",
+                starts_at=second_start,
+            )
+        )
+        with pytest.raises(IntegrityError):
+            session.commit()
+        session.rollback()
+
+    with engine.connect() as connection:
+        assert connection.scalar(text("select count(*) from identity_agent_capabilities")) == 2
+        assert connection.scalar(text("select count(*) from identity_team_memberships")) == 2
+    engine.dispose()
 
 
 def test_state_and_idempotency_survive_application_recreation(tmp_path: Path) -> None:
