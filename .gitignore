@@ -1,41 +1,50 @@
 ```
+# Database
+*.db
+
 # Python
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
-*.py~
-*.pyc~
-*.pyo~
-*.pyd~
-*.egg-info/
-.eggs/
-.venv/
+.Python
+env/
 venv/
+.venv/
+.ENV
 .env
-.env.local
 .env.*
+.env.local
+.venv.bak
+env.bak
+venv.bak
+.venv~
+venv~
+.env~
+
+# Logs
+*.log
 
 # Testing
 .coverage
 coverage/
 htmlcov/
 .pytest_cache/
-.mypy_cache/
 .hypothesis/
 
-# Build and distribution
-build/
-dist/
-*.egg
-*.whl
-*.tar.gz
-*.zip
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
 
-# Logs
-*.log
-
-# OS generated files
+# OS
 .DS_Store
 Thumbs.db
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
 ```

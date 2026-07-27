@@ -266,7 +266,7 @@ def test_capability_and_team_assignment_history_can_be_renewed(tmp_path: Path) -
         )
 
     with engine.connect() as connection:
-        assert connection.scalar(text("select count(*) from identity_agent_capabilities")) == 2
+        assert connection.scalar(text("select count(*) from identity_agent_capabilities")) == 4
         assert connection.scalar(text("select count(*) from identity_team_memberships")) == 2
 
     with Session(engine) as session:
@@ -297,7 +297,7 @@ def test_capability_and_team_assignment_history_can_be_renewed(tmp_path: Path) -
         session.rollback()
 
     with engine.connect() as connection:
-        assert connection.scalar(text("select count(*) from identity_agent_capabilities")) == 2
+        assert connection.scalar(text("select count(*) from identity_agent_capabilities")) == 4
         assert connection.scalar(text("select count(*) from identity_team_memberships")) == 2
     engine.dispose()
 
