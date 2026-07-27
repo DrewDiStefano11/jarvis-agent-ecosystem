@@ -4,6 +4,7 @@ import warnings
 from datetime import timedelta
 
 import pytest
+from pydantic import ValidationError
 
 from app.agent_runtime.errors import (
     InvalidTransitionError,
@@ -16,7 +17,9 @@ from app.models.agent_runtime import (
     AbandonAttemptCommand,
     AgentRunState,
     AttemptState,
+    BeginAttemptCommand,
     BlockAgentRunCommand,
+    ClaimAgentRunCommand,
     CompleteAgentRunCommand,
     CompleteAttemptCommand,
     ConfirmPauseCommand,
@@ -630,6 +633,135 @@ def test_replay_rejects_malformed_payloads_without_emitting_serialization_warnin
         with pytest.raises(LedgerReplayError):
             replay_execution_ledger(events)
     assert caught == []
+
+
+@pytest.mark.parametrize("bad_value", [None, "", "   ", "bad\nvalue", "x" * 161])
+def test_replay_rejects_invalid_required_executor_reference(bad_value: object) -> None:
+    for event_type, events in (
+        ("run_claimed", _prepare_claimed_run_events()),
+        ("run_start_requested", _prepare_running_run_events()),
+    ):
+        broken = _mutate_event_payload(
+            events,
+            event_type=event_type,
+            payload_updates={"executor_reference": bad_value},
+        )
+        with pytest.raises(LedgerReplayError) as exc_info:
+            replay_execution_ledger(broken)
+        assert exc_info.value.metadata["eventType"] == event_type
+        assert exc_info.value.metadata["payloadSection"] == "executor_reference"
+
+
+@pytest.mark.parametrize("event_type", ["run_claimed", "run_start_requested"])
+def test_replay_rejects_missing_required_executor_reference(event_type: str) -> None:
+    events = _mutate_event_payload(
+        {
+            "run_claimed": _prepare_claimed_run_events(),
+            "run_start_requested": _prepare_running_run_events(),
+        }[event_type],
+        event_type=event_type,
+        replace_payload={"detail": "valid detail"},
+    )
+    with pytest.raises(LedgerReplayError) as exc_info:
+        replay_execution_ledger(events)
+    assert exc_info.value.metadata["payloadSection"] == "executor_reference"
+
+
+def test_service_and_replay_agree_on_invalid_executor_reference() -> None:
+    with pytest.raises(ValidationError):
+        ClaimAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-claim-invalid",
+            expected_run_version=1,
+            timestamp=ts(1),
+            actor_reference="scheduler-1",
+            executor_reference="   ",
+            source_metadata={"source": "test"},
+        )
+    with pytest.raises(ValidationError):
+        BeginAttemptCommand(
+            run_id="run-1",
+            command_id="cmd-begin-invalid",
+            expected_run_version=3,
+            timestamp=ts(3),
+            actor_reference="worker-1",
+            executor_reference="   ",
+            source_metadata={"source": "test"},
+        )
+    broken_claim = _mutate_event_payload(
+        _prepare_claimed_run_events(),
+        event_type="run_claimed",
+        payload_updates={"executor_reference": "   "},
+    )
+    with pytest.raises(LedgerReplayError):
+        replay_execution_ledger(broken_claim)
+    broken_start = _mutate_event_payload(
+        _prepare_running_run_events(),
+        event_type="run_start_requested",
+        payload_updates={"executor_reference": "   "},
+    )
+    with pytest.raises(LedgerReplayError):
+        replay_execution_ledger(broken_start)
+
+
+def test_replay_accepts_valid_required_executor_reference() -> None:
+    assert replay_execution_ledger(_prepare_claimed_run_events()) is not None
+    assert replay_execution_ledger(_prepare_running_run_events()) is not None
+
+
+def test_repository_append_rejects_attempt_created_after_success_without_mutation() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    service.complete_attempt(
+        CompleteAttemptCommand(
+            run_id="run-1",
+            command_id="cmd-attempt-succeeded-append",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="worker-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.complete_run(
+        CompleteAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-run-succeeded-append",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="worker-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    invalid_attempt = RuntimeEventEnvelope.model_validate(
+        before_events[-1].model_dump(mode="json")
+        | {
+            "event_id": "event-attempt-after-success-append",
+            "event_type": "attempt_created",
+            "sequence_number": len(before_events) + 1,
+            "run_version": len(before_events) + 1,
+            "attempt_id": "attempt-2",
+            "timestamp": ts(7).isoformat(),
+            "payload": {
+                "attempt": {
+                    "attempt_id": "attempt-2",
+                    "run_id": "run-1",
+                    "attempt_number": 2,
+                    "state": "starting",
+                    "started_at": ts(7).isoformat(),
+                    "executor_reference": "worker-1",
+                    "version": len(before_events) + 1,
+                }
+            },
+        }
+    )
+    with pytest.raises(LedgerReplayError):
+        service.repository.append_events(
+            "run-1", [invalid_attempt], expected_sequence=len(before_events)
+        )
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
 
 
 def test_replay_rejects_invalid_resume_and_unblock_target_states() -> None:
@@ -1374,6 +1506,34 @@ def test_replay_of_valid_recovery_attempt_is_deterministic() -> None:
     assert first is not None and second is not None
     assert first.snapshot == second.snapshot
     assert first.attempts == second.attempts
+
+
+def test_replay_rejects_attempt_created_after_succeeded_attempt() -> None:
+    events = _prepare_run_succeeded_events()
+    invalid_attempt = RuntimeEventEnvelope.model_validate(
+        events[-1].model_dump(mode="json")
+        | {
+            "event_id": "event-attempt-after-success",
+            "event_type": "attempt_created",
+            "sequence_number": len(events) + 1,
+            "run_version": len(events) + 1,
+            "attempt_id": "attempt-2",
+            "timestamp": ts(7).isoformat(),
+            "payload": {
+                "attempt": {
+                    "attempt_id": "attempt-2",
+                    "run_id": "run-1",
+                    "attempt_number": 2,
+                    "state": "starting",
+                    "started_at": ts(7).isoformat(),
+                    "executor_reference": "worker-1",
+                    "version": len(events) + 1,
+                }
+            },
+        }
+    )
+    with pytest.raises(LedgerReplayError):
+        replay_execution_ledger(events + [invalid_attempt])
 
 
 def test_replay_rejects_run_success_without_a_succeeded_latest_attempt() -> None:

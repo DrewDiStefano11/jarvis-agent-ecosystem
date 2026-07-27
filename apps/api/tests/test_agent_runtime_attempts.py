@@ -13,6 +13,7 @@ from app.models.agent_runtime import (
     AbandonAttemptCommand,
     AgentRunState,
     AttemptState,
+    CompleteAgentRunCommand,
     CompleteAttemptCommand,
     FailAttemptCommand,
     RecordCheckpointCommand,
@@ -123,6 +124,47 @@ def test_attempt_limit_is_enforced() -> None:
                 source_metadata={"source": "test"},
             )
         )
+
+
+def test_succeeded_attempt_cannot_be_followed_by_another_attempt() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    first_attempt_id = service.repository.load_attempt_history("run-1")[-1].attempt_id
+    completed = complete_attempt(
+        service, "run-1", expected_run_version=6, attempt_id=first_attempt_id
+    )
+    assert completed.snapshot is not None
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    before_attempts = service.repository.load_attempt_history("run-1")
+    before_processed = service.repository.get_processed_command("run-1", "cmd-begin-after-success")
+    with pytest.raises(InvalidAttemptStateError):
+        begin_attempt(
+            service,
+            "run-1",
+            expected_run_version=7,
+            command_id="cmd-begin-after-success",
+            second=6,
+        )
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
+    assert service.repository.load_attempt_history("run-1") == before_attempts
+    assert (
+        service.repository.get_processed_command("run-1", "cmd-begin-after-success")
+        == before_processed
+    )
+    finalized = service.complete_run(
+        CompleteAgentRunCommand(
+            run_id="run-1",
+            command_id="cmd-complete-run",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="worker-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    assert finalized.snapshot is not None
+    assert finalized.snapshot.state == AgentRunState.SUCCEEDED
 
 
 def test_terminal_attempts_do_not_become_active_again() -> None:

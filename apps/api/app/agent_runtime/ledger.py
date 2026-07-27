@@ -212,6 +212,32 @@ def _payload_optional_identifier(
         raise _payload_validation_error(event, section=key, exc=exc) from exc
 
 
+def _payload_required_identifier(
+    event: RuntimeEventEnvelope,
+    key: str,
+    field_name: str,
+    *,
+    max_length: int = 120,
+) -> str:
+    raw = event.payload.get(key)
+    if raw is None:
+        raise _payload_validation_error(
+            event,
+            section=key,
+            exc=TypeError(f"{key} is required and must be a string"),
+        )
+    if not isinstance(raw, str):
+        raise _payload_validation_error(
+            event,
+            section=key,
+            exc=TypeError(f"{key} must be a string"),
+        )
+    try:
+        return validate_identifier(raw, field_name=field_name, max_length=max_length)
+    except (TypeError, ValueError) as exc:
+        raise _payload_validation_error(event, section=key, exc=exc) from exc
+
+
 def _payload_model(event: RuntimeEventEnvelope, key: str, model_type: type[Any]) -> Any:
     try:
         return model_type.model_validate(_payload_mapping(event, key))
@@ -243,7 +269,7 @@ def _validated_event_payload(event: RuntimeEventEnvelope) -> dict[str, object]:
     if event.event_type == AgentRuntimeEventType.RUN_CLAIMED:
         return {
             "detail": _payload_detail(event),
-            "executor_reference": _payload_optional_identifier(
+            "executor_reference": _payload_required_identifier(
                 event,
                 "executor_reference",
                 "opaque_reference",
@@ -253,7 +279,7 @@ def _validated_event_payload(event: RuntimeEventEnvelope) -> dict[str, object]:
     if event.event_type == AgentRuntimeEventType.RUN_START_REQUESTED:
         return {
             "detail": _payload_detail(event),
-            "executor_reference": _payload_optional_identifier(
+            "executor_reference": _payload_required_identifier(
                 event,
                 "executor_reference",
                 "opaque_reference",
@@ -997,6 +1023,15 @@ def _validate_attempt_created(
             attempt_id=attempt.attempt_id,
             command_id=event.command_id,
             metadata={"priorAttemptId": nonterminal_prior[0].attempt_id},
+        )
+    latest_attempt = _latest_attempt(attempts)
+    if latest_attempt is not None and latest_attempt.state == AttemptState.SUCCEEDED:
+        raise LedgerReplayError(
+            "A succeeded attempt must be finalized by completing the run before another attempt can be created.",
+            run_id=event.run_id,
+            attempt_id=latest_attempt.attempt_id,
+            command_id=event.command_id,
+            metadata={"priorAttemptId": latest_attempt.attempt_id},
         )
     if attempt.state != AttemptState.STARTING:
         raise LedgerReplayError(

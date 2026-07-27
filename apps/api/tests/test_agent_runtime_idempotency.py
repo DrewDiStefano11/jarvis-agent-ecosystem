@@ -13,11 +13,15 @@ from app.agent_runtime.errors import (
 )
 from app.models.agent_runtime import (
     AbandonAttemptCommand,
+    BeginAttemptCommand,
+    ClaimAgentRunCommand,
     FailAttemptCommand,
     QueueAgentRunCommand,
     RecordCheckpointCommand,
     RequestCancellationCommand,
     RequestRecoveryPlanCommand,
+    RuntimeCommandResult,
+    StartAttemptCommand,
     TimeoutAttemptCommand,
 )
 from tests.agent_runtime_testkit import create_run, make_service, prepare_running_run, ts
@@ -663,11 +667,6 @@ def test_unexplained_snapshot_ledger_mismatch_still_fails_closed() -> None:
 def test_command_processing_does_not_invoke_fallback_clock_when_timestamp_is_present() -> None:
     from app.agent_runtime.repository import InMemoryAgentRuntimeRepository
     from app.agent_runtime.service import AgentRuntimeService
-    from app.models.agent_runtime import (
-        BeginAttemptCommand,
-        ClaimAgentRunCommand,
-        StartAttemptCommand,
-    )
     from tests.agent_runtime_testkit import SequenceFactory
 
     def raising_clock():
@@ -787,7 +786,6 @@ def test_command_processing_does_not_invoke_fallback_clock_when_timestamp_is_pre
 def test_processed_record_fallback_clock_is_called_only_when_timestamp_is_absent() -> None:
     from app.agent_runtime.repository import InMemoryAgentRuntimeRepository
     from app.agent_runtime.service import AgentRuntimeService
-    from app.models.agent_runtime import RuntimeCommandResult
     from tests.agent_runtime_testkit import SequenceFactory
 
     calls = {"count": 0}

@@ -291,19 +291,26 @@ class AgentRuntimeService:
                 attempt_id=snapshot.active_attempt_id,
                 command_id=command.command_id,
             )
-        if aggregate.attempts and aggregate.attempts[-1].state not in {
-            AttemptState.CANCELLED,
-            AttemptState.SUCCEEDED,
-            AttemptState.FAILED,
-            AttemptState.TIMED_OUT,
-            AttemptState.ABANDONED,
-        }:
-            raise InvalidAttemptStateError(
-                "A prior attempt must be terminal before another attempt can start.",
-                run_id=command.run_id,
-                attempt_id=aggregate.attempts[-1].attempt_id,
-                command_id=command.command_id,
-            )
+        if aggregate.attempts:
+            latest_attempt = aggregate.attempts[-1]
+            if latest_attempt.state == AttemptState.SUCCEEDED:
+                raise InvalidAttemptStateError(
+                    "A succeeded attempt must be finalized by completing the run before another attempt can start.",
+                    run_id=command.run_id,
+                    attempt_id=latest_attempt.attempt_id,
+                    command_id=command.command_id,
+                )
+            if latest_attempt.state not in {
+                AttemptState.FAILED,
+                AttemptState.TIMED_OUT,
+                AttemptState.ABANDONED,
+            }:
+                raise InvalidAttemptStateError(
+                    "A prior attempt must reach an eligible terminal recovery state before another attempt can start.",
+                    run_id=command.run_id,
+                    attempt_id=latest_attempt.attempt_id,
+                    command_id=command.command_id,
+                )
         if len(aggregate.attempts) >= snapshot.specification.maximum_permitted_attempts:
             raise AttemptLimitExceededError(
                 run_id=command.run_id,

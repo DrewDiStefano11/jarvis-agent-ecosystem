@@ -110,6 +110,8 @@ Rules:
 - attempt numbers never repeat inside one run
 - only one attempt may be active at a time
 - a terminal attempt never becomes active again
+- only failed, timed-out, and abandoned terminal outcomes are eligible for another attempt through the documented recovery flow
+- a succeeded attempt is final for that run and must be followed by `complete_run`, not another attempt
 - the runtime never auto-retries; a future orchestrator must request another attempt explicitly
 - failed, timed-out, and abandoned attempt records preserve the resolved authoritative `attempt_id` in both history and snapshot failure state, even when the command omitted it
 
@@ -244,6 +246,8 @@ Each runtime event envelope includes:
 - optional `causation_id`
 - safe payload
 - safe metadata
+
+When an event payload section corresponds to a required command field such as `executor_reference`, replay validates it with the same required-identifier rules rather than treating it as optional.
 
 Rules:
 
