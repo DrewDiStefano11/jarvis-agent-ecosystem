@@ -13,6 +13,7 @@ from app.db.models import (
     AgentPermissionAssignmentRow,
     AgentRoleAssignmentRow,
     IdentityAuditEventRow,
+    ResourceAccessPolicyRow,
     SupervisorRelationshipRow,
     TeamMembershipRow,
 )
@@ -22,6 +23,7 @@ from app.main import create_app
 from app.models.identity import (
     AssignPermissionRequest,
     AssignRoleRequest,
+    AuthorizationDecision,
     CreateAgentRequest,
     CreatePermissionRequest,
     CreateRankRequest,
@@ -202,6 +204,41 @@ def test_resource_policy_allow_cannot_override_explicit_denial(service):
     assert decision.reason_code == "explicit_denial"
     assert decision.permission_key == "office.entry"
     assert decision.matched_denials
+
+
+@pytest.mark.parametrize("effect", ["allow", "deny"])
+def test_resource_policy_cannot_override_evaluation_failure(service, monkeypatch, effect):
+    actor = agent(service, f"agent.evaluation.failure.{effect}")
+    service.transition(actor.id, "active")
+    service.create_resource_policy(
+        ResourcePolicyRequest(
+            subject_type="all",
+            resource_type="door",
+            resource_id="door-failed",
+            action="enter",
+            effect=effect,
+        )
+    )
+    failed = AuthorizationDecision(
+        allowed=False,
+        permission_key="door.enter",
+        actor_agent_id=actor.id,
+        resource_type="door",
+        resource_id="door-failed",
+        matched_grants=[],
+        matched_denials=[],
+        decisive_rule="fail_closed",
+        reason_code="evaluation_failed",
+    )
+    monkeypatch.setattr(service, "check_permission", lambda *args, **kwargs: failed)
+
+    decision = service.check_resource_access(actor.id, "door", "door-failed", "enter")
+
+    assert decision == failed
+    assert not decision.allowed
+    assert decision.decisive_rule == "fail_closed"
+    assert decision.reason_code == "evaluation_failed"
+    assert decision.matched_grants == []
 
 
 @pytest.mark.parametrize("subject_type", ["agent", "role", "rank", "team", "all"])
@@ -476,6 +513,233 @@ def test_duplicate_global_role_assignment_is_structured_and_atomic(service):
     with service.sessions() as session:
         assert len(list(session.scalars(select(AgentRoleAssignmentRow)))) == 1
         assert len(list(session.scalars(select(IdentityAuditEventRow)))) == before
+
+
+@pytest.mark.parametrize(("scope_type", "scope_id"), [("global", None), ("resource", "artifact-a")])
+def test_active_role_assignment_blocks_overlap_atomically(service, scope_type, scope_id):
+    actor = agent(service, f"agent.role.active.{scope_type}")
+    role = service.create_definition(
+        "role",
+        CreateRoleRequest(
+            stable_key=f"role.active.{scope_type}",
+            display_name="Active",
+            role_scope=scope_type,
+        ),
+    )
+    request = AssignRoleRequest(role_id=role.id, scope_type=scope_type, scope_id=scope_id)
+    service.assign_role(actor.id, request)
+    before = len(service.audits(0, 100))
+    with pytest.raises(DomainError) as error:
+        service.assign_role(actor.id, request)
+    assert error.value.code == "DUPLICATE_ASSIGNMENT"
+    with service.sessions() as session:
+        assert len(list(session.scalars(select(AgentRoleAssignmentRow)))) == 1
+        assert len(list(session.scalars(select(IdentityAuditEventRow)))) == before
+
+
+@pytest.mark.parametrize(("scope_type", "scope_id"), [("global", None), ("resource", "artifact-a")])
+def test_expired_and_revoked_role_assignments_can_be_renewed(service, scope_type, scope_id):
+    actor = agent(service, f"agent.role.renew.{scope_type}")
+    role = service.create_definition(
+        "role",
+        CreateRoleRequest(
+            stable_key=f"role.renew.{scope_type}",
+            display_name="Renewable",
+            role_scope=scope_type,
+        ),
+    )
+    base = {"role_id": role.id, "scope_type": scope_type, "scope_id": scope_id}
+    past = datetime.now(UTC) - timedelta(days=4)
+    expired = service.assign_role(
+        actor.id,
+        AssignRoleRequest(**base, starts_at=past, expires_at=past + timedelta(days=1)),
+    )
+    active = service.assign_role(actor.id, AssignRoleRequest(**base))
+    with service.sessions.begin() as session:
+        session.get(AgentRoleAssignmentRow, active.id).revoked_at = datetime.now(UTC)
+    renewed = service.assign_role(actor.id, AssignRoleRequest(**base))
+
+    assert len({expired.id, active.id, renewed.id}) == 3
+    with service.sessions() as session:
+        rows = list(session.scalars(select(AgentRoleAssignmentRow)))
+        assert len(rows) == 3
+        assert session.get(AgentRoleAssignmentRow, expired.id)
+        assert session.get(AgentRoleAssignmentRow, active.id)
+
+
+@pytest.mark.parametrize(("scope_type", "scope_id"), [("global", None), ("resource", "artifact-a")])
+def test_overlapping_role_assignments_are_structured_and_atomic(service, scope_type, scope_id):
+    actor = agent(service, f"agent.role.overlap.{scope_type}")
+    role = service.create_definition(
+        "role",
+        CreateRoleRequest(
+            stable_key=f"role.overlap.{scope_type}",
+            display_name="Overlapping",
+            role_scope=scope_type,
+        ),
+    )
+    base = {"role_id": role.id, "scope_type": scope_type, "scope_id": scope_id}
+    future = datetime.now(UTC) + timedelta(days=2)
+    service.assign_role(
+        actor.id,
+        AssignRoleRequest(**base, starts_at=future, expires_at=future + timedelta(days=2)),
+    )
+    before = len(service.audits(0, 100))
+    with pytest.raises(DomainError) as overlap:
+        service.assign_role(
+            actor.id,
+            AssignRoleRequest(
+                **base,
+                starts_at=future + timedelta(days=1),
+                expires_at=future + timedelta(days=3),
+            ),
+        )
+    assert overlap.value.code == "DUPLICATE_ASSIGNMENT"
+    assert service.assign_role(
+        actor.id,
+        AssignRoleRequest(
+            **base,
+            starts_at=future + timedelta(days=2),
+            expires_at=future + timedelta(days=3),
+        ),
+    )
+    service.assign_role(actor.id, AssignRoleRequest(**base, starts_at=future + timedelta(days=4)))
+    with pytest.raises(DomainError) as open_ended:
+        service.assign_role(
+            actor.id,
+            AssignRoleRequest(
+                **base,
+                starts_at=future + timedelta(days=5),
+                expires_at=future + timedelta(days=6),
+            ),
+        )
+    assert open_ended.value.code == "DUPLICATE_ASSIGNMENT"
+    with service.sessions() as session:
+        assert len(list(session.scalars(select(AgentRoleAssignmentRow)))) == 3
+        assert len(list(session.scalars(select(IdentityAuditEventRow)))) == before + 2
+
+
+def test_role_assignments_keep_scopes_and_roles_independent(service):
+    actor = agent(service, "agent.role.independent")
+    roles = [
+        service.create_definition(
+            "role",
+            CreateRoleRequest(
+                stable_key=f"role.independent.{key}",
+                display_name=key,
+                role_scope="resource",
+            ),
+        )
+        for key in ("one", "two")
+    ]
+    service.assign_role(
+        actor.id,
+        AssignRoleRequest(role_id=roles[0].id, scope_type="resource", scope_id="artifact-a"),
+    )
+    service.assign_role(
+        actor.id,
+        AssignRoleRequest(role_id=roles[0].id, scope_type="resource", scope_id="artifact-b"),
+    )
+    service.assign_role(
+        actor.id,
+        AssignRoleRequest(role_id=roles[1].id, scope_type="resource", scope_id="artifact-a"),
+    )
+    with service.sessions() as session:
+        assert len(list(session.scalars(select(AgentRoleAssignmentRow)))) == 3
+
+
+def test_attribution_agents_are_validated_before_persistence(service):
+    target = agent(service, "agent.attribution.target")
+    service.transition(target.id, "active")
+    supervisor = agent(service, "agent.attribution.supervisor")
+    attribution = agent(service, "agent.attribution.valid")
+    role = service.create_definition(
+        "role",
+        CreateRoleRequest(
+            stable_key="role.attribution", display_name="Attributed", role_scope="global"
+        ),
+    )
+    permission = service.create_definition(
+        "permission",
+        CreatePermissionRequest(
+            stable_key="artifact.attribution",
+            display_name="Attributed",
+            resource_type="artifact",
+            action="use",
+        ),
+    )
+    app = create_app(database_url=str(service.sessions.kw["bind"].url))
+    requests = [
+        (
+            f"/api/identity/agents/{target.id}/roles",
+            {"role_id": role.id, "assigned_by": "agent-missing"},
+        ),
+        (
+            f"/api/identity/agents/{target.id}/permissions",
+            {
+                "permission_id": permission.id,
+                "effect": "allow",
+                "assigned_by": "agent-missing",
+            },
+        ),
+        (
+            "/api/identity/access-policies",
+            {
+                "subject_type": "all",
+                "resource_type": "artifact",
+                "resource_id": "artifact-a",
+                "action": "use",
+                "effect": "allow",
+                "created_by": "agent-missing",
+            },
+        ),
+        (
+            "/api/identity/hierarchy",
+            {
+                "supervisor_agent_id": supervisor.id,
+                "subordinate_agent_id": target.id,
+                "relationship_type": "secondary",
+                "assigned_by": "agent-missing",
+            },
+        ),
+    ]
+    before = len(service.audits(0, 100))
+    with TestClient(app) as client:
+        responses = [client.post(path, json=body) for path, body in requests]
+    assert {response.status_code for response in responses} == {404}
+    assert {response.json()["error"]["code"] for response in responses} == {"AGENT_NOT_FOUND"}
+    with service.sessions() as session:
+        assert not list(session.scalars(select(AgentRoleAssignmentRow)))
+        assert not list(session.scalars(select(AgentPermissionAssignmentRow)))
+        assert not list(session.scalars(select(ResourceAccessPolicyRow)))
+        assert not list(session.scalars(select(SupervisorRelationshipRow)))
+        assert len(list(session.scalars(select(IdentityAuditEventRow)))) == before
+
+    assert service.assign_role(
+        target.id, AssignRoleRequest(role_id=role.id, assigned_by=attribution.id)
+    )
+    assert service.assign_permission(
+        target.id, AssignPermissionRequest(permission_id=permission.id, effect="allow")
+    )
+    assert service.create_resource_policy(
+        ResourcePolicyRequest(
+            subject_type="all",
+            resource_type="artifact",
+            resource_id="artifact-a",
+            action="use",
+            effect="allow",
+            created_by=attribution.id,
+        )
+    )
+    assert service.add_supervisor(relationship(supervisor, target, assigned_by=None))
+
+    transition_target = agent(service, "agent.attribution.transition")
+    before_transition = len(service.audits(0, 100))
+    with pytest.raises(DomainError) as transition_error:
+        service.transition(transition_target.id, "active", actor="agent-missing")
+    assert transition_error.value.code == "AGENT_NOT_FOUND"
+    assert service.get_agent(transition_target.id).lifecycle_state == "provisioned"
+    assert len(service.audits(0, 100)) == before_transition
 
 
 def relationship(supervisor, subordinate, kind="secondary", **times):

@@ -176,12 +176,13 @@ class AgentRoleAssignmentRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
-        UniqueConstraint("agent_id", "role_id", "scope_type", "scope_id"),
+        UniqueConstraint("agent_id", "role_id", "scope_type", "scope_id", "starts_at"),
         Index(
             "uq_identity_agent_roles_global",
             "agent_id",
             "role_id",
             "scope_type",
+            "starts_at",
             unique=True,
             sqlite_where=(scope_type == "global") & scope_id.is_(None),
             postgresql_where=(scope_type == "global") & scope_id.is_(None),

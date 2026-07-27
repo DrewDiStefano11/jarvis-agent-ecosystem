@@ -299,7 +299,7 @@ def upgrade() -> None:
             ["identity_roles.id"],
         ),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint("agent_id", "role_id", "scope_type", "scope_id"),
+        sa.UniqueConstraint("agent_id", "role_id", "scope_type", "scope_id", "starts_at"),
     )
     with op.batch_alter_table("identity_agent_roles", schema=None) as batch_op:
         batch_op.create_index(
@@ -310,7 +310,7 @@ def upgrade() -> None:
         )
         batch_op.create_index(
             "uq_identity_agent_roles_global",
-            ["agent_id", "role_id", "scope_type"],
+            ["agent_id", "role_id", "scope_type", "starts_at"],
             unique=True,
             sqlite_where=sa.text("scope_type = 'global' AND scope_id IS NULL"),
             postgresql_where=sa.text("scope_type = 'global' AND scope_id IS NULL"),

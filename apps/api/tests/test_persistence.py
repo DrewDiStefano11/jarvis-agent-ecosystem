@@ -105,6 +105,22 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     ]
     role_indexes = {item["name"]: item for item in inspector.get_indexes("identity_agent_roles")}
     assert role_indexes["uq_identity_agent_roles_global"]["unique"] == 1
+    assert role_indexes["uq_identity_agent_roles_global"]["column_names"] == [
+        "agent_id",
+        "role_id",
+        "scope_type",
+        "starts_at",
+    ]
+    assert (
+        "agent_id",
+        "role_id",
+        "scope_type",
+        "scope_id",
+        "starts_at",
+    ) in {
+        tuple(item["column_names"])
+        for item in inspector.get_unique_constraints("identity_agent_roles")
+    }
     assert not inspector.get_unique_constraints("identity_supervisor_relationships")
     assert "ck_identity_agent_permissions_resource_scope" in {
         item["name"] for item in inspector.get_check_constraints("identity_agent_permissions")

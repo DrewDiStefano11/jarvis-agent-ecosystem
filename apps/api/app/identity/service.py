@@ -81,6 +81,10 @@ class IdentityService:
             raise DomainError("AGENT_NOT_FOUND", "Agent identity was not found.", 404)
         return row
 
+    def _validate_attribution(self, session: Session, agent_id: str | None) -> None:
+        if agent_id is not None:
+            self._agent(session, agent_id)
+
     def create_agent(self, data) -> IdentityAgentRow:
         with UnitOfWork(self.sessions) as uow:
             assert uow.session
@@ -151,6 +155,7 @@ class IdentityService:
             row = self._agent(uow.session, agent_id)
             if target == row.lifecycle_state:
                 return row
+            self._validate_attribution(uow.session, actor)
             if target not in TRANSITIONS[row.lifecycle_state]:
                 raise DomainError(
                     "INVALID_LIFECYCLE_TRANSITION",
@@ -233,11 +238,22 @@ class IdentityService:
                     "Assignment scope must match the role's declared scope.",
                     409,
                 )
+            self._validate_attribution(uow.session, data.assigned_by)
+            starts_at = data.starts_at or now()
+            expires_at = data.expires_at
+            infinity = datetime.max.replace(tzinfo=UTC)
             duplicate = uow.session.scalar(
                 select(AgentRoleAssignmentRow.id).where(
                     AgentRoleAssignmentRow.agent_id == agent_id,
                     AgentRoleAssignmentRow.role_id == data.role_id,
                     AgentRoleAssignmentRow.scope_type == data.scope_type,
+                    AgentRoleAssignmentRow.revoked_at.is_(None),
+                    AgentRoleAssignmentRow.starts_at
+                    < (expires_at if expires_at is not None else infinity),
+                    or_(
+                        AgentRoleAssignmentRow.expires_at.is_(None),
+                        AgentRoleAssignmentRow.expires_at > starts_at,
+                    ),
                     AgentRoleAssignmentRow.scope_id.is_(None)
                     if data.scope_id is None
                     else AgentRoleAssignmentRow.scope_id == data.scope_id,
@@ -248,7 +264,7 @@ class IdentityService:
                     "DUPLICATE_ASSIGNMENT", "Equivalent assignment already exists.", 409
                 )
             values = data.model_dump()
-            values["starts_at"] = values["starts_at"] or now()
+            values["starts_at"] = starts_at
             row = AgentRoleAssignmentRow(id=uid("arole"), agent_id=agent_id, **values)
             uow.session.add(row)
             self._audit(
@@ -291,6 +307,7 @@ class IdentityService:
                 )
             if not permission:
                 raise DomainError("PERMISSION_NOT_FOUND", "Permission was not found.", 404)
+            self._validate_attribution(uow.session, data.assigned_by)
             starts_at = data.starts_at or now()
             expires_at = data.expires_at
             infinity = datetime.max.replace(tzinfo=UTC)
@@ -476,6 +493,7 @@ class IdentityService:
                         "Retired agents cannot enter hierarchy relationships.",
                         409,
                     )
+            self._validate_attribution(uow.session, data.assigned_by)
             starts_at = data.starts_at or now()
             expires_at = data.expires_at
             infinity = datetime.max.replace(tzinfo=UTC)
@@ -641,6 +659,7 @@ class IdentityService:
     def create_resource_policy(self, data):
         with UnitOfWork(self.sessions) as uow:
             assert uow.session
+            self._validate_attribution(uow.session, data.created_by)
             values = data.model_dump()
             values["starts_at"] = values["starts_at"] or now()
             row = ResourceAccessPolicyRow(id=uid("policy"), **values)
@@ -669,6 +688,8 @@ class IdentityService:
             )
             permission_key = permission.stable_key if permission else f"{resource_type}.{action}"
             base = self.check_permission(actor_id, permission_key, resource_type, resource_id)
+            if base.reason_code == "evaluation_failed":
+                return base
             if not actor or actor.lifecycle_state != "active" or not actor.is_enabled:
                 return base
             t = now()
