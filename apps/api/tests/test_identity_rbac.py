@@ -243,6 +243,57 @@ def test_resource_policy_cannot_override_evaluation_failure(service, monkeypatch
     assert decision.matched_grants == []
 
 
+def test_resource_policy_cannot_override_concurrent_inactive_decision(service, monkeypatch):
+    actor = agent(service, "agent.concurrent.inactive")
+    service.transition(actor.id, "active")
+    service.create_resource_policy(
+        ResourcePolicyRequest(
+            subject_type="all",
+            resource_type="door",
+            resource_id="door-concurrent",
+            action="enter",
+            effect="allow",
+        )
+    )
+    inactive = AuthorizationDecision(
+        allowed=False,
+        permission_key="door.enter",
+        actor_agent_id=actor.id,
+        resource_type="door",
+        resource_id="door-concurrent",
+        matched_grants=[],
+        matched_denials=[],
+        decisive_rule="actor_state",
+        reason_code="actor_inactive",
+    )
+    monkeypatch.setattr(service, "check_permission", lambda *args, **kwargs: inactive)
+
+    decision = service.check_resource_access(actor.id, "door", "door-concurrent", "enter")
+
+    assert decision == inactive
+    assert not decision.allowed
+    assert decision.decisive_rule == "actor_state"
+    assert decision.reason_code == "actor_inactive"
+    assert decision.matched_grants == []
+
+
+def test_resource_access_evaluator_fails_closed_when_outer_session_fails(service, monkeypatch):
+    def unavailable():
+        raise RuntimeError("database unavailable")
+
+    monkeypatch.setattr(service, "sessions", unavailable)
+
+    decision = service.check_resource_access("agent-unavailable", "artifact", "artifact-a", "use")
+
+    assert not decision.allowed
+    assert decision.permission_key == "artifact.use"
+    assert decision.actor_agent_id == "agent-unavailable"
+    assert decision.matched_grants == []
+    assert decision.matched_denials == []
+    assert decision.decisive_rule == "fail_closed"
+    assert decision.reason_code == "evaluation_failed"
+
+
 @pytest.mark.parametrize("subject_type", ["agent", "role", "rank", "team", "all"])
 def test_resource_policies_match_every_active_subject(service, subject_type):
     rank = service.create_definition(

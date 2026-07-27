@@ -696,6 +696,24 @@ class IdentityService:
     def check_resource_access(
         self, actor_id: str, resource_type: str, resource_id: str, action: str
     ) -> AuthorizationDecision:
+        try:
+            return self._check_resource_access(actor_id, resource_type, resource_id, action)
+        except Exception:
+            return AuthorizationDecision(
+                allowed=False,
+                permission_key=f"{resource_type}.{action}",
+                actor_agent_id=actor_id,
+                resource_type=resource_type,
+                resource_id=resource_id,
+                matched_grants=[],
+                matched_denials=[],
+                decisive_rule="fail_closed",
+                reason_code="evaluation_failed",
+            )
+
+    def _check_resource_access(
+        self, actor_id: str, resource_type: str, resource_id: str, action: str
+    ) -> AuthorizationDecision:
         with self.sessions() as s:
             actor = s.get(IdentityAgentRow, actor_id)
             permission = s.scalar(
@@ -707,7 +725,7 @@ class IdentityService:
             )
             permission_key = permission.stable_key if permission else f"{resource_type}.{action}"
             base = self.check_permission(actor_id, permission_key, resource_type, resource_id)
-            if base.reason_code == "evaluation_failed":
+            if base.reason_code in {"actor_inactive", "evaluation_failed"}:
                 return base
             if not actor or actor.lifecycle_state != "active" or not actor.is_enabled:
                 return base
