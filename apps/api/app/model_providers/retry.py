@@ -48,9 +48,10 @@ class RetryExecutor:
         *,
         request: ModelExecutionRequest,
         budget: BudgetTracker,
+        provider_name: str | None = None,
     ) -> T:
         for attempt in range(1, self.policy.maximum_attempts + 1):
-            budget.before_attempt(request)
+            budget.before_attempt(request, provider=provider_name)
             try:
                 return await operation()
             except ModelProviderError as exc:

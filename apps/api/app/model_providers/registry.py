@@ -54,9 +54,12 @@ class ProviderRegistry:
     def by_capability(self, capability: ModelCapability) -> list[ModelProvider]:
         return [provider for provider in self.list() if capability in provider.capabilities]
 
-    async def health(self) -> dict[str, ProviderHealth]:
+    async def health(
+        self, providers: Iterable[ModelProvider] | None = None
+    ) -> dict[str, ProviderHealth]:
+        selected = list(providers) if providers is not None else self.list()
         results = await asyncio.gather(
-            *(self._safe_health_check(provider) for provider in self.list())
+            *(self._safe_health_check(provider) for provider in selected)
         )
         return {result.provider: result for result in results}
 

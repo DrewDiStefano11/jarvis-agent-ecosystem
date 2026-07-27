@@ -4,13 +4,16 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
+import app.model_providers.ollama as ollama_module
+import app.model_providers.openai_compatible as openai_module
 from app.model_providers.budget import BudgetTracker, TaskBudget
-from app.model_providers.contracts import ModelExecutionRequest
+from app.model_providers.contracts import HealthStatus, ModelExecutionRequest
 from app.model_providers.errors import (
     AuthenticationError,
     InvalidModelRequestError,
     MalformedProviderResponseError,
     ModelUnavailableError,
+    ProviderExecutionDisabledError,
     ProviderUnavailableError,
     QuotaExhaustedError,
     RateLimitError,
@@ -25,10 +28,72 @@ from app.model_providers.openai_compatible import (
 from app.model_providers.retry import RetryExecutor, RetryPolicy
 
 
+@pytest.fixture(autouse=True)
+def allow_mocked_adapter_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    def allow_execution(**kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(ollama_module, "require_live_provider_execution", allow_execution)
+    monkeypatch.setattr(openai_module, "require_live_provider_execution", allow_execution)
+    monkeypatch.setattr(ollama_module, "provider_network_health_allowed", lambda: True)
+    monkeypatch.setattr(openai_module, "provider_network_health_allowed", lambda: True)
+
+
 def mock_client(
     handler: httpx.MockTransport, base_url: str = "https://provider.test/v1"
 ) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=handler, base_url=base_url)
+
+
+@pytest.mark.asyncio
+async def test_phase_policy_blocks_execution_and_remote_health_before_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.model_providers.policy import (
+        provider_network_health_allowed,
+        require_live_provider_execution,
+    )
+
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise AssertionError(f"phase gate allowed network request: {request.url}")
+
+    monkeypatch.setattr(
+        openai_module, "require_live_provider_execution", require_live_provider_execution
+    )
+    monkeypatch.setattr(
+        openai_module, "provider_network_health_allowed", provider_network_health_allowed
+    )
+    monkeypatch.setattr(
+        ollama_module, "require_live_provider_execution", require_live_provider_execution
+    )
+    monkeypatch.setattr(
+        ollama_module, "provider_network_health_allowed", provider_network_health_allowed
+    )
+    async with mock_client(httpx.MockTransport(handler)) as client:
+        remote = OpenAICompatibleProvider(
+            name="remote",
+            base_url="https://provider.test/v1",
+            api_key=SecretStr("fixture-only"),
+            default_model="model-a",
+            client=client,
+        )
+        with pytest.raises(ProviderExecutionDisabledError):
+            await remote.execute(ModelExecutionRequest(prompt="hello"))
+        remote_health = await remote.health_check()
+        availability = await remote.model_available("model-a")
+        local = OllamaProvider(default_model="qwen:4b", client=client)
+        with pytest.raises(ProviderExecutionDisabledError):
+            await local.execute(ModelExecutionRequest(prompt="hello"))
+        local_health = await local.health_check()
+
+    assert calls == 0
+    assert remote_health.status == HealthStatus.CONFIGURATION_ONLY
+    assert local_health.status == HealthStatus.CONFIGURATION_ONLY
+    assert availability is None
 
 
 @pytest.mark.asyncio
@@ -65,7 +130,9 @@ async def test_ollama_missing_model_and_malformed_content() -> None:
 
     async with mock_client(httpx.MockTransport(handler)) as client:
         provider = OllamaProvider(default_model="missing", client=client)
-        assert not (await provider.health_check()).healthy
+        health = await provider.health_check()
+        assert health.healthy
+        assert health.model_available is False
         with pytest.raises(MalformedProviderResponseError):
             await provider.execute(ModelExecutionRequest(prompt="hello"))
 

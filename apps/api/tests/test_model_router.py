@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
 from app.core.config import Settings
 from app.model_providers.base import ProviderBase
-from app.model_providers.budget import TaskBudget
+from app.model_providers.budget import ModelPricing, TaskBudget
 from app.model_providers.contracts import (
     HealthStatus,
     ModelCapability,
@@ -27,6 +28,7 @@ from app.model_providers.factory import (
     build_model_pricing,
     build_provider_registry,
 )
+from app.model_providers.ollama import OllamaProvider, is_loopback_endpoint
 from app.model_providers.registry import ProviderRegistry
 from app.model_providers.retry import RetryExecutor, RetryPolicy
 from app.model_providers.router import ModelRouter, RoutingRequirements
@@ -43,6 +45,9 @@ class FixtureProvider(ProviderBase):
         healthy: bool = True,
         capabilities: frozenset[ModelCapability] = frozenset({ModelCapability.CHAT}),
         outcomes: list[Exception | str] | None = None,
+        available_models: set[str] | None = None,
+        availability_unknown: bool = False,
+        health_log: list[str] | None = None,
     ) -> None:
         self.name = name
         self.default_model = f"{name}-model"
@@ -50,21 +55,41 @@ class FixtureProvider(ProviderBase):
         self.capabilities = capabilities
         self.is_healthy = healthy
         self.outcomes = list(outcomes or ["ok"])
+        self.available_models = available_models
+        self.availability_unknown = availability_unknown
+        self.health_log = health_log
         self.calls = 0
+        self.health_calls = 0
+        self.availability_calls: list[str] = []
+        self.executed_models: list[str | None] = []
 
     async def health_check(self) -> ProviderHealth:
+        self.health_calls += 1
+        if self.health_log is not None:
+            self.health_log.append(self.name)
         return ProviderHealth(
             provider=self.name,
             healthy=self.is_healthy,
             status=HealthStatus.HEALTHY if self.is_healthy else HealthStatus.UNAVAILABLE,
             latency_ms=0,
+            model_available=(
+                self.default_model in self.available_models
+                if self.available_models is not None
+                else None
+            ),
         )
 
     async def model_available(self, model: str) -> bool | None:
+        self.availability_calls.append(model)
+        if self.availability_unknown:
+            return None
+        if self.available_models is not None:
+            return model in self.available_models
         return model != "missing"
 
     async def execute(self, request: ModelExecutionRequest) -> ModelExecutionResponse:
         self.calls += 1
+        self.executed_models.append(request.model)
         outcome = self.outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
@@ -180,6 +205,195 @@ async def test_prefer_local_remote_policy_and_exact_fallback_order() -> None:
     assert result.routing_metadata["fallback_count"] == 1
 
 
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("http://127.0.0.1:11434", True),
+        ("http://localhost:11434", True),
+        ("http://[::1]:11434", True),
+        ("https://ollama.example.com", False),
+        ("http://192.168.1.50:11434", False),
+        ("http://localhost.example.com:11434", False),
+        ("http://host.docker.internal:11434", False),
+        ("http://ollama:11434", False),
+    ],
+)
+def test_ollama_locality_is_structural_and_conservative(url: str, expected: bool) -> None:
+    assert is_loopback_endpoint(url) is expected
+    assert OllamaProvider(base_url=url, default_model="model").is_local is expected
+
+
+@pytest.mark.asyncio
+async def test_remote_ollama_respects_allow_remote_without_network() -> None:
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise AssertionError(f"routing contacted remote Ollama: {request.url}")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        base_url="https://ollama.example.com",
+    ) as client:
+        provider = OllamaProvider(
+            base_url="https://ollama.example.com",
+            default_model="model",
+            client=client,
+        )
+        service = router(provider)
+        assert await service.eligible(request(), RoutingRequirements(allow_remote=False)) == []
+        assert await service.eligible(request(), RoutingRequirements(allow_remote=True)) == [
+            provider
+        ]
+    assert calls == 0
+
+
+@pytest.mark.asyncio
+async def test_static_policy_filters_before_deterministic_health_checks() -> None:
+    order: list[str] = []
+    eligible_first = FixtureProvider("eligible-first", health_log=order)
+    eligible_second = FixtureProvider("eligible-second", health_log=order)
+    remote = FixtureProvider("remote", local=False, health_log=order)
+    denied = FixtureProvider("denied", health_log=order)
+    outside = FixtureProvider("outside", health_log=order)
+    incapable = FixtureProvider(
+        "incapable",
+        capabilities=frozenset({ModelCapability.VISION}),
+        health_log=order,
+    )
+    service = router(
+        eligible_first,
+        remote,
+        denied,
+        outside,
+        incapable,
+        eligible_second,
+    )
+    candidates = await service.eligible(
+        request(),
+        RoutingRequirements(
+            provider_allowlist=frozenset({"eligible-first", "eligible-second", "incapable"}),
+            allow_remote=False,
+        ),
+    )
+    assert candidates == [eligible_first, eligible_second]
+    assert order == ["eligible-first", "eligible-second"]
+    assert remote.health_calls == 0
+    assert denied.health_calls == 0
+    assert outside.health_calls == 0
+    assert incapable.health_calls == 0
+
+    denied_only = FixtureProvider("denied-only")
+    permitted = FixtureProvider("permitted")
+    candidates = await router(denied_only, permitted).eligible(
+        request(),
+        RoutingRequirements(provider_denylist=frozenset({"denied-only"})),
+    )
+    assert candidates == [permitted]
+    assert denied_only.health_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_effective_model_precedence_and_availability() -> None:
+    preferred = FixtureProvider(
+        "provider",
+        available_models={"preferred-model", "request-model"},
+    )
+    service = router(preferred)
+    result = await service.execute(
+        request=request().model_copy(update={"model": "request-model"}),
+        requirements=RoutingRequirements(preferred_model="preferred-model"),
+        budget=TaskBudget(),
+    )
+    assert preferred.availability_calls == ["preferred-model"]
+    assert preferred.executed_models == ["preferred-model"]
+    assert result.routing_metadata["selected_model"] == "preferred-model"
+
+    request_override = FixtureProvider(
+        "request-override",
+        available_models={"request-model"},
+    )
+    result = await router(request_override).execute(
+        request=request().model_copy(update={"model": "request-model"}),
+        requirements=RoutingRequirements(),
+        budget=TaskBudget(),
+    )
+    assert request_override.availability_calls == ["request-model"]
+    assert request_override.executed_models == ["request-model"]
+    assert result.routing_metadata["selected_model"] == "request-model"
+
+
+@pytest.mark.asyncio
+async def test_unavailable_effective_model_and_service_are_skipped() -> None:
+    unavailable_model = FixtureProvider("model-missing", available_models=set())
+    service_down = FixtureProvider(
+        "service-down",
+        healthy=False,
+        available_models={"request-model"},
+    )
+    unknown = FixtureProvider("unknown", availability_unknown=True)
+    candidates = await router(unavailable_model, service_down, unknown).eligible(
+        request().model_copy(update={"model": "request-model"}),
+        RoutingRequirements(),
+    )
+    assert candidates == [unknown]
+    assert unavailable_model.availability_calls == ["request-model"]
+    assert service_down.availability_calls == []
+    assert unknown.availability_calls == ["request-model"]
+
+
+@pytest.mark.asyncio
+async def test_default_model_availability_and_fallback_models_are_provider_specific() -> None:
+    missing_default = FixtureProvider("missing-default", available_models=set())
+    assert await router(missing_default).eligible(request(), RoutingRequirements()) == []
+
+    first = FixtureProvider(
+        "first",
+        available_models={"first-model"},
+        outcomes=[
+            TransientProviderError("one", provider="first"),
+            TransientProviderError("two", provider="first"),
+        ],
+    )
+    second = FixtureProvider("second", available_models={"second-model"})
+    result = await router(first, second).execute(
+        request=request(),
+        requirements=RoutingRequirements(allow_fallback=True, maximum_fallbacks=1),
+        budget=TaskBudget(maximum_requests=3),
+    )
+    assert first.executed_models == ["first-model", "first-model"]
+    assert second.executed_models == ["second-model"]
+    assert result.routing_metadata["selected_model"] == "second-model"
+
+
+@pytest.mark.asyncio
+async def test_fallback_provider_requires_its_own_cost_pricing_before_execution() -> None:
+    first = FixtureProvider(
+        "first",
+        outcomes=[
+            TransientProviderError("one", provider="first"),
+            TransientProviderError("two", provider="first"),
+        ],
+    )
+    unpriced_fallback = FixtureProvider("unpriced-fallback")
+    with pytest.raises(BudgetExceededError) as raised:
+        await router(first, unpriced_fallback).execute(
+            request=request(),
+            requirements=RoutingRequirements(allow_fallback=True, maximum_fallbacks=1),
+            budget=TaskBudget(maximum_requests=3, maximum_cost_usd=1),
+            pricing={
+                "first-model": ModelPricing(
+                    input_per_million_usd=1,
+                    output_per_million_usd=1,
+                )
+            },
+        )
+    assert raised.value.provider == "unpriced-fallback"
+    assert raised.value.model == "unpriced-fallback-model"
+    assert unpriced_fallback.calls == 0
+
+
 @pytest.mark.asyncio
 async def test_retry_then_success_counts_requests_and_backoff() -> None:
     delays: list[float] = []
@@ -260,6 +474,7 @@ def test_configuration_defaults_validation_redaction_and_factory(
         monkeypatch.delenv(key, raising=False)
     defaults = Settings(_env_file=None)
     assert build_provider_registry(defaults).list() == []
+    assert not any("execution" in field for field in Settings.model_fields)
 
     monkeypatch.setenv("JARVIS_MODEL_OLLAMA_ENABLED", "true")
     assert [item.name for item in build_provider_registry(Settings(_env_file=None)).list()] == [

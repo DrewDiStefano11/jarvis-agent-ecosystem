@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ipaddress
 from time import perf_counter
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -17,11 +19,14 @@ from app.model_providers.contracts import (
 )
 from app.model_providers.errors import MalformedProviderResponseError, ModelProviderError
 from app.model_providers.http import translate_http_error
+from app.model_providers.policy import (
+    provider_network_health_allowed,
+    require_live_provider_execution,
+)
 
 
 class OllamaProvider(ProviderBase):
     provider_type = ProviderType.OLLAMA
-    is_local = True
 
     def __init__(
         self,
@@ -38,6 +43,7 @@ class OllamaProvider(ProviderBase):
     ) -> None:
         self.name = name
         self.base_url = base_url.rstrip("/")
+        self.is_local = is_loopback_endpoint(base_url)
         self.default_model = default_model
         self.timeout_seconds = timeout_seconds
         self.capabilities = capabilities
@@ -51,6 +57,12 @@ class OllamaProvider(ProviderBase):
 
     async def execute(self, request: ModelExecutionRequest) -> ModelExecutionResponse:
         model = request.model or self.default_model
+        require_live_provider_execution(
+            provider=self.name,
+            model=model,
+            task_id=request.task_id,
+            correlation_id=request.correlation_id,
+        )
         payload: dict[str, Any] = {
             "model": model,
             "messages": [
@@ -120,6 +132,15 @@ class OllamaProvider(ProviderBase):
 
     async def health_check(self) -> ProviderHealth:
         started = perf_counter()
+        if not provider_network_health_allowed():
+            return ProviderHealth(
+                provider=self.name,
+                healthy=True,
+                status=HealthStatus.CONFIGURATION_ONLY,
+                latency_ms=0,
+                model_available=None,
+                detail="network health disabled by current project phase",
+            )
         client, owned = self._client_or_new()
         try:
             response = await client.get("/api/tags")
@@ -129,7 +150,7 @@ class OllamaProvider(ProviderBase):
             available = self.default_model in models
             return ProviderHealth(
                 provider=self.name,
-                healthy=available,
+                healthy=True,
                 status=HealthStatus.HEALTHY if available else HealthStatus.DEGRADED,
                 latency_ms=(perf_counter() - started) * 1000,
                 model_available=available,
@@ -161,6 +182,8 @@ class OllamaProvider(ProviderBase):
                 await client.aclose()
 
     async def model_available(self, model: str) -> bool | None:
+        if not provider_network_health_allowed():
+            return None
         client, owned = self._client_or_new()
         try:
             response = await client.get("/api/tags")
@@ -199,3 +222,16 @@ def _model_names(body: object, *, provider: str, model: str) -> set[str]:
             model=model,
         )
     return {item["name"] for item in models}
+
+
+def is_loopback_endpoint(base_url: str) -> bool:
+    hostname = urlsplit(base_url).hostname
+    if hostname is None:
+        return False
+    normalized = hostname.rstrip(".").lower()
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False

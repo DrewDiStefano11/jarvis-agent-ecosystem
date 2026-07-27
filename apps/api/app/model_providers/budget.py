@@ -45,7 +45,20 @@ class BudgetTracker:
         self.pricing = pricing or {}
         self.usage = BudgetUsage()
 
-    def before_attempt(self, request: ModelExecutionRequest) -> None:
+    def before_attempt(
+        self, request: ModelExecutionRequest, *, provider: str | None = None
+    ) -> None:
+        if self.budget.maximum_cost_usd is not None and (
+            request.model is None or request.model not in self.pricing
+        ):
+            raise BudgetExceededError(
+                "cost budget requires explicit pricing for the routed model",
+                provider=provider,
+                model=request.model,
+                task_id=request.task_id,
+                correlation_id=request.correlation_id,
+                metadata={"reason": "pricing_unavailable"},
+            )
         if self.usage.requests >= self.budget.maximum_requests:
             logger.info(
                 "model budget exceeded category=request task_id=%s correlation_id=%s",
@@ -120,6 +133,15 @@ class BudgetTracker:
         self.usage.output_tokens += output_tokens
         self.usage.total_tokens += total_tokens or 0
         pricing = self.pricing.get(response.model)
+        if self.budget.maximum_cost_usd is not None and pricing is None:
+            raise BudgetExceededError(
+                "cost budget cannot account for the provider response model",
+                provider=response.provider,
+                model=response.model,
+                task_id=response.task_id,
+                correlation_id=response.correlation_id,
+                metadata={"reason": "response_model_pricing_unavailable"},
+            )
         cost = None
         if pricing and response.input_tokens is not None and response.output_tokens is not None:
             cost = (

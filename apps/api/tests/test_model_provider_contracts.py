@@ -98,13 +98,15 @@ def test_budget_counts_requests_preflight_tokens_and_cost() -> None:
         ),
         {"fixture-model": ModelPricing(input_per_million_usd=10, output_per_million_usd=20)},
     )
-    tracker.before_attempt(request(max_output_tokens=5))
+    tracker.before_attempt(request(model="fixture-model", max_output_tokens=5), provider="fixture")
     cost = tracker.record(response())
     assert tracker.usage.requests == 1
     assert tracker.usage.total_tokens == 5
     assert cost == pytest.approx(0.00007)
     with pytest.raises(BudgetExceededError) as raised:
-        tracker.before_attempt(request(max_output_tokens=4))
+        tracker.before_attempt(
+            request(model="fixture-model", max_output_tokens=4), provider="fixture"
+        )
     assert raised.value.task_id == "task-1"
     assert raised.value.correlation_id == "corr-1"
 
@@ -121,3 +123,44 @@ def test_unknown_usage_is_not_treated_as_zero() -> None:
                 usage_quality=UsageQuality.UNKNOWN,
             )
         )
+
+
+def test_cost_budget_fails_closed_for_missing_pricing_and_response_alias() -> None:
+    unpriced = BudgetTracker(TaskBudget(maximum_requests=1, maximum_cost_usd=1))
+    with pytest.raises(BudgetExceededError) as preflight:
+        unpriced.before_attempt(request(model="vendor/model-latest"), provider="remote")
+    assert preflight.value.provider == "remote"
+    assert preflight.value.model == "vendor/model-latest"
+    assert preflight.value.metadata["reason"] == "pricing_unavailable"
+
+    no_cost_limit = BudgetTracker(TaskBudget(maximum_requests=1))
+    no_cost_limit.before_attempt(request(model="vendor/model-latest"), provider="remote")
+
+    priced = BudgetTracker(
+        TaskBudget(maximum_requests=1, maximum_cost_usd=1),
+        {
+            "vendor/model-latest": ModelPricing(
+                input_per_million_usd=1,
+                output_per_million_usd=1,
+            )
+        },
+    )
+    priced.before_attempt(request(model="vendor/model-latest"), provider="remote")
+    with pytest.raises(BudgetExceededError) as alias:
+        priced.record(response(provider="remote", model="vendor/model-2026-07-01"))
+    assert alias.value.metadata["reason"] == "response_model_pricing_unavailable"
+
+
+def test_configured_cost_pricing_enforces_cap() -> None:
+    tracker = BudgetTracker(
+        TaskBudget(maximum_requests=1, maximum_cost_usd=0.000001),
+        {
+            "fixture-model": ModelPricing(
+                input_per_million_usd=10,
+                output_per_million_usd=20,
+            )
+        },
+    )
+    tracker.before_attempt(request(model="fixture-model"), provider="fixture")
+    with pytest.raises(BudgetExceededError, match="cost budget exceeded"):
+        tracker.record(response())

@@ -23,6 +23,10 @@ from app.model_providers.errors import (
     ProviderConfigurationError,
 )
 from app.model_providers.http import translate_http_error
+from app.model_providers.policy import (
+    provider_network_health_allowed,
+    require_live_provider_execution,
+)
 
 
 class HealthCheckStrategy(StrEnum):
@@ -82,6 +86,12 @@ class OpenAICompatibleProvider(ProviderBase):
 
     async def execute(self, request: ModelExecutionRequest) -> ModelExecutionResponse:
         model = request.model or self.default_model
+        require_live_provider_execution(
+            provider=self.name,
+            model=model,
+            task_id=request.task_id,
+            correlation_id=request.correlation_id,
+        )
         payload: dict[str, Any] = {
             "model": model,
             "messages": [
@@ -167,6 +177,15 @@ class OpenAICompatibleProvider(ProviderBase):
 
     async def health_check(self) -> ProviderHealth:
         started = perf_counter()
+        if not provider_network_health_allowed():
+            return ProviderHealth(
+                provider=self.name,
+                healthy=True,
+                status=HealthStatus.CONFIGURATION_ONLY,
+                latency_ms=0,
+                model_available=None,
+                detail="network health disabled by current project phase",
+            )
         if self.health_strategy == HealthCheckStrategy.CONFIGURATION:
             return ProviderHealth(
                 provider=self.name,
@@ -211,7 +230,7 @@ class OpenAICompatibleProvider(ProviderBase):
                 available = self.default_model in {item["id"] for item in data}
             return ProviderHealth(
                 provider=self.name,
-                healthy=available is not False,
+                healthy=True,
                 status=HealthStatus.HEALTHY if available is not False else HealthStatus.DEGRADED,
                 latency_ms=(perf_counter() - started) * 1000,
                 model_available=available,
@@ -235,6 +254,32 @@ class OpenAICompatibleProvider(ProviderBase):
                 error_category=type(error).__name__,
                 detail=error.message,
             )
+        finally:
+            if owned:
+                await client.aclose()
+
+    async def model_available(self, model: str) -> bool | None:
+        if not provider_network_health_allowed():
+            return None
+        if self.health_strategy != HealthCheckStrategy.MODELS:
+            return None
+        client, owned = self._client_or_new()
+        try:
+            response = await client.get(
+                "models", headers=self._headers() if self._client is not None else None
+            )
+            response.raise_for_status()
+            body = response.json()
+            if not isinstance(body, dict) or not isinstance(body.get("data"), list):
+                return None
+            model_ids = {
+                item["id"]
+                for item in body["data"]
+                if isinstance(item, dict) and isinstance(item.get("id"), str)
+            }
+            return model in model_ids
+        except (httpx.HTTPError, ValueError, TypeError):
+            return None
         finally:
             if owned:
                 await client.aclose()

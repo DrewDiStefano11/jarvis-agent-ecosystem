@@ -97,5 +97,9 @@ class ProviderConfigurationError(ModelProviderError):
     pass
 
 
+class ProviderExecutionDisabledError(ProviderConfigurationError):
+    pass
+
+
 class TransientProviderError(ModelProviderError):
     retryable = True

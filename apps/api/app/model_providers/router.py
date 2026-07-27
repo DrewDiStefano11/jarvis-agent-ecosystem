@@ -16,6 +16,7 @@ from app.model_providers.errors import (
     BudgetExceededError,
     InvalidModelRequestError,
     ModelProviderError,
+    ProviderExecutionDisabledError,
     QuotaExhaustedError,
     UnknownProviderError,
 )
@@ -64,7 +65,9 @@ class ModelRouter:
         providers = self.registry.list()
         if requirements.requested_provider:
             requested = self.registry.get(requirements.requested_provider)
-            providers = [requested] + [item for item in providers if item is not requested]
+            providers = [requested]
+            if requirements.allow_fallback:
+                providers += [item for item in self.registry.list() if item is not requested]
         filtered = [
             provider
             for provider in providers
@@ -76,16 +79,17 @@ class ModelRouter:
             and provider.name not in requirements.provider_denylist
             and (requirements.allow_remote or provider.is_local)
         ]
-        health = await self.registry.health()
+        health = await self.registry.health(filtered)
         filtered = [provider for provider in filtered if health[provider.name].healthy]
-        if requirements.preferred_model:
-            availability = {
-                provider.name: await provider.model_available(requirements.preferred_model)
-                for provider in filtered
-            }
-            filtered = [
-                provider for provider in filtered if availability[provider.name] is not False
-            ]
+        available: list[ModelProvider] = []
+        for provider in filtered:
+            routed_model = requirements.preferred_model or request.model or provider.default_model
+            known = health[provider.name].model_available
+            if routed_model != provider.default_model or known is None:
+                known = await provider.model_available(routed_model)
+            if known is not False:
+                available.append(provider)
+        filtered = available
         if requirements.requested_provider:
             requested = requirements.requested_provider
             requested_items = [provider for provider in filtered if provider.name == requested]
@@ -133,6 +137,7 @@ class ModelRouter:
                     ),
                     request=routed_request,
                     budget=tracker,
+                    provider_name=provider.name,
                 )
                 response.estimated_cost_usd = tracker.record(response)
                 response.routing_metadata = {
@@ -159,7 +164,13 @@ class ModelRouter:
                     exc.retryable,
                 )
                 if isinstance(
-                    exc, (AuthenticationError, InvalidModelRequestError, BudgetExceededError)
+                    exc,
+                    (
+                        AuthenticationError,
+                        InvalidModelRequestError,
+                        BudgetExceededError,
+                        ProviderExecutionDisabledError,
+                    ),
                 ):
                     raise
                 if isinstance(exc, QuotaExhaustedError) and not requirements.allow_quota_fallback:
