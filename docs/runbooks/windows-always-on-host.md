@@ -19,3 +19,8 @@ Private Serve only; no Funnel; ACL recommendations.
 Private network boundary only; no application-level auth.
 ## Manual Verification
 Run Test-JarvisHost.ps1; verify process ownership; inspect logs.
+## Manual Windows Verification Checklist
+- Run Install-JarvisHost.ps1 with -WhatIf; confirm no mutation.
+- Verify scheduled tasks with Get-ScheduledTask.
+- Inspect PID metadata in %LOCALAPPDATA%\JarvisHost.
+- Confirm loopback bindings only.

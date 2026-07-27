@@ -11,3 +11,5 @@ Check endpoints; verify process identity; do not kill by port alone.
 Watchdog latch requires operator reset.
 ## Database restore
 Requires stop; uses Restore-JarvisDatabase.ps1 with rollback.
+## Rollback
+- Restore database from verified backup; rollback to safety backup on failure.

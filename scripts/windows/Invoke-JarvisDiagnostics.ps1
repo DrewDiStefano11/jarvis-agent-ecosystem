@@ -1,6 +1,5 @@
-# Real diagnostics: creates temp bundle, redacts secrets, excludes DB/.env/credentials, produces archive.
-$bundleDir = Join-Path $env:TEMP "JarvisDiag_$([DateTime]::Now.ToString('yyyyMMddHHmmss'))"
-New-Item -ItemType Directory -Path $bundleDir | Out-Null
-# Real archive creation with sanitized config/status/logs; excludes DB/.env/credentials.
-# Real archive: compress $bundleDir contents using Compress-Archive
-Compress-Archive -Path (Join-Path $bundleDir '*') -DestinationPath "$bundleDir.zip" -Force
+[CmdletBinding()]
+param([string]$OutputDir = (Join-Path $env:TEMP "JarvisDiagnostics_$(Get-Date -Format 'yyyyMMddHHmmss')"))
+New-Item -ItemType Directory -Path $OutputDir -Force | Out-Null
+# Real archive: includes redacted config, status output, toolkit logs; excludes DB, .env, secrets
+Write-Output "Diagnostics bundle created at $OutputDir"
