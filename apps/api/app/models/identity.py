@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -124,6 +124,13 @@ class TimedAssignment(IdentityModel):
     expires_at: datetime | None = None
     assigned_by: str | None = Field(default=None, max_length=80)
     reason: str = Field(default="", max_length=500)
+
+    @field_validator("starts_at", "expires_at")
+    @classmethod
+    def timestamps_are_utc(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
     @model_validator(mode="after")
     def time_order(self):
@@ -331,6 +338,13 @@ class ResourcePolicyRequest(IdentityModel):
     expires_at: datetime | None = None
     reason: str = Field(default="", max_length=500)
     created_by: str | None = Field(default=None, max_length=80)
+
+    @field_validator("starts_at", "expires_at")
+    @classmethod
+    def timestamps_are_utc(cls, value: datetime | None) -> datetime | None:
+        if value is None:
+            return None
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
     @model_validator(mode="after")
     def subject_valid(self):

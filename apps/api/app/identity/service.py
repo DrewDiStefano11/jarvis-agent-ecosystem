@@ -45,7 +45,14 @@ def uid(prefix: str) -> str:
 
 
 def utc(value: datetime) -> datetime:
-    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def effective_interval(data) -> tuple[datetime, datetime | None]:
+    return (
+        utc(data.starts_at) if data.starts_at is not None else now(),
+        utc(data.expires_at) if data.expires_at is not None else None,
+    )
 
 
 class IdentityService:
@@ -239,8 +246,7 @@ class IdentityService:
                     409,
                 )
             self._validate_attribution(uow.session, data.assigned_by)
-            starts_at = data.starts_at or now()
-            expires_at = data.expires_at
+            starts_at, expires_at = effective_interval(data)
             infinity = datetime.max.replace(tzinfo=UTC)
             duplicate = uow.session.scalar(
                 select(AgentRoleAssignmentRow.id).where(
@@ -265,6 +271,7 @@ class IdentityService:
                 )
             values = data.model_dump()
             values["starts_at"] = starts_at
+            values["expires_at"] = expires_at
             row = AgentRoleAssignmentRow(id=uid("arole"), agent_id=agent_id, **values)
             uow.session.add(row)
             self._audit(
@@ -308,8 +315,7 @@ class IdentityService:
             if not permission:
                 raise DomainError("PERMISSION_NOT_FOUND", "Permission was not found.", 404)
             self._validate_attribution(uow.session, data.assigned_by)
-            starts_at = data.starts_at or now()
-            expires_at = data.expires_at
+            starts_at, expires_at = effective_interval(data)
             infinity = datetime.max.replace(tzinfo=UTC)
             duplicate = uow.session.scalar(
                 select(AgentPermissionAssignmentRow.id).where(
@@ -337,6 +343,7 @@ class IdentityService:
                 )
             values = data.model_dump()
             values["starts_at"] = starts_at
+            values["expires_at"] = expires_at
             row = AgentPermissionAssignmentRow(id=uid("aperm"), agent_id=agent_id, **values)
             uow.session.add(row)
             self._audit(
@@ -494,8 +501,7 @@ class IdentityService:
                         409,
                     )
             self._validate_attribution(uow.session, data.assigned_by)
-            starts_at = data.starts_at or now()
-            expires_at = data.expires_at
+            starts_at, expires_at = effective_interval(data)
             infinity = datetime.max.replace(tzinfo=UTC)
             duplicate = uow.session.scalar(
                 select(SupervisorRelationshipRow.id).where(
@@ -551,6 +557,7 @@ class IdentityService:
                     )
             values = data.model_dump()
             values["starts_at"] = starts_at
+            values["expires_at"] = expires_at
             row = SupervisorRelationshipRow(id=uid("rel"), **values)
             uow.session.add(row)
             self._audit(
@@ -660,8 +667,20 @@ class IdentityService:
         with UnitOfWork(self.sessions) as uow:
             assert uow.session
             self._validate_attribution(uow.session, data.created_by)
+            subject_models = {
+                "agent": (IdentityAgentRow, "AGENT_NOT_FOUND", "Agent identity was not found."),
+                "role": (IdentityRoleRow, "ROLE_NOT_FOUND", "Role was not found."),
+                "rank": (IdentityRankRow, "RANK_NOT_FOUND", "Rank was not found."),
+                "team": (IdentityTeamRow, "TEAM_NOT_FOUND", "Team was not found."),
+            }
+            if data.subject_type != "all":
+                model, code, message = subject_models[data.subject_type]
+                if not uow.session.get(model, data.subject_id):
+                    raise DomainError(code, message, 404)
+            starts_at, expires_at = effective_interval(data)
             values = data.model_dump()
-            values["starts_at"] = values["starts_at"] or now()
+            values["starts_at"] = starts_at
+            values["expires_at"] = expires_at
             row = ResourceAccessPolicyRow(id=uid("policy"), **values)
             uow.session.add(row)
             self._audit(

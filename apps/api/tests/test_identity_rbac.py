@@ -1,5 +1,5 @@
 import asyncio
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -21,6 +21,7 @@ from app.db.session import create_database_engine, create_session_factory
 from app.identity.service import IdentityService
 from app.main import create_app
 from app.models.identity import (
+    AssignCapabilityRequest,
     AssignPermissionRequest,
     AssignRoleRequest,
     AuthorizationDecision,
@@ -31,6 +32,7 @@ from app.models.identity import (
     CreateTeamRequest,
     ResourcePolicyRequest,
     SupervisorRequest,
+    TeamMembershipRequest,
 )
 
 
@@ -740,6 +742,123 @@ def test_attribution_agents_are_validated_before_persistence(service):
     assert transition_error.value.code == "AGENT_NOT_FOUND"
     assert service.get_agent(transition_target.id).lifecycle_state == "provisioned"
     assert len(service.audits(0, 100)) == before_transition
+
+
+def test_timed_identity_mutations_normalize_offsets_to_utc(service):
+    actor = agent(service, "agent.timezone.actor")
+    service.transition(actor.id, "active")
+    supervisor = agent(service, "agent.timezone.supervisor")
+    role = service.create_definition(
+        "role",
+        CreateRoleRequest(stable_key="role.timezone", display_name="Timezone", role_scope="global"),
+    )
+    permission = service.create_definition(
+        "permission",
+        CreatePermissionRequest(
+            stable_key="artifact.timezone",
+            display_name="Timezone",
+            resource_type="artifact",
+            action="use",
+        ),
+    )
+    offset = timezone(timedelta(hours=5))
+    starts_at = (datetime.now(UTC) - timedelta(minutes=5)).astimezone(offset)
+    expires_at = (datetime.now(UTC) + timedelta(hours=1)).astimezone(offset)
+    expected_start = starts_at.astimezone(UTC)
+    expected_end = expires_at.astimezone(UTC)
+    capability_request = AssignCapabilityRequest(
+        capability_id="capability-timezone",
+        source="test",
+        starts_at=starts_at,
+        expires_at=expires_at,
+    )
+    membership_request = TeamMembershipRequest(
+        agent_id=actor.id,
+        starts_at=starts_at,
+        expires_at=expires_at,
+    )
+    for request in (capability_request, membership_request):
+        assert request.starts_at == expected_start
+        assert request.expires_at == expected_end
+
+    role_assignment = service.assign_role(
+        actor.id,
+        AssignRoleRequest(role_id=role.id, starts_at=starts_at, expires_at=expires_at),
+    )
+    permission_assignment = service.assign_permission(
+        actor.id,
+        AssignPermissionRequest(
+            permission_id=permission.id,
+            effect="allow",
+            starts_at=starts_at,
+            expires_at=expires_at,
+        ),
+    )
+    supervisor_relationship = service.add_supervisor(
+        relationship(
+            supervisor,
+            actor,
+            starts_at=starts_at,
+            expires_at=expires_at,
+        )
+    )
+    policy = service.create_resource_policy(
+        ResourcePolicyRequest(
+            subject_type="all",
+            resource_type="artifact",
+            resource_id="artifact-timezone",
+            action="use",
+            effect="allow",
+            starts_at=starts_at,
+            expires_at=expires_at,
+        )
+    )
+
+    def as_utc(value):
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+    for row in (
+        role_assignment,
+        permission_assignment,
+        supervisor_relationship,
+        policy,
+    ):
+        assert as_utc(row.starts_at) == expected_start
+        assert as_utc(row.expires_at) == expected_end
+    assert service.check_permission(actor.id, permission.stable_key).allowed
+
+
+@pytest.mark.parametrize(
+    ("subject_type", "error_code"),
+    [
+        ("agent", "AGENT_NOT_FOUND"),
+        ("role", "ROLE_NOT_FOUND"),
+        ("rank", "RANK_NOT_FOUND"),
+        ("team", "TEAM_NOT_FOUND"),
+    ],
+)
+def test_resource_policies_reject_missing_subjects_atomically(service, subject_type, error_code):
+    app = create_app(database_url=str(service.sessions.kw["bind"].url))
+    before = len(service.audits(0, 100))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/identity/access-policies",
+            json={
+                "subject_type": subject_type,
+                "subject_id": "missing-subject",
+                "resource_type": "artifact",
+                "resource_id": "artifact-protected",
+                "action": "use",
+                "effect": "deny",
+            },
+        )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == error_code
+    with service.sessions() as session:
+        assert not list(session.scalars(select(ResourceAccessPolicyRow)))
+        assert len(list(session.scalars(select(IdentityAuditEventRow)))) == before
 
 
 def relationship(supervisor, subordinate, kind="secondary", **times):
