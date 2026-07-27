@@ -156,6 +156,16 @@ class IdentityService:
                     "Retired agents must remain disabled and offline.",
                     409,
                 )
+            if (
+                row.lifecycle_state == "suspended"
+                and "operational_status" in changes
+                and changes["operational_status"] != "offline"
+            ):
+                raise DomainError(
+                    "SUSPENDED_AGENT_STATE_CONFLICT",
+                    "Suspended agents must remain offline.",
+                    409,
+                )
             for key, value in changes.items():
                 setattr(row, key, value)
             row.version += 1
@@ -385,6 +395,13 @@ class IdentityService:
                 agent_id,
                 data.assigned_by,
                 data.reason,
+                {
+                    "assignment_id": row.id,
+                    "permission_id": row.permission_id,
+                    "effect": row.effect,
+                    "resource_type": row.resource_type,
+                    "resource_id": row.resource_id,
+                },
             )
             try:
                 uow.session.flush()

@@ -132,6 +132,30 @@ def test_retired_agent_patch_allows_metadata_without_relaxing_terminal_state(ser
     assert persisted.operational_status == "offline"
 
 
+@pytest.mark.parametrize("operational_status", ["available", "busy", "error"])
+def test_suspended_agent_patch_preserves_offline_state_atomically(service, operational_status):
+    row = agent(service, "agent.suspended-patch")
+    service.transition(row.id, "active")
+    suspended = service.transition(row.id, "suspended")
+    version = suspended.version
+    audit_count = len(service.audits(0, 100))
+    app = create_app(database_url=str(service.sessions.kw["bind"].url))
+
+    with TestClient(app) as client:
+        response = client.patch(
+            f"/api/identity/agents/{row.id}",
+            json={"operational_status": operational_status},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "SUSPENDED_AGENT_STATE_CONFLICT"
+    persisted = service.get_agent(row.id)
+    assert persisted.lifecycle_state == "suspended"
+    assert persisted.operational_status == "offline"
+    assert persisted.version == version
+    assert len(service.audits(0, 100)) == audit_count
+
+
 def test_duplicate_and_invalid_stable_key(service):
     agent(service, "agent.unique")
     with pytest.raises(DomainError) as duplicate:
@@ -195,6 +219,58 @@ def test_role_assignment_audits_identify_role_and_assignment(service):
             "scope_id": None,
         }
         for role, assignment in zip(roles, assignments, strict=True)
+    }
+
+
+def test_permission_assignment_audits_identify_authorization_change(service):
+    actor = agent(service, "agent.permission-audit")
+    service.transition(actor.id, "active")
+    permission = service.create_definition(
+        "permission",
+        CreatePermissionRequest(
+            stable_key="artifact.audit",
+            display_name="Audit permission",
+            resource_type="artifact",
+            action="audit",
+        ),
+    )
+    assignments = [
+        service.assign_permission(
+            actor.id,
+            AssignPermissionRequest(permission_id=permission.id, effect="allow"),
+        ),
+        service.assign_permission(
+            actor.id,
+            AssignPermissionRequest(
+                permission_id=permission.id,
+                effect="deny",
+                resource_type="artifact",
+                resource_id="artifact-a",
+            ),
+        ),
+    ]
+
+    events = service.audits(0, 100)
+    changes_by_effect = {
+        event.changes["effect"]: event.changes
+        for event in events
+        if event.event_type in {"permission.granted", "permission.denied"}
+    }
+    assert changes_by_effect == {
+        "allow": {
+            "assignment_id": assignments[0].id,
+            "permission_id": permission.id,
+            "effect": "allow",
+            "resource_type": None,
+            "resource_id": None,
+        },
+        "deny": {
+            "assignment_id": assignments[1].id,
+            "permission_id": permission.id,
+            "effect": "deny",
+            "resource_type": "artifact",
+            "resource_id": "artifact-a",
+        },
     }
 
 
