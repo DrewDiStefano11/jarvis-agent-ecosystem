@@ -210,6 +210,14 @@ def upgrade() -> None:
             raise RuntimeError(
                 "Runtime authorization bootstrap conflict: role assignment is revoked"
             )
+        if existing_assignment["starts_at"] is not None and existing_assignment["starts_at"] > timestamp:
+            raise RuntimeError(
+                "Runtime authorization bootstrap conflict: role assignment is future-dated"
+            )
+        if existing_assignment["expires_at"] is not None and existing_assignment["expires_at"] < timestamp:
+            raise RuntimeError(
+                "Runtime authorization bootstrap conflict: role assignment is expired"
+            )
     for key in ("agent_runtime.control", "agent_runtime.recovery"):
         cap_assignment_id = f"assign-runtime-local-{key.rsplit('.', 1)[1]}"
         cap_id = _capability_id(key)
@@ -251,6 +259,14 @@ def upgrade() -> None:
             if existing_cap["revoked_at"] is not None:
                 raise RuntimeError(
                     "Runtime authorization bootstrap conflict: capability assignment is revoked"
+                )
+            if existing_cap["starts_at"] is not None and existing_cap["starts_at"] > timestamp:
+                raise RuntimeError(
+                    f"Runtime authorization bootstrap conflict: capability assignment is future-dated for {cap_assignment_id}"
+                )
+            if existing_cap["expires_at"] is not None and existing_cap["expires_at"] < timestamp:
+                raise RuntimeError(
+                    f"Runtime authorization bootstrap conflict: capability assignment is expired for {cap_assignment_id}"
                 )
 
 

@@ -1,50 +1,20 @@
-```
-# Database
-*.db
-
-# Python
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-venv/
-.venv/
-.ENV
 .env
-.env.*
-.env.local
-.venv.bak
-env.bak
-venv.bak
-.venv~
-venv~
-.env~
-
-# Logs
-*.log
-
-# Testing
-.coverage
-coverage/
-htmlcov/
+.venv/
+__pycache__/
 .pytest_cache/
-.hypothesis/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*.tmp
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Build artifacts
-build/
-dist/
+.ruff_cache/
+*.pyc
+*.db
+*.db-shm
+*.db-wal
+data/
+node_modules/
+.pnpm-store/
 *.egg-info/
-```
+*.tsbuildinfo
+dist/
+coverage/
+.coverage
+apps/web/public/mockServiceWorker.js
+apps/web/vite.config.js
+apps/web/vite.config.d.ts
