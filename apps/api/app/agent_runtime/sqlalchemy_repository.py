@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from hashlib import sha256
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -55,6 +56,25 @@ def load(text, cls):
 class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
     def __init__(self, sessions: sessionmaker[Session]):
         self.sessions = sessions
+
+    @contextmanager
+    def _write_session(self):
+        session = self.sessions()
+        try:
+            if session.bind and session.bind.dialect.name == "sqlite":
+                # SQLite ignores SELECT ... FOR UPDATE. Acquire the writer lock
+                # before idempotency/run checks so concurrent creates retain the
+                # same deterministic error precedence as other databases.
+                session.execute(text("BEGIN IMMEDIATE"))
+            else:
+                session.begin()
+            yield session
+            session.commit()
+        except Exception:
+            session.rollback()
+            raise
+        finally:
+            session.close()
 
     def load_run(self, run_id):
         with self.sessions() as s:
@@ -183,7 +203,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
     ):
         run_id = snapshot.specification.run_id
         try:
-            with self.sessions.begin() as s:
+            with self._write_session() as s:
                 prior = s.get(
                     AgentRuntimeProcessedCommandRow, (run_id, processed_command.command_id)
                 )
@@ -210,6 +230,16 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 if create:
                     if row:
                         raise RunAlreadyExistsError(run_id=run_id)
+                    if expected_version != 0 or expected_sequence != 0:
+                        raise VersionConflictError(
+                            run_id=run_id,
+                            command_id=processed_command.command_id,
+                            metadata={
+                                "expectedVersion": expected_version,
+                                "expectedSequence": expected_sequence,
+                                "storedVersion": None,
+                            },
+                        )
                     validate_lineage_invariant(
                         run_id,
                         snapshot.specification.parent_run_id,
@@ -345,6 +375,8 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                         command_id=processed_command.command_id,
                     ) from exc
                 return persisted
+            if create and self.load_run(run_id) is not None:
+                raise RunAlreadyExistsError(run_id=run_id) from exc
             raise RuntimePersistenceError(
                 run_id=run_id,
                 command_id=processed_command.command_id,
@@ -370,7 +402,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
     def _store_outbox(self, session: Session, event: RuntimeEventEnvelope) -> None:
         event_type = f"agent_runtime.{event.event_type.value}"
         event_session_id = self._runtime_session_id(event.run_id)
-        correlation_id = (event.correlation_id or event.run_id)[:80]
+        correlation_id = event.correlation_id or event.run_id
         dispatcher_envelope = EventEnvelope(
             eventId=event.event_id,
             schemaVersion=event.event_schema_version,
@@ -420,7 +452,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 approval_id=None,
                 previous_state=None,
                 new_state=snapshot.state.value,
-                correlation_id=(snapshot.specification.correlation_id or command.run_id)[:80],
+                correlation_id=snapshot.specification.correlation_id or command.run_id,
                 sequence_number=snapshot.event_sequence_number,
                 event_session_id=self._runtime_session_id(command.run_id),
                 timestamp=command.recorded_at,

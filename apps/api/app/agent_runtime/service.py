@@ -199,13 +199,8 @@ class AgentRuntimeService:
                     run_id=command.specification.run_id, command_id=command.command_id
                 )
             return existing.result.model_copy(update={"idempotent_replay": True}, deep=True)
-        if command.expected_run_version != 0:
-            raise VersionConflictError(
-                run_id=command.specification.run_id,
-                command_id=command.command_id,
-                metadata={"expectedVersion": command.expected_run_version, "storedVersion": None},
-            )
-        # The SQL adapter validates lineage inside the command transaction.
+        # The repository transaction is authoritative for duplicate-run and
+        # expected-version precedence, including concurrent creates.
         event = self._build_event(
             command=command,
             run_id=command.specification.run_id,
@@ -228,7 +223,7 @@ class AgentRuntimeService:
             snapshot=aggregate.snapshot,
             events=(event,),
             processed_command=record,
-            expected_version=0,
+            expected_version=command.expected_run_version,
             expected_sequence=0,
             create=True,
         )

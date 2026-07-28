@@ -60,7 +60,7 @@ from app.repositories.task_leases import TaskLeaseRepository
 from app.services.events import EventBroker
 from app.simulator.engine import SimulatorEngine
 
-DATABASE_REVISION = "20260727_07"
+DATABASE_REVISION = "20260728_08"
 
 
 def _upgrade_database(settings: Settings) -> None:
@@ -274,9 +274,18 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     def _safe_runtime_health(health_fn: object) -> dict:
         try:
             result = health_fn()
-            if isinstance(result, dict):
-                return result
-            return {"configured": True, "nonterminalRunCount": 0}
+            if not isinstance(result, dict):
+                return {
+                    "configured": False,
+                    "nonterminalRunCount": 0,
+                    "status": "unavailable",
+                    "reasonCode": "runtime_health_invalid_response",
+                }
+            bounded = dict(result)
+            if bounded.get("configured") is not True:
+                bounded.setdefault("status", "unavailable")
+                bounded.setdefault("reasonCode", "runtime_persistence_unavailable")
+            return bounded
         except Exception:
             return {
                 "configured": False,
@@ -284,6 +293,11 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "status": "unavailable",
                 "reasonCode": "runtime_health_query_failed",
             }
+
+    def _runtime_health_is_degraded(runtime_health: dict) -> bool:
+        if runtime_health.get("configured") is not True:
+            return True
+        return runtime_health.get("status") not in {None, "available", "healthy", "ready"}
 
     @app.get("/api/health", response_model=ApiResponse)
     async def health() -> ApiResponse:
@@ -300,6 +314,16 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "staleWorkerCount": 0,
             }
         )
+        runtime_persistence = (
+            _safe_runtime_health(app.state.agent_runtime_repository.health_status)
+            if database_reachable and schema_current
+            else {
+                "configured": False,
+                "nonterminalRunCount": 0,
+                "status": "unavailable",
+                "reasonCode": "schema_stale" if database_reachable else "database_unreachable",
+            }
+        )
         degraded = (
             repository._system.recovery_status == "required"
             or not database_reachable
@@ -307,6 +331,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             or outbox_exhausted_count > 0
             or lease_counts["expiredLeaseCount"] > 0
             or lease_counts["staleWorkerCount"] > 0
+            or _runtime_health_is_degraded(runtime_persistence)
         )
         return ApiResponse(
             data={
@@ -321,18 +346,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "contextAssemblerReady": database_reachable and schema_current,
                 "contextAssemblyCount": context_status.totalAssemblies if database_reachable else 0,
                 **lease_counts,
-                "runtimePersistence": (
-                    _safe_runtime_health(app.state.agent_runtime_repository.health_status)
-                    if database_reachable and schema_current
-                    else {
-                        "configured": False,
-                        "nonterminalRunCount": 0,
-                        "status": "unavailable",
-                        "reasonCode": "schema_stale"
-                        if database_reachable
-                        else "database_unreachable",
-                    }
-                ),
+                "runtimePersistence": runtime_persistence,
                 "simulated": True,
             }
         )

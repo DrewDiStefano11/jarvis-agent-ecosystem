@@ -88,6 +88,7 @@ def test_runtime_correlation_backfill_upgrade_downgrade_and_exact_values(tmp_pat
 
 # --- Checkpoint migration (20260727_07) tests ---
 
+REPOSITORY_HEAD = "20260728_08"
 CHECKPOINT_HEAD = "20260727_07"
 CHECKPOINT_PREV = "20260727_06"
 
@@ -138,25 +139,25 @@ def _insert_runtime_run_for_checkpoint(
 
 
 def test_checkpoint_migration_blank_upgrade_to_head(tmp_path: Path) -> None:
-    """Blank database upgrades to 20260727_07."""
+    """Blank database upgrades to the current repository head."""
     root = Path(__file__).resolve().parents[1]
     database = tmp_path / "checkpoint-blank.db"
     config = migration_config(root, database)
-    command.upgrade(config, CHECKPOINT_HEAD)
+    command.upgrade(config, REPOSITORY_HEAD)
     engine = create_engine(database_url(database))
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == CHECKPOINT_HEAD
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == REPOSITORY_HEAD
 
 
 def test_checkpoint_migration_alembic_version_reports_head(tmp_path: Path) -> None:
-    """Alembic version reports 20260727_07."""
+    """Alembic version reports the current repository head."""
     root = Path(__file__).resolve().parents[1]
     database = tmp_path / "checkpoint-version.db"
     config = migration_config(root, database)
-    command.upgrade(config, CHECKPOINT_HEAD)
+    command.upgrade(config, REPOSITORY_HEAD)
     engine = create_engine(database_url(database))
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == CHECKPOINT_HEAD
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == REPOSITORY_HEAD
 
 
 def test_checkpoint_migration_exactly_one_head(tmp_path: Path) -> None:
@@ -164,11 +165,11 @@ def test_checkpoint_migration_exactly_one_head(tmp_path: Path) -> None:
     root = Path(__file__).resolve().parents[1]
     database = tmp_path / "checkpoint-heads.db"
     config = migration_config(root, database)
-    command.upgrade(config, CHECKPOINT_HEAD)
+    command.upgrade(config, REPOSITORY_HEAD)
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
     assert len(heads) == 1
-    assert heads[0] == CHECKPOINT_HEAD
+    assert heads[0] == REPOSITORY_HEAD
 
 
 def test_checkpoint_migration_primary_key_columns(tmp_path: Path) -> None:
@@ -464,12 +465,12 @@ def test_checkpoint_migration_round_trips_retain_one_head(tmp_path: Path) -> Non
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
     assert len(heads) == 1
-    assert heads[0] == CHECKPOINT_HEAD
+    assert heads[0] == REPOSITORY_HEAD
     command.downgrade(config, CHECKPOINT_PREV)
     command.upgrade(config, CHECKPOINT_HEAD)
     heads = script.get_heads()
     assert len(heads) == 1
-    assert heads[0] == CHECKPOINT_HEAD
+    assert heads[0] == REPOSITORY_HEAD
 
 
 # --- Attempt projection migration (also 20260727_07) tests ---

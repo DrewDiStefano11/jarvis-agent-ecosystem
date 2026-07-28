@@ -7,6 +7,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.context import ContextAssemblerStatus
 
+MAX_CORRELATION_ID_LENGTH = 120
+
 AgentStatus = Literal[
     "idle",
     "assigned",
@@ -180,7 +182,7 @@ class AuditEvent(ContractModel):
     previousState: str | None = None
     newState: str | None = None
     summary: str
-    correlationId: str
+    correlationId: str = Field(min_length=1, max_length=MAX_CORRELATION_ID_LENGTH)
     sequenceNumber: int
     payload: dict[str, Any] = Field(default_factory=dict)
     artifactIds: list[str] = Field(default_factory=list)
@@ -269,7 +271,7 @@ class EventEnvelope(ContractModel):
     timestamp: datetime
     sequenceNumber: int
     eventSessionId: str | None = None
-    correlationId: str
+    correlationId: str = Field(min_length=1, max_length=MAX_CORRELATION_ID_LENGTH)
     taskId: str | None = None
     agentId: str | None = None
     source: str = "simulator"
