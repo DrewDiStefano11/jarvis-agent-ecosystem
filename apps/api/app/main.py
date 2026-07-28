@@ -924,7 +924,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.get("/api/audit-events", response_model=ApiResponse)
     async def audit() -> ApiResponse:
-        return ApiResponse(data=repository.audit)
+        return ApiResponse(data=repository.list_audit_events())
 
     @app.get("/api/artifacts", response_model=ApiResponse)
     async def artifacts() -> ApiResponse:

@@ -407,6 +407,14 @@ class SqlAlchemyRepository:
 
     @staticmethod
     def _audit_from_row(row: AuditEventRow) -> AuditEvent:
+        nested_payload = row.payload.get("payload")
+        public_payload = (
+            nested_payload
+            if isinstance(nested_payload, dict)
+            else row.payload
+            if row.event_type.startswith("agent_runtime.")
+            else {}
+        )
         return AuditEvent(
             id=row.id,
             timestamp=row.timestamp,
@@ -418,10 +426,20 @@ class SqlAlchemyRepository:
             summary=row.payload.get("summary", row.event_type),
             correlationId=row.correlation_id,
             sequenceNumber=row.sequence_number,
-            payload=row.payload.get("payload", {}),
+            payload=public_payload,
             artifactIds=row.payload.get("artifactIds", []),
             approvalId=row.approval_id,
         )
+
+    def list_audit_events(self) -> list[AuditEvent]:
+        """Return the durable append-only view, including runtime-owned writes."""
+        with self.session_factory() as session:
+            return [
+                self._audit_from_row(row)
+                for row in session.scalars(
+                    select(AuditEventRow).order_by(AuditEventRow.timestamp, AuditEventRow.id)
+                )
+            ]
 
     def add_audit(
         self,
@@ -1043,7 +1061,7 @@ class SqlAlchemyRepository:
                 "approvals": list(self.approvals.values()),
                 "artifacts": list(self.artifacts.values()),
                 "notifications": list(self.notifications.values()),
-                "auditEvents": self.audit,
+                "auditEvents": self.list_audit_events(),
                 "emergencyStop": self.emergency_stop,
             }
         )

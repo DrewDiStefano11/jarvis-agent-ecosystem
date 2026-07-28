@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from alembic import command
 from alembic.config import Config
+from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -23,6 +24,7 @@ from app.db.models import (
     OutboxEventRow,
 )
 from app.db.session import create_database_engine, create_session_factory
+from app.main import create_app
 from app.models.agent_runtime import (
     AbandonAttemptCommand,
     BeginAttemptCommand,
@@ -434,3 +436,56 @@ def test_runtime_audit_identity_delimits_run_and_command_ids(runtime_database) -
         ("a", "bc"),
     }
     assert all(row.id.startswith("runtime-") and len(row.id) == 72 for row in rows)
+
+
+def test_runtime_audit_is_visible_through_api_without_restart_and_after_replay(
+    tmp_path: Path,
+) -> None:
+    url = _database_url(tmp_path / "runtime-live-audit.db")
+    app = create_app(delay_ms=1, database_url=url)
+    specification = make_spec(run_id="run-live-audit")
+
+    with TestClient(app) as api:
+        first = create_run(
+            app.state.agent_runtime_service,
+            specification=specification,
+            command_id="command-live-audit",
+        )
+        assert first.idempotent_replay is False
+
+        live_rows = [
+            row
+            for row in api.get("/api/audit-events").json()["data"]
+            if row["eventType"] == "agent_runtime.command"
+        ]
+        assert len(live_rows) == 1
+        assert live_rows[0]["payload"]["runId"] == "run-live-audit"
+        assert live_rows[0]["payload"]["commandId"] == "command-live-audit"
+
+        replay = create_run(
+            app.state.agent_runtime_service,
+            specification=specification,
+            command_id="command-live-audit",
+        )
+        assert replay.idempotent_replay is True
+        replay_rows = [
+            row
+            for row in api.get("/api/audit-events").json()["data"]
+            if row["eventType"] == "agent_runtime.command"
+        ]
+        assert replay_rows == live_rows
+        snapshot_rows = [
+            row
+            for row in app.state.repository.snapshot()["auditEvents"]
+            if row.eventType == "agent_runtime.command"
+        ]
+        assert len(snapshot_rows) == 1
+        assert snapshot_rows[0].payload["runId"] == "run-live-audit"
+
+    with TestClient(create_app(delay_ms=1, database_url=url)) as restarted:
+        restarted_rows = [
+            row
+            for row in restarted.get("/api/audit-events").json()["data"]
+            if row["eventType"] == "agent_runtime.command"
+        ]
+        assert restarted_rows == live_rows
