@@ -26,7 +26,9 @@ from app.model_providers.openai_compatible import (
     HealthCheckStrategy,
     OpenAICompatibleProvider,
 )
+from app.model_providers.registry import ProviderRegistry
 from app.model_providers.retry import RetryExecutor, RetryPolicy
+from app.model_providers.router import ModelRouter, RoutingRequirements
 
 
 @pytest.fixture(autouse=True)
@@ -227,6 +229,182 @@ async def test_openai_compatible_success_and_secret_header() -> None:
     assert result.total_tokens == 7
     assert result.request_id == "remote-1"
     assert secret not in repr(provider)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value", "reason"),
+    [
+        ("id", 42, "invalid_response_id"),
+        ("id", {"nested": "response-content-secret"}, "invalid_response_id"),
+        ("id", True, "invalid_response_id"),
+        ("finish_reason", 7, "invalid_finish_reason"),
+        ("finish_reason", ["stop"], "invalid_finish_reason"),
+        ("finish_reason", {"value": "stop"}, "invalid_finish_reason"),
+        ("finish_reason", False, "invalid_finish_reason"),
+        ("model", ["model-a"], "invalid_response_model"),
+    ],
+)
+async def test_openai_normalizes_malformed_optional_response_fields(
+    field: str,
+    value: object,
+    reason: str,
+) -> None:
+    secret = "response-content-secret"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body: dict[str, object] = {
+            "id": "request-1",
+            "model": "model-a",
+            "choices": [
+                {
+                    "message": {"content": secret},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+        if field == "finish_reason":
+            choices = body["choices"]
+            assert isinstance(choices, list)
+            choice = choices[0]
+            assert isinstance(choice, dict)
+            choice[field] = value
+        else:
+            body[field] = value
+        return httpx.Response(200, json=body)
+
+    async with mock_client(httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            name="remote",
+            base_url="https://provider.test/v1",
+            api_key=SecretStr("api-key-secret"),
+            default_model="model-a",
+            client=client,
+        )
+        with pytest.raises(MalformedProviderResponseError) as raised:
+            await provider.execute(
+                ModelExecutionRequest(
+                    prompt="hello",
+                    task_id="task-1",
+                    correlation_id="correlation-1",
+                )
+            )
+
+    details = raised.value.safe_details()
+    assert details["provider"] == "remote"
+    assert details["model"] == "model-a"
+    assert details["task_id"] == "task-1"
+    assert details["correlation_id"] == "correlation-1"
+    assert details["metadata"]["reason"] == reason
+    assert secret not in str(details)
+    assert "api-key-secret" not in str(details)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("response_id", "finish_reason"),
+    [
+        (None, None),
+        ("request-1", "length"),
+    ],
+)
+async def test_openai_preserves_valid_optional_response_fields(
+    response_id: str | None,
+    finish_reason: str | None,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "id": response_id,
+                "model": "model-a",
+                "choices": [
+                    {
+                        "message": {"content": "answer"},
+                        "finish_reason": finish_reason,
+                    }
+                ],
+            },
+        )
+
+    async with mock_client(httpx.MockTransport(handler)) as client:
+        provider = OpenAICompatibleProvider(
+            name="remote",
+            base_url="https://provider.test/v1",
+            api_key=SecretStr("fixture-only"),
+            default_model="model-a",
+            client=client,
+        )
+        result = await provider.execute(ModelExecutionRequest(prompt="hello"))
+
+    assert result.request_id == response_id
+    assert result.finish_reason == finish_reason
+
+
+@pytest.mark.asyncio
+async def test_router_falls_back_after_normalized_malformed_optional_field() -> None:
+    calls = {"malformed": 0, "fallback": 0}
+
+    def malformed_handler(request: httpx.Request) -> httpx.Response:
+        calls["malformed"] += 1
+        return httpx.Response(
+            200,
+            json={
+                "id": 42,
+                "model": "first-model",
+                "choices": [{"message": {"content": "unsafe response content"}}],
+            },
+        )
+
+    def fallback_handler(request: httpx.Request) -> httpx.Response:
+        calls["fallback"] += 1
+        return httpx.Response(
+            200,
+            json={
+                "id": "fallback-request",
+                "model": "second-model",
+                "choices": [{"message": {"content": "safe fallback"}}],
+            },
+        )
+
+    async with (
+        mock_client(httpx.MockTransport(malformed_handler)) as malformed_client,
+        mock_client(httpx.MockTransport(fallback_handler)) as fallback_client,
+    ):
+        malformed = OpenAICompatibleProvider(
+            name="malformed",
+            base_url="https://provider.test/v1",
+            api_key=SecretStr("fixture-only"),
+            default_model="first-model",
+            health_strategy=HealthCheckStrategy.CONFIGURATION,
+            client=malformed_client,
+        )
+        fallback = OpenAICompatibleProvider(
+            name="fallback",
+            base_url="https://provider.test/v1",
+            api_key=SecretStr("fixture-only"),
+            default_model="second-model",
+            health_strategy=HealthCheckStrategy.CONFIGURATION,
+            client=fallback_client,
+        )
+        result = await ModelRouter(
+            ProviderRegistry([malformed, fallback]),
+            RetryExecutor(RetryPolicy(maximum_attempts=2)),
+        ).execute(
+            request=ModelExecutionRequest(prompt="hello"),
+            requirements=RoutingRequirements(
+                allow_remote=True,
+                allow_fallback=True,
+                maximum_fallbacks=1,
+            ),
+            budget=TaskBudget(maximum_requests=3),
+        )
+
+    assert result.provider == "fallback"
+    assert result.routing_metadata["failure_categories"] == [
+        MalformedProviderResponseError.__name__
+    ]
+    assert calls == {"malformed": 1, "fallback": 1}
 
 
 @pytest.mark.asyncio

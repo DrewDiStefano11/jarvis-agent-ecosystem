@@ -158,6 +158,30 @@ class OpenAICompatibleProvider(ProviderBase):
             raise MalformedProviderResponseError(
                 "provider response is missing generated content", provider=self.name, model=model
             )
+        response_id = _optional_response_string(
+            body.get("id"),
+            provider=self.name,
+            model=model,
+            task_id=request.task_id,
+            correlation_id=request.correlation_id,
+            reason="invalid_response_id",
+        )
+        finish_reason = _optional_response_string(
+            choices[0].get("finish_reason"),
+            provider=self.name,
+            model=model,
+            task_id=request.task_id,
+            correlation_id=request.correlation_id,
+            reason="invalid_finish_reason",
+        )
+        returned_model = _optional_response_string(
+            body.get("model"),
+            provider=self.name,
+            model=model,
+            task_id=request.task_id,
+            correlation_id=request.correlation_id,
+            reason="invalid_response_model",
+        )
         usage = body.get("usage", {})
         if not isinstance(usage, dict):
             raise MalformedProviderResponseError(
@@ -169,16 +193,16 @@ class OpenAICompatibleProvider(ProviderBase):
         return ModelExecutionResponse(
             content=content,
             provider=self.name,
-            model=str(body.get("model") or model),
+            model=returned_model or model,
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             total_tokens=total_tokens,
             usage_quality=UsageQuality.EXACT if usage else UsageQuality.UNKNOWN,
             latency_ms=(perf_counter() - started) * 1000,
-            finish_reason=choices[0].get("finish_reason"),
+            finish_reason=finish_reason,
             task_id=request.task_id,
             correlation_id=request.correlation_id,
-            request_id=response.headers.get("x-request-id") or body.get("id"),
+            request_id=response.headers.get("x-request-id") or response_id,
         )
 
     async def health_check(self) -> ProviderHealth:
@@ -298,4 +322,27 @@ def _integer(value: object, provider: str, model: str) -> int | None:
         return value
     raise MalformedProviderResponseError(
         "provider token usage is malformed", provider=provider, model=model
+    )
+
+
+def _optional_response_string(
+    value: object,
+    *,
+    provider: str,
+    model: str,
+    task_id: str | None,
+    correlation_id: str | None,
+    reason: str,
+) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    raise MalformedProviderResponseError(
+        "provider response contains an invalid optional field",
+        provider=provider,
+        model=model,
+        task_id=task_id,
+        correlation_id=correlation_id,
+        metadata={"reason": reason},
     )
