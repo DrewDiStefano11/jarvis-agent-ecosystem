@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -412,6 +412,21 @@ class FailureRequest(ContractModel):
 
 class ApiResponse(ContractModel):
     data: Any
+    meta: dict[str, Any] = Field(default_factory=lambda: {"schemaVersion": "1.0"})
+
+
+DataT = TypeVar("DataT")
+
+
+class TypedApiResponse(ContractModel, Generic[DataT]):
+    """The standard successful-response envelope with a typed ``data`` payload.
+
+    This is the same wire contract as :class:`ApiResponse`; the generic
+    parameter only lets routes declare the inner model so the generated OpenAPI
+    documents the real payload schema instead of an untyped object.
+    """
+
+    data: DataT
     meta: dict[str, Any] = Field(default_factory=lambda: {"schemaVersion": "1.0"})
 
 
