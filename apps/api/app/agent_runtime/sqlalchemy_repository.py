@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.agent_runtime.errors import (
@@ -417,12 +417,19 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
 
     def health_status(self) -> dict[str, int | bool]:
         """Bounded health summary; it intentionally never replays every ledger."""
-        with self.sessions() as session:
-            nonterminal = session.scalar(
-                select(func.count())
-                .select_from(AgentRuntimeRunRow)
-                .where(AgentRuntimeRunRow.state.not_in([state.value for state in TERMINAL_STATES]))
-            )
+        try:
+            with self.sessions() as session:
+                nonterminal = session.scalar(
+                    select(func.count())
+                    .select_from(AgentRuntimeRunRow)
+                    .where(
+                        AgentRuntimeRunRow.state.not_in([state.value for state in TERMINAL_STATES])
+                    )
+                )
+        except OperationalError as exc:
+            if "no such table" not in str(exc).lower():
+                raise
+            return {"configured": False, "nonterminalRunCount": 0}
         return {"configured": True, "nonterminalRunCount": nonterminal or 0}
 
     def integrity_check(self, run_id):

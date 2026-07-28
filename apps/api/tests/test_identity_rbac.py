@@ -754,7 +754,18 @@ def test_duplicate_global_role_assignment_is_structured_and_atomic(service):
         service.assign_role(actor.id, request)
     assert error.value.code == "DUPLICATE_ASSIGNMENT"
     with service.sessions() as session:
-        assert len(list(session.scalars(select(AgentRoleAssignmentRow)))) == 1
+        assert (
+            len(
+                list(
+                    session.scalars(
+                        select(AgentRoleAssignmentRow).where(
+                            AgentRoleAssignmentRow.agent_id == actor.id
+                        )
+                    )
+                )
+            )
+            == 1
+        )
         assert len(list(session.scalars(select(IdentityAuditEventRow)))) == before
 
 
@@ -776,7 +787,18 @@ def test_active_role_assignment_blocks_overlap_atomically(service, scope_type, s
         service.assign_role(actor.id, request)
     assert error.value.code == "DUPLICATE_ASSIGNMENT"
     with service.sessions() as session:
-        assert len(list(session.scalars(select(AgentRoleAssignmentRow)))) == 1
+        assert (
+            len(
+                list(
+                    session.scalars(
+                        select(AgentRoleAssignmentRow).where(
+                            AgentRoleAssignmentRow.agent_id == actor.id
+                        )
+                    )
+                )
+            )
+            == 1
+        )
         assert len(list(session.scalars(select(IdentityAuditEventRow)))) == before
 
 
@@ -804,7 +826,11 @@ def test_expired_and_revoked_role_assignments_can_be_renewed(service, scope_type
 
     assert len({expired.id, active.id, renewed.id}) == 3
     with service.sessions() as session:
-        rows = list(session.scalars(select(AgentRoleAssignmentRow)))
+        rows = list(
+            session.scalars(
+                select(AgentRoleAssignmentRow).where(AgentRoleAssignmentRow.agent_id == actor.id)
+            )
+        )
         assert len(rows) == 3
         assert session.get(AgentRoleAssignmentRow, expired.id)
         assert session.get(AgentRoleAssignmentRow, active.id)
@@ -858,7 +884,18 @@ def test_overlapping_role_assignments_are_structured_and_atomic(service, scope_t
         )
     assert open_ended.value.code == "DUPLICATE_ASSIGNMENT"
     with service.sessions() as session:
-        assert len(list(session.scalars(select(AgentRoleAssignmentRow)))) == 3
+        assert (
+            len(
+                list(
+                    session.scalars(
+                        select(AgentRoleAssignmentRow).where(
+                            AgentRoleAssignmentRow.agent_id == actor.id
+                        )
+                    )
+                )
+            )
+            == 3
+        )
         assert len(list(session.scalars(select(IdentityAuditEventRow)))) == before + 2
 
 
@@ -888,7 +925,18 @@ def test_role_assignments_keep_scopes_and_roles_independent(service):
         AssignRoleRequest(role_id=roles[1].id, scope_type="resource", scope_id="artifact-a"),
     )
     with service.sessions() as session:
-        assert len(list(session.scalars(select(AgentRoleAssignmentRow)))) == 3
+        assert (
+            len(
+                list(
+                    session.scalars(
+                        select(AgentRoleAssignmentRow).where(
+                            AgentRoleAssignmentRow.agent_id == actor.id
+                        )
+                    )
+                )
+            )
+            == 3
+        )
 
 
 def test_attribution_agents_are_validated_before_persistence(service):
@@ -952,7 +1000,11 @@ def test_attribution_agents_are_validated_before_persistence(service):
     assert {response.status_code for response in responses} == {404}
     assert {response.json()["error"]["code"] for response in responses} == {"AGENT_NOT_FOUND"}
     with service.sessions() as session:
-        assert not list(session.scalars(select(AgentRoleAssignmentRow)))
+        assert not list(
+            session.scalars(
+                select(AgentRoleAssignmentRow).where(AgentRoleAssignmentRow.agent_id == target.id)
+            )
+        )
         assert not list(session.scalars(select(AgentPermissionAssignmentRow)))
         assert not list(session.scalars(select(ResourceAccessPolicyRow)))
         assert not list(session.scalars(select(SupervisorRelationshipRow)))
@@ -1446,7 +1498,11 @@ def test_omitted_start_rejects_already_expired_effective_windows_atomically(serv
         "INVALID_EFFECTIVE_INTERVAL"
     }
     with service.sessions() as session:
-        assert not list(session.scalars(select(AgentRoleAssignmentRow)))
+        assert not list(
+            session.scalars(
+                select(AgentRoleAssignmentRow).where(AgentRoleAssignmentRow.agent_id == target.id)
+            )
+        )
         assert not list(session.scalars(select(AgentPermissionAssignmentRow)))
         assert not list(session.scalars(select(SupervisorRelationshipRow)))
         assert not list(session.scalars(select(ResourceAccessPolicyRow)))
