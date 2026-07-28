@@ -36,12 +36,15 @@ from app.models.agent_runtime import (
     AgentRunCheckpoint,
     AgentRunQueryResult,
     AgentRunSnapshot,
+    AgentRunState,
     ProcessedCommandRecord,
     RuntimeCommandResult,
     RuntimeEventEnvelope,
     canonical_json,
 )
 from app.models.domain import EventEnvelope
+
+KNOWN_RUN_STATE_VALUES = tuple(state.value for state in AgentRunState)
 
 
 def dump(x):
@@ -370,7 +373,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
     def _store_outbox(self, session: Session, event: RuntimeEventEnvelope) -> None:
         event_type = f"agent_runtime.{event.event_type.value}"
         event_session_id = self._runtime_session_id(event.run_id)
-        correlation_id = (event.correlation_id or event.run_id)[:80]
+        correlation_id = event.correlation_id or event.run_id
         dispatcher_envelope = EventEnvelope(
             eventId=event.event_id,
             schemaVersion=event.event_schema_version,
@@ -420,7 +423,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 approval_id=None,
                 previous_state=None,
                 new_state=snapshot.state.value,
-                correlation_id=(snapshot.specification.correlation_id or command.run_id)[:80],
+                correlation_id=snapshot.specification.correlation_id or command.run_id,
                 sequence_number=snapshot.event_sequence_number,
                 event_session_id=self._runtime_session_id(command.run_id),
                 timestamp=command.recorded_at,
@@ -446,11 +449,34 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                         AgentRuntimeRunRow.state.not_in([state.value for state in TERMINAL_STATES])
                     )
                 )
+                exhausted = session.scalar(
+                    select(func.count())
+                    .select_from(OutboxEventRow)
+                    .where(
+                        OutboxEventRow.status == "exhausted",
+                        OutboxEventRow.event_type.like("agent_runtime.%"),
+                    )
+                )
+                # Bounded corruption probe: an unknown persisted state means the
+                # durable projection can no longer be replayed or trusted.
+                corrupt = session.scalar(
+                    select(func.count())
+                    .select_from(AgentRuntimeRunRow)
+                    .where(AgentRuntimeRunRow.state.not_in(KNOWN_RUN_STATE_VALUES))
+                )
         except OperationalError as exc:
             if "no such table" not in str(exc).lower():
                 raise
             return {"configured": False, "nonterminalRunCount": 0}
-        return {"configured": True, "nonterminalRunCount": nonterminal or 0}
+        health: dict[str, int | bool | str] = {
+            "configured": True,
+            "nonterminalRunCount": nonterminal or 0,
+            "outboxExhaustedCount": exhausted or 0,
+        }
+        if corrupt:
+            health["status"] = "degraded"
+            health["reasonCode"] = "runtime_projection_corrupt"
+        return health
 
     def integrity_check(self, run_id):
         state = self.load_run_state(run_id)

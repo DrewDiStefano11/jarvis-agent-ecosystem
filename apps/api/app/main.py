@@ -60,7 +60,7 @@ from app.repositories.task_leases import TaskLeaseRepository
 from app.services.events import EventBroker
 from app.simulator.engine import SimulatorEngine
 
-DATABASE_REVISION = "20260727_07"
+DATABASE_REVISION = "20260728_08"
 
 
 def _upgrade_database(settings: Settings) -> None:
@@ -271,19 +271,61 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             content={"error": {"code": exc.code, "message": exc.message, "details": {}}},
         )
 
+    def _bounded_runtime_health(reason_code: str) -> dict:
+        """Bounded runtime component result; it never carries internal detail."""
+        return {
+            "configured": False,
+            "nonterminalRunCount": 0,
+            "status": "unavailable",
+            "reasonCode": reason_code,
+        }
+
+    def _normalize_runtime_health(result: object) -> dict:
+        """Normalize a runtime health result into a bounded, comparable component."""
+        if not isinstance(result, dict):
+            return _bounded_runtime_health("runtime_health_invalid_response")
+        configured = result.get("configured")
+        nonterminal = result.get("nonterminalRunCount", 0)
+        if not isinstance(configured, bool) or isinstance(nonterminal, bool):
+            return _bounded_runtime_health("runtime_health_invalid_response")
+        if not isinstance(nonterminal, int) or nonterminal < 0:
+            return _bounded_runtime_health("runtime_health_invalid_response")
+        status = result.get("status")
+        if status is not None and not isinstance(status, str):
+            return _bounded_runtime_health("runtime_health_invalid_response")
+        reason_code = result.get("reasonCode")
+        if reason_code is not None and not isinstance(reason_code, str):
+            return _bounded_runtime_health("runtime_health_invalid_response")
+        exhausted = result.get("outboxExhaustedCount", 0)
+        if isinstance(exhausted, bool) or not isinstance(exhausted, int) or exhausted < 0:
+            return _bounded_runtime_health("runtime_health_invalid_response")
+        component = dict(result)
+        if not configured:
+            component["status"] = status or "unavailable"
+            component.setdefault("reasonCode", "runtime_persistence_unavailable")
+        elif exhausted > 0:
+            component["status"] = status or "degraded"
+            component.setdefault("reasonCode", "runtime_outbox_exhausted")
+        elif status is None:
+            component["status"] = "healthy" if reason_code is None else "degraded"
+        return component
+
     def _safe_runtime_health(health_fn: object) -> dict:
         try:
             result = health_fn()
-            if isinstance(result, dict):
-                return result
-            return {"configured": True, "nonterminalRunCount": 0}
         except Exception:
-            return {
-                "configured": False,
-                "nonterminalRunCount": 0,
-                "status": "unavailable",
-                "reasonCode": "runtime_health_query_failed",
-            }
+            # Unexpected runtime repository failures stay bounded: no exception
+            # text, SQL, database path, or traceback ever reaches the response.
+            return _bounded_runtime_health("runtime_health_query_failed")
+        return _normalize_runtime_health(result)
+
+    def _runtime_health_component(database_reachable: bool, schema_current: bool) -> dict:
+        """Runtime tables are only queried on a reachable, current schema."""
+        if not database_reachable:
+            return _bounded_runtime_health("database_unreachable")
+        if not schema_current:
+            return _bounded_runtime_health("schema_stale")
+        return _safe_runtime_health(app.state.agent_runtime_repository.health_status)
 
     @app.get("/api/health", response_model=ApiResponse)
     async def health() -> ApiResponse:
@@ -300,6 +342,10 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "staleWorkerCount": 0,
             }
         )
+        # The runtime component is resolved before the top-level status so that
+        # unusable runtime persistence can never be reported as healthy.
+        runtime_persistence = _runtime_health_component(database_reachable, schema_current)
+        runtime_degraded = runtime_persistence.get("status", "healthy") != "healthy"
         degraded = (
             repository._system.recovery_status == "required"
             or not database_reachable
@@ -307,6 +353,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             or outbox_exhausted_count > 0
             or lease_counts["expiredLeaseCount"] > 0
             or lease_counts["staleWorkerCount"] > 0
+            or runtime_degraded
         )
         return ApiResponse(
             data={
@@ -321,18 +368,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "contextAssemblerReady": database_reachable and schema_current,
                 "contextAssemblyCount": context_status.totalAssemblies if database_reachable else 0,
                 **lease_counts,
-                "runtimePersistence": (
-                    _safe_runtime_health(app.state.agent_runtime_repository.health_status)
-                    if database_reachable and schema_current
-                    else {
-                        "configured": False,
-                        "nonterminalRunCount": 0,
-                        "status": "unavailable",
-                        "reasonCode": "schema_stale"
-                        if database_reachable
-                        else "database_unreachable",
-                    }
-                ),
+                "runtimePersistence": runtime_persistence,
                 "simulated": True,
             }
         )
