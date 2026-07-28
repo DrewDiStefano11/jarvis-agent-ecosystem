@@ -226,12 +226,23 @@ def upgrade() -> None:
             raise RuntimeError(
                 "Runtime authorization bootstrap conflict: role assignment is revoked"
             )
-        if existing_assignment["starts_at"] > timestamp or (
-            existing_assignment["expires_at"] is not None
-            and existing_assignment["expires_at"] <= timestamp
-        ):
+        role_starts_at = _as_utc_timestamp(
+            existing_assignment["starts_at"], field="role assignment starts_at"
+        )
+        role_expires_at = (
+            None
+            if existing_assignment["expires_at"] is None
+            else _as_utc_timestamp(
+                existing_assignment["expires_at"], field="role assignment expires_at"
+            )
+        )
+        if role_starts_at > timestamp:
             raise RuntimeError(
-                "Runtime authorization bootstrap conflict: role assignment is inactive"
+                "Runtime authorization bootstrap conflict: role assignment is future-dated"
+            )
+        if role_expires_at is not None and role_expires_at <= timestamp:
+            raise RuntimeError(
+                "Runtime authorization bootstrap conflict: role assignment is expired"
             )
     for key in ("agent_runtime.control", "agent_runtime.recovery"):
         cap_assignment_id = f"assign-runtime-local-{key.rsplit('.', 1)[1]}"
@@ -275,11 +286,23 @@ def upgrade() -> None:
                 raise RuntimeError(
                     "Runtime authorization bootstrap conflict: capability assignment is revoked"
                 )
-            if existing_cap["starts_at"] > timestamp or (
-                existing_cap["expires_at"] is not None and existing_cap["expires_at"] <= timestamp
-            ):
+            capability_starts_at = _as_utc_timestamp(
+                existing_cap["starts_at"], field="capability assignment starts_at"
+            )
+            capability_expires_at = (
+                None
+                if existing_cap["expires_at"] is None
+                else _as_utc_timestamp(
+                    existing_cap["expires_at"], field="capability assignment expires_at"
+                )
+            )
+            if capability_starts_at > timestamp:
                 raise RuntimeError(
-                    "Runtime authorization bootstrap conflict: capability assignment is inactive"
+                    "Runtime authorization bootstrap conflict: capability assignment is future-dated"
+                )
+            if capability_expires_at is not None and capability_expires_at <= timestamp:
+                raise RuntimeError(
+                    "Runtime authorization bootstrap conflict: capability assignment is expired"
                 )
 
 
