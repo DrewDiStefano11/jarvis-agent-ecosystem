@@ -17,6 +17,7 @@ from app.agent_runtime.errors import (
     InvalidRuntimeMetadataError,
     InvalidTransitionError,
     RecoveryNotAllowedError,
+    RunAlreadyExistsError,
     RunNotFoundError,
     TerminalRunImmutableError,
     VersionConflictError,
@@ -199,6 +200,13 @@ class AgentRuntimeService:
                     run_id=command.specification.run_id, command_id=command.command_id
                 )
             return existing.result.model_copy(update={"idempotent_replay": True}, deep=True)
+        # Duplicate-create precedence: an existing run outranks expected-version
+        # validation, so a new command ID for an existing run always reports
+        # run_already_exists regardless of its expected_run_version.
+        if self.repository.load_run(command.specification.run_id) is not None:
+            raise RunAlreadyExistsError(
+                run_id=command.specification.run_id, command_id=command.command_id
+            )
         if command.expected_run_version != 0:
             raise VersionConflictError(
                 run_id=command.specification.run_id,
