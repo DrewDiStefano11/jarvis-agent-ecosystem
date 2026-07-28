@@ -248,6 +248,8 @@ Each runtime event envelope includes:
 - safe payload
 - safe metadata
 
+Correlation IDs are preserved exactly. The shared maximum is 120 characters; values of 1 through 120 characters are accepted and longer values are rejected during contract validation. No layer truncates, hashes, replaces, or normalizes a valid correlation ID, so the runtime event, run projection, durable event row, outbox row, outer dispatcher `EventEnvelope`, audit row, audit API response, websocket publication, restart reload, and exact replay all carry the identical value.
+
 When an event payload section corresponds to a required command field such as `executor_reference`, replay validates it with the same required-identifier rules rather than treating it as optional.
 
 Rules:
@@ -321,6 +323,18 @@ Rules:
 - repository commit is authoritative for concurrent idempotency; exact concurrent duplicates return the stored result rather than a stale version conflict
 - command handlers build candidate state from the aggregate they originally loaded instead of re-reading a newer ledger before commit
 - checkpoint duplicate handling also supports a stable no-op when the same checkpoint ID and content are submitted again on the same attempt
+
+### Create-command precedence
+
+`create_run` resolves duplicate creates in one fixed order:
+
+1. a processed command with identical canonical contents returns the stored result with `idempotent_replay=true` and writes no event, projection, audit, or outbox row
+2. a processed command whose contents changed returns `command_conflict`, including when the changed command also carries a nonzero `expected_run_version`
+3. no processed command but an existing run returns `run_already_exists`, regardless of whether `expected_run_version` is zero or nonzero
+4. neither a processed command nor a run, with a nonzero `expected_run_version`, returns `version_conflict`
+5. neither exists and `expected_run_version` is zero continues into the atomic durable create
+
+Lineage validation stays inside the durable transaction, concurrent creates of the same run commit exactly once, and rejected duplicates leave no partial run, event, processed-command, projection, audit, or outbox rows.
 
 ## Optimistic concurrency
 
