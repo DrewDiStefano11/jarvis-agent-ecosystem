@@ -271,6 +271,20 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             content={"error": {"code": exc.code, "message": exc.message, "details": {}}},
         )
 
+    def _safe_runtime_health(health_fn: object) -> dict:
+        try:
+            result = health_fn()
+            if isinstance(result, dict):
+                return result
+            return {"configured": True, "nonterminalRunCount": 0}
+        except Exception:
+            return {
+                "configured": False,
+                "nonterminalRunCount": 0,
+                "status": "unavailable",
+                "reasonCode": "runtime_health_query_failed",
+            }
+
     @app.get("/api/health", response_model=ApiResponse)
     async def health() -> ApiResponse:
         database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
@@ -308,7 +322,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "contextAssemblyCount": context_status.totalAssemblies if database_reachable else 0,
                 **lease_counts,
                 "runtimePersistence": (
-                    app.state.agent_runtime_repository.health_status()
+                    _safe_runtime_health(app.state.agent_runtime_repository.health_status)
                     if database_reachable and schema_current
                     else {
                         "configured": False,
