@@ -307,7 +307,18 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "contextAssemblerReady": database_reachable and schema_current,
                 "contextAssemblyCount": context_status.totalAssemblies if database_reachable else 0,
                 **lease_counts,
-                "runtimePersistence": app.state.agent_runtime_repository.health_status(),
+                "runtimePersistence": (
+                    app.state.agent_runtime_repository.health_status()
+                    if database_reachable and schema_current
+                    else {
+                        "configured": False,
+                        "nonterminalRunCount": 0,
+                        "status": "unavailable",
+                        "reasonCode": "schema_stale"
+                        if database_reachable
+                        else "database_unreachable",
+                    }
+                ),
                 "simulated": True,
             }
         )
