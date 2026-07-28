@@ -41,6 +41,7 @@ from app.models.agent_runtime import (
     RuntimeEventEnvelope,
     canonical_json,
 )
+from app.models.domain import EventEnvelope
 
 
 def dump(x):
@@ -367,13 +368,27 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
         return f"runtime-{sha256(run_id.encode()).hexdigest()[:64]}"
 
     def _store_outbox(self, session: Session, event: RuntimeEventEnvelope) -> None:
+        event_type = f"agent_runtime.{event.event_type.value}"
+        event_session_id = self._runtime_session_id(event.run_id)
+        correlation_id = (event.correlation_id or event.run_id)[:80]
+        dispatcher_envelope = EventEnvelope(
+            eventId=event.event_id,
+            schemaVersion=event.event_schema_version,
+            eventType=event_type,
+            timestamp=event.timestamp,
+            sequenceNumber=event.sequence_number,
+            eventSessionId=event_session_id,
+            correlationId=correlation_id,
+            source="agent_runtime",
+            payload={"runtimeEvent": event.model_dump(mode="json")},
+        )
         session.add(
             OutboxEventRow(
                 id=event.event_id,
-                event_type=f"agent_runtime.{event.event_type.value}",
-                envelope={"runtimeEvent": event.model_dump(mode="json")},
-                correlation_id=(event.correlation_id or event.run_id)[:80],
-                event_session_id=self._runtime_session_id(event.run_id),
+                event_type=event_type,
+                envelope=dispatcher_envelope.model_dump(mode="json"),
+                correlation_id=correlation_id,
+                event_session_id=event_session_id,
                 sequence_number=event.sequence_number,
                 status="pending",
                 created_at=event.timestamp,
@@ -391,7 +406,10 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
         events: object,
     ) -> None:
         event_list = list(events)
-        audit_id = f"runtime-{sha256((command.run_id + command.command_id).encode()).hexdigest()}"
+        audit_identity = canonical_json(
+            {"commandId": command.command_id, "runId": command.run_id}
+        ).encode()
+        audit_id = f"runtime-{sha256(audit_identity).hexdigest()}"
         session.add(
             AuditEventRow(
                 id=audit_id,
@@ -442,8 +460,8 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
         if (
             not ag
             or ag.snapshot != state[0]
-            or ag.attempts != self.load_attempt_history(run_id)
-            or ag.checkpoints != self.list_checkpoints(run_id)
+            or list(ag.attempts) != self.load_attempt_history(run_id)
+            or list(ag.checkpoints) != self.list_checkpoints(run_id)
         ):
             raise LedgerReplayError("Durable projection mismatch", run_id=run_id)
         return True

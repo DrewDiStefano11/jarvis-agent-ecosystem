@@ -687,7 +687,7 @@ class AgentRuntimeAttemptRow(Base):
     __tablename__ = "agent_runtime_attempts"
     attempt_id: Mapped[str] = mapped_column(String(120), primary_key=True)
     run_id: Mapped[str] = mapped_column(
-        ForeignKey("agent_runtime_runs.run_id", ondelete="CASCADE"), index=True
+        ForeignKey("agent_runtime_runs.run_id", ondelete="CASCADE"), primary_key=True, index=True
     )
     attempt_number: Mapped[int] = mapped_column(Integer)
     contract_json: Mapped[str] = mapped_column(Text)

@@ -7,10 +7,10 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import Session
 
-from app.db.models import AgentRuntimeCheckpointRow
+from app.db.models import AgentRuntimeAttemptRow, AgentRuntimeCheckpointRow
 
 
 def database_url(path: Path) -> str:
@@ -470,3 +470,133 @@ def test_checkpoint_migration_round_trips_retain_one_head(tmp_path: Path) -> Non
     heads = script.get_heads()
     assert len(heads) == 1
     assert heads[0] == CHECKPOINT_HEAD
+
+
+# --- Attempt projection migration (also 20260727_07) tests ---
+
+
+def _insert_runtime_attempt(
+    engine,
+    *,
+    run_id: str,
+    attempt_id: str,
+    attempt_number: int = 1,
+    contract_json: str | None = None,
+) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                """INSERT INTO agent_runtime_attempts (
+                attempt_id, run_id, attempt_number, contract_json
+            ) VALUES (
+                :attempt_id, :run_id, :attempt_number, :contract_json
+            )"""
+            ),
+            {
+                "attempt_id": attempt_id,
+                "run_id": run_id,
+                "attempt_number": attempt_number,
+                "contract_json": contract_json
+                or json.dumps({"attempt_id": attempt_id, "run_id": run_id}),
+            },
+        )
+
+
+def test_attempt_migration_uses_run_scoped_composite_primary_key(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    database = tmp_path / "attempt-composite-pk.db"
+    config = migration_config(root, database)
+    command.upgrade(config, CHECKPOINT_HEAD)
+    engine = create_engine(database_url(database))
+
+    primary_key = inspect(engine).get_pk_constraint("agent_runtime_attempts")
+    assert set(primary_key["constrained_columns"]) == {"run_id", "attempt_id"}
+    unique_columns = {
+        tuple(constraint["column_names"])
+        for constraint in inspect(engine).get_unique_constraints("agent_runtime_attempts")
+    }
+    assert ("attempt_id",) not in unique_columns
+    assert ("run_id", "attempt_number") in unique_columns
+
+
+def test_attempt_migration_upgrade_from_v06_preserves_existing_attempt(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    database = tmp_path / "attempt-upgrade-preserves.db"
+    config = migration_config(root, database)
+    command.upgrade(config, CHECKPOINT_PREV)
+    engine = create_engine(database_url(database))
+    _insert_runtime_run_for_checkpoint(engine, "run-preserved-attempt")
+    contract = json.dumps(
+        {
+            "attempt_id": "attempt-preserved",
+            "run_id": "run-preserved-attempt",
+            "attempt_number": 7,
+            "marker": "must-survive",
+        }
+    )
+    _insert_runtime_attempt(
+        engine,
+        run_id="run-preserved-attempt",
+        attempt_id="attempt-preserved",
+        attempt_number=7,
+        contract_json=contract,
+    )
+
+    command.upgrade(config, CHECKPOINT_HEAD)
+
+    with Session(engine) as session:
+        row = session.scalar(
+            select(AgentRuntimeAttemptRow).where(
+                AgentRuntimeAttemptRow.run_id == "run-preserved-attempt",
+                AgentRuntimeAttemptRow.attempt_id == "attempt-preserved",
+            )
+        )
+        assert row is not None
+        assert row.attempt_number == 7
+        assert row.contract_json == contract
+
+
+def test_attempt_migration_allows_equal_ids_in_different_runs(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    database = tmp_path / "attempt-cross-run-id.db"
+    config = migration_config(root, database)
+    command.upgrade(config, CHECKPOINT_HEAD)
+    engine = create_engine(database_url(database))
+    for run_id in ("run-a", "run-b"):
+        _insert_runtime_run_for_checkpoint(engine, run_id)
+        _insert_runtime_attempt(engine, run_id=run_id, attempt_id="attempt-shared")
+
+    with engine.connect() as connection:
+        rows = connection.execute(
+            text(
+                """SELECT run_id, attempt_id FROM agent_runtime_attempts
+                WHERE attempt_id = 'attempt-shared' ORDER BY run_id"""
+            )
+        ).all()
+    assert rows == [("run-a", "attempt-shared"), ("run-b", "attempt-shared")]
+
+
+def test_attempt_migration_failed_downgrade_preserves_data_and_revision(tmp_path: Path) -> None:
+    root = Path(__file__).resolve().parents[1]
+    database = tmp_path / "attempt-duplicate-downgrade.db"
+    config = migration_config(root, database)
+    command.upgrade(config, CHECKPOINT_HEAD)
+    engine = create_engine(database_url(database))
+    for run_id in ("run-a", "run-b"):
+        _insert_runtime_run_for_checkpoint(engine, run_id)
+        _insert_runtime_attempt(engine, run_id=run_id, attempt_id="attempt-shared")
+
+    with pytest.raises(RuntimeError, match="duplicate attempt_id values exist across runs"):
+        command.downgrade(config, CHECKPOINT_PREV)
+
+    with engine.connect() as connection:
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == CHECKPOINT_HEAD
+        rows = connection.execute(
+            text(
+                """SELECT run_id, attempt_id, attempt_number, contract_json
+                FROM agent_runtime_attempts ORDER BY run_id"""
+            )
+        ).all()
+    assert len(rows) == 2
+    assert [row.run_id for row in rows] == ["run-a", "run-b"]
+    assert all(row.attempt_id == "attempt-shared" for row in rows)
