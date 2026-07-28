@@ -140,7 +140,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
         item["name"] for item in inspector.get_check_constraints("identity_agent_permissions")
     }
     with engine.connect() as connection:
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260727_05"
+        assert connection.scalar(text("select version_num from alembic_version")) == "20260727_06"
     engine.dispose()
     command.downgrade(config, "20260723_02")
     lease_engine = create_engine(database_url(path))
@@ -179,7 +179,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     command.current(config)
     with create_database_engine(database_url(path)).connect() as connection:
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260727_05"
+        assert connection.scalar(text("select version_num from alembic_version")) == "20260727_06"
     for revision in (root / "migrations" / "versions").glob("*.py"):
         source = revision.read_text(encoding="utf-8")
         assert "Base.metadata" not in source
@@ -266,7 +266,14 @@ def test_capability_and_team_assignment_history_can_be_renewed(tmp_path: Path) -
         )
 
     with engine.connect() as connection:
-        assert connection.scalar(text("select count(*) from identity_agent_capabilities")) == 2
+        assert (
+            connection.scalar(
+                text(
+                    "select count(*) from identity_agent_capabilities where agent_id = 'agent-renewal'"
+                )
+            )
+            == 2
+        )
         assert connection.scalar(text("select count(*) from identity_team_memberships")) == 2
 
     with Session(engine) as session:
@@ -297,7 +304,14 @@ def test_capability_and_team_assignment_history_can_be_renewed(tmp_path: Path) -
         session.rollback()
 
     with engine.connect() as connection:
-        assert connection.scalar(text("select count(*) from identity_agent_capabilities")) == 2
+        assert (
+            connection.scalar(
+                text(
+                    "select count(*) from identity_agent_capabilities where agent_id = 'agent-renewal'"
+                )
+            )
+            == 2
+        )
         assert connection.scalar(text("select count(*) from identity_team_memberships")) == 2
     engine.dispose()
 

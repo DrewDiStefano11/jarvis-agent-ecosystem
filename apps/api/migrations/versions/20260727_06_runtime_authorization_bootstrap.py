@@ -9,6 +9,22 @@ from datetime import UTC, datetime
 import sqlalchemy as sa
 from alembic import op
 
+
+def _as_utc_timestamp(value: object, *, field: str) -> datetime:
+    """Normalize SQLite/textual timestamp values or fail the bootstrap closed."""
+    if isinstance(value, datetime):
+        return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Runtime authorization bootstrap conflict: {field} timestamp invalid"
+            ) from exc
+        return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+    raise RuntimeError(f"Runtime authorization bootstrap conflict: {field} timestamp invalid")
+
+
 revision = "20260727_06"
 down_revision = "20260727_05"
 branch_labels = None
