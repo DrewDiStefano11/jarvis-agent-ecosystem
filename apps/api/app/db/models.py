@@ -698,7 +698,7 @@ class AgentRuntimeCheckpointRow(Base):
     __tablename__ = "agent_runtime_checkpoints"
     checkpoint_id: Mapped[str] = mapped_column(String(120), primary_key=True)
     run_id: Mapped[str] = mapped_column(
-        ForeignKey("agent_runtime_runs.run_id", ondelete="CASCADE"), index=True
+        ForeignKey("agent_runtime_runs.run_id", ondelete="CASCADE"), primary_key=True
     )
     attempt_id: Mapped[str] = mapped_column(String(120))
     checkpoint_sequence: Mapped[int] = mapped_column(Integer)

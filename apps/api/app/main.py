@@ -60,7 +60,7 @@ from app.repositories.task_leases import TaskLeaseRepository
 from app.services.events import EventBroker
 from app.simulator.engine import SimulatorEngine
 
-DATABASE_REVISION = "20260727_06"
+DATABASE_REVISION = "20260727_07"
 
 
 def _upgrade_database(settings: Settings) -> None:
