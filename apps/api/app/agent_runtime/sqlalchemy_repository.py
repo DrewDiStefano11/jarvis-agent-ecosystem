@@ -59,6 +59,17 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
     def __init__(self, sessions: sessionmaker[Session]):
         self.sessions = sessions
 
+    def _awaiting_run_lock(self, run_id: str, command_id: str) -> None:
+        """Deterministic test seam for the run-lock contention window.
+
+        Production behavior is a no-op. On a database with real row-level locks
+        a competing transaction can commit while this caller blocks on the
+        ``SELECT ... FOR UPDATE`` below, so the lock resolves against
+        post-commit state. Concurrency regressions override this to commit a
+        competitor here, reproducing that ordering without relying on SQLite
+        serializing writes.
+        """
+
     def load_run(self, run_id):
         with self.sessions() as s:
             x = s.get(AgentRuntimeRunRow, run_id)
@@ -187,28 +198,24 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
         run_id = snapshot.specification.run_id
         try:
             with self.sessions.begin() as s:
-                prior = s.get(
-                    AgentRuntimeProcessedCommandRow, (run_id, processed_command.command_id)
-                )
-                if prior:
-                    if prior.command_hash != processed_command.command_hash:
-                        raise CommandConflictError(
-                            run_id=run_id, command_id=processed_command.command_id
-                        )
-                    return ProcessedCommandRecord(
-                        run_id=run_id,
-                        command_id=prior.command_id,
-                        command_hash=prior.command_hash,
-                        result=load(prior.result_json, RuntimeCommandResult),
-                        recorded_at=prior.processed_at.replace(tzinfo=UTC)
-                        if prior.processed_at.tzinfo is None
-                        else prior.processed_at,
-                    )
+                replay = self._replay_processed_command(s, run_id, processed_command)
+                if replay is not None:
+                    return replay
+                self._awaiting_run_lock(run_id, processed_command.command_id)
                 row = s.scalar(
                     select(AgentRuntimeRunRow)
                     .where(AgentRuntimeRunRow.run_id == run_id)
                     .with_for_update()
                 )
+                # Two identical concurrent commands can both observe no processed
+                # command before either commits. On a database with real row-level
+                # locks the loser blocks on the run lock above, so the record must
+                # be re-read after the lock is held and before expected-version
+                # validation; otherwise the exact retry would see the committed
+                # version increment and wrongly return version_conflict.
+                replay = self._replay_processed_command(s, run_id, processed_command, refresh=True)
+                if replay is not None:
+                    return replay
                 old = []
                 if create:
                     if row:
@@ -353,6 +360,40 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 command_id=processed_command.command_id,
                 metadata={"constraint": "runtime_transaction"},
             ) from exc
+
+    @staticmethod
+    def _replay_processed_command(
+        session: Session,
+        run_id: str,
+        processed_command: ProcessedCommandRecord,
+        *,
+        refresh: bool = False,
+    ) -> ProcessedCommandRecord | None:
+        """Return the stored record for an exact replay, or raise on a changed command.
+
+        Returning ``None`` means the command has not been processed yet and the
+        caller must continue with expected-version and transition validation.
+        ``refresh`` forces a database read instead of an identity-map hit, which
+        the post-lock recheck requires to observe a concurrently committed row.
+        """
+        prior = session.get(
+            AgentRuntimeProcessedCommandRow,
+            (run_id, processed_command.command_id),
+            populate_existing=refresh,
+        )
+        if prior is None:
+            return None
+        if prior.command_hash != processed_command.command_hash:
+            raise CommandConflictError(run_id=run_id, command_id=processed_command.command_id)
+        return ProcessedCommandRecord(
+            run_id=run_id,
+            command_id=prior.command_id,
+            command_hash=prior.command_hash,
+            result=load(prior.result_json, RuntimeCommandResult),
+            recorded_at=prior.processed_at.replace(tzinfo=UTC)
+            if prior.processed_at.tzinfo is None
+            else prior.processed_at,
+        )
 
     def _store(self, s, x):
         s.add(
