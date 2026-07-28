@@ -11,11 +11,25 @@ from alembic.config import Config
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.agent_runtime.errors import LedgerReplayError
 from app.agent_runtime.service import AgentRuntimeService
 from app.agent_runtime.sqlalchemy_repository import SqlAlchemyAgentRuntimeRepository
-from app.db.models import AgentRuntimeAttemptRow, AgentRuntimeRunRow, AuditEventRow, OutboxEventRow
+from app.db.models import (
+    AgentRuntimeAttemptRow,
+    AgentRuntimeEventRow,
+    AgentRuntimeProcessedCommandRow,
+    AgentRuntimeRunRow,
+    AuditEventRow,
+    OutboxEventRow,
+)
 from app.db.session import create_database_engine, create_session_factory
-from app.models.agent_runtime import BeginAttemptCommand
+from app.models.agent_runtime import (
+    AbandonAttemptCommand,
+    BeginAttemptCommand,
+    RequestRecoveryPlanCommand,
+    StartAttemptCommand,
+    UnblockAgentRunCommand,
+)
 from app.models.domain import EventEnvelope
 from app.repositories.sqlalchemy import SqlAlchemyRepository
 from app.services.events import EventBroker
@@ -142,6 +156,106 @@ def test_run_scoped_attempt_delete_cascades_only_its_parent(runtime_database) ->
     assert [(row.run_id, row.attempt_id) for row in remaining] == [("run-b", "attempt-shared")]
 
 
+def test_same_run_attempt_id_reuse_returns_stable_replay_error_without_mutation(
+    runtime_database,
+) -> None:
+    engine, session_factory = runtime_database
+    service = _runtime_service(session_factory)
+    _prepare_attempt(service, run_id="run-a", attempt_id="attempt-shared", command_prefix="a")
+    service.start_attempt(
+        StartAttemptCommand(
+            run_id="run-a",
+            command_id="a-start",
+            expected_run_version=5,
+            timestamp=ts(4),
+            actor_reference="worker-1",
+            attempt_id="attempt-shared",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.abandon_attempt(
+        AbandonAttemptCommand(
+            run_id="run-a",
+            command_id="a-abandon",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="worker-1",
+            attempt_id="attempt-shared",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.request_recovery_plan(
+        RequestRecoveryPlanCommand(
+            run_id="run-a",
+            command_id="a-recovery",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.unblock_run(
+        UnblockAgentRunCommand(
+            run_id="run-a",
+            command_id="a-unblock",
+            expected_run_version=8,
+            timestamp=ts(7),
+            actor_reference="operator-1",
+            source_metadata={"source": "test"},
+        )
+    )
+
+    with Session(engine) as session:
+        counts_before = (
+            session.scalar(select(func.count()).select_from(AgentRuntimeAttemptRow)),
+            session.scalar(select(func.count()).select_from(AgentRuntimeEventRow)),
+            session.scalar(select(func.count()).select_from(AgentRuntimeProcessedCommandRow)),
+            session.scalar(
+                select(func.count())
+                .select_from(AuditEventRow)
+                .where(AuditEventRow.event_type == "agent_runtime.command")
+            ),
+            session.scalar(
+                select(func.count())
+                .select_from(OutboxEventRow)
+                .where(OutboxEventRow.event_type.like("agent_runtime.%"))
+            ),
+        )
+
+    with pytest.raises(LedgerReplayError) as error:
+        service.begin_attempt(
+            BeginAttemptCommand(
+                run_id="run-a",
+                command_id="a-begin-reused-id",
+                expected_run_version=9,
+                timestamp=ts(8),
+                actor_reference="worker-1",
+                executor_reference="worker-1",
+                attempt_id="attempt-shared",
+                source_metadata={"source": "test"},
+            )
+        )
+    assert error.value.code == "ledger_replay_error"
+
+    with Session(engine) as session:
+        counts_after = (
+            session.scalar(select(func.count()).select_from(AgentRuntimeAttemptRow)),
+            session.scalar(select(func.count()).select_from(AgentRuntimeEventRow)),
+            session.scalar(select(func.count()).select_from(AgentRuntimeProcessedCommandRow)),
+            session.scalar(
+                select(func.count())
+                .select_from(AuditEventRow)
+                .where(AuditEventRow.event_type == "agent_runtime.command")
+            ),
+            session.scalar(
+                select(func.count())
+                .select_from(OutboxEventRow)
+                .where(OutboxEventRow.event_type.like("agent_runtime.%"))
+            ),
+        )
+    assert counts_after == counts_before
+
+
 class _RecordingWebSocket:
     def __init__(self) -> None:
         self.messages: list[dict] = []
@@ -205,6 +319,95 @@ def test_runtime_outbox_dispatch_survives_repository_restart(runtime_database) -
         assert row.status == "published"
         assert row.publish_attempt_count == 1
         assert row.last_publish_error is None
+
+
+def test_runtime_exact_replay_does_not_duplicate_outbox_or_audit(runtime_database) -> None:
+    engine, session_factory = runtime_database
+    runtime_service = _runtime_service(session_factory)
+    specification = make_spec(run_id="run-exact-replay")
+    first = create_run(
+        runtime_service,
+        specification=specification,
+        command_id="command-exact-replay",
+    )
+    replay = create_run(
+        runtime_service,
+        specification=specification,
+        command_id="command-exact-replay",
+    )
+    assert replay.idempotent_replay is True
+    assert replay.events == first.events
+
+    with Session(engine) as session:
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(OutboxEventRow)
+                .where(OutboxEventRow.event_type.like("agent_runtime.%"))
+            )
+            == 1
+        )
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(AuditEventRow)
+                .where(AuditEventRow.event_type == "agent_runtime.command")
+            )
+            == 1
+        )
+        assert session.scalar(select(func.count()).select_from(AgentRuntimeEventRow)) == 1
+        assert (
+            session.scalar(select(func.count()).select_from(AgentRuntimeProcessedCommandRow)) == 1
+        )
+
+
+def test_runtime_failure_rolls_back_outbox_and_audit(
+    runtime_database, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, session_factory = runtime_database
+    repository = SqlAlchemyAgentRuntimeRepository(session_factory)
+    runtime_service = AgentRuntimeService(
+        repository,
+        utc_clock=lambda: ts(10_000),
+        run_id_factory=SequenceFactory("run"),
+        attempt_id_factory=SequenceFactory("attempt"),
+        event_id_factory=SequenceFactory("event"),
+        checkpoint_id_factory=SequenceFactory("checkpoint"),
+    )
+
+    def fail_after_outbox(*_args, **_kwargs) -> None:
+        raise RuntimeError("injected failure after outbox staging")
+
+    monkeypatch.setattr(repository, "_store_audit", fail_after_outbox)
+    with pytest.raises(RuntimeError, match="injected failure after outbox staging"):
+        create_run(
+            runtime_service,
+            specification=make_spec(run_id="run-rollback"),
+            command_id="command-rollback",
+        )
+
+    with Session(engine) as session:
+        assert session.scalar(select(func.count()).select_from(AgentRuntimeRunRow)) == 0
+        assert session.scalar(select(func.count()).select_from(AgentRuntimeEventRow)) == 0
+        assert (
+            session.scalar(select(func.count()).select_from(AgentRuntimeProcessedCommandRow)) == 0
+        )
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(AuditEventRow)
+                .where(AuditEventRow.event_type == "agent_runtime.command")
+            )
+            == 0
+        )
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(OutboxEventRow)
+                .where(OutboxEventRow.event_type.like("agent_runtime.%"))
+            )
+            == 0
+        )
 
 
 def test_runtime_audit_identity_delimits_run_and_command_ids(runtime_database) -> None:

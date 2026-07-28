@@ -511,6 +511,10 @@ def test_attempt_migration_uses_run_scoped_composite_primary_key(tmp_path: Path)
 
     primary_key = inspect(engine).get_pk_constraint("agent_runtime_attempts")
     assert set(primary_key["constrained_columns"]) == {"run_id", "attempt_id"}
+    assert set(AgentRuntimeAttemptRow.__table__.primary_key.columns.keys()) == {
+        "run_id",
+        "attempt_id",
+    }
     unique_columns = {
         tuple(constraint["column_names"])
         for constraint in inspect(engine).get_unique_constraints("agent_runtime_attempts")
