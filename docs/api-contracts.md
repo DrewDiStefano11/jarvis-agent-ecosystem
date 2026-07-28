@@ -15,7 +15,10 @@ Routes:
 - History: `GET /api/audit-events`, `GET /api/artifacts`, `GET /api/notifications`, `POST /api/notifications/{id}/read`
 - Simulator: `POST /api/simulator/{start|pause|resume|reset|failure|approval}`
 - Events: `WS /ws/events`
+- Agent runtime: `GET /api/agent-runtime/runs`, `GET /api/agent-runtime/runs/{run_id}`, `GET /api/agent-runtime/runs/{run_id}/{events|attempts|checkpoints|lineage}`, and `POST /api/agent-runtime/commands`
 - Identity and authorization: versioned routes under `/api/identity` for durable identities and lifecycle, rank/role/permission/capability/team definitions, assignments, permission evaluation, bounded hierarchy traversal, resource access policy evaluation, and paginated identity audit history. See [agent identity and RBAC](agent-identity-rbac.md) and OpenAPI for exact contracts.
+
+Agent-runtime routes use the same successful-response envelope as the rest of the API: the typed runtime payload is carried in `data` with `meta.schemaVersion` of `"1.0"`, and pagination fields stay inside `data`. Runtime domain failures continue to use the standard error body with their stable codes (`run_not_found` at 404, `run_already_exists`/`version_conflict`/`command_conflict` at 409) and are never wrapped in a success envelope. The command route returns the full `RuntimeCommandResult` inside `data`, preserving `idempotent_replay`, snapshot, and event fields.
 
 Approvals are idempotency-guarded: processed, expired, unknown, black-risk, or emergency-blocked decisions never execute. A pending approval discovered past its expiration commits a durable `expired` transition before returning `APPROVAL_EXPIRED`; subsequent attempts return `APPROVAL_ALREADY_PROCESSED`. No Phase 1 command performs a real external action.
 

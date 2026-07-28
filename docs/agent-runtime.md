@@ -336,6 +336,10 @@ Rules:
 
 Lineage validation stays inside the durable transaction, concurrent creates of the same run commit exactly once, and rejected duplicates leave no partial run, event, processed-command, projection, audit, or outbox rows.
 
+### Concurrent exact retries
+
+For non-create commands the processed-command record is read twice: once before the run lock and again immediately after the run row lock is acquired, before expected-version validation. On a database with real row-level locks two identical concurrent commands can both observe no record before either commits; the loser blocks on the run lock and its post-lock re-read observes the committed record, so it returns the stored result with `idempotent_replay=true` instead of a misleading `version_conflict`. A changed command reusing the same command ID still returns `command_conflict`, and a genuinely different command with a stale expected version still returns `version_conflict`. The replay is returned from inside the same transaction without committing early or appending duplicate events, processed commands, projections, audit rows, outbox rows, or run-version increments.
+
 ## Optimistic concurrency
 
 Every state-changing command carries `expected_run_version`.
