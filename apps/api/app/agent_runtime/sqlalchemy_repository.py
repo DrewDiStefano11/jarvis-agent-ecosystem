@@ -251,28 +251,30 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 if not ag or ag.snapshot != snapshot:
                     raise LedgerReplayError("Ledger/projection mismatch", run_id=run_id)
                 if create:
-                    s.add(
-                        AgentRuntimeRunRow(
-                            run_id=run_id,
-                            task_id=snapshot.specification.task_id,
-                            agent_id=snapshot.specification.agent_id,
-                            correlation_id=snapshot.specification.correlation_id,
-                            parent_run_id=snapshot.specification.parent_run_id,
-                            state=snapshot.state.value,
-                            version=snapshot.version,
-                            event_sequence_number=snapshot.event_sequence_number,
-                            attempt_count=snapshot.attempt_count,
-                            active_attempt_id=snapshot.active_attempt_id,
-                            latest_checkpoint_id=snapshot.latest_checkpoint_id,
-                            recovery_status=snapshot.recovery_status.value,
-                            created_at=snapshot.created_at,
-                            updated_at=snapshot.created_at,
-                            deadline=snapshot.specification.deadline,
-                            terminal_at=snapshot.completed_at,
-                            specification_json=dump(snapshot.specification),
-                            snapshot_json=dump(snapshot),
-                        )
+                    run_row = AgentRuntimeRunRow(
+                        run_id=run_id,
+                        task_id=snapshot.specification.task_id,
+                        agent_id=snapshot.specification.agent_id,
+                        correlation_id=snapshot.specification.correlation_id,
+                        parent_run_id=snapshot.specification.parent_run_id,
+                        state=snapshot.state.value,
+                        version=snapshot.version,
+                        event_sequence_number=snapshot.event_sequence_number,
+                        attempt_count=snapshot.attempt_count,
+                        active_attempt_id=snapshot.active_attempt_id,
+                        latest_checkpoint_id=snapshot.latest_checkpoint_id,
+                        recovery_status=snapshot.recovery_status.value,
+                        created_at=snapshot.created_at,
+                        updated_at=snapshot.created_at,
+                        deadline=snapshot.specification.deadline,
+                        terminal_at=snapshot.completed_at,
+                        specification_json=dump(snapshot.specification),
+                        snapshot_json=dump(snapshot),
                     )
+                    s.add(run_row)
+                    # The ledger/event rows have an FK to the durable run projection.
+                    # Flush only the parent; the encompassing transaction remains atomic.
+                    s.flush([run_row])
                 else:
                     row.state = snapshot.state.value
                     row.version = snapshot.version

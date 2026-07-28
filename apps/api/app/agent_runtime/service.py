@@ -189,6 +189,16 @@ class AgentRuntimeService:
         raise TypeError(f"Unsupported command type: {type(command)!r}")
 
     def create_run(self, command: CreateAgentRunCommand) -> RuntimeCommandResult:
+        existing = self.repository.get_processed_command(
+            command.specification.run_id, command.command_id
+        )
+        command_hash = stable_hash(command.model_dump(mode="json", exclude_none=False))
+        if existing is not None:
+            if existing.command_hash != command_hash:
+                raise CommandConflictError(
+                    run_id=command.specification.run_id, command_id=command.command_id
+                )
+            return existing.result.model_copy(update={"idempotent_replay": True}, deep=True)
         if command.expected_run_version != 0:
             raise VersionConflictError(
                 run_id=command.specification.run_id,
