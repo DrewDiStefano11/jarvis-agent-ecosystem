@@ -89,6 +89,8 @@ def test_runtime_correlation_backfill_upgrade_downgrade_and_exact_values(tmp_pat
 # --- Checkpoint migration (20260727_07) tests ---
 
 CHECKPOINT_HEAD = "20260727_07"
+# The single Alembic head advances as forward migrations are added.
+ALEMBIC_HEAD = "20260728_08"
 CHECKPOINT_PREV = "20260727_06"
 
 
@@ -168,7 +170,7 @@ def test_checkpoint_migration_exactly_one_head(tmp_path: Path) -> None:
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
     assert len(heads) == 1
-    assert heads[0] == CHECKPOINT_HEAD
+    assert heads[0] == ALEMBIC_HEAD
 
 
 def test_checkpoint_migration_primary_key_columns(tmp_path: Path) -> None:
@@ -464,12 +466,12 @@ def test_checkpoint_migration_round_trips_retain_one_head(tmp_path: Path) -> Non
     script = ScriptDirectory.from_config(config)
     heads = script.get_heads()
     assert len(heads) == 1
-    assert heads[0] == CHECKPOINT_HEAD
+    assert heads[0] == ALEMBIC_HEAD
     command.downgrade(config, CHECKPOINT_PREV)
     command.upgrade(config, CHECKPOINT_HEAD)
     heads = script.get_heads()
     assert len(heads) == 1
-    assert heads[0] == CHECKPOINT_HEAD
+    assert heads[0] == ALEMBIC_HEAD
 
 
 # --- Attempt projection migration (also 20260727_07) tests ---

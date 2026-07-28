@@ -19,6 +19,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.models.constraints import MAX_CORRELATION_ID_LENGTH
 
 
 def now_utc() -> datetime:
@@ -484,7 +485,7 @@ class AuditEventRow(Base):
     approval_id: Mapped[str | None] = mapped_column(ForeignKey("approvals.id"))
     previous_state: Mapped[str | None] = mapped_column(String(80))
     new_state: Mapped[str | None] = mapped_column(String(80))
-    correlation_id: Mapped[str] = mapped_column(String(80), index=True)
+    correlation_id: Mapped[str] = mapped_column(String(MAX_CORRELATION_ID_LENGTH), index=True)
     sequence_number: Mapped[int] = mapped_column(Integer)
     event_session_id: Mapped[str] = mapped_column(String(80), index=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True))
@@ -546,7 +547,7 @@ class OutboxEventRow(Base):
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
     event_type: Mapped[str] = mapped_column(String(120), index=True)
     envelope: Mapped[dict[str, Any]] = mapped_column(JSON)
-    correlation_id: Mapped[str] = mapped_column(String(80))
+    correlation_id: Mapped[str] = mapped_column(String(MAX_CORRELATION_ID_LENGTH))
     event_session_id: Mapped[str] = mapped_column(String(80), index=True)
     sequence_number: Mapped[int] = mapped_column(Integer)
     status: Mapped[str] = mapped_column(String(30), index=True, default="pending")

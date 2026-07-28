@@ -10,7 +10,13 @@ from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.models.constraints import MAX_CORRELATION_ID_LENGTH as _MAX_CORRELATION_ID_LENGTH
+
 MAX_IDENTIFIER_LENGTH = 120
+# Correlation IDs are preserved exactly across every runtime, outbox, audit,
+# dispatcher, and websocket layer; the shared maximum is explicit, never a
+# silent truncation point.
+MAX_CORRELATION_ID_LENGTH = _MAX_CORRELATION_ID_LENGTH
 MAX_IDEMPOTENCY_KEY_LENGTH = 200
 MAX_TEXT_LENGTH = 2_000
 MAX_METADATA_DEPTH = 5
@@ -295,7 +301,11 @@ CommandId = Annotated[
 ]
 CorrelationId = Annotated[
     str,
-    AfterValidator(lambda value: validate_identifier(value, field_name="correlation_id")),
+    AfterValidator(
+        lambda value: validate_identifier(
+            value, field_name="correlation_id", max_length=MAX_CORRELATION_ID_LENGTH
+        )
+    ),
 ]
 CausationId = Annotated[
     str,
