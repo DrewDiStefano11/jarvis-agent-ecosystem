@@ -57,6 +57,12 @@ class OpenAICompatibleProvider(ProviderBase):
         custom_headers: dict[str, str] | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
+        if not isinstance(name, str) or not name.strip():
+            raise ProviderConfigurationError("provider name must not be empty")
+        if not isinstance(default_model, str) or not default_model.strip():
+            raise ProviderConfigurationError(
+                "provider default model must not be empty", provider=name
+            )
         if not api_key.get_secret_value():
             raise ProviderConfigurationError("an API key is required", provider=name)
         if not capabilities or not capabilities <= BUILTIN_ADAPTER_CAPABILITIES:
@@ -74,10 +80,16 @@ class OpenAICompatibleProvider(ProviderBase):
         ):
             raise ProviderConfigurationError("provider base URL is invalid", provider=name)
         headers = custom_headers or {}
+        secret_terms = (
+            "api_key",
+            "authorization",
+            "token",
+            "password",
+            "secret",
+            "credential",
+        )
         if any(
-            key.lower().replace("-", "_")
-            in {"authorization", "api_key", "token", "password", "secret", "credential"}
-            for key in headers
+            any(term in key.lower().replace("-", "_") for term in secret_terms) for key in headers
         ):
             raise ProviderConfigurationError(
                 "custom headers cannot override secret-bearing headers", provider=name
@@ -307,7 +319,11 @@ def _normalize_completion(body: object, *, provider: str, requested_model: str) 
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "total_tokens": total_tokens,
-        "usage_quality": UsageQuality.EXACT if usage else UsageQuality.UNKNOWN,
+        "usage_quality": (
+            UsageQuality.EXACT
+            if input_tokens is not None and output_tokens is not None
+            else UsageQuality.UNKNOWN
+        ),
         "finish_reason": finish_reason,
         "response_id": response_id,
     }

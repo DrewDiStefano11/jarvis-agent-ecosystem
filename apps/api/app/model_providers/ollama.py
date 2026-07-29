@@ -46,6 +46,12 @@ class OllamaProvider(ProviderBase):
         keep_alive: str | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
+        if not isinstance(name, str) or not name.strip():
+            raise ProviderConfigurationError("provider name must not be empty")
+        if not isinstance(default_model, str) or not default_model.strip():
+            raise ProviderConfigurationError(
+                "provider default model must not be empty", provider=name
+            )
         if not capabilities or not capabilities <= BUILTIN_ADAPTER_CAPABILITIES:
             raise ProviderConfigurationError(
                 "built-in adapter capabilities contain an unsupported value", provider=name

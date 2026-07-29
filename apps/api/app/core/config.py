@@ -43,7 +43,9 @@ class Settings(BaseSettings):
     model_ollama_base_url: AnyHttpUrl = Field(
         "http://127.0.0.1:11434", alias="JARVIS_MODEL_OLLAMA_BASE_URL"
     )
-    model_ollama_model: str = Field("configure-a-model", alias="JARVIS_MODEL_OLLAMA_MODEL")
+    model_ollama_model: str = Field(
+        "configure-a-model", alias="JARVIS_MODEL_OLLAMA_MODEL", min_length=1
+    )
     model_ollama_timeout_seconds: float = Field(
         30, alias="JARVIS_MODEL_OLLAMA_TIMEOUT_SECONDS", gt=0, le=3600
     )

@@ -82,6 +82,92 @@ def test_provider_urls_and_custom_headers_reject_embedded_secrets() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "header_name",
+    [
+        "X-API-Key",
+        "Proxy-Authorization",
+        "X-Access-Token",
+        "Vendor-Secret",
+    ],
+)
+def test_openai_compatible_rejects_secret_bearing_custom_header_names(
+    header_name: str,
+) -> None:
+    rejected_value = "plain-" + "secret-" + "value"
+    with pytest.raises(ProviderConfigurationError) as raised:
+        OpenAICompatibleProvider(
+            name="remote",
+            base_url="https://example.invalid/v1",
+            api_key=SecretStr("mock"),
+            default_model="m",
+            custom_headers={header_name: rejected_value},
+        )
+    assert raised.value.message == "custom headers cannot override secret-bearing headers"
+    assert raised.value.metadata == {}
+
+
+def test_openai_compatible_accepts_ordinary_custom_headers() -> None:
+    provider = OpenAICompatibleProvider(
+        name="remote",
+        base_url="https://example.invalid/v1",
+        api_key=SecretStr("mock"),
+        default_model="m",
+        custom_headers={
+            "X-Organization-ID": "organization-1",
+            "X-Request-Source": "jarvis-tests",
+        },
+    )
+    assert provider.custom_headers == {
+        "X-Organization-ID": "organization-1",
+        "X-Request-Source": "jarvis-tests",
+    }
+
+
+@pytest.mark.parametrize(
+    ("provider_type", "name", "default_model"),
+    [
+        ("ollama", "", "m"),
+        ("ollama", "   ", "m"),
+        ("ollama", "local", ""),
+        ("ollama", "local", "   "),
+        ("openai", "", "m"),
+        ("openai", "   ", "m"),
+        ("openai", "remote", ""),
+        ("openai", "remote", "   "),
+    ],
+)
+def test_builtin_provider_construction_rejects_empty_identifiers(
+    provider_type: str,
+    name: str,
+    default_model: str,
+) -> None:
+    with pytest.raises(ProviderConfigurationError):
+        if provider_type == "ollama":
+            OllamaProvider(name=name, default_model=default_model)
+        else:
+            OpenAICompatibleProvider(
+                name=name,
+                base_url="https://example.invalid/v1",
+                api_key=SecretStr("mock"),
+                default_model=default_model,
+            )
+
+
+def test_builtin_provider_construction_accepts_valid_identifiers() -> None:
+    ollama = OllamaProvider(name="local", default_model="local-model")
+    remote = OpenAICompatibleProvider(
+        name="remote",
+        base_url="https://example.invalid/v1",
+        api_key=SecretStr("mock"),
+        default_model="remote-model",
+    )
+    assert ollama.safe_summary().name == "local"
+    assert ollama.safe_summary().default_model == "local-model"
+    assert remote.safe_summary().name == "remote"
+    assert remote.safe_summary().default_model == "remote-model"
+
+
 @pytest.mark.asyncio
 async def test_ollama_success_health_and_availability(
     monkeypatch: pytest.MonkeyPatch,
@@ -187,6 +273,64 @@ async def test_openai_compatible_preserves_versioned_and_gemini_prefixes(
         await client.aclose()
     assert seen[0].url.path == "/v1/chat/completions"
     assert seen[1].url.path == "/v1beta/openai/chat/completions"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("usage_present", "usage", "expected_quality", "expected_counts"),
+    [
+        (
+            True,
+            {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+            UsageQuality.EXACT,
+            (2, 3, 5),
+        ),
+        (
+            True,
+            {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 1},
+            UsageQuality.EXACT,
+            (2, 3, 5),
+        ),
+        (True, {"prompt_tokens": 2}, UsageQuality.UNKNOWN, (2, None, None)),
+        (True, {"completion_tokens": 3}, UsageQuality.UNKNOWN, (None, 3, None)),
+        (True, {"total_tokens": 5}, UsageQuality.UNKNOWN, (None, None, 5)),
+        (True, {}, UsageQuality.UNKNOWN, (None, None, None)),
+        (False, {}, UsageQuality.UNKNOWN, (None, None, None)),
+    ],
+)
+async def test_openai_compatible_usage_quality_requires_complete_components(
+    monkeypatch: pytest.MonkeyPatch,
+    usage_present: bool,
+    usage: dict[str, int],
+    expected_quality: UsageQuality,
+    expected_counts: tuple[int | None, int | None, int | None],
+) -> None:
+    _allow_execution(monkeypatch)
+    body: dict[str, object] = {
+        "model": "m",
+        "choices": [{"message": {"content": "answer"}, "finish_reason": "stop"}],
+    }
+    if usage_present:
+        body["usage"] = usage
+    client = httpx.AsyncClient(
+        base_url="https://example.invalid/v1/",
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=body)),
+    )
+    provider = OpenAICompatibleProvider(
+        name="remote",
+        base_url="https://example.invalid/v1",
+        api_key=SecretStr("mock"),
+        default_model="m",
+        client=client,
+    )
+    response = await provider.execute(ModelExecutionRequest(prompt="hello"))
+    assert response.usage_quality == expected_quality
+    assert (
+        response.input_tokens,
+        response.output_tokens,
+        response.total_tokens,
+    ) == expected_counts
+    await client.aclose()
 
 
 @pytest.mark.asyncio

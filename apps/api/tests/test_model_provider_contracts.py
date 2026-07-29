@@ -137,6 +137,7 @@ def test_settings_defaults_disable_both_providers() -> None:
             "JARVIS_MODEL_OPENAI_COMPATIBLE_API_KEY": "",
         },
         {"JARVIS_MODEL_PROVIDER_PRIORITY": "a,a"},
+        {"JARVIS_MODEL_OLLAMA_MODEL": ""},
         {"JARVIS_MODEL_OLLAMA_CAPABILITIES": "vision"},
         {"JARVIS_MODEL_OLLAMA_CAPABILITIES": "CHAT"},
         {"JARVIS_MODEL_PRICING_JSON": "[]"},
