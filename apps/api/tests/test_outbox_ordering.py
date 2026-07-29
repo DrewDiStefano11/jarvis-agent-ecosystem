@@ -74,7 +74,14 @@ def test_pending_outbox_records_order_by_session_sequence_and_id(tmp_path) -> No
         for item in app.state.repository.pending_outbox_records()
         if item[0] in {"z-seq-3", "a-seq-1", "m-seq-2", "legacy"}
     ]
-    assert ids == ["legacy", "a-seq-1", "m-seq-2", "z-seq-3"]
+    assert ids == ["legacy", "a-seq-1"]
+    app.state.repository.mark_outbox("a-seq-1", True)
+    second_ids = [
+        item[0]
+        for item in app.state.repository.pending_outbox_records()
+        if item[0] in {"z-seq-3", "m-seq-2"}
+    ]
+    assert second_ids == ["m-seq-2"]
 
 
 @pytest.mark.asyncio
@@ -196,3 +203,21 @@ def test_runtime_outbox_uses_enqueue_time_and_begin_attempt_sequence_order(tmp_p
     assert [row.sequence_number for row in begin_rows] == [4, 5]
     assert all(row.created_at.replace(tzinfo=UTC) >= before for row in rows)
     assert all(row.created_at.date() != ts(0).date() for row in rows)
+
+
+@pytest.mark.asyncio
+async def test_same_session_clock_skew_still_publishes_sequence_order(tmp_path) -> None:
+    app = create_app(delay_ms=1, database_url=database_url(tmp_path / "outbox-skew.db"))
+    base = datetime(2026, 1, 1, tzinfo=UTC)
+    add_outbox(app, "seq-2", "runtime-skew", 2, created_at=base)
+    add_outbox(app, "seq-1", "runtime-skew", 1, created_at=base + timedelta(seconds=5))
+    add_outbox(app, "seq-3", "runtime-skew", 3, created_at=base - timedelta(seconds=5))
+    published: list[str] = []
+
+    async def publish(event, outbox_id=None):
+        published.append(outbox_id)
+        app.state.repository.mark_outbox(outbox_id or event.eventId, True)
+
+    app.state.broker._publish_unlocked = publish
+    await app.state.broker.dispatch_pending()
+    assert published == ["seq-1", "seq-2", "seq-3"]

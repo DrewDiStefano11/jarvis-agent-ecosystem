@@ -537,23 +537,56 @@ class SqlAlchemyRepository:
         return [envelope for _, envelope in self.pending_outbox_records()]
 
     def pending_outbox_records(self) -> list[tuple[str, dict[str, Any]]]:
+        """Return dispatchable outbox rows in deterministic, session-safe order.
+
+        Runtime events are multiplexed by independent event-session IDs. For each
+        runtime session only the lowest unpublished sequence is eligible; an
+        exhausted lower sequence keeps that session blocked. Non-runtime events
+        preserve the existing retryable-row behavior and are not blocked by the
+        runtime head-of-line rules.
+        """
         with self.session_factory() as session:
-            return [
-                (row.id, row.envelope)
-                for row in session.scalars(
+            rows = list(
+                session.scalars(
                     select(OutboxEventRow)
-                    .where(
-                        OutboxEventRow.status.in_(["pending", "failed"]),
-                        OutboxEventRow.publish_attempt_count < self.outbox_max_attempts,
-                    )
+                    .where(OutboxEventRow.status.in_(["pending", "failed"]))
                     .order_by(
-                        OutboxEventRow.created_at,
                         OutboxEventRow.event_session_id,
                         OutboxEventRow.sequence_number,
+                        OutboxEventRow.created_at,
                         OutboxEventRow.id,
                     )
                 )
-            ]
+            )
+        eligible: list[OutboxEventRow] = []
+        runtime_by_session: dict[str, list[OutboxEventRow]] = {}
+        for row in rows:
+            retryable = row.publish_attempt_count < self.outbox_max_attempts
+            if not row.event_type.startswith("agent_runtime."):
+                if retryable:
+                    eligible.append(row)
+                continue
+            runtime_by_session.setdefault(row.event_session_id or "legacy", []).append(row)
+        for session_rows in runtime_by_session.values():
+            head = min(
+                session_rows,
+                key=lambda row: (
+                    row.sequence_number,
+                    row.created_at,
+                    row.id,
+                ),
+            )
+            if head.publish_attempt_count < self.outbox_max_attempts:
+                eligible.append(head)
+        eligible.sort(
+            key=lambda row: (
+                row.created_at,
+                row.event_session_id or "legacy",
+                row.sequence_number,
+                row.id,
+            )
+        )
+        return [(row.id, row.envelope) for row in eligible]
 
     def exhausted_outbox_sessions(self) -> set[str]:
         with self.session_factory() as session:
