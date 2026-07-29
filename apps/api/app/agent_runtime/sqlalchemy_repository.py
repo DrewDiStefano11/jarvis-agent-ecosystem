@@ -485,7 +485,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 event_session_id=event_session_id,
                 sequence_number=event.sequence_number,
                 status="pending",
-                created_at=event.timestamp,
+                created_at=datetime.now(UTC),
                 published_at=None,
                 publish_attempt_count=0,
                 last_publish_error=None,

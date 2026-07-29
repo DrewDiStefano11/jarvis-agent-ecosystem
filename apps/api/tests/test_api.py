@@ -155,3 +155,55 @@ def test_all_manifests_validate() -> None:
         "archive",
         "sentinel",
     }
+
+
+def test_runtime_actor_header_is_allowed_by_cors_preflight() -> None:
+    app = create_app(delay_ms=1)
+    with TestClient(app) as client:
+        response = client.options(
+            "/api/agent-runtime/commands",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "X-Jarvis-Actor-Id, Content-Type, Idempotency-Key",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+        assert response.headers["access-control-allow-credentials"] == "true"
+        assert "POST" in response.headers["access-control-allow-methods"]
+        allowed_headers = response.headers["access-control-allow-headers"].lower()
+        assert "x-jarvis-actor-id" in allowed_headers
+        assert "content-type" in allowed_headers
+        assert "idempotency-key" in allowed_headers
+
+        get_response = client.options(
+            "/api/agent-runtime/runs",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "X-Jarvis-Actor-Id",
+            },
+        )
+        assert get_response.status_code == 200
+        assert "GET" in get_response.headers["access-control-allow-methods"]
+
+        disallowed = client.options(
+            "/api/agent-runtime/commands",
+            headers={
+                "Origin": "http://evil.example",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "X-Jarvis-Actor-Id",
+            },
+        )
+        assert "access-control-allow-origin" not in disallowed.headers
+
+        unrelated = client.options(
+            "/api/agent-runtime/commands",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "X-Unrelated-Header",
+            },
+        )
+        assert unrelated.status_code == 400

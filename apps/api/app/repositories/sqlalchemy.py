@@ -546,9 +546,27 @@ class SqlAlchemyRepository:
                         OutboxEventRow.status.in_(["pending", "failed"]),
                         OutboxEventRow.publish_attempt_count < self.outbox_max_attempts,
                     )
-                    .order_by(OutboxEventRow.created_at)
+                    .order_by(
+                        OutboxEventRow.created_at,
+                        OutboxEventRow.event_session_id,
+                        OutboxEventRow.sequence_number,
+                        OutboxEventRow.id,
+                    )
                 )
             ]
+
+    def exhausted_outbox_sessions(self) -> set[str]:
+        with self.session_factory() as session:
+            return {
+                row.event_session_id or "legacy"
+                for row in session.scalars(
+                    select(OutboxEventRow).where(
+                        OutboxEventRow.status == "failed",
+                        OutboxEventRow.publish_attempt_count >= self.outbox_max_attempts,
+                        OutboxEventRow.event_type.like("agent_runtime.%"),
+                    )
+                )
+            }
 
     def mark_outbox(self, event_id: str, published: bool, error: str | None = None) -> None:
         with self.session_factory() as session, session.begin():

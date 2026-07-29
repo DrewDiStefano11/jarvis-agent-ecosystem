@@ -96,7 +96,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         allow_origins=[settings.web_origin],
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH"],
-        allow_headers=["Content-Type", "Idempotency-Key"],
+        allow_headers=["Content-Type", "Idempotency-Key", "X-Jarvis-Actor-Id"],
     )
     broker = EventBroker(repository)
     approval_decision_locks: dict[str, asyncio.Lock] = {}

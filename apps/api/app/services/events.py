@@ -102,11 +102,19 @@ class EventBroker:
         if not self.repository:
             return
         async with self._dispatch_lock:
+            blocked_sessions = self.repository.exhausted_outbox_sessions()
             for outbox_id, raw in self.repository.pending_outbox_records():
                 try:
                     event = EventEnvelope.model_validate(raw)
+                    session_id = event.eventSessionId or "legacy"
+                    runtime_ordered = event.eventType.startswith("agent_runtime.")
+                    if runtime_ordered and session_id in blocked_sessions:
+                        continue
                     await self._publish_unlocked(event, outbox_id)
                 except Exception as exc:
+                    if str(raw.get("eventType") or "").startswith("agent_runtime."):
+                        session_id = str(raw.get("eventSessionId") or "legacy")
+                        blocked_sessions.add(session_id)
                     self.repository.mark_outbox(outbox_id, False, str(exc)[:500])
 
     async def start_dispatcher(self, poll_interval_ms: int) -> None:

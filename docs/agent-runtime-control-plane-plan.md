@@ -106,3 +106,11 @@ PR #40 head inspected as reference only: `5777faaa5792c9f08811338cecb96d2559b187
 - Runtime does not query `ResourceAccessPolicyRow` directly and does not derive policy actions from runtime operation names or stable-key strings.
 - `runtime.admin` remains the explicit administrative override before task resource-policy evaluation.
 - Regression coverage in `test_agent_runtime_authorization.py` verifies actual permission-action resolution, policy denial/blocked behavior for agent/role/rank/team/all subjects, lifecycle and isolation behavior, policy allow semantics, and admin override behavior.
+
+## WebSocket and outbox ordering repair
+
+- Frontend WebSocket sequence cursors are now tracked per `eventSessionId` with a bounded registry and legacy fallback key. Interleaved simulator/runtime sessions no longer reset each other's cursors; gaps and duplicates are evaluated per session; reconnect clears cursors so first replay/snapshot establishes a fresh baseline.
+- Runtime outbox rows now use persistence enqueue time for `created_at`; the domain timestamp remains inside the runtime event/envelope.
+- Pending outbox retrieval orders by enqueue time, session ID, sequence number, and ID. Runtime dispatch enforces per-session head-of-line blocking for failed/exhausted runtime sessions without blocking unrelated runtime sessions or the existing simulator stream.
+- CORS now explicitly allows `X-Jarvis-Actor-Id` from the configured web origin without wildcard origins or headers.
+- Regression coverage lives in `apps/web/tests/app.test.tsx`, `apps/api/tests/test_outbox_ordering.py`, and the CORS preflight test in `apps/api/tests/test_api.py`.

@@ -9,7 +9,7 @@ const initial:AppState={departments:[],agents:[],tasks:[],approvals:[],artifacts
 
 export function AppStoreProvider({children}:{children:ReactNode}){
   const [state,setState]=useState(initial); const [selectedAgentId,selectAgent]=useState<string|null>(null); const [selectedTaskId,selectTask]=useState<string|null>(null)
-  const sequence=useRef(-1); const eventSession=useRef<string|null>(null); const reconnects=useRef(0)
+  const sessionSequences=useRef(new Map<string,number>()); const reconnects=useRef(0)
   const refresh=useCallback(async()=>{try{
     const [departments,agents,tasks,approvals,artifacts,auditEvents,notifications,system]=await Promise.all([
       request<Department[]>('/api/departments'),request<Agent[]>('/api/agents'),request<Task[]>('/api/tasks'),request<Approval[]>('/api/approvals'),
@@ -19,13 +19,14 @@ export function AppStoreProvider({children}:{children:ReactNode}){
   const action=useCallback(async<T,>(path:string,body?:unknown)=>{const result=await post<T>(path,body);await refresh();return result},[refresh])
   useEffect(()=>{void refresh()},[refresh])
   useEffect(()=>{let socket:WebSocket|null=null;let timer:number|undefined;let closed=false
-    const connect=()=>{if(closed)return;setState(s=>({...s,connection:reconnects.current?'reconnecting':'connecting'}));socket=new WebSocket(WS_URL)
+    const connect=()=>{if(closed)return;sessionSequences.current.clear();setState(s=>({...s,connection:reconnects.current?'reconnecting':'connecting'}));socket=new WebSocket(WS_URL)
       socket.onopen=()=>{reconnects.current=0;setState(s=>({...s,connection:'connected'}))}
       socket.onmessage=(message)=>{const event=JSON.parse(String(message.data)) as EventEnvelope
-        if(event.eventSessionId&&event.eventSessionId!==eventSession.current){eventSession.current=event.eventSessionId;sequence.current=-1}
-        if(event.sequenceNumber<=sequence.current)return
-        if(sequence.current>=0&&event.sequenceNumber!==sequence.current+1){setState(s=>({...s,resyncRequired:true}));void refresh()}
-        sequence.current=event.sequenceNumber
+        const sessionKey=event.eventSessionId??'legacy'; const previous=sessionSequences.current.get(sessionKey)
+        if(previous!==undefined&&event.sequenceNumber<=previous)return
+        if(previous!==undefined&&event.sequenceNumber!==previous+1){setState(s=>({...s,resyncRequired:true}));void refresh()}
+        sessionSequences.current.set(sessionKey,event.sequenceNumber)
+        if(sessionSequences.current.size>100){for(const key of sessionSequences.current.keys()){if(key!==sessionKey){sessionSequences.current.delete(key);break}}}
         if(event.eventType==='system.snapshot'){const payload=event.payload as {snapshot:Snapshot;system:SystemStatus};const snap=payload.snapshot;setState(s=>({...s,...snap,system:payload.system,loading:false,lastSync:new Date().toISOString(),error:null}))}
         else void refresh()
       }
