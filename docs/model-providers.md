@@ -206,7 +206,7 @@ All providers are disabled by default:
 | `JARVIS_MODEL_RETRY_MAXIMUM_ATTEMPTS` | `2` | Bounded attempts |
 | `JARVIS_MODEL_RETRY_INITIAL_BACKOFF_SECONDS` | `0.25` | Initial delay |
 | `JARVIS_MODEL_RETRY_MAXIMUM_BACKOFF_SECONDS` | `5` | Delay and `Retry-After` bound |
-| `JARVIS_MODEL_DEFAULT_MAXIMUM_REQUESTS` | `1` | Default request cap |
+| `JARVIS_MODEL_DEFAULT_MAXIMUM_REQUESTS` | `2` | Default request cap; must cover retries |
 | `JARVIS_MODEL_DEFAULT_MAXIMUM_INPUT_TOKENS` | unset | Optional input cap |
 | `JARVIS_MODEL_DEFAULT_MAXIMUM_OUTPUT_TOKENS` | unset | Optional output cap |
 | `JARVIS_MODEL_DEFAULT_MAXIMUM_TOTAL_TOKENS` | unset | Optional total cap |

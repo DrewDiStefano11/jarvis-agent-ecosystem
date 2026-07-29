@@ -101,7 +101,7 @@ class Settings(BaseSettings):
         5, alias="JARVIS_MODEL_RETRY_MAXIMUM_BACKOFF_SECONDS", ge=0, le=300
     )
     model_default_maximum_requests: int = Field(
-        1, alias="JARVIS_MODEL_DEFAULT_MAXIMUM_REQUESTS", ge=1
+        2, alias="JARVIS_MODEL_DEFAULT_MAXIMUM_REQUESTS", ge=1
     )
     model_default_maximum_input_tokens: int | None = Field(
         None, alias="JARVIS_MODEL_DEFAULT_MAXIMUM_INPUT_TOKENS", ge=1
@@ -129,6 +129,8 @@ class Settings(BaseSettings):
             )
         if self.model_retry_initial_backoff_seconds > self.model_retry_maximum_backoff_seconds:
             raise ValueError("initial model retry backoff cannot exceed maximum backoff")
+        if self.model_default_maximum_requests < self.model_retry_maximum_attempts:
+            raise ValueError("default request budget must cover configured retry attempts")
         for label, url in (
             ("Ollama", self.model_ollama_base_url),
             ("OpenAI-compatible", self.model_openai_compatible_base_url),

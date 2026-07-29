@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
+from pydantic import ValidationError
 
 from app.model_providers.base import ProviderBase
 from app.model_providers.contracts import (
@@ -144,22 +145,31 @@ class OllamaProvider(ProviderBase):
         finish_reason = _optional_string(body.get("done_reason"), self.name, model)
         input_tokens = _optional_integer(body.get("prompt_eval_count"), self.name, model)
         output_tokens = _optional_integer(body.get("eval_count"), self.name, model)
-        return ModelExecutionResponse(
-            content=content,
-            provider=self.name,
-            model=returned_model or model,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            usage_quality=(
-                UsageQuality.EXACT
-                if input_tokens is not None and output_tokens is not None
-                else UsageQuality.UNKNOWN
-            ),
-            latency_ms=(perf_counter() - started) * 1000,
-            finish_reason=finish_reason,
-            task_id=request.task_id,
-            correlation_id=request.correlation_id,
-        )
+        try:
+            return ModelExecutionResponse(
+                content=content,
+                provider=self.name,
+                model=returned_model or model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                usage_quality=(
+                    UsageQuality.EXACT
+                    if input_tokens is not None and output_tokens is not None
+                    else UsageQuality.UNKNOWN
+                ),
+                latency_ms=(perf_counter() - started) * 1000,
+                finish_reason=finish_reason,
+                task_id=request.task_id,
+                correlation_id=request.correlation_id,
+            )
+        except ValidationError as exc:
+            raise MalformedProviderResponseError(
+                "Ollama response violates the normalized response contract",
+                provider=self.name,
+                model=model,
+                task_id=request.task_id,
+                correlation_id=request.correlation_id,
+            ) from exc
 
     async def health_check(self) -> ProviderHealth:
         if not provider_network_health_allowed():

@@ -227,6 +227,24 @@ async def test_retry_then_success_counts_every_attempt() -> None:
 
 
 @pytest.mark.asyncio
+async def test_retry_stops_without_sleep_when_request_budget_cannot_fund_attempt() -> None:
+    provider = FakeProvider("local", results=[ProviderUnavailableError("temporary")])
+    delays: list[float] = []
+
+    async def sleep(delay: float) -> None:
+        delays.append(delay)
+
+    with pytest.raises(ProviderUnavailableError):
+        await _router(provider, attempts=2, sleep=sleep).execute(
+            request=ModelExecutionRequest(prompt="hello"),
+            requirements=RoutingRequirements(),
+            budget=TaskBudget(maximum_requests=1),
+        )
+    assert len(provider.execute_calls) == 1
+    assert delays == []
+
+
+@pytest.mark.asyncio
 async def test_cost_cap_stops_retry_after_ambiguous_failure() -> None:
     provider = FakeProvider(
         "local",
@@ -324,6 +342,22 @@ async def test_malformed_provider_response_never_falls_back() -> None:
     first = FakeProvider(
         "first",
         results=[MalformedProviderResponseError("malformed", provider="first")],
+    )
+    second = FakeProvider("second")
+    with pytest.raises(MalformedProviderResponseError):
+        await _router(first, second).execute(
+            request=ModelExecutionRequest(prompt="hello"),
+            requirements=RoutingRequirements(allow_fallback=True, maximum_fallbacks=1),
+            budget=TaskBudget(maximum_requests=2),
+        )
+    assert second.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_router_rejects_response_from_different_provider() -> None:
+    first = FakeProvider(
+        "first",
+        results=[_response("impostor", "first-model")],
     )
     second = FakeProvider("second")
     with pytest.raises(MalformedProviderResponseError):

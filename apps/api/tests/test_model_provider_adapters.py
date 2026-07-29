@@ -367,6 +367,7 @@ async def test_openai_compatible_usage_quality_requires_complete_components(
         {"choices": [{"message": {"content": "ok"}}], "id": 123},
         {"choices": [{"message": {"content": "ok"}, "finish_reason": {}}]},
         {"choices": [{"message": {"content": "ok"}}], "model": ["m"]},
+        {"choices": [{"message": {"content": "ok"}}], "model": "m" * 201},
         {
             "choices": [{"message": {"content": "ok"}}],
             "usage": {"prompt_tokens": True},

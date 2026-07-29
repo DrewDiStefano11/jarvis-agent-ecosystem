@@ -87,6 +87,18 @@ class RetryExecutor:
                         request.correlation_id,
                     )
                     raise
+                if budget.usage.requests >= budget.budget.maximum_requests:
+                    logger.info(
+                        "model retry stopped by request budget provider=%s model=%s "
+                        "category=%s attempt=%s task_id=%s correlation_id=%s",
+                        exc.provider,
+                        exc.model or request.model,
+                        exc.category.value,
+                        attempt,
+                        request.task_id,
+                        request.correlation_id,
+                    )
+                    raise
                 delay = self.policy.delay(attempt, exc.retry_after_seconds)
                 logger.info(
                     "model retry scheduled provider=%s model=%s category=%s attempt=%s "

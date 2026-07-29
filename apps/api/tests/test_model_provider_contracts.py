@@ -171,6 +171,7 @@ def test_settings_defaults_disable_both_providers() -> None:
     assert settings.model_ollama_enabled is False
     assert settings.model_openai_compatible_enabled is False
     assert not hasattr(settings, "model_live_execution_enabled")
+    assert settings.model_default_maximum_requests == settings.model_retry_maximum_attempts
 
 
 @pytest.mark.parametrize(
@@ -181,6 +182,7 @@ def test_settings_defaults_disable_both_providers() -> None:
             "JARVIS_MODEL_OPENAI_COMPATIBLE_API_KEY": "",
         },
         {"JARVIS_MODEL_PROVIDER_PRIORITY": "a,a"},
+        {"JARVIS_MODEL_DEFAULT_MAXIMUM_REQUESTS": 1},
         {"JARVIS_MODEL_OLLAMA_NAME": "x" * 121},
         {"JARVIS_MODEL_OPENAI_COMPATIBLE_NAME": "x" * 121},
         {"JARVIS_MODEL_OLLAMA_MODEL": ""},

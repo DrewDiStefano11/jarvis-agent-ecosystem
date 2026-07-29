@@ -150,6 +150,14 @@ class ModelRouter:
                     budget=tracker,
                     provider_name=provider.name,
                 )
+                if response.provider != provider.name:
+                    raise MalformedProviderResponseError(
+                        "provider response identity does not match the selected provider",
+                        provider=provider.name,
+                        model=effective_model,
+                        task_id=request.task_id,
+                        correlation_id=request.correlation_id,
+                    )
                 response.estimated_cost_usd = tracker.record(response)
                 response.routing_metadata = {
                     "selected_provider": provider.name,

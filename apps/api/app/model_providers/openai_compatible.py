@@ -6,7 +6,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from app.model_providers.base import ProviderBase
 from app.model_providers.contracts import (
@@ -184,20 +184,29 @@ class OpenAICompatibleProvider(ProviderBase):
             if owned:
                 await client.aclose()
         normalized = _normalize_completion(body, provider=self.name, requested_model=model)
-        return ModelExecutionResponse(
-            content=normalized["content"],
-            provider=self.name,
-            model=normalized["model"],
-            input_tokens=normalized["input_tokens"],
-            output_tokens=normalized["output_tokens"],
-            total_tokens=normalized["total_tokens"],
-            usage_quality=normalized["usage_quality"],
-            latency_ms=(perf_counter() - started) * 1000,
-            finish_reason=normalized["finish_reason"],
-            task_id=request.task_id,
-            correlation_id=request.correlation_id,
-            request_id=response.headers.get("x-request-id") or normalized["response_id"],
-        )
+        try:
+            return ModelExecutionResponse(
+                content=normalized["content"],
+                provider=self.name,
+                model=normalized["model"],
+                input_tokens=normalized["input_tokens"],
+                output_tokens=normalized["output_tokens"],
+                total_tokens=normalized["total_tokens"],
+                usage_quality=normalized["usage_quality"],
+                latency_ms=(perf_counter() - started) * 1000,
+                finish_reason=normalized["finish_reason"],
+                task_id=request.task_id,
+                correlation_id=request.correlation_id,
+                request_id=response.headers.get("x-request-id") or normalized["response_id"],
+            )
+        except ValidationError as exc:
+            raise MalformedProviderResponseError(
+                "provider response violates the normalized response contract",
+                provider=self.name,
+                model=model,
+                task_id=request.task_id,
+                correlation_id=request.correlation_id,
+            ) from exc
 
     async def health_check(self) -> ProviderHealth:
         if not provider_network_health_allowed():
