@@ -18,8 +18,11 @@ from app.model_providers.contracts import ModelExecutionResponse, UsageQuality
 from app.models.agent_runtime import (
     AutonomousExecutionSpecification,
     AutonomousExecutionType,
+    ConfirmCancellationStartCommand,
+    ConfirmPauseCommand,
     CreateAgentRunCommand,
     QueueAgentRunCommand,
+    RequestCancellationCommand,
 )
 from app.models.autonomous_worker import PlanningReviewResult
 from app.models.identity import AssignPermissionRequest
@@ -792,6 +795,123 @@ async def test_restart_reconciles_cancelled_persisted_result(
         assert runtime is not None
         assert runtime.state == "cancelled"
         assert len(router.requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_recovery_finishes_from_pause_requested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    review_result = VALID_RESULT | {"requiresHumanReview": True}
+    router = FakeRouter([json.dumps(review_result)])
+    app, client, _, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-autonomous-pause-requested-cancelled",
+    )
+    service = app.state.autonomous_worker_service
+    original_handle = service._handle
+
+    def crash_before_pause_confirmation(command_type, snapshot, actor, suffix, **fields):
+        if command_type is ConfirmPauseCommand:
+            raise RuntimeError("injected pause-confirmation crash")
+        return original_handle(command_type, snapshot, actor, suffix, **fields)
+
+    monkeypatch.setattr(service, "_handle", crash_before_pause_confirmation)
+    try:
+        with pytest.raises(RuntimeError, match="injected pause-confirmation crash"):
+            await service.run_once(worker.id)
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-autonomous-pause-requested-cancelled"
+        )
+        assert runtime is not None
+        assert runtime.state == "pause_requested"
+        with app.state.model_execution_repository.sessions.begin() as session:
+            session.execute(
+                update(TaskLeaseRow)
+                .where(TaskLeaseRow.task_id == "task-demo")
+                .values(expires_at=ts(0))
+            )
+        assert app.state.task_leases.recover_expired_leases() == 1
+        app.state.task_leases.cancel_task("task-demo")
+        monkeypatch.setattr(service, "_handle", original_handle)
+
+        assert await service.run_once(worker.id) is None
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-autonomous-pause-requested-cancelled"
+        )
+        assert runtime is not None
+        assert runtime.state == "cancelled"
+        stored = app.state.model_execution_repository.get_by_run(
+            "run-autonomous-pause-requested-cancelled"
+        )
+        assert stored is not None
+        assert stored.stage == "failed"
+        assert stored.failureCode == "execution_cancelled"
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_cancelled_recovery_finishes_from_cancelling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    router = FakeRouter([json.dumps(VALID_RESULT)])
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-autonomous-cancelling-recovery",
+    )
+    service = app.state.autonomous_worker_service
+    original_checkpoint = service._checkpoint
+
+    def crash_after_result(snapshot, actor, execution, attempt_id, name):
+        if name == "result-persisted":
+            raise RuntimeError("injected process crash")
+        return original_checkpoint(snapshot, actor, execution, attempt_id, name)
+
+    monkeypatch.setattr(service, "_checkpoint", crash_after_result)
+    try:
+        with pytest.raises(RuntimeError, match="injected process crash"):
+            await service.run_once(worker.id)
+        actor = app.state.agent_runtime_service.authenticate_actor(actor_id)
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-autonomous-cancelling-recovery"
+        )
+        assert runtime is not None
+        runtime = service._handle(
+            RequestCancellationCommand,
+            runtime,
+            actor,
+            "test-cancel-request",
+            reason_code="task_cancelled",
+            detail="Test cancellation requested",
+            requester_reference=actor_id,
+        )
+        runtime = service._handle(
+            ConfirmCancellationStartCommand,
+            runtime,
+            actor,
+            "test-cancel-start",
+            detail="Test cancellation started",
+        )
+        assert runtime.state == "cancelling"
+        app.state.task_leases.cancel_task("task-demo")
+        monkeypatch.setattr(service, "_checkpoint", original_checkpoint)
+
+        assert await service.run_once(worker.id) is None
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-autonomous-cancelling-recovery"
+        )
+        assert runtime is not None
+        assert runtime.state == "cancelled"
+        stored = app.state.model_execution_repository.get_by_run(
+            "run-autonomous-cancelling-recovery"
+        )
+        assert stored is not None
+        assert stored.stage == "failed"
+        assert stored.failureCode == "execution_cancelled"
     finally:
         client.__exit__(None, None, None)
 

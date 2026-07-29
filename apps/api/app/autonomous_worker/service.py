@@ -969,6 +969,7 @@ class AutonomousWorkerService:
                 AgentRunState.CLAIMED,
                 AgentRunState.STARTING,
                 AgentRunState.RUNNING,
+                AgentRunState.PAUSE_REQUESTED,
                 AgentRunState.PAUSED,
                 AgentRunState.BLOCKED,
             }:
@@ -990,6 +991,10 @@ class AutonomousWorkerService:
                         "cancel-start",
                         detail="Autonomous execution cancellation started",
                     )
+            if current.state in {
+                AgentRunState.CANCEL_REQUESTED,
+                AgentRunState.CANCELLING,
+            }:
                 self._handle(
                     ConfirmCancellationCommand,
                     current,
