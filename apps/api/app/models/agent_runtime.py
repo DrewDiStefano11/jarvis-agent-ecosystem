@@ -1233,11 +1233,21 @@ class ProcessedCommandRecord(RuntimeContract):
     command_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     result: RuntimeCommandResult
     recorded_at: datetime
+    verified_actor_id: OpaqueReference | None = None
+    command_type: str = Field(default="runtime", min_length=1, max_length=120)
+    authorization: dict[str, SafeMetadataValue] = Field(default_factory=dict)
 
     @field_validator("recorded_at")
     @classmethod
     def _validate_timestamp(cls, value: datetime) -> datetime:
         return ensure_utc_datetime(value, field_name="processed_command.recorded_at")
+
+    @field_validator("authorization")
+    @classmethod
+    def _validate_authorization(
+        cls, value: dict[str, SafeMetadataValue]
+    ) -> dict[str, SafeMetadataValue]:
+        return normalize_safe_metadata(value, field_name="processed_command.authorization")
 
 
 class AgentRunQuery(RuntimeContract):

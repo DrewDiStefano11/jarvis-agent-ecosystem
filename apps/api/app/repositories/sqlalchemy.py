@@ -407,11 +407,16 @@ class SqlAlchemyRepository:
 
     @staticmethod
     def _audit_from_row(row: AuditEventRow) -> AuditEvent:
+        payload = row.payload.get("payload", {})
+        actor_id = row.agent_id
+        if actor_id is None and isinstance(payload, dict):
+            verified_actor = payload.get("verifiedActorId")
+            actor_id = verified_actor if isinstance(verified_actor, str) else None
         return AuditEvent(
             id=row.id,
             timestamp=row.timestamp,
             eventType=row.event_type,
-            actorAgentId=row.agent_id,
+            actorAgentId=actor_id,
             taskId=row.task_id,
             previousState=row.previous_state,
             newState=row.new_state,

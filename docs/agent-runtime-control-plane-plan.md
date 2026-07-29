@@ -1,14 +1,15 @@
 # Durable runtime control plane replacement plan
 
-Living execution plan for a clean replacement that supersedes stale draft PR #40.
+Living execution plan for draft PR #46, a clean replacement that supersedes stale draft PR #40.
 
 ## Starting state
 
 - Remote state fetched before planning or editing.
 - Required base SHA: `aaa823d17417bcbc906e99b03a00494d94ddd79a`.
-- Arena session branch: `arena/019fadd4-jarvis-agent-ecosystem`.
-- This branch starts at the required base SHA. Arena requires work to remain on this session branch, so no alternate branch is created.
-- PR #40 will be inspected only for changed files, patches, review history, tests, and intended behavior; none of its commits will be merged, rebased, cherry-picked, or reused as branch history.
+- Existing PR branch: `arena/019fadd4-jarvis-agent-ecosystem`.
+- Previous reviewed head: `8fe8ded3c5cbb68619e476f3c2dd3c98cfdedb74`.
+- Remote branch head verified unchanged before this repair pass.
+- PR #40 remains reference-only; no merge, rebase, cherry-pick, branch-history reuse, close, or modification.
 
 ## Repository foundations to preserve
 
@@ -17,33 +18,30 @@ Living execution plan for a clean replacement that supersedes stale draft PR #40
 - SQLAlchemy repositories and explicit transactions own persistence.
 - Identity/RBAC, hierarchical role assignments, task leases, context assembly, audit, transactional outbox, durable workflow ledger, processed-command idempotency, normalized envelopes/errors, health reporting, correlation-id preservation, and model-provider phase gates remain authoritative.
 
-## Implementation phases
+## Repair objectives for PR #46
 
-1. Complete repository reconnaissance.
-   - Read AGENTS, README, migrations, current API routes, schemas, services, repositories, models, DB sessions, errors, health, audit, outbox, task leases, context assembler, identity/RBAC, durable workflow ledger, provider foundation, tests, and docs.
-   - Inspect PR #40 file list, patch, review history, tests, and intended behavior only as reference.
-2. Add durable runtime persistence.
-   - Add one migration from the current main Alembic head.
-   - Add SQLAlchemy rows for runtime executions, attempts, events, checkpoints, processed command results, and deterministic indexes/constraints.
-   - Implement an SQLAlchemy runtime repository with atomic event/projection/processed-command/audit/outbox writes, optimistic concurrency, replay validation, deterministic projection rebuild, pagination, and bounded integrity checks.
-3. Add service/API control plane.
-   - Preserve current state machine terminology and command contracts.
-   - Add typed API routes using normalized response/error envelopes and no route SQL.
-   - Enforce authorization at service boundaries, including actor identity, role, assignment scope, inactive/expired/cross-scope cases, and read-vs-command permissions.
-   - Add bounded runtime health/integrity summary integrated with top-level health degradation.
-4. Harden provider adapter exception chains.
-   - Prevent malformed JSON, response-contract validation, and translated HTTP failures from retaining raw provider data or credential-bearing request objects via `__cause__` or `__context__`.
-   - Add focused Ollama and OpenAI-compatible regressions without enabling live providers.
-5. Add focused tests.
-   - State/forbidden transitions, idempotency precedence, stale versions, rollback seams, restart/replay, projection rebuild, concurrency/races, checkpoint stale writes, corruption detection, pagination, bounded health degradation, RBAC/scope enforcement, audit/outbox atomicity, migrations/head checks, provider sanitization, secret/runtime-artifact scans.
-6. Validate locally.
-   - Backend Ruff format, Ruff lint, full pytest, focused runtime tests, Alembic heads, blank upgrade, upgrade/downgrade/upgrade, concurrency/restart tests.
-   - Frontend typecheck, lint, tests, production build.
-   - Repository `git diff --check`, changed-file audit, secret scan, runtime DB/sidecar scan, dependency/build artifact scan, exact migration-head inspection.
-7. Draft PR and review loop.
-   - Open a draft PR from `arena/019fadd4-jarvis-agent-ecosystem` only after local validation passes.
-   - PR body explicitly supersedes PR #40, includes required impact/validation evidence, and states no merge attempted.
-   - Request fresh Codex review on the final SHA; address valid findings with regressions; repeat until CI/review requirements are satisfied while remaining draft and unmerged.
+1. **Service-boundary runtime authorization**
+   - Add a trusted local-control-plane actor boundary for runtime routes.
+   - Resolve the actor through `IdentityService`; reject missing, unknown, inactive, suspended, or retired identities with bounded runtime errors.
+   - Enforce command/read permissions in `AgentRuntimeService` before protected reads or mutations.
+   - Require any body `actor_reference` to exactly match the verified actor, then populate the command with the verified actor.
+   - Use existing identity permission/role/scope/resource-policy checks. Do not create a parallel RBAC store.
+   - Runtime permission keys are grouped by operation class: read, create, queue, execute, pause, cancel, checkpoint, complete, recover, admin.
+   - For this local phase, runtime scoped permissions evaluate against the authoritative runtime task scope (`resource_type="task"`, `resource_id=task_id`); admin uses `administrative_function/agent_runtime`.
+   - Exact command replay is restricted to the same verified actor recorded with the processed command.
+2. **Migration downgrade safety**
+   - Move correlation-ID representability checks to the very start of downgrade.
+   - Add unsafe downgrade preservation and safe downgrade/upgrade tests with non-empty runtime/audit/outbox data.
+3. **Runtime audit attribution**
+   - Attribute audit rows to the verified actor, not body-supplied `actor_reference`.
+   - Record command type, run/task/target-agent identifiers, prior/new state, event IDs, bounded authorization decision metadata, and correlation ID.
+   - Avoid duplicate mutation audit rows on exact replay.
+
+## Progress log
+
+- Completed mandatory reread of AGENTS, PR #46 diff/comments/review state, runtime service/router/repository/contracts, identity service/models/tests, migration, audit/outbox models, runtime SQL tests, and migration tests.
+- Codex review on prior head produced additional valid findings: runtime audits were not visible through the in-process audit endpoint, runtime outbox exhaustion health counted the wrong status, and migration docs mis-described `20260729_04`.
+- Implementation will address these findings together with the three confirmed blockers.
 
 ## Non-goals
 

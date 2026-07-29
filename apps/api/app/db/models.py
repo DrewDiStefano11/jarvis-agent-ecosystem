@@ -715,5 +715,7 @@ class AgentRuntimeProcessedCommandRow(Base):
     command_id: Mapped[str] = mapped_column(String(120), primary_key=True)
     command_hash: Mapped[str] = mapped_column(String(64))
     command_type: Mapped[str] = mapped_column(String(120))
+    verified_actor_id: Mapped[str | None] = mapped_column(String(160))
+    authorization_json: Mapped[str] = mapped_column(Text, default="{}")
     result_json: Mapped[str] = mapped_column(Text)
     processed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

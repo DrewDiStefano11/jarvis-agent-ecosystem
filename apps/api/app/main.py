@@ -14,6 +14,7 @@ from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.agent_runtime.authorization import IdentityRuntimeAuthorizer
 from app.agent_runtime.errors import AgentRuntimeError
 from app.agent_runtime.router import router as agent_runtime_router
 from app.agent_runtime.service import AgentRuntimeService
@@ -127,8 +128,13 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     app.state.engine = engine
     app.state.task_leases = task_leases
     app.state.identity_service = IdentityService(session_factory)
-    app.state.agent_runtime_repository = SqlAlchemyAgentRuntimeRepository(session_factory)
-    app.state.agent_runtime_service = AgentRuntimeService(app.state.agent_runtime_repository)
+    app.state.agent_runtime_repository = SqlAlchemyAgentRuntimeRepository(
+        session_factory, outbox_max_attempts=repository.outbox_max_attempts
+    )
+    app.state.agent_runtime_service = AgentRuntimeService(
+        app.state.agent_runtime_repository,
+        authorizer=IdentityRuntimeAuthorizer(app.state.identity_service),
+    )
     app.include_router(agent_runtime_router)
     app.include_router(identity_router)
     app.state.lease_recovery_task = None
@@ -236,12 +242,26 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.exception_handler(AgentRuntimeError)
     async def runtime_error(_: Request, exc: AgentRuntimeError) -> JSONResponse:
-        missing_codes = {"run_not_found", "attempt_not_found"}
-        input_codes = {"invalid_runtime_metadata", "invalid_runtime_identifier"}
+        missing_codes = {"run_not_found", "attempt_not_found", "runtime_actor_not_found"}
+        input_codes = {
+            "invalid_runtime_metadata",
+            "invalid_runtime_identifier",
+            "runtime_actor_mismatch",
+        }
         internal_codes = {"ledger_replay_error", "runtime_persistence_error"}
+        auth_required_codes = {"runtime_authentication_required"}
+        permission_codes = {
+            "runtime_actor_inactive",
+            "runtime_permission_denied",
+            "runtime_replay_actor_mismatch",
+        }
         status = (
-            404
+            401
+            if exc.code in auth_required_codes
+            else 404
             if exc.code in missing_codes
+            else 403
+            if exc.code in permission_codes
             else 400
             if exc.code in input_codes
             else 500
@@ -960,6 +980,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.get("/api/audit-events", response_model=ApiResponse)
     async def audit() -> ApiResponse:
+        repository.reload()
         return ApiResponse(data=repository.audit)
 
     @app.get("/api/artifacts", response_model=ApiResponse)

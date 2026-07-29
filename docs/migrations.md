@@ -1,22 +1,15 @@
 # Migrations
 
-Alembic is authoritative. Application startup never calls `create_all`; development startup upgrades to head only when `JARVIS_AUTO_MIGRATE=true` (the default). Production-like runs may disable that setting and migrate explicitly.
+Alembic migrations are the authoritative schema history. Application startup may run Alembic upgrades when configured, but it must never substitute `Base.metadata.create_all()` for migrations.
 
-From PowerShell:
+Revision `20260720_01` creates the frozen Phase 2A durable control-plane schema for simulator state, audit history, transactional outbox, idempotency records, workflow runs, and checkpoints.
 
-```powershell
-Set-Location apps/api
-python -m alembic upgrade head
-python -m alembic current
-python -m alembic history
-```
-
-Initial revision `20260720_01` creates departments, agents, tasks, approvals, artifacts, notifications, append-only audits, system state, workflow runs/checkpoints, outbox, idempotency, and task association tables. CI upgrades a blank temporary database. Tests never use the developer database.
-
-Revision `20260723_02` adds worker registrations, unique active task leases, and immutable execution attempts. It is reversible and leaves the frozen Phase 2A revision unchanged. Upgrade preserves every existing task and adds no synthetic ownership; downgrade removes only Phase 2B lease/worker history.
+Revision `20260723_02` adds worker registrations, unique active task leases, fenced lease tokens, and task-attempt history after the durable control-plane baseline.
 
 Revision `20260724_03` adds durable context assemblies after the task-lease revision, with a task foreign key, unique canonical input hash, request/policy/status fields, security counters, and the validated redacted payload. Upgrade, downgrade-to-Phase-2A, and re-upgrade are covered against isolated temporary databases.
 
-Revision `20260729_04` adds the normalized agent identity and authorization schema. It creates identities, ranks, roles, permissions, capabilities, teams, time-bounded assignments, supervisor relationships, delegation and approval-authority boundaries, typed resource access, seat priority policies, and append-only identity audit events. It does not alter the simulator compatibility tables and is reversible.
+Revision `a87a487dd714` adds the normalized agent identity and authorization schema. It creates identities, ranks, roles, permissions, capabilities, teams, time-bounded assignments, supervisor relationships, delegation and approval-authority boundaries, typed resource access, seat priority policies, and append-only identity audit events. It does not alter the simulator compatibility tables and is reversible.
+
+Revision `20260729_04` adds the durable agent-runtime SQL control plane. It widens audit/outbox correlation identifiers to the shared 120-character exact-preservation limit and creates runtime run, event, attempt, checkpoint, and processed-command tables. Its downgrade checks correlation-ID representability before any destructive DDL so unsafe narrowing leaves runtime tables and existing rows intact.
 
 To intentionally start clean in development, stop the API, back up anything needed, and delete the database plus its `-wal` and `-shm` sidecars from `apps/api/data`; then run `python -m alembic upgrade head`. This destroys local durable state and should never be automated against an uncertain path. Do not edit SQLite tables manually.

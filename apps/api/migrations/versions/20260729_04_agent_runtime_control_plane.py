@@ -118,6 +118,8 @@ def upgrade() -> None:
         sa.Column("command_id", sa.String(length=120), nullable=False),
         sa.Column("command_hash", sa.String(length=64), nullable=False),
         sa.Column("command_type", sa.String(length=120), nullable=False),
+        sa.Column("verified_actor_id", sa.String(length=160), nullable=True),
+        sa.Column("authorization_json", sa.Text(), nullable=False, server_default="{}"),
         sa.Column("result_json", sa.Text(), nullable=False),
         sa.Column("processed_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["run_id"], ["agent_runtime_runs.run_id"], ondelete="CASCADE"),
@@ -145,6 +147,8 @@ def _reject_unrepresentable_downgrade() -> None:
 
 
 def downgrade() -> None:
+    _reject_unrepresentable_downgrade()
+
     op.drop_table("agent_runtime_processed_commands")
     op.drop_table("agent_runtime_checkpoints")
     op.drop_index("ix_agent_runtime_attempts_run_id", table_name="agent_runtime_attempts")
@@ -161,7 +165,6 @@ def downgrade() -> None:
     op.drop_index("ix_agent_runtime_runs_agent_id", table_name="agent_runtime_runs")
     op.drop_table("agent_runtime_runs")
 
-    _reject_unrepresentable_downgrade()
     for table_name, column_name in reversed(
         (("outbox_events", "correlation_id"), ("audit_events", "correlation_id"))
     ):

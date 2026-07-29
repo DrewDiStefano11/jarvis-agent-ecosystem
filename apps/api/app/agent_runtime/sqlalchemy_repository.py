@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from hashlib import sha256
+from threading import RLock
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError, OperationalError
@@ -17,6 +18,7 @@ from app.agent_runtime.errors import (
     RunAlreadyExistsError,
     RunNotFoundError,
     RuntimePersistenceError,
+    RuntimeReplayActorMismatchError,
     VersionConflictError,
 )
 from app.agent_runtime.ledger import replay_execution_ledger
@@ -30,6 +32,7 @@ from app.db.models import (
     AgentRuntimeRunRow,
     AuditEventRow,
     OutboxEventRow,
+    TaskRow,
 )
 from app.models.agent_runtime import (
     AgentRunAttempt,
@@ -56,8 +59,10 @@ def load(text, cls):
 
 
 class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
-    def __init__(self, sessions: sessionmaker[Session]):
+    def __init__(self, sessions: sessionmaker[Session], *, outbox_max_attempts: int = 10):
         self.sessions = sessions
+        self.outbox_max_attempts = outbox_max_attempts
+        self._commit_lock = RLock()
 
     def _awaiting_run_lock(self, run_id: str, command_id: str) -> None:
         """Deterministic test seam for the run-lock contention window.
@@ -128,6 +133,9 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                     recorded_at=x.processed_at.replace(tzinfo=UTC)
                     if x.processed_at.tzinfo is None
                     else x.processed_at,
+                    verified_actor_id=x.verified_actor_id,
+                    command_type=x.command_type,
+                    authorization=json.loads(x.authorization_json or "{}"),
                 )
             )
 
@@ -197,7 +205,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
     ):
         run_id = snapshot.specification.run_id
         try:
-            with self.sessions.begin() as s:
+            with self._commit_lock, self.sessions.begin() as s:
                 replay = self._replay_processed_command(s, run_id, processed_command)
                 if replay is not None:
                     return replay
@@ -217,6 +225,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 if replay is not None:
                     return replay
                 old = []
+                previous_state: str | None = None
                 if create:
                     if row:
                         raise RunAlreadyExistsError(run_id=run_id)
@@ -232,7 +241,13 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 else:
                     if not row:
                         raise RunNotFoundError(run_id=run_id)
+                    previous_state = row.state
                     if row.version != expected_version:
+                        replay = self._replay_processed_command(
+                            s, run_id, processed_command, refresh=True
+                        )
+                        if replay is not None:
+                            return replay
                         raise VersionConflictError(
                             run_id=run_id,
                             command_id=processed_command.command_id,
@@ -250,6 +265,11 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                         )
                     ]
                     if len(old) != expected_sequence:
+                        replay = self._replay_processed_command(
+                            s, run_id, processed_command, refresh=True
+                        )
+                        if replay is not None:
+                            return replay
                         raise LedgerSequenceError(
                             run_id=run_id,
                             command_id=processed_command.command_id,
@@ -340,7 +360,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                         )
                     )
                 self._store(s, processed_command)
-                self._store_audit(s, processed_command, snapshot, events)
+                self._store_audit(s, processed_command, snapshot, events, previous_state)
                 s.flush()
                 return None
         except IntegrityError as exc:
@@ -383,6 +403,14 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
         )
         if prior is None:
             return None
+        if (
+            prior.verified_actor_id
+            and processed_command.verified_actor_id
+            and prior.verified_actor_id != processed_command.verified_actor_id
+        ):
+            raise RuntimeReplayActorMismatchError(
+                run_id=run_id, command_id=processed_command.command_id
+            )
         if prior.command_hash != processed_command.command_hash:
             raise CommandConflictError(run_id=run_id, command_id=processed_command.command_id)
         return ProcessedCommandRecord(
@@ -393,6 +421,9 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
             recorded_at=prior.processed_at.replace(tzinfo=UTC)
             if prior.processed_at.tzinfo is None
             else prior.processed_at,
+            verified_actor_id=prior.verified_actor_id,
+            command_type=prior.command_type,
+            authorization=json.loads(prior.authorization_json or "{}"),
         )
 
     def _store(self, s, x):
@@ -401,7 +432,9 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 run_id=x.run_id,
                 command_id=x.command_id,
                 command_hash=x.command_hash,
-                command_type="runtime",
+                command_type=x.command_type,
+                verified_actor_id=x.verified_actor_id,
+                authorization_json=canonical_json(x.authorization),
                 result_json=dump(x.result),
                 processed_at=x.recorded_at,
             )
@@ -448,32 +481,47 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
         command: ProcessedCommandRecord,
         snapshot: AgentRunSnapshot,
         events: object,
+        previous_state: str | None,
     ) -> None:
         event_list = list(events)
         audit_identity = canonical_json(
             {"commandId": command.command_id, "runId": command.run_id}
         ).encode()
         audit_id = f"runtime-{sha256(audit_identity).hexdigest()}"
+        actor_id = command.verified_actor_id or "runtime-control-plane"
+        task_id = (
+            snapshot.specification.task_id
+            if session.get(TaskRow, snapshot.specification.task_id) is not None
+            else None
+        )
         session.add(
             AuditEventRow(
                 id=audit_id,
                 event_type="agent_runtime.command",
-                actor="runtime-control-plane",
+                actor=actor_id,
                 agent_id=None,
-                task_id=None,
+                task_id=task_id,
                 approval_id=None,
-                previous_state=None,
+                previous_state=previous_state,
                 new_state=snapshot.state.value,
                 correlation_id=snapshot.specification.correlation_id or command.run_id,
                 sequence_number=snapshot.event_sequence_number,
                 event_session_id=self._runtime_session_id(command.run_id),
                 timestamp=command.recorded_at,
                 payload={
-                    "commandId": command.command_id,
-                    "runId": command.run_id,
-                    "taskId": snapshot.specification.task_id,
-                    "targetAgentId": snapshot.specification.agent_id,
-                    "eventIds": [event.event_id for event in event_list],
+                    "summary": f"Runtime command {command.command_type}",
+                    "payload": {
+                        "verifiedActorId": command.verified_actor_id,
+                        "commandType": command.command_type,
+                        "commandId": command.command_id,
+                        "runId": command.run_id,
+                        "taskId": snapshot.specification.task_id,
+                        "targetAgentId": snapshot.specification.agent_id,
+                        "eventIds": [event.event_id for event in event_list],
+                        "authorization": command.authorization,
+                        "idempotentReplay": False,
+                    },
+                    "artifactIds": [],
                 },
                 schema_version="1.0",
             )
@@ -494,7 +542,8 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                     select(func.count())
                     .select_from(OutboxEventRow)
                     .where(
-                        OutboxEventRow.status == "exhausted",
+                        OutboxEventRow.status == "failed",
+                        OutboxEventRow.publish_attempt_count >= self.outbox_max_attempts,
                         OutboxEventRow.event_type.like("agent_runtime.%"),
                     )
                 )
