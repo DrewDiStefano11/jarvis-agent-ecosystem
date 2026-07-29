@@ -157,8 +157,8 @@ def test_create_with_unauthorized_parent_is_403_bounded_and_zero_artifact(tmp_pa
             json=create_body(actor, "denied-child", "task-child", "secret-parent"),
             headers={"X-Jarvis-Actor-Id": actor},
         )
-        assert response.status_code == 403
-        assert response.json()["error"]["code"] == "runtime_permission_denied"
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "runtime_parent_unavailable"
         assert_no_leak(response, "secret-parent", "secret-task", "secret-agent", "corr-7")
         assert_no_child_artifacts(app, before, "denied-child")
 
@@ -201,7 +201,8 @@ def test_create_parent_expired_and_explicit_deny_are_zero_artifact(tmp_path) -> 
                 json=create_body(actor, child, "task-child", "policy-parent"),
                 headers={"X-Jarvis-Actor-Id": actor},
             )
-            assert response.status_code == 403
+            assert response.status_code == 404
+            assert response.json()["error"]["code"] == "runtime_parent_unavailable"
             assert_no_leak(response, "policy-parent", "task-parent")
             assert_no_child_artifacts(app, before, child)
 
@@ -252,40 +253,133 @@ def test_create_parent_replay_requires_current_parent_authorization_and_same_act
         lost_permission = client.post(
             "/api/agent-runtime/commands", json=body, headers={"X-Jarvis-Actor-Id": actor}
         )
-        assert lost_permission.status_code == 403
-        assert lost_permission.json()["error"]["code"] == "runtime_permission_denied"
+        assert lost_permission.status_code == 404
+        assert lost_permission.json()["error"]["code"] == "runtime_parent_unavailable"
         assert artifact_counts(app) == before
 
 
-def test_create_missing_parent_contract_and_child_permission_order(tmp_path) -> None:
-    app = create_app(delay_ms=1, database_url=database_url(tmp_path / "parent-missing.db"))
+def test_parent_unavailable_responses_are_indistinguishable_and_zero_artifact(
+    tmp_path,
+) -> None:
+    app = create_app(delay_ms=1, database_url=database_url(tmp_path / "parent-enumeration.db"))
     with TestClient(app) as client:
         permissions = ensure_permissions(app)
-        actor = create_actor(app, "parent-missing")
-        no_create = create_actor(app, "parent-no-create")
-        grant(app, actor, permissions, "runtime.create", "runtime.read", task_id="task-child")
-        grant(app, no_create, permissions, "runtime.read", task_id="task-parent")
-        missing = client.post(
-            "/api/agent-runtime/commands",
-            json=create_body(actor, "child-missing-parent", "task-child", "missing-parent"),
-            headers={"X-Jarvis-Actor-Id": actor},
-        )
-        assert missing.status_code == 200
-        lineage = client.get(
-            "/api/agent-runtime/runs/child-missing-parent/lineage",
-            headers={"X-Jarvis-Actor-Id": actor},
-        ).json()["data"]
-        assert lineage["missing_parent_id"] == "missing-parent"
+        actor = create_actor(app, "parent-enumeration")
+        grant(app, actor, permissions, "runtime.create", task_id="task-child")
+        now = datetime.now(UTC)
 
+        create_runtime_run(
+            app, "secret-parent", task_id="secret-task", agent_id="secret-agent", index=1
+        )
+        create_runtime_run(
+            app, "denied-parent", task_id="denied-task", agent_id="denied-agent", index=2
+        )
+        create_runtime_run(
+            app, "expired-parent", task_id="expired-task", agent_id="expired-agent", index=3
+        )
+        create_runtime_run(
+            app,
+            "missing-grandparent-parent",
+            task_id="task-child",
+            parent_run_id="missing-grandparent",
+            index=4,
+        )
+        create_runtime_run(
+            app, "secret-grandparent", task_id="grand-secret", agent_id="grand-agent", index=5
+        )
+        create_runtime_run(
+            app,
+            "unreadable-grandparent-parent",
+            task_id="task-child",
+            parent_run_id="secret-grandparent",
+            index=6,
+        )
+
+        grant(app, actor, permissions, "runtime.read", task_id="denied-task")
+        app.state.identity_service.assign_permission(
+            actor,
+            AssignPermissionRequest(
+                permission_id=permissions["runtime.read"],
+                effect="deny",
+                resource_type="task",
+                resource_id="denied-task",
+            ),
+        )
+        app.state.identity_service.assign_permission(
+            actor,
+            AssignPermissionRequest(
+                permission_id=permissions["runtime.read"],
+                effect="allow",
+                resource_type="task",
+                resource_id="expired-task",
+                starts_at=now - timedelta(days=2),
+                expires_at=now - timedelta(days=1),
+            ),
+        )
+        grant(app, actor, permissions, "runtime.read", task_id="task-child")
+
+        cases = (
+            ("missing-parent-child", "missing-parent"),
+            ("unreadable-parent", "secret-parent"),
+            ("denied-parent-child", "denied-parent"),
+            ("expired-parent-child", "expired-parent"),
+            ("missing-grandparent-child", "missing-grandparent-parent"),
+            ("unreadable-grandparent-child", "unreadable-grandparent-parent"),
+        )
+        bodies = []
+        before = artifact_counts(app)
+        for child_run_id, parent_run_id in cases:
+            response = client.post(
+                "/api/agent-runtime/commands",
+                json=create_body(actor, child_run_id, "task-child", parent_run_id),
+                headers={"X-Jarvis-Actor-Id": actor},
+            )
+            assert response.status_code == 404
+            bodies.append(response.json())
+            assert_no_leak(
+                response,
+                parent_run_id,
+                "secret-parent",
+                "secret-task",
+                "secret-agent",
+                "denied-task",
+                "expired-task",
+                "secret-grandparent",
+                "grand-secret",
+                "grand-agent",
+            )
+            assert_no_child_artifacts(app, before, child_run_id)
+        assert all(body == bodies[0] for body in bodies)
+        assert bodies[0]["error"]["code"] == "runtime_parent_unavailable"
+
+
+def test_child_authorization_precedence_hides_parent_state(tmp_path) -> None:
+    app = create_app(delay_ms=1, database_url=database_url(tmp_path / "parent-child-precedence.db"))
+    with TestClient(app) as client:
+        permissions = ensure_permissions(app)
+        no_create = create_actor(app, "parent-no-create")
+        grant(app, no_create, permissions, "runtime.read", task_id="task-parent")
         create_runtime_run(app, "readable-parent", task_id="task-parent", index=2)
         before = artifact_counts(app)
-        denied_child = client.post(
+        missing = client.post(
             "/api/agent-runtime/commands",
-            json=create_body(no_create, "child-no-create", "task-child", "readable-parent"),
+            json=create_body(no_create, "child-no-create-missing", "task-child", "missing-parent"),
             headers={"X-Jarvis-Actor-Id": no_create},
         )
-        assert denied_child.status_code == 403
-        assert_no_child_artifacts(app, before, "child-no-create")
+        existing = client.post(
+            "/api/agent-runtime/commands",
+            json=create_body(
+                no_create, "child-no-create-existing", "task-child", "readable-parent"
+            ),
+            headers={"X-Jarvis-Actor-Id": no_create},
+        )
+        assert missing.status_code == existing.status_code == 403
+        assert missing.json() == existing.json()
+        assert missing.json()["error"]["code"] == "runtime_permission_denied"
+        assert_no_leak(missing, "missing-parent", "readable-parent", "task-parent")
+        assert_no_leak(existing, "missing-parent", "readable-parent", "task-parent")
+        assert_no_child_artifacts(app, before, "child-no-create-missing")
+        assert app.state.agent_runtime_repository.load_run("child-no-create-existing") is None
 
 
 def test_create_parent_structural_failures_are_zero_artifact(tmp_path) -> None:
@@ -323,3 +417,57 @@ def test_create_parent_structural_failures_are_zero_artifact(tmp_path) -> None:
         assert cycle.status_code == 400
         assert cycle.json()["error"]["code"] == "invalid_runtime_metadata"
         assert_no_child_artifacts(app, before_cycle, "cycle-child")
+
+
+def test_parent_deleted_between_authorization_and_commit_is_zero_artifact(tmp_path) -> None:
+    app = create_app(delay_ms=1, database_url=database_url(tmp_path / "parent-race.db"))
+    with TestClient(app) as client:
+        permissions = ensure_permissions(app)
+        actor = create_actor(app, "parent-race")
+        grant(app, actor, permissions, "runtime.create", task_id="task-child")
+        grant(app, actor, permissions, "runtime.read", task_id="task-parent")
+        create_runtime_run(app, "race-parent", task_id="task-parent", index=1)
+        original = app.state.agent_runtime_repository._awaiting_run_lock
+
+        def delete_parent(run_id: str, command_id: str) -> None:
+            if run_id == "race-child":
+                with app.state.agent_runtime_repository.sessions.begin() as session:
+                    parent = session.get(AgentRuntimeRunRow, "race-parent")
+                    session.delete(parent)
+            original(run_id, command_id)
+
+        app.state.agent_runtime_repository._awaiting_run_lock = delete_parent
+        response = client.post(
+            "/api/agent-runtime/commands",
+            json=create_body(actor, "race-child", "task-child", "race-parent"),
+            headers={"X-Jarvis-Actor-Id": actor},
+        )
+        assert response.status_code == 404
+        assert response.json()["error"]["code"] == "runtime_parent_unavailable"
+        # The parent deletion is the simulated race; no child artifacts are added.
+        assert app.state.agent_runtime_repository.load_run("race-child") is None
+        with app.state.repository.session_factory() as session:
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(AgentRuntimeEventRow)
+                    .where(AgentRuntimeEventRow.run_id == "race-child")
+                )
+                == 0
+            )
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(AgentRuntimeProcessedCommandRow)
+                    .where(AgentRuntimeProcessedCommandRow.run_id == "race-child")
+                )
+                == 0
+            )
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(AuditEventRow)
+                    .where(AuditEventRow.payload.contains("race-child"))
+                )
+                == 0
+            )

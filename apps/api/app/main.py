@@ -242,7 +242,12 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.exception_handler(AgentRuntimeError)
     async def runtime_error(_: Request, exc: AgentRuntimeError) -> JSONResponse:
-        missing_codes = {"run_not_found", "attempt_not_found", "runtime_actor_not_found"}
+        missing_codes = {
+            "run_not_found",
+            "attempt_not_found",
+            "runtime_actor_not_found",
+            "runtime_parent_unavailable",
+        }
         input_codes = {
             "invalid_runtime_metadata",
             "invalid_runtime_identifier",

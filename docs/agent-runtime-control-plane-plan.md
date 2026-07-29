@@ -91,9 +91,10 @@ PR #40 head inspected as reference only: `5777faaa5792c9f08811338cecb96d2559b187
 
 ## Parent-link authorization repair
 
-- Create commands remain authorized against the child run's `task_id` using `runtime.create`.
-- When `parent_run_id` is present and the parent exists, `AgentRuntimeService` now authorizes `runtime.read` on each existing parent/ancestor before structural lineage validation and before any durable artifact is written. `runtime.admin` remains the bounded override.
-- Missing parents preserve the existing unresolved-reference contract: create succeeds after child create authorization, and lineage later reports `missing_parent_id`.
-- Unauthorized existing parents fail closed with `runtime_permission_denied`; the response does not include protected parent run/task/agent/state/correlation metadata.
-- Exact replay still requires the same verified actor and current child/parent authorization, so permission removal after the original create prevents returning a protected stored result.
+- Create commands remain authorized against the child run's `task_id` using `runtime.create` before any parent lookup, preserving child authorization precedence.
+- External protected create now requires a fully existing and authorized parent/ancestor chain whenever `parent_run_id` is present. Each existing parent/ancestor requires `runtime.read`; `runtime.admin` remains the bounded override.
+- Missing parents, unreadable parents, explicit parent denies, expired parent grants, missing grandparents, and unreadable grandparents all fail with the same bounded `runtime_parent_unavailable` response. The response contains no parent/ancestor run IDs, task IDs, agent IDs, states, correlation IDs, assignment IDs, role IDs, SQL, paths, or tracebacks.
+- Existing persisted or imported legacy/corrupt missing ancestry can still be represented by the lineage reader as `missing_parent_id`; the external create route no longer introduces new unresolved parent references.
+- Exact replay still requires the same verified actor plus current child and parent/ancestor authorization. Permission removal or parent/ancestor deletion prevents returning the stored protected result and creates no duplicate artifacts.
+- Rejected parent-unavailable and lineage-validation failures preserve the zero-artifact contract for runtime runs, events, attempts, checkpoints, processed commands, mutation audits, and runtime outbox rows.
 - Regression coverage lives in `apps/api/tests/test_agent_runtime_parent_authorization.py`.

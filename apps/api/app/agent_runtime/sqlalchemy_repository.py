@@ -17,6 +17,7 @@ from app.agent_runtime.errors import (
     LedgerSequenceError,
     RunAlreadyExistsError,
     RunNotFoundError,
+    RuntimeParentUnavailableError,
     RuntimePersistenceError,
     RuntimeReplayActorMismatchError,
     VersionConflictError,
@@ -229,6 +230,18 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 if create:
                     if row:
                         raise RunAlreadyExistsError(run_id=run_id)
+                    if processed_command.authorization.get("parentCheckRequired") is True:
+                        current_parent = snapshot.specification.parent_run_id
+                        visited = {run_id}
+                        while current_parent is not None:
+                            if current_parent in visited:
+                                break
+                            parent_row = s.get(AgentRuntimeRunRow, current_parent)
+                            if parent_row is None:
+                                raise RuntimeParentUnavailableError()
+                            visited.add(current_parent)
+                            parent_snapshot = load(parent_row.snapshot_json, AgentRunSnapshot)
+                            current_parent = parent_snapshot.specification.parent_run_id
                     validate_lineage_invariant(
                         run_id,
                         snapshot.specification.parent_run_id,

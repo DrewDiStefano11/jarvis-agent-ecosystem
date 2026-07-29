@@ -159,3 +159,8 @@ class RuntimeActorMismatchError(AgentRuntimeError):
 class RuntimeReplayActorMismatchError(AgentRuntimeError):
     code = "runtime_replay_actor_mismatch"
     default_message = "The processed command result belongs to a different verified actor."
+
+
+class RuntimeParentUnavailableError(AgentRuntimeError):
+    code = "runtime_parent_unavailable"
+    default_message = "The requested parent run is unavailable."

@@ -28,6 +28,8 @@ from app.agent_runtime.errors import (
     RunAlreadyExistsError,
     RunNotFoundError,
     RuntimeActorMismatchError,
+    RuntimeParentUnavailableError,
+    RuntimePermissionDeniedError,
     RuntimeReplayActorMismatchError,
     TerminalRunImmutableError,
     VersionConflictError,
@@ -338,8 +340,8 @@ class AgentRuntimeService:
             context = self.authorizer.authorize(
                 actor, "create", specification=command.specification
             )
-            parent_checked, parent_allowed_by_admin, parent_reason = self._authorize_parent_lineage(
-                command.specification, actor
+            parent_checked, parent_allowed_by_admin, parent_reason, checked_count = (
+                self._authorize_parent_lineage(command.specification, actor)
             )
             return replace(
                 context,
@@ -349,6 +351,7 @@ class AgentRuntimeService:
                     "parentCheckPerformed": parent_checked,
                     "parentCheckAllowedByAdmin": parent_allowed_by_admin,
                     "parentCheckReasonCode": parent_reason,
+                    "checkedAncestorCount": checked_count,
                 },
             )
         aggregate = self._load_current(command.run_id)
@@ -359,22 +362,27 @@ class AgentRuntimeService:
         self,
         specification: AgentRunSpecification,
         actor: RuntimeActorContext,
-    ) -> tuple[bool, bool, str | None]:
+    ) -> tuple[bool, bool, str | None, int]:
         if self.authorizer is None or specification.parent_run_id is None:
-            return False, False, None
+            return False, False, None, 0
         current_parent = specification.parent_run_id
         visited = {specification.run_id}
         depth = 0
         first_checked = False
         first_allowed_by_admin = False
         first_reason: str | None = None
+        checked_count = 0
         while current_parent is not None and depth < DEFAULT_LINEAGE_DEPTH_LIMIT:
             if current_parent in visited:
                 break
             parent_snapshot = self.repository.load_run(current_parent)
             if parent_snapshot is None:
-                break
-            parent_context = self.authorizer.authorize(actor, "read", snapshot=parent_snapshot)
+                raise RuntimeParentUnavailableError()
+            try:
+                parent_context = self.authorizer.authorize(actor, "read", snapshot=parent_snapshot)
+            except RuntimePermissionDeniedError as exc:
+                raise RuntimeParentUnavailableError() from exc
+            checked_count += 1
             if not first_checked:
                 first_checked = True
                 first_allowed_by_admin = parent_context.allowed_by_admin
@@ -382,7 +390,12 @@ class AgentRuntimeService:
             visited.add(current_parent)
             current_parent = parent_snapshot.specification.parent_run_id
             depth += 1
-        return first_checked, first_allowed_by_admin, first_reason
+        if current_parent is not None and depth >= DEFAULT_LINEAGE_DEPTH_LIMIT:
+            raise InvalidRuntimeMetadataError(
+                "Run lineage exceeded the bounded traversal depth.",
+                run_id=specification.run_id,
+            )
+        return first_checked, first_allowed_by_admin, first_reason, checked_count
 
     def _require_authorized(
         self,
