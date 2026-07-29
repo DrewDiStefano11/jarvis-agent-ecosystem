@@ -3,7 +3,23 @@ from __future__ import annotations
 import asyncio
 import signal
 
+from app.autonomous_worker.errors import AutonomousWorkerError
 from app.main import create_app
+
+EXPECTED_RUN_ERRORS = {
+    "EXECUTION_CANCELLED",
+    "EXECUTION_EMERGENCY_STOPPED",
+    "EXECUTION_LEASE_LOST",
+}
+
+
+async def _run_once_resilient(service, worker_id: str):
+    try:
+        return await service.run_once(worker_id)
+    except AutonomousWorkerError as exc:
+        if exc.code not in EXPECTED_RUN_ERRORS:
+            raise
+        return None
 
 
 async def run() -> None:
@@ -27,7 +43,7 @@ async def run() -> None:
     try:
         while not stop.is_set():
             app.state.task_leases.heartbeat_worker(worker.id)
-            result = await service.run_once(worker.id)
+            result = await _run_once_resilient(service, worker.id)
             if result is None:
                 try:
                     await asyncio.wait_for(

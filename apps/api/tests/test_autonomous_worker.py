@@ -9,6 +9,8 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import func, select, update
 
+from app.autonomous_worker.__main__ import _run_once_resilient
+from app.autonomous_worker.errors import AutonomousWorkerError
 from app.core.config import Settings
 from app.db.models import AuditEventRow, ModelExecutionRow, OutboxEventRow, TaskLeaseRow
 from app.main import create_app
@@ -686,6 +688,94 @@ async def test_restart_repeats_pre_result_call_and_completes(
 
 
 @pytest.mark.asyncio
+async def test_restart_reconciles_cancelled_pre_result_execution(tmp_path: Path) -> None:
+    def crash_during_call() -> None:
+        raise RuntimeError("injected provider-response crash")
+
+    router = FakeRouter([json.dumps(VALID_RESULT)], callback=crash_during_call)
+    app, client, _, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-autonomous-pre-result-cancelled",
+    )
+    try:
+        with pytest.raises(RuntimeError, match="injected provider-response crash"):
+            await app.state.autonomous_worker_service.run_once(worker.id)
+        with app.state.model_execution_repository.sessions.begin() as session:
+            session.execute(
+                update(TaskLeaseRow)
+                .where(TaskLeaseRow.task_id == "task-demo")
+                .values(expires_at=ts(0))
+            )
+        assert app.state.task_leases.recover_expired_leases() == 1
+        app.state.task_leases.cancel_task("task-demo")
+        router.callback = None
+
+        assert await app.state.autonomous_worker_service.run_once(worker.id) is None
+        stored = app.state.model_execution_repository.get_by_run(
+            "run-autonomous-pre-result-cancelled"
+        )
+        assert stored is not None
+        assert stored.stage == "failed"
+        assert stored.failureCode == "execution_cancelled"
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-autonomous-pre-result-cancelled"
+        )
+        assert runtime is not None
+        assert runtime.state == "cancelled"
+        assert len(router.requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_restart_reconciles_cancelled_persisted_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    router = FakeRouter([json.dumps(VALID_RESULT)])
+    app, client, _, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-autonomous-result-cancelled",
+    )
+    service = app.state.autonomous_worker_service
+    original_checkpoint = service._checkpoint
+
+    def crash_after_result(snapshot, actor, execution, attempt_id, name):
+        if name == "result-persisted":
+            raise RuntimeError("injected process crash")
+        return original_checkpoint(snapshot, actor, execution, attempt_id, name)
+
+    monkeypatch.setattr(service, "_checkpoint", crash_after_result)
+    try:
+        with pytest.raises(RuntimeError, match="injected process crash"):
+            await service.run_once(worker.id)
+        with app.state.model_execution_repository.sessions.begin() as session:
+            session.execute(
+                update(TaskLeaseRow)
+                .where(TaskLeaseRow.task_id == "task-demo")
+                .values(expires_at=ts(0))
+            )
+        assert app.state.task_leases.recover_expired_leases() == 1
+        app.state.task_leases.cancel_task("task-demo")
+        monkeypatch.setattr(service, "_checkpoint", original_checkpoint)
+
+        assert await service.run_once(worker.id) is None
+        stored = app.state.model_execution_repository.get_by_run("run-autonomous-result-cancelled")
+        assert stored is not None
+        assert stored.stage == "failed"
+        assert stored.failureCode == "execution_cancelled"
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-autonomous-result-cancelled"
+        )
+        assert runtime is not None
+        assert runtime.state == "cancelled"
+        assert len(router.requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
 async def test_task_cancellation_wins_before_runtime_success(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -768,6 +858,113 @@ async def test_restart_finishes_runtime_after_task_completion_without_model_reca
         assert runtime.state == "succeeded"
         assert app.state.repository.tasks["task-demo"].status == "completed"
         assert len(router.requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_hashed_review_flag_must_match_recovery_column(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    review_result = VALID_RESULT | {"requiresHumanReview": True}
+    router = FakeRouter([json.dumps(review_result)])
+    app, client, _, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-autonomous-review-flag-corrupt",
+    )
+    service = app.state.autonomous_worker_service
+
+    def crash_before_review_pause(*args, **kwargs):
+        raise RuntimeError("injected review-pause crash")
+
+    monkeypatch.setattr(service, "_pause_for_review", crash_before_review_pause)
+    try:
+        with pytest.raises(RuntimeError, match="injected review-pause crash"):
+            await service.run_once(worker.id)
+        stored = app.state.model_execution_repository.get_by_run(
+            "run-autonomous-review-flag-corrupt"
+        )
+        assert stored is not None
+        with app.state.model_execution_repository.sessions.begin() as session:
+            session.execute(
+                update(ModelExecutionRow)
+                .where(ModelExecutionRow.execution_id == stored.executionId)
+                .values(requires_human_review=False)
+            )
+        with pytest.raises(AutonomousWorkerError) as raised:
+            app.state.model_execution_repository.recoverable_results()
+        assert raised.value.code == "MODEL_RESULT_CORRUPT"
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_worker_polling_continues_after_expected_run_error() -> None:
+    class ScriptedService:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def run_once(self, worker_id: str):
+            self.calls += 1
+            if self.calls == 1:
+                raise AutonomousWorkerError("EXECUTION_CANCELLED")
+            return worker_id
+
+    service = ScriptedService()
+    assert await _run_once_resilient(service, "worker-1") is None
+    assert await _run_once_resilient(service, "worker-1") == "worker-1"
+    assert service.calls == 2
+
+    class MisconfiguredService:
+        async def run_once(self, worker_id: str):
+            raise AutonomousWorkerError("MODEL_EXECUTION_DISABLED")
+
+    with pytest.raises(AutonomousWorkerError) as raised:
+        await _run_once_resilient(MisconfiguredService(), "worker-1")
+    assert raised.value.code == "MODEL_EXECUTION_DISABLED"
+
+
+def test_autonomous_scan_paginates_past_ordinary_queued_runs(tmp_path: Path) -> None:
+    router = FakeRouter([json.dumps(VALID_RESULT)])
+    app, client, actor_id, _ = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-zz-autonomous",
+    )
+    runtime = app.state.agent_runtime_service
+    actor = runtime.authenticate_actor(actor_id)
+    try:
+        for index in range(100):
+            run_id = f"run-aa-ordinary-{index:03d}"
+            created = runtime.handle_authorized(
+                CreateAgentRunCommand(
+                    specification=make_spec(
+                        run_id=run_id,
+                        task_id="task-demo",
+                        agent_id=actor_id,
+                    ),
+                    command_id=f"create-{run_id}",
+                    timestamp=ts(0),
+                    actor_reference=actor_id,
+                ),
+                actor,
+            )
+            assert created.snapshot is not None
+            queued = runtime.handle_authorized(
+                QueueAgentRunCommand(
+                    run_id=run_id,
+                    command_id=f"queue-{run_id}",
+                    expected_run_version=created.snapshot.version,
+                    timestamp=ts(1),
+                    actor_reference=actor_id,
+                ),
+                actor,
+            )
+            assert queued.snapshot is not None
+
+        candidates = app.state.model_execution_repository.list_queued_autonomous_runs()
+        assert [item.specification.run_id for item in candidates] == ["run-zz-autonomous"]
     finally:
         client.__exit__(None, None, None)
 

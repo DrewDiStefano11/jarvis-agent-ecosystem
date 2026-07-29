@@ -244,6 +244,8 @@ class AutonomousWorkerService:
     ) -> tuple[AgentRunSnapshot, ModelExecutionResult | None, Any] | None:
         for execution in self.executions.recoverable_uncommitted():
             snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
+            if self._reconcile_cancelled_recovery(snapshot, actor, execution):
+                continue
             request = snapshot.specification.autonomous_execution
             if request is None:
                 continue
@@ -774,6 +776,8 @@ class AutonomousWorkerService:
         for execution in self.executions.recoverable_results():
             snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
             task = self.task_leases.repository.tasks.get(execution.taskId)
+            if self._reconcile_cancelled_recovery(snapshot, actor, execution):
+                continue
             if execution.requiresHumanReview:
                 if (
                     snapshot.state == AgentRunState.PAUSED
@@ -805,6 +809,19 @@ class AutonomousWorkerService:
                 )
             return self._finalize(snapshot, actor, execution, worker_id, lease.leaseToken)
         return None
+
+    def _reconcile_cancelled_recovery(
+        self,
+        snapshot: AgentRunSnapshot,
+        actor: RuntimeActorContext,
+        execution: ModelExecutionResult,
+    ) -> bool:
+        task = self.task_leases.repository.tasks.get(execution.taskId)
+        if task is None or task.status != "cancelled":
+            return False
+        self._best_effort_cancel(snapshot, actor)
+        self.executions.mark_failed(execution.executionId, "execution_cancelled")
+        return True
 
     def _handle(
         self,

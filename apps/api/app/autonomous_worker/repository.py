@@ -94,21 +94,30 @@ class ModelExecutionRepository:
             state = session.get(SystemStateRow, 1)
             if state is not None and state.emergency_stop:
                 return []
-            rows = list(
-                session.scalars(
-                    select(AgentRuntimeRunRow)
-                    .where(AgentRuntimeRunRow.state == AgentRunState.QUEUED.value)
-                    .order_by(AgentRuntimeRunRow.created_at, AgentRuntimeRunRow.run_id)
-                    .limit(100)
-                )
-            )
             snapshots: list[AgentRunSnapshot] = []
-            for row in rows:
-                snapshot = AgentRunSnapshot.model_validate_json(row.snapshot_json)
-                request = snapshot.specification.autonomous_execution
-                if request is None or request.execution_type.value != "planning_review":
-                    continue
-                snapshots.append(snapshot)
+            offset = 0
+            page_size = 100
+            while len(snapshots) < 100:
+                rows = list(
+                    session.scalars(
+                        select(AgentRuntimeRunRow)
+                        .where(AgentRuntimeRunRow.state == AgentRunState.QUEUED.value)
+                        .order_by(AgentRuntimeRunRow.created_at, AgentRuntimeRunRow.run_id)
+                        .offset(offset)
+                        .limit(page_size)
+                    )
+                )
+                if not rows:
+                    break
+                offset += len(rows)
+                for row in rows:
+                    snapshot = AgentRunSnapshot.model_validate_json(row.snapshot_json)
+                    request = snapshot.specification.autonomous_execution
+                    if request is None or request.execution_type.value != "planning_review":
+                        continue
+                    snapshots.append(snapshot)
+                    if len(snapshots) == 100:
+                        break
             return snapshots
 
     def target_identity_active(self, agent_id: str) -> bool:
@@ -796,6 +805,8 @@ class ModelExecutionRepository:
                 result = PlanningReviewResult.model_validate(row.result_json)
             except ValidationError as exc:
                 raise AutonomousWorkerError("MODEL_RESULT_CORRUPT") from exc
+            if row.requires_human_review != result.requiresHumanReview:
+                raise AutonomousWorkerError("MODEL_RESULT_CORRUPT")
         elif row.result_hash is not None:
             raise AutonomousWorkerError("MODEL_RESULT_CORRUPT")
         return ModelExecutionResult(
@@ -823,7 +834,9 @@ class ModelExecutionRepository:
                 if isinstance(row.estimated_cost_usd, Decimal)
                 else row.estimated_cost_usd
             ),
-            requiresHumanReview=row.requires_human_review,
+            requiresHumanReview=(
+                result.requiresHumanReview if result is not None else row.requires_human_review
+            ),
             failureCode=row.failure_code,
             createdAt=row.created_at,
             updatedAt=row.updated_at,
