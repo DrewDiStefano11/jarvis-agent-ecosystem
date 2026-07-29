@@ -45,6 +45,9 @@ def test_invalid_request_contracts_are_rejected(payload: dict[str, object]) -> N
         {"items": [{"credential_id": "abc"}]},
         {"message": "Bearer abc.def"},
         {"value": object()},
+        {"value": float("nan")},
+        {"value": float("inf")},
+        {"value": float("-inf")},
         {1: "non-string key"},
         {f"k{index}": index for index in range(33)},
         {"large": "x" * 20_001},
@@ -144,7 +147,7 @@ def test_settings_defaults_disable_both_providers() -> None:
         {"JARVIS_MODEL_PRICING_JSON": '{"m":{"input_per_million_usd":1}}'},
         {
             "JARVIS_MODEL_PRICING_JSON": (
-                '{"m":{"input_per_million_usd":-1,"output_per_million_usd":2}}'
+                '{"p":{"m":{"input_per_million_usd":-1,"output_per_million_usd":2}}}'
             )
         },
     ],

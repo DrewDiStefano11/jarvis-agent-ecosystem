@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.core.config import Settings
-from app.model_providers.budget import ModelPricing, TaskBudget
+from app.model_providers.budget import ModelPricing, PricingTable, TaskBudget
 from app.model_providers.contracts import ModelCapability
 from app.model_providers.ollama import OllamaProvider
 from app.model_providers.openai_compatible import (
@@ -77,9 +77,11 @@ def build_default_routing_requirements(settings: Settings) -> RoutingRequirement
     )
 
 
-def build_model_pricing(settings: Settings) -> dict[str, ModelPricing]:
+def build_model_pricing(settings: Settings) -> PricingTable:
     return {
-        model: ModelPricing(**pricing) for model, pricing in settings.parsed_model_pricing().items()
+        (provider, model): ModelPricing(**pricing)
+        for provider, models in settings.parsed_model_pricing().items()
+        for model, pricing in models.items()
     }
 
 

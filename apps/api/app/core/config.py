@@ -143,7 +143,7 @@ class Settings(BaseSettings):
         self.parsed_model_pricing()
         return self
 
-    def parsed_model_pricing(self) -> dict[str, dict[str, float]]:
+    def parsed_model_pricing(self) -> dict[str, dict[str, dict[str, float]]]:
         try:
             payload = json.loads(self.model_pricing_json)
         except json.JSONDecodeError as exc:
@@ -151,18 +151,22 @@ class Settings(BaseSettings):
         if not isinstance(payload, dict):
             raise ValueError("JARVIS_MODEL_PRICING_JSON must contain an object")
         required = {"input_per_million_usd", "output_per_million_usd"}
-        result: dict[str, dict[str, float]] = {}
-        for model, pricing in payload.items():
-            if not isinstance(model, str) or not model or not isinstance(pricing, dict):
-                raise ValueError("model pricing entries must map model names to objects")
-            if set(pricing) != required:
-                raise ValueError("model pricing entries require exact input and output rates")
-            if any(
-                isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0
-                for value in pricing.values()
-            ):
-                raise ValueError("model pricing rates must be nonnegative numbers")
-            result[model] = {key: float(value) for key, value in pricing.items()}
+        result: dict[str, dict[str, dict[str, float]]] = {}
+        for provider, models in payload.items():
+            if not isinstance(provider, str) or not provider or not isinstance(models, dict):
+                raise ValueError("pricing entries must map provider names to model objects")
+            result[provider] = {}
+            for model, pricing in models.items():
+                if not isinstance(model, str) or not model or not isinstance(pricing, dict):
+                    raise ValueError("provider pricing must map model names to rate objects")
+                if set(pricing) != required:
+                    raise ValueError("model pricing entries require exact input and output rates")
+                if any(
+                    isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0
+                    for value in pricing.values()
+                ):
+                    raise ValueError("model pricing rates must be nonnegative numbers")
+                result[provider][model] = {key: float(value) for key, value in pricing.items()}
         return result
 
     def ensure_runtime_directory(self) -> None:

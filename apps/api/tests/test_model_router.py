@@ -20,6 +20,7 @@ from app.model_providers.errors import (
     AuthenticationError,
     BudgetExceededError,
     DuplicateProviderError,
+    MalformedProviderResponseError,
     ProviderUnavailableError,
     QuotaExhaustedError,
     RequestTimeoutError,
@@ -240,7 +241,7 @@ async def test_cost_cap_stops_retry_after_ambiguous_failure() -> None:
             requirements=RoutingRequirements(),
             budget=TaskBudget(maximum_requests=2, maximum_cost_usd=Decimal("1")),
             pricing={
-                "local-model": ModelPricing(
+                ("local", "local-model"): ModelPricing(
                     input_per_million_usd=1,
                     output_per_million_usd=1,
                 )
@@ -255,8 +256,10 @@ async def test_cost_cap_ambiguous_failure_cannot_fall_back() -> None:
     first = FakeProvider("first", results=[RequestTimeoutError("ambiguous", provider="first")])
     second = FakeProvider("second")
     pricing = {
-        name: ModelPricing(input_per_million_usd=1, output_per_million_usd=1)
-        for name in ("first-model", "second-model")
+        (provider, f"{provider}-model"): ModelPricing(
+            input_per_million_usd=1, output_per_million_usd=1
+        )
+        for provider in ("first", "second")
     }
     with pytest.raises(BudgetExceededError):
         await _router(first, second).execute(
@@ -308,6 +311,22 @@ async def test_auth_and_budget_never_fall_back(error: Exception) -> None:
     first = FakeProvider("first", results=[error])
     second = FakeProvider("second")
     with pytest.raises(type(error)):
+        await _router(first, second).execute(
+            request=ModelExecutionRequest(prompt="hello"),
+            requirements=RoutingRequirements(allow_fallback=True, maximum_fallbacks=1),
+            budget=TaskBudget(maximum_requests=2),
+        )
+    assert second.execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_malformed_provider_response_never_falls_back() -> None:
+    first = FakeProvider(
+        "first",
+        results=[MalformedProviderResponseError("malformed", provider="first")],
+    )
+    second = FakeProvider("second")
+    with pytest.raises(MalformedProviderResponseError):
         await _router(first, second).execute(
             request=ModelExecutionRequest(prompt="hello"),
             requirements=RoutingRequirements(allow_fallback=True, maximum_fallbacks=1),
@@ -377,14 +396,14 @@ def test_budget_exact_cost_zero_usage_and_limits() -> None:
     tracker = BudgetTracker(
         TaskBudget(maximum_requests=1, maximum_cost_usd=Decimal("1")),
         {
-            "m": ModelPricing(
+            ("p", "m"): ModelPricing(
                 input_per_million_usd=Decimal("2"),
                 output_per_million_usd=Decimal("4"),
             )
         },
     )
     request = ModelExecutionRequest(prompt="hello", model="m")
-    tracker.before_attempt(request)
+    tracker.before_attempt(request, provider="p")
     assert tracker.record(_response("p", "m", input_tokens=0, output_tokens=0, total_tokens=0)) == 0
     assert tracker.usage.cost_usd == Decimal("0")
 
@@ -399,12 +418,12 @@ def test_budget_exact_cost_zero_usage_and_limits() -> None:
         ),
         (
             TaskBudget(maximum_requests=1, maximum_cost_usd=Decimal("1")),
-            {"m": ModelPricing(input_per_million_usd=1, output_per_million_usd=1)},
+            {("p", "m"): ModelPricing(input_per_million_usd=1, output_per_million_usd=1)},
             _response("p", "alias"),
         ),
         (
             TaskBudget(maximum_requests=1, maximum_cost_usd=Decimal("1")),
-            {"m": ModelPricing(input_per_million_usd=1, output_per_million_usd=1)},
+            {("p", "m"): ModelPricing(input_per_million_usd=1, output_per_million_usd=1)},
             _response("p", "m", input_tokens=None, output_tokens=None, total_tokens=None),
         ),
         (
@@ -416,16 +435,16 @@ def test_budget_exact_cost_zero_usage_and_limits() -> None:
 )
 def test_cost_and_token_budgets_fail_closed(
     budget: TaskBudget,
-    pricing: dict[str, ModelPricing],
+    pricing: dict[tuple[str, str], ModelPricing],
     response: ModelExecutionResponse,
 ) -> None:
     tracker = BudgetTracker(budget, pricing)
     request = ModelExecutionRequest(prompt="hello", model="m")
-    if budget.maximum_cost_usd is not None and "m" not in pricing:
+    if budget.maximum_cost_usd is not None and ("p", "m") not in pricing:
         with pytest.raises(BudgetExceededError):
-            tracker.before_attempt(request)
+            tracker.before_attempt(request, provider="p")
         return
-    tracker.before_attempt(request)
+    tracker.before_attempt(request, provider="p")
     with pytest.raises(BudgetExceededError):
         tracker.record(response)
 
@@ -447,6 +466,38 @@ def test_unknown_usage_is_allowed_without_relevant_limits_or_cost_cap() -> None:
     )
 
 
+@pytest.mark.asyncio
+async def test_cost_budget_prices_same_model_per_provider() -> None:
+    first = FakeProvider(
+        "first",
+        model="shared",
+        results=[QuotaExhaustedError("quota", provider="first")],
+    )
+    second = FakeProvider(
+        "second",
+        model="shared",
+        results=[_response("second", "shared", input_tokens=1, output_tokens=1)],
+    )
+    pricing = {
+        ("first", "shared"): ModelPricing(input_per_million_usd=0, output_per_million_usd=0),
+        ("second", "shared"): ModelPricing(
+            input_per_million_usd=1_000_000, output_per_million_usd=1_000_000
+        ),
+    }
+    with pytest.raises(BudgetExceededError):
+        await _router(first, second).execute(
+            request=ModelExecutionRequest(prompt="hello"),
+            requirements=RoutingRequirements(
+                allow_fallback=True,
+                allow_quota_fallback=True,
+                maximum_fallbacks=1,
+            ),
+            budget=TaskBudget(maximum_requests=2, maximum_cost_usd=Decimal("1")),
+            pricing=pricing,
+        )
+    assert second.execute_calls == ["shared"]
+
+
 def test_factory_defaults_pricing_and_stable_priority() -> None:
     settings = Settings(
         _env_file=None,
@@ -456,7 +507,9 @@ def test_factory_defaults_pricing_and_stable_priority() -> None:
         JARVIS_MODEL_PROVIDER_PRIORITY="openai-compatible,ollama",
         JARVIS_MODEL_DEFAULT_MAXIMUM_REQUESTS=3,
         JARVIS_MODEL_DEFAULT_MAXIMUM_INPUT_TOKENS=10,
-        JARVIS_MODEL_PRICING_JSON=('{"m":{"input_per_million_usd":1,"output_per_million_usd":2}}'),
+        JARVIS_MODEL_PRICING_JSON=(
+            '{"openai-compatible":{"m":{"input_per_million_usd":1,"output_per_million_usd":2}}}'
+        ),
     )
     assert [item.name for item in build_provider_registry(settings).list()] == [
         "openai-compatible",
@@ -464,4 +517,6 @@ def test_factory_defaults_pricing_and_stable_priority() -> None:
     ]
     assert build_default_task_budget(settings).maximum_input_tokens == 10
     assert build_default_routing_requirements(settings).allow_remote is False
-    assert build_model_pricing(settings)["m"].output_per_million_usd == Decimal("2.0")
+    assert build_model_pricing(settings)[
+        ("openai-compatible", "m")
+    ].output_per_million_usd == Decimal("2.0")

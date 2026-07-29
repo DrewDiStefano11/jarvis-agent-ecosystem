@@ -4,7 +4,7 @@ import logging
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.model_providers.budget import BudgetTracker, ModelPricing, TaskBudget
+from app.model_providers.budget import BudgetTracker, PricingTable, TaskBudget
 from app.model_providers.contracts import (
     ModelCapability,
     ModelExecutionRequest,
@@ -15,6 +15,7 @@ from app.model_providers.errors import (
     AuthenticationError,
     BudgetExceededError,
     InvalidModelRequestError,
+    MalformedProviderResponseError,
     ModelProviderError,
     ProviderExecutionDisabledError,
     QuotaExhaustedError,
@@ -109,7 +110,7 @@ class ModelRouter:
         request: ModelExecutionRequest,
         requirements: RoutingRequirements,
         budget: TaskBudget,
-        pricing: dict[str, ModelPricing] | None = None,
+        pricing: PricingTable | None = None,
     ) -> ModelExecutionResponse:
         tracker = BudgetTracker(budget, pricing)
         candidates = await self.eligible(request, requirements)
@@ -184,6 +185,7 @@ class ModelRouter:
                     (
                         AuthenticationError,
                         InvalidModelRequestError,
+                        MalformedProviderResponseError,
                         BudgetExceededError,
                         ProviderExecutionDisabledError,
                     ),

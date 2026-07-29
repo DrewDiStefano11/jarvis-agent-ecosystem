@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -208,12 +209,14 @@ def validate_safe_metadata(metadata: dict[str, Any]) -> None:
         elif isinstance(value, str):
             if redact_secrets(value) != value:
                 raise ValueError("secret-bearing metadata values are not allowed")
+        elif isinstance(value, float) and not math.isfinite(value):
+            raise ValueError("metadata numbers must be finite")
         elif value is not None and not isinstance(value, (bool, int, float)):
             raise ValueError("metadata values must use JSON-compatible scalar types")
 
     validate(metadata)
     try:
-        size = len(json.dumps(metadata, separators=(",", ":")).encode())
+        size = len(json.dumps(metadata, separators=(",", ":"), allow_nan=False).encode())
     except (TypeError, ValueError, RecursionError) as exc:
         raise ValueError("metadata must be safely serializable") from exc
     if size > MAX_METADATA_BYTES:

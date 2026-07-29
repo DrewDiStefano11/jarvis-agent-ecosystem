@@ -27,6 +27,9 @@ class ModelPricing(BaseModel):
     output_per_million_usd: Decimal = Field(ge=0)
 
 
+PricingTable = dict[tuple[str, str], ModelPricing]
+
+
 @dataclass
 class BudgetUsage:
     requests: int = 0
@@ -38,7 +41,7 @@ class BudgetUsage:
 
 
 class BudgetTracker:
-    def __init__(self, budget: TaskBudget, pricing: dict[str, ModelPricing] | None = None) -> None:
+    def __init__(self, budget: TaskBudget, pricing: PricingTable | None = None) -> None:
         self.budget = budget
         self.pricing = pricing or {}
         self.usage = BudgetUsage()
@@ -49,9 +52,13 @@ class BudgetTracker:
         if self.usage.requests >= self.budget.maximum_requests:
             self._raise("request budget exhausted", request, provider)
         if self.budget.maximum_cost_usd is not None:
-            if request.model is None or request.model not in self.pricing:
+            if (
+                provider is None
+                or request.model is None
+                or (provider, request.model) not in self.pricing
+            ):
                 self._raise(
-                    "cost budget requires exact pricing for the routed model",
+                    "cost budget requires exact pricing for the routed provider and model",
                     request,
                     provider,
                     reason="pricing_unavailable",
@@ -114,10 +121,10 @@ class BudgetTracker:
         self.usage.output_tokens += output_tokens
         self.usage.total_tokens += total_tokens or 0
 
-        pricing = self.pricing.get(response.model)
+        pricing = self.pricing.get((response.provider, response.model))
         if self.budget.maximum_cost_usd is not None and pricing is None:
             self._raise_response(
-                "cost budget cannot account for the exact provider response model",
+                "cost budget cannot account for the exact provider and response model",
                 response,
                 reason="response_model_pricing_unavailable",
             )

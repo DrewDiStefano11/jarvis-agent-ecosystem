@@ -211,15 +211,17 @@ All providers are disabled by default:
 | `JARVIS_MODEL_DEFAULT_MAXIMUM_OUTPUT_TOKENS` | unset | Optional output cap |
 | `JARVIS_MODEL_DEFAULT_MAXIMUM_TOTAL_TOKENS` | unset | Optional total cap |
 | `JARVIS_MODEL_DEFAULT_MAXIMUM_COST_USD` | unset | Optional cost cap |
-| `JARVIS_MODEL_PRICING_JSON` | `{}` | Exact per-model pricing map |
+| `JARVIS_MODEL_PRICING_JSON` | `{}` | Exact provider-and-model pricing map |
 
 Pricing JSON is strict:
 
 ```json
 {
-  "example-model": {
-    "input_per_million_usd": 0.0,
-    "output_per_million_usd": 0.0
+  "example-provider": {
+    "example-model": {
+      "input_per_million_usd": 0.0,
+      "output_per_million_usd": 0.0
+    }
   }
 }
 ```
