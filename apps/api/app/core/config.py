@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Literal
 
@@ -162,7 +163,10 @@ class Settings(BaseSettings):
                 if set(pricing) != required:
                     raise ValueError("model pricing entries require exact input and output rates")
                 if any(
-                    isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0
+                    isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or value < 0
+                    or (isinstance(value, float) and not math.isfinite(value))
                     for value in pricing.values()
                 ):
                     raise ValueError("model pricing rates must be nonnegative numbers")

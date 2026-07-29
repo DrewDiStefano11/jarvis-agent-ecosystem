@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ipaddress
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -26,6 +28,19 @@ HARD_QUOTA_TERMS = (
     "hard usage cap",
 )
 TEMPORARY_QUOTA_TERMS = ("per-minute", "per minute", "perminute", "rate_limit")
+
+
+def is_loopback_endpoint(base_url: str) -> bool:
+    hostname = urlsplit(base_url).hostname
+    if hostname is None:
+        return False
+    normalized = hostname.rstrip(".").lower()
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
 
 
 def retry_after(response: httpx.Response, *, maximum: float = 300) -> float | None:

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import ipaddress
 from time import perf_counter
 from typing import Any
 from urllib.parse import urlsplit
@@ -23,7 +22,7 @@ from app.model_providers.errors import (
     ModelProviderError,
     ProviderConfigurationError,
 )
-from app.model_providers.http import translate_http_error
+from app.model_providers.http import is_loopback_endpoint, translate_http_error
 from app.model_providers.policy import (
     provider_network_health_allowed,
     require_live_provider_execution,
@@ -261,16 +260,3 @@ def _unhealthy(provider: str, started: float, error: ModelProviderError) -> Prov
         error_category=error.category.value,
         detail=error.message,
     )
-
-
-def is_loopback_endpoint(base_url: str) -> bool:
-    hostname = urlsplit(base_url).hostname
-    if hostname is None:
-        return False
-    normalized = hostname.rstrip(".").lower()
-    if normalized == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(normalized).is_loopback
-    except ValueError:
-        return False

@@ -15,8 +15,8 @@ from app.model_providers.errors import (
     RequestTimeoutError,
     TransientProviderError,
 )
-from app.model_providers.http import translate_http_error
-from app.model_providers.ollama import OllamaProvider, is_loopback_endpoint
+from app.model_providers.http import is_loopback_endpoint, translate_http_error
+from app.model_providers.ollama import OllamaProvider
 from app.model_providers.openai_compatible import (
     HealthCheckStrategy,
     OpenAICompatibleProvider,
@@ -67,6 +67,27 @@ async def test_phase_gate_prevents_client_creation(monkeypatch: pytest.MonkeyPat
 )
 def test_ollama_locality_is_structural(url: str, expected: bool) -> None:
     assert is_loopback_endpoint(url) is expected
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("http://localhost:4000/v1", True),
+        ("http://127.0.0.1:4000/v1", True),
+        ("http://[::1]:4000/v1", True),
+        ("https://example.invalid/v1", False),
+        ("http://host.docker.internal:4000/v1", False),
+    ],
+)
+def test_openai_compatible_locality_is_structural(url: str, expected: bool) -> None:
+    provider = OpenAICompatibleProvider(
+        name="compatible",
+        base_url=url,
+        api_key=SecretStr("mock"),
+        default_model="m",
+    )
+    assert provider.is_local is expected
+    assert provider.safe_summary().is_local is expected
 
 
 def test_provider_urls_and_custom_headers_reject_embedded_secrets() -> None:

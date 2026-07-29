@@ -147,6 +147,21 @@ def test_settings_defaults_disable_both_providers() -> None:
         {"JARVIS_MODEL_PRICING_JSON": '{"m":{"input_per_million_usd":1}}'},
         {
             "JARVIS_MODEL_PRICING_JSON": (
+                '{"p":{"m":{"input_per_million_usd":NaN,"output_per_million_usd":2}}}'
+            )
+        },
+        {
+            "JARVIS_MODEL_PRICING_JSON": (
+                '{"p":{"m":{"input_per_million_usd":Infinity,"output_per_million_usd":2}}}'
+            )
+        },
+        {
+            "JARVIS_MODEL_PRICING_JSON": (
+                '{"p":{"m":{"input_per_million_usd":-Infinity,"output_per_million_usd":2}}}'
+            )
+        },
+        {
+            "JARVIS_MODEL_PRICING_JSON": (
                 '{"p":{"m":{"input_per_million_usd":-1,"output_per_million_usd":2}}}'
             )
         },

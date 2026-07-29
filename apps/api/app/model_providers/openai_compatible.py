@@ -24,7 +24,7 @@ from app.model_providers.errors import (
     ModelProviderError,
     ProviderConfigurationError,
 )
-from app.model_providers.http import translate_http_error
+from app.model_providers.http import is_loopback_endpoint, translate_http_error
 from app.model_providers.policy import (
     provider_network_health_allowed,
     require_live_provider_execution,
@@ -40,7 +40,6 @@ class HealthCheckStrategy(StrEnum):
 
 class OpenAICompatibleProvider(ProviderBase):
     provider_type = ProviderType.OPENAI_COMPATIBLE
-    is_local = False
 
     def __init__(
         self,
@@ -100,6 +99,7 @@ class OpenAICompatibleProvider(ProviderBase):
             )
         self.name = name
         self.base_url = f"{base_url.rstrip('/')}/"
+        self.is_local = is_loopback_endpoint(base_url)
         self.api_key = api_key
         self.default_model = default_model
         self.timeout_seconds = timeout_seconds
