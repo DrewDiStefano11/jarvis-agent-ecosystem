@@ -184,3 +184,35 @@ def test_runtime_sql_concurrent_identical_command_replays_once(tmp_path) -> None
         assert results == [False, True]
         assert app.state.agent_runtime_repository.load_run("run-sql-2").version == 2
         assert app.state.agent_runtime_repository.integrity_check("run-sql-2") is True
+
+
+def test_concurrent_different_create_commands_return_run_already_exists(tmp_path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.agent_runtime.errors import RunAlreadyExistsError
+    from app.models.agent_runtime import CreateAgentRunCommand
+
+    app = create_app(delay_ms=1, database_url=database_url(tmp_path / "runtime-create-race.db"))
+    with TestClient(app):
+        spec = make_spec(run_id="run-create-race")
+        service = app.state.agent_runtime_service
+
+        def submit(command_id: str) -> str:
+            try:
+                service.create_run(
+                    CreateAgentRunCommand(
+                        specification=spec,
+                        command_id=command_id,
+                        expected_run_version=0,
+                        timestamp=ts(0),
+                        actor_reference="race-actor",
+                    )
+                )
+                return "created"
+            except RunAlreadyExistsError:
+                return "run_already_exists"
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = sorted(executor.map(submit, ["cmd-race-a", "cmd-race-b"]))
+        assert outcomes == ["created", "run_already_exists"]
+        assert app.state.agent_runtime_repository.load_run("run-create-race").version == 1

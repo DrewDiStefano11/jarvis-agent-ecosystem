@@ -388,6 +388,10 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                         command_id=processed_command.command_id,
                     ) from exc
                 return persisted
+            if create:
+                raise RunAlreadyExistsError(
+                    run_id=run_id, command_id=processed_command.command_id
+                ) from exc
             raise RuntimePersistenceError(
                 run_id=run_id,
                 command_id=processed_command.command_id,

@@ -544,3 +544,51 @@ def test_runtime_resource_policy_lifecycle_and_allow_precedence(tmp_path) -> Non
         )
         assert denied_by_policy.allowed is False
         assert denied_by_policy.reason_code == "resource_denial"
+
+
+def test_runtime_admin_resource_policy_deny_disables_admin_override(tmp_path) -> None:
+    app = create_app(delay_ms=1, database_url=database_url(tmp_path / "auth-admin-policy.db"))
+    with TestClient(app) as client:
+        identity = app.state.identity_service
+        admin = create_actor(app, "runtime-admin-policy")
+        admin_permission = identity.create_definition(
+            "permission",
+            CreatePermissionRequest(
+                stable_key="runtime.admin",
+                display_name="Runtime admin",
+                resource_type="administrative_function",
+                action="runtime_admin_special",
+            ),
+        )
+        identity.assign_permission(
+            admin,
+            AssignPermissionRequest(
+                permission_id=admin_permission.id,
+                effect="allow",
+                resource_type="administrative_function",
+                resource_id="agent_runtime",
+            ),
+        )
+        add_policy(
+            app,
+            subject_type="all",
+            resource_id="agent_runtime",
+            action="runtime_admin_special",
+            effect="deny",
+            access_state="blocked",
+        )
+        with identity.sessions.begin() as session:
+            policy = session.scalar(
+                select(ResourceAccessPolicyRow).where(
+                    ResourceAccessPolicyRow.resource_id == "agent_runtime"
+                )
+            )
+            policy.resource_type = "administrative_function"
+        response = client.post(
+            "/api/agent-runtime/commands",
+            json=command_body(admin, run_id="admin-policy-denied"),
+            headers={"X-Jarvis-Actor-Id": admin},
+        )
+        assert response.status_code == 403
+        assert response.json()["error"]["code"] == "runtime_permission_denied"
+        assert app.state.agent_runtime_repository.load_run("admin-policy-denied") is None

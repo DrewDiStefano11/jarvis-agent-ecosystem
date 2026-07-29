@@ -132,7 +132,7 @@ class IdentityRuntimeAuthorizer(RuntimeAuthorizer):
             raise RuntimePermissionDeniedError(metadata={"operation": operation})
         permission_key = RUNTIME_PERMISSION_KEYS[operation]
         resource_id = target.task_id
-        admin_decision = self.identity.check_permission(
+        admin_decision = self.identity.check_permission_resource_access(
             actor.actor_id,
             RUNTIME_ADMIN_PERMISSION,
             RUNTIME_ADMIN_RESOURCE_TYPE,
