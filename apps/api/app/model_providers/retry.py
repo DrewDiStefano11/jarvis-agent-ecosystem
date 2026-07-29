@@ -9,7 +9,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.model_providers.budget import BudgetTracker
 from app.model_providers.contracts import ModelExecutionRequest
-from app.model_providers.errors import ModelProviderError
+from app.model_providers.errors import (
+    ModelProviderError,
+    ProviderUnavailableError,
+    RequestTimeoutError,
+    TransientProviderError,
+)
 
 T = TypeVar("T")
 logger = logging.getLogger(__name__)
@@ -61,6 +66,15 @@ class RetryExecutor:
             try:
                 return await operation()
             except ModelProviderError as exc:
+                if budget.budget.maximum_cost_usd is not None and isinstance(
+                    exc,
+                    (
+                        ProviderUnavailableError,
+                        RequestTimeoutError,
+                        TransientProviderError,
+                    ),
+                ):
+                    budget.fail_closed_after_ambiguous_attempt(request, provider=provider_name)
                 if not exc.retryable or attempt >= self.policy.maximum_attempts:
                     logger.info(
                         "model retry stopped provider=%s model=%s category=%s attempt=%s "

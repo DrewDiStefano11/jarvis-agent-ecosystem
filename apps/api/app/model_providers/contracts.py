@@ -128,12 +128,12 @@ class ModelExecutionResponse(ProviderContract):
 
     @model_validator(mode="after")
     def derive_and_validate(self) -> ModelExecutionResponse:
-        if (
-            self.total_tokens is None
-            and self.input_tokens is not None
-            and self.output_tokens is not None
-        ):
-            self.total_tokens = self.input_tokens + self.output_tokens
+        if self.input_tokens is not None and self.output_tokens is not None:
+            object.__setattr__(
+                self,
+                "total_tokens",
+                self.input_tokens + self.output_tokens,
+            )
         validate_safe_metadata(self.provider_metadata)
         validate_safe_metadata(self.routing_metadata)
         return self

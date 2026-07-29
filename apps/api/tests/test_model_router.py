@@ -22,6 +22,7 @@ from app.model_providers.errors import (
     DuplicateProviderError,
     ProviderUnavailableError,
     QuotaExhaustedError,
+    RequestTimeoutError,
     UnknownProviderError,
 )
 from app.model_providers.factory import (
@@ -174,6 +175,36 @@ async def test_requested_provider_is_not_bypassed_without_fallback() -> None:
 
 
 @pytest.mark.asyncio
+async def test_filtered_requested_provider_consumes_the_primary_slot() -> None:
+    requested = FakeProvider("requested", available=False)
+    first_fallback = FakeProvider("first-fallback")
+    second_fallback = FakeProvider("second-fallback")
+    router = _router(requested, first_fallback, second_fallback)
+    with pytest.raises(UnknownProviderError):
+        await router.execute(
+            request=ModelExecutionRequest(prompt="hello"),
+            requirements=RoutingRequirements(
+                requested_provider="requested",
+                allow_fallback=True,
+                maximum_fallbacks=0,
+            ),
+            budget=TaskBudget(maximum_requests=1),
+        )
+    result = await router.execute(
+        request=ModelExecutionRequest(prompt="hello"),
+        requirements=RoutingRequirements(
+            requested_provider="requested",
+            allow_fallback=True,
+            maximum_fallbacks=1,
+        ),
+        budget=TaskBudget(maximum_requests=1),
+    )
+    assert result.provider == "first-fallback"
+    assert result.routing_metadata["fallback_count"] == 1
+    assert second_fallback.execute_calls == []
+
+
+@pytest.mark.asyncio
 async def test_retry_then_success_counts_every_attempt() -> None:
     provider = FakeProvider(
         "local",
@@ -192,6 +223,52 @@ async def test_retry_then_success_counts_every_attempt() -> None:
     assert result.content == "answer"
     assert len(provider.execute_calls) == 2
     assert delays == [0.25]
+
+
+@pytest.mark.asyncio
+async def test_cost_cap_stops_retry_after_ambiguous_failure() -> None:
+    provider = FakeProvider(
+        "local",
+        results=[
+            RequestTimeoutError("ambiguous", provider="local"),
+            _response("local", "local-model"),
+        ],
+    )
+    with pytest.raises(BudgetExceededError) as raised:
+        await _router(provider, attempts=2).execute(
+            request=ModelExecutionRequest(prompt="hello"),
+            requirements=RoutingRequirements(),
+            budget=TaskBudget(maximum_requests=2, maximum_cost_usd=Decimal("1")),
+            pricing={
+                "local-model": ModelPricing(
+                    input_per_million_usd=1,
+                    output_per_million_usd=1,
+                )
+            },
+        )
+    assert raised.value.metadata == {"reason": "ambiguous_attempt_usage"}
+    assert len(provider.execute_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_cost_cap_ambiguous_failure_cannot_fall_back() -> None:
+    first = FakeProvider("first", results=[RequestTimeoutError("ambiguous", provider="first")])
+    second = FakeProvider("second")
+    pricing = {
+        name: ModelPricing(input_per_million_usd=1, output_per_million_usd=1)
+        for name in ("first-model", "second-model")
+    }
+    with pytest.raises(BudgetExceededError):
+        await _router(first, second).execute(
+            request=ModelExecutionRequest(prompt="hello"),
+            requirements=RoutingRequirements(
+                allow_fallback=True,
+                maximum_fallbacks=1,
+            ),
+            budget=TaskBudget(maximum_requests=2, maximum_cost_usd=Decimal("1")),
+            pricing=pricing,
+        )
+    assert second.execute_calls == []
 
 
 @pytest.mark.asyncio

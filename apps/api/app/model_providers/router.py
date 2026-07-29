@@ -115,10 +115,22 @@ class ModelRouter:
         candidates = await self.eligible(request, requirements)
         if not candidates:
             raise UnknownProviderError("no healthy provider satisfies the routing requirements")
-        maximum_candidates = 1 + (
-            requirements.maximum_fallbacks if requirements.allow_fallback else 0
-        )
+        fallback_offset = 0
+        maximum_candidates = 1
+        if requirements.requested_provider and requirements.allow_fallback:
+            requested_is_eligible = (
+                bool(candidates) and candidates[0].name == requirements.requested_provider
+            )
+            if requested_is_eligible:
+                maximum_candidates += requirements.maximum_fallbacks
+            else:
+                maximum_candidates = requirements.maximum_fallbacks
+                fallback_offset = 1
+        elif requirements.allow_fallback:
+            maximum_candidates += requirements.maximum_fallbacks
         selected_candidates = candidates[:maximum_candidates]
+        if not selected_candidates:
+            raise UnknownProviderError("provider routing fallback allowance is exhausted")
         attempted: list[str] = []
         failures: list[str] = []
 
@@ -142,7 +154,7 @@ class ModelRouter:
                     "selected_provider": provider.name,
                     "selected_model": response.model,
                     "is_local": provider.is_local,
-                    "fallback_count": index,
+                    "fallback_count": index + fallback_offset,
                     "attempted_providers": attempted.copy(),
                     "failure_categories": failures.copy(),
                 }

@@ -77,6 +77,19 @@ def test_response_derives_total_tokens_and_accepts_explicit_zero_usage() -> None
     assert response.total_tokens == 0
 
 
+def test_response_derives_total_from_components_when_provider_total_is_inconsistent() -> None:
+    response = ModelExecutionResponse(
+        content="done",
+        provider="mock",
+        model="model",
+        input_tokens=4,
+        output_tokens=3,
+        total_tokens=1,
+        latency_ms=1,
+    )
+    assert response.total_tokens == 7
+
+
 def test_recursive_redaction_handles_keys_bearers_and_assignments() -> None:
     value: dict[str, object] = {
         "api_key": "raw",

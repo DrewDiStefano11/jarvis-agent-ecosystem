@@ -131,6 +131,20 @@ class BudgetTracker:
         self._enforce(response)
         return float(cost) if cost is not None else None
 
+    def fail_closed_after_ambiguous_attempt(
+        self,
+        request: ModelExecutionRequest,
+        *,
+        provider: str | None,
+    ) -> None:
+        self.usage.usage_known = False
+        self._raise(
+            "cost budget accounting is unavailable after an ambiguous provider failure",
+            request,
+            provider,
+            reason="ambiguous_attempt_usage",
+        )
+
     def _enforce(self, response: ModelExecutionResponse) -> None:
         checks = (
             (self.budget.maximum_input_tokens, self.usage.input_tokens, "input token"),
