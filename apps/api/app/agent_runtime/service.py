@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from contextvars import ContextVar
+from dataclasses import replace
 from datetime import UTC, datetime
 from time import sleep
 from typing import Any
@@ -334,10 +335,54 @@ class AgentRuntimeService:
                 ),
             )
         if isinstance(command, CreateAgentRunCommand):
-            return self.authorizer.authorize(actor, "create", specification=command.specification)
+            context = self.authorizer.authorize(
+                actor, "create", specification=command.specification
+            )
+            parent_checked, parent_allowed_by_admin, parent_reason = self._authorize_parent_lineage(
+                command.specification, actor
+            )
+            return replace(
+                context,
+                extra={
+                    **context.extra,
+                    "parentCheckRequired": command.specification.parent_run_id is not None,
+                    "parentCheckPerformed": parent_checked,
+                    "parentCheckAllowedByAdmin": parent_allowed_by_admin,
+                    "parentCheckReasonCode": parent_reason,
+                },
+            )
         aggregate = self._load_current(command.run_id)
         operation = getattr(command, "command_type", "")
         return self.authorizer.authorize(actor, operation, snapshot=aggregate.snapshot)
+
+    def _authorize_parent_lineage(
+        self,
+        specification: AgentRunSpecification,
+        actor: RuntimeActorContext,
+    ) -> tuple[bool, bool, str | None]:
+        if self.authorizer is None or specification.parent_run_id is None:
+            return False, False, None
+        current_parent = specification.parent_run_id
+        visited = {specification.run_id}
+        depth = 0
+        first_checked = False
+        first_allowed_by_admin = False
+        first_reason: str | None = None
+        while current_parent is not None and depth < DEFAULT_LINEAGE_DEPTH_LIMIT:
+            if current_parent in visited:
+                break
+            parent_snapshot = self.repository.load_run(current_parent)
+            if parent_snapshot is None:
+                break
+            parent_context = self.authorizer.authorize(actor, "read", snapshot=parent_snapshot)
+            if not first_checked:
+                first_checked = True
+                first_allowed_by_admin = parent_context.allowed_by_admin
+                first_reason = parent_context.decision.reason_code
+            visited.add(current_parent)
+            current_parent = parent_snapshot.specification.parent_run_id
+            depth += 1
+        return first_checked, first_allowed_by_admin, first_reason
 
     def _require_authorized(
         self,

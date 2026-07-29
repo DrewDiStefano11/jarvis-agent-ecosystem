@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 
 from app.core.errors import DomainError
@@ -57,9 +57,10 @@ class RuntimeAuthorizationContext:
     allowed_by_admin: bool
     decision: AuthorizationDecision
     admin_decision: AuthorizationDecision | None = None
+    extra: dict[str, object] = field(default_factory=dict)
 
     def bounded_metadata(self) -> dict[str, object]:
-        return {
+        metadata = {
             "actorId": self.actor.actor_id,
             "permissionKey": self.permission_key,
             "resourceType": self.resource_type,
@@ -70,6 +71,8 @@ class RuntimeAuthorizationContext:
             "denialCount": len(self.decision.matched_denials),
             "allowedByAdmin": self.allowed_by_admin,
         }
+        metadata.update(self.extra)
+        return metadata
 
 
 class RuntimeAuthorizer(Protocol):
