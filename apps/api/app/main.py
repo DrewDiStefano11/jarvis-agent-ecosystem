@@ -352,11 +352,13 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             return _bounded_runtime_health("schema_stale")
         return _safe_runtime_health(app.state.agent_runtime_repository.health_status)
 
-    @app.get("/api/health", response_model=ApiResponse)
-    async def health() -> ApiResponse:
+    def _status_snapshot() -> dict:
         database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
+        outbox_pending_count = repository.outbox_pending_count() if database_reachable else 0
         outbox_exhausted_count = repository.outbox_exhausted_count() if database_reachable else 0
         context_status = repository.context_assembler_status()
+        if not database_reachable or not schema_current:
+            context_status = context_status.model_copy(update={"state": "unavailable"})
         lease_counts = (
             task_leases.health_counts()
             if database_reachable and schema_current
@@ -367,8 +369,6 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "staleWorkerCount": 0,
             }
         )
-        # The runtime component is resolved before the top-level status so that
-        # unusable runtime persistence can never be reported as healthy.
         runtime_persistence = _runtime_health_component(database_reachable, schema_current)
         runtime_degraded = runtime_persistence.get("status", "healthy") != "healthy"
         degraded = (
@@ -380,51 +380,49 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             or lease_counts["staleWorkerCount"] > 0
             or runtime_degraded
         )
+        return {
+            "database_reachable": database_reachable,
+            "schema_current": schema_current,
+            "outbox_pending_count": outbox_pending_count,
+            "outbox_exhausted_count": outbox_exhausted_count,
+            "context_status": context_status,
+            "lease_counts": lease_counts,
+            "runtime_persistence": runtime_persistence,
+            "runtime_degraded": runtime_degraded,
+            "degraded": degraded,
+        }
+
+    @app.get("/api/health", response_model=ApiResponse)
+    async def health() -> ApiResponse:
+        snapshot = _status_snapshot()
+        database_reachable = snapshot["database_reachable"]
+        schema_current = snapshot["schema_current"]
+        context_status = snapshot["context_status"]
         return ApiResponse(
             data={
-                "status": "degraded" if degraded else "healthy",
+                "status": "degraded" if snapshot["degraded"] else "healthy",
                 "service": "jarvis-simulator-api",
                 "processAlive": True,
                 "databaseReachable": database_reachable,
                 "schemaCurrent": schema_current,
                 "outboxDispatcherRunning": broker.dispatcher_running,
-                "outboxExhaustedCount": outbox_exhausted_count,
+                "outboxExhaustedCount": snapshot["outbox_exhausted_count"],
                 "recoveryRequired": repository._system.recovery_status == "required",
                 "contextAssemblerReady": database_reachable and schema_current,
                 "contextAssemblyCount": context_status.totalAssemblies if database_reachable else 0,
-                **lease_counts,
-                "runtimePersistence": runtime_persistence,
+                **snapshot["lease_counts"],
+                "runtimePersistence": snapshot["runtime_persistence"],
                 "simulated": True,
             }
         )
 
     def system_status() -> SystemStatus:
-        database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
-        outbox_pending_count = repository.outbox_pending_count() if database_reachable else 0
-        outbox_exhausted_count = repository.outbox_exhausted_count() if database_reachable else 0
-        lease_counts = (
-            task_leases.health_counts()
-            if database_reachable and schema_current
-            else {
-                "activeWorkerCount": 0,
-                "activeLeaseCount": 0,
-                "expiredLeaseCount": 0,
-                "staleWorkerCount": 0,
-            }
-        )
-        degraded = (
-            repository._system.recovery_status == "required"
-            or not database_reachable
-            or not schema_current
-            or outbox_exhausted_count > 0
-            or lease_counts["expiredLeaseCount"] > 0
-            or lease_counts["staleWorkerCount"] > 0
-        )
-        context_status = repository.context_assembler_status()
-        if not database_reachable or not schema_current:
-            context_status = context_status.model_copy(update={"state": "unavailable"})
+        snapshot = _status_snapshot()
+        database_reachable = snapshot["database_reachable"]
+        schema_current = snapshot["schema_current"]
+        context_status = snapshot["context_status"]
         return SystemStatus(
-            status="degraded" if degraded else "healthy",
+            status="degraded" if snapshot["degraded"] else "healthy",
             environment=settings.app_env,
             seedDataVersion=repository._system.seed_data_version,
             emergencyStop=repository.emergency_stop,
@@ -446,15 +444,15 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             databaseRevision=DATABASE_REVISION,
             schemaCurrent=schema_current,
             eventSessionId=repository.event_session_id,
-            outboxPendingCount=outbox_pending_count,
-            outboxExhaustedCount=outbox_exhausted_count,
+            outboxPendingCount=snapshot["outbox_pending_count"],
+            outboxExhaustedCount=snapshot["outbox_exhausted_count"],
             recoveryRequired=repository._system.recovery_status == "required",
             activeWorkflowRunId=repository._system.last_workflow_run_id,
             lastCheckpointId=repository._system.last_checkpoint_id,
             lastStartupAt=repository._system.last_successful_startup,
             lastCleanShutdown=repository._system.last_clean_shutdown,
             contextAssembler=context_status,
-            **lease_counts,
+            **snapshot["lease_counts"],
         )
 
     @app.get("/api/system/status", response_model=ApiResponse)

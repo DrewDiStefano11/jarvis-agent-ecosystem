@@ -124,7 +124,9 @@ def test_runtime_api_persists_events_audit_outbox_and_restarts(tmp_path) -> None
                 )
             )
         degraded = client.get("/api/health").json()["data"]
+        system_degraded = client.get("/api/system/status").json()["data"]
         assert degraded["status"] == "degraded"
+        assert system_degraded["status"] == "degraded"
         assert degraded["runtimePersistence"]["reasonCode"] == "runtime_outbox_exhausted"
         audit_rows = [
             row

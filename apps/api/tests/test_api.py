@@ -207,3 +207,72 @@ def test_runtime_actor_header_is_allowed_by_cors_preflight() -> None:
             },
         )
         assert unrelated.status_code == 400
+
+
+def test_system_status_matches_health_for_runtime_component_states() -> None:
+    app = create_app(delay_ms=1)
+    scenarios = [
+        {"configured": True, "nonterminalRunCount": 0},
+        {
+            "configured": True,
+            "nonterminalRunCount": 1,
+            "status": "degraded",
+            "reasonCode": "runtime_projection_corrupt",
+        },
+        {
+            "configured": False,
+            "nonterminalRunCount": 0,
+            "status": "unavailable",
+            "reasonCode": "runtime_persistence_unavailable",
+        },
+        {"not": "a valid response"},
+    ]
+    with TestClient(app) as client:
+        for result in scenarios:
+            app.state.agent_runtime_repository.health_status = lambda result=result: result
+            health = client.get("/api/health").json()["data"]
+            system_status = client.get("/api/system/status").json()["data"]
+            assert system_status["status"] == health["status"]
+            if result == scenarios[0]:
+                assert system_status["status"] == "healthy"
+            else:
+                assert system_status["status"] == "degraded"
+
+
+def test_system_status_runtime_query_failure_is_bounded_and_matches_health() -> None:
+    app = create_app(delay_ms=1)
+
+    def fail_runtime_health() -> dict:
+        raise RuntimeError("SELECT secret from /tmp/runtime.db")
+
+    app.state.agent_runtime_repository.health_status = fail_runtime_health
+    with TestClient(app) as client:
+        health = client.get("/api/health").json()["data"]
+        system_status = client.get("/api/system/status").json()["data"]
+        assert health["status"] == system_status["status"] == "degraded"
+        encoded = str(system_status) + str(health)
+        assert "SELECT" not in encoded
+        assert "/tmp/runtime.db" not in encoded
+        assert "secret" not in encoded
+        assert "Traceback" not in encoded
+
+
+def test_system_status_does_not_query_runtime_when_database_unreachable_or_schema_stale() -> None:
+    app = create_app(delay_ms=1)
+    calls = {"count": 0}
+
+    def fail_if_touched() -> dict:
+        calls["count"] += 1
+        raise AssertionError("runtime health must not be queried")
+
+    app.state.agent_runtime_repository.health_status = fail_if_touched
+    with TestClient(app) as client:
+        app.state.repository.health_probe = lambda _revision: (False, False)
+        health = client.get("/api/health").json()["data"]
+        system_status = client.get("/api/system/status").json()["data"]
+        assert health["status"] == system_status["status"] == "degraded"
+        app.state.repository.health_probe = lambda _revision: (True, False)
+        health = client.get("/api/health").json()["data"]
+        system_status = client.get("/api/system/status").json()["data"]
+        assert health["status"] == system_status["status"] == "degraded"
+    assert calls["count"] == 0
