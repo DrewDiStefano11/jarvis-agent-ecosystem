@@ -165,7 +165,7 @@ def test_unsafe_runtime_downgrade_fails_before_destructive_ddl(tmp_path: Path) -
     insert_runtime_fixture(path, correlation_id=oversized)
 
     with pytest.raises(RuntimeError):
-        command.downgrade(config, "-1")
+        command.downgrade(config, "a87a487dd714")
 
     engine = create_engine(database_url(path))
     inspector = inspect(engine)
@@ -201,7 +201,7 @@ def test_safe_runtime_downgrade_and_upgrade_round_trip_preserves_representable_d
     command.upgrade(config, "head")
     insert_runtime_fixture(path, correlation_id="c" * 80)
 
-    command.downgrade(config, "-1")
+    command.downgrade(config, "a87a487dd714")
     engine = create_engine(database_url(path))
     inspector = inspect(engine)
     assert "agent_runtime_runs" not in set(inspector.get_table_names())
@@ -218,6 +218,6 @@ def test_safe_runtime_downgrade_and_upgrade_round_trip_preserves_representable_d
     command.upgrade(config, "head")
     engine = create_engine(database_url(path))
     with engine.connect() as connection:
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260729_04"
+        assert connection.scalar(text("select version_num from alembic_version")) == "20260729_05"
     assert "agent_runtime_runs" in set(inspect(engine).get_table_names())
     engine.dispose()

@@ -266,7 +266,10 @@ class TaskLeaseRepository:
         return self._worker(row)
 
     def acquire_task(
-        self, worker_id: str, lease_seconds: int | None = None
+        self,
+        worker_id: str,
+        lease_seconds: int | None = None,
+        task_id: str | None = None,
     ) -> tuple[Task, TaskLease] | None:
         self.recover_expired_leases()
         now = datetime.now(UTC)
@@ -296,14 +299,15 @@ class TaskLeaseRepository:
             active_lease = exists(
                 select(TaskLeaseRow.task_id).where(TaskLeaseRow.task_id == TaskRow.id)
             )
+            task_query = select(TaskRow).where(
+                TaskRow.status.in_(ELIGIBLE_TASK_STATES),
+                ~active_lease,
+                ~unsatisfied_dependency,
+            )
+            if task_id is not None:
+                task_query = task_query.where(TaskRow.id == task_id)
             task = session.scalar(
-                select(TaskRow)
-                .where(
-                    TaskRow.status.in_(ELIGIBLE_TASK_STATES),
-                    ~active_lease,
-                    ~unsatisfied_dependency,
-                )
-                .order_by(
+                task_query.order_by(
                     case(
                         (TaskRow.priority == "urgent", 1),
                         (TaskRow.priority == "high", 2),
@@ -313,8 +317,7 @@ class TaskLeaseRepository:
                     ),
                     TaskRow.created_at,
                     TaskRow.id,
-                )
-                .limit(1)
+                ).limit(1)
             )
             if task is None:
                 return None
@@ -409,6 +412,23 @@ class TaskLeaseRepository:
         self.repository.reload()
         return self.repository.tasks[task.id], self._lease(lease, recovery_checkpoint_id)
 
+    def assert_current(
+        self,
+        task_id: str,
+        worker_id: str,
+        lease_token: str,
+        *,
+        require_execution_enabled: bool = True,
+    ) -> TaskLease:
+        """Revalidate fencing and emergency-stop state without mutating the lease."""
+
+        now = datetime.now(UTC)
+        with self.session_factory() as session:
+            lease = self._require_lease(session, task_id, worker_id, lease_token, now)
+            if require_execution_enabled:
+                self._require_execution_enabled(session)
+            return self._lease(lease)
+
     def renew_lease(
         self,
         task_id: str,
@@ -465,6 +485,58 @@ class TaskLeaseRepository:
         with self._write() as session:
             lease = self._require_lease(session, task_id, worker_id, lease_token, datetime.now(UTC))
             self._release_in_transaction(session, lease, "released")
+        self.repository.reload()
+        return self.repository.tasks[task_id]
+
+    def pause_for_review(
+        self,
+        task_id: str,
+        worker_id: str,
+        lease_token: str,
+        result_reference: str | None = None,
+    ) -> Task:
+        now = datetime.now(UTC)
+        with self._write() as session:
+            lease = self._require_lease(session, task_id, worker_id, lease_token, now)
+            self._require_execution_enabled(session)
+            task = session.get(TaskRow, task_id)
+            assert task is not None
+            payload = dict(task.payload)
+            payload.update(
+                {
+                    "status": "under_review",
+                    "statusMessage": "Paused for human review",
+                    "result": result_reference,
+                    "updatedAt": now.isoformat(),
+                }
+            )
+            task.status = "under_review"
+            task.status_message = "Paused for human review"
+            task.result = result_reference
+            task.updated_at = now
+            task.payload = payload
+            attempt = session.scalar(
+                select(TaskAttemptRow).where(TaskAttemptRow.lease_token == lease_token)
+            )
+            if attempt:
+                attempt.ended_at = now
+                attempt.outcome = "human_review_required"
+            session.delete(lease)
+            self._add_event(
+                session,
+                "task.review_required",
+                f"Task {task_id} paused for human review",
+                task_id=task_id,
+                worker_id=worker_id,
+                previous="in_progress",
+                new="under_review",
+                payload={
+                    "workerId": worker_id,
+                    "attemptNumber": lease.attempt_number,
+                    "leaseTokenFingerprint": self._token_fingerprint(lease_token),
+                    "resultReference": result_reference,
+                },
+            )
         self.repository.reload()
         return self.repository.tasks[task_id]
 

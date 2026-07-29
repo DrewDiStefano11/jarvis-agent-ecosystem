@@ -23,6 +23,7 @@ def build_provider_registry(settings: Settings) -> ProviderRegistry:
                 default_model=settings.model_ollama_model,
                 timeout_seconds=settings.model_ollama_timeout_seconds,
                 capabilities=_capabilities(settings.model_ollama_capabilities),
+                execution_mode=settings.model_execution_mode,
             )
         )
     if settings.model_openai_compatible_enabled:
@@ -38,6 +39,7 @@ def build_provider_registry(settings: Settings) -> ProviderRegistry:
                 health_strategy=HealthCheckStrategy(
                     settings.model_openai_compatible_health_strategy
                 ),
+                execution_mode=settings.model_execution_mode,
             )
         )
     priority = {

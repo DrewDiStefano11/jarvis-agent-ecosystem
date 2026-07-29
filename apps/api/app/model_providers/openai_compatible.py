@@ -55,6 +55,7 @@ class OpenAICompatibleProvider(ProviderBase):
         ),
         health_strategy: HealthCheckStrategy = HealthCheckStrategy.MODELS,
         custom_headers: dict[str, str] | None = None,
+        execution_mode: str = "disabled",
         client: httpx.AsyncClient | None = None,
     ) -> None:
         if not isinstance(name, str) or not name.strip() or len(name) > 120:
@@ -111,6 +112,7 @@ class OpenAICompatibleProvider(ProviderBase):
         self.capabilities = capabilities
         self.health_strategy = health_strategy
         self.custom_headers = dict(headers)
+        self.execution_mode = execution_mode
         self._client = client
 
     def _headers(self) -> dict[str, str]:
@@ -127,6 +129,8 @@ class OpenAICompatibleProvider(ProviderBase):
                 base_url=self.base_url,
                 headers=self._headers(),
                 timeout=self.timeout_seconds,
+                follow_redirects=False,
+                trust_env=False,
             ),
             True,
         )
@@ -138,6 +142,8 @@ class OpenAICompatibleProvider(ProviderBase):
             model=model,
             task_id=request.task_id,
             correlation_id=request.correlation_id,
+            execution_mode=self.execution_mode,
+            is_local=self.is_local,
         )
         payload: dict[str, Any] = {
             "model": model,
@@ -222,7 +228,10 @@ class OpenAICompatibleProvider(ProviderBase):
             raise error
 
     async def health_check(self) -> ProviderHealth:
-        if not provider_network_health_allowed():
+        network_allowed = provider_network_health_allowed() or (
+            self.execution_mode == "local_only" and self.is_local
+        )
+        if not network_allowed:
             return ProviderHealth(
                 provider=self.name,
                 healthy=True,
@@ -264,7 +273,10 @@ class OpenAICompatibleProvider(ProviderBase):
             )
 
     async def model_available(self, model: str) -> bool | None:
-        if not provider_network_health_allowed():
+        network_allowed = provider_network_health_allowed() or (
+            self.execution_mode == "local_only" and self.is_local
+        )
+        if not network_allowed:
             return None
         if self.health_strategy != HealthCheckStrategy.MODELS:
             return None
@@ -274,10 +286,15 @@ class OpenAICompatibleProvider(ProviderBase):
             return None
 
     async def _get(self, path: str) -> httpx.Response:
+        network_allowed = provider_network_health_allowed() or (
+            self.execution_mode == "local_only" and self.is_local
+        )
         require_provider_network_health(
             provider=self.name,
             model=self.default_model,
-            allowed=provider_network_health_allowed(),
+            allowed=network_allowed,
+            execution_mode=self.execution_mode,
+            is_local=self.is_local,
         )
         client, owned = self._client_or_new()
         response: httpx.Response | None = None

@@ -471,19 +471,23 @@ Those integrations are deferred on purpose. This package uses opaque IDs and saf
 
 ## Explicit non-goals
 
-This package does **not** implement:
+The runtime domain package itself does **not** implement:
 
-- real agent execution
-- model selection or provider execution
+- model selection or provider transport
 - tool execution
 - network calls
 - shell commands
 - browser automation
-- RBAC or identity evaluation
+- provider-side authorization
 - approval workflows
-- SQLAlchemy rows or migrations
-- FastAPI routes
-- application startup wiring
+- worker scheduling
 - frontend controls or office visuals
 - message-broker publication
-- autonomous orchestration
+- general-purpose autonomous orchestration
+
+Phase 2C composes this unchanged command/state-machine boundary from
+`app.autonomous_worker`: an optional `autonomous_execution` object in the immutable run
+specification identifies one fixed `planning_review` request and Context Assembly. The worker
+uses ordinary authorized claim, attempt, checkpoint, pause, cancellation, and completion
+commands; it does not update runtime projections directly. Runs without that object remain
+non-autonomous and fully backward compatible.

@@ -5,6 +5,7 @@ from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.autonomous_worker import AutonomousWorkerStatus
 from app.models.constraints import MAX_CORRELATION_ID_LENGTH
 from app.models.context import ContextAssemblerStatus
 
@@ -222,7 +223,7 @@ class SystemStatus(ContractModel):
     lastSynchronizedAt: datetime
     storageBackend: str = "sqlite"
     databaseHealthy: bool = True
-    databaseRevision: str = "20260729_04"
+    databaseRevision: str = "20260729_05"
     schemaCurrent: bool = True
     eventSessionId: str
     outboxPendingCount: int = 0
@@ -237,6 +238,13 @@ class SystemStatus(ContractModel):
     activeLeaseCount: int = 0
     expiredLeaseCount: int = 0
     staleWorkerCount: int = 0
+    autonomousWorker: AutonomousWorkerStatus = Field(
+        default_factory=lambda: AutonomousWorkerStatus(
+            enabled=False,
+            modelExecutionMode="disabled",
+            providerReady=False,
+        )
+    )
 
 
 class Worker(ContractModel):
@@ -362,6 +370,7 @@ class RegisterWorkerRequest(ContractModel):
 
 class AcquireTaskLeaseRequest(ContractModel):
     leaseSeconds: int | None = Field(default=None, ge=1, le=3600)
+    taskId: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 
 
 class LeaseCommandRequest(ContractModel):

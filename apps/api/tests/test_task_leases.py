@@ -374,6 +374,36 @@ def test_concurrent_workers_claim_once_and_process_high_volume(tmp_path: Path) -
         assert active_leases == []
 
 
+def test_exact_task_selector_preserves_eligibility_and_has_one_race_winner(
+    tmp_path: Path,
+) -> None:
+    app = create_app(delay_ms=1, database_url=database_url(tmp_path / "exact-selector.db"))
+    with TestClient(app) as client:
+        prepare_empty_queue(app)
+        selected_id = create_task(client, "Exact selected task")
+        other_id = create_task(client, "Other eligible task")
+        workers = [
+            register_worker(client, "exact-worker-one"),
+            register_worker(client, "exact-worker-two"),
+        ]
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            claims = list(
+                executor.map(
+                    lambda worker: app.state.task_leases.acquire_task(
+                        worker["id"], task_id=selected_id
+                    ),
+                    workers,
+                )
+            )
+        winners = [claim for claim in claims if claim is not None]
+        assert len(winners) == 1
+        assert winners[0][0].id == selected_id
+        generic = app.state.task_leases.acquire_task(workers[1]["id"])
+        assert generic is not None
+        assert generic[0].id == other_id
+
+
 def test_retry_limit_and_invalid_lease_states(tmp_path: Path) -> None:
     app = create_app(delay_ms=1, database_url=database_url(tmp_path / "retry.db"))
     with TestClient(app) as client:

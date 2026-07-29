@@ -2,43 +2,44 @@
 
 ## Purpose and boundary
 
-`apps/api/app/model_providers` defines a provider-independent foundation for a future,
-explicitly authorized model-execution phase. It provides contracts, adapter mappings,
+`apps/api/app/model_providers` defines the provider-independent foundation used by the explicitly
+authorized Phase 2C local planning worker. It provides contracts, adapter mappings,
 registration, deterministic routing, retry/fallback policy, per-execution budgets, safe error
 normalization, and configuration factories.
 
-This package is not connected to FastAPI routes, application startup, the simulator, agent
-runtime, workers, tools, the office, or autonomous orchestration. Construction is
-side-effect-free and does not create an HTTP client or contact a provider.
+Construction remains side-effect-free and does not create an HTTP client or contact a provider.
+Application startup builds safe provider metadata and a router; only the separate, explicitly
+enabled autonomous worker invokes it. Ordinary API handlers, the simulator, tools, and the office
+do not generate model traffic.
 
 This change does **not** add:
 
-- real model execution
 - OpenHands
 - tool calling
-- structured-output mapping
 - vision payload mapping
 - streaming
 - persistent or cross-process budget accounting
-- autonomous orchestration
+- general-purpose autonomous orchestration
+- remote model execution
 - office integration
 - memory integration
 
 ## Current phase gate
 
-Repository policy currently forbids real models and external integrations. The constant policy
-`phase_1_no_live_models` therefore fails closed:
+`JARVIS_MODEL_EXECUTION_MODE` is `disabled` by default. In that mode:
 
 - adapter execution raises `ProviderExecutionDisabledError` before client creation;
 - provider health and model-list network access return configuration-only/unknown results;
 - lowest-level network helpers independently enforce the same phase gate before client creation;
-- no environment variable can enable either network path;
 - enabling provider configuration registers safe metadata only; and
-- application startup does not build a registry, router, or client.
+- application startup does not contact a provider.
 
-Tests may monkeypatch the policy functions only while supplying `httpx.MockTransport`. Enabling
-live traffic requires a later, explicit repository-policy change and accompanying threat model,
-approval controls, and integration review.
+`local_only` is the only enabling mode. It requires a structurally loopback provider, disables
+redirect following and proxy-environment inheritance in production clients, and is usable only
+through the disabled-by-default autonomous worker. Remote URLs, private LAN hosts, Docker names,
+and deceptive localhost names remain ineligible; `JARVIS_MODEL_ALLOW_REMOTE` does not override
+the worker boundary. Health and model-list traffic use the same gate. Tests use controlled mock
+transports and never require a live provider.
 
 ## Contracts
 
@@ -245,6 +246,7 @@ developer-specific configuration must not be committed.
 
 ## Deferred work
 
-Live-provider threat modeling and authorization, real execution, streaming, tools, structured
-output, vision, persistent accounting, production telemetry, autonomous scheduling, memory,
-office controls, and external gateway operations remain outside this foundation.
+Remote-provider threat modeling, streaming, tools, provider-native structured output, vision,
+persistent accounting beyond one durable execution result, production telemetry, general
+autonomous scheduling, memory, office controls, and external gateway operations remain outside
+this phase. See `docs/autonomous-worker.md` for the one real local execution path.

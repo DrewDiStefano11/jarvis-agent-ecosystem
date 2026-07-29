@@ -5,10 +5,10 @@ Task leases give one registered local worker exclusive, time-bounded ownership o
 ## Lifecycle
 
 1. A worker registers a stable instance ID and heartbeat duration.
-2. Acquisition first reclaims expired leases, then selects the highest-priority eligible task using urgent-to-low priority, FIFO creation time, and task ID as a deterministic tie-breaker. Tasks with incomplete `requires` dependencies are skipped.
+2. Acquisition first reclaims expired leases, then selects the highest-priority eligible task using urgent-to-low priority, FIFO creation time, and task ID as a deterministic tie-breaker. Tasks with incomplete `requires` dependencies are skipped. An optional exact task selector applies the same eligibility and locking rules and is used by an explicitly queued autonomous runtime run.
 3. The acquisition transaction moves the task to `in_progress`, creates an immutable attempt, creates the unique active lease, appends an audit record, advances the event-session sequence, and inserts an outbox envelope.
 4. The worker renews before `expiresAt`. Renewal may attach a validated workflow checkpoint belonging to the leased root task.
-5. The matching worker ID and lease token may complete, fail, or release the attempt. Completion with the same committed attempt token is idempotent.
+5. The matching worker ID and lease token may complete, fail, release, or pause the attempt for human review. Review pause moves the task to `under_review`, closes the attempt, and revokes the active lease.
 6. Draining or stopping a worker releases its leases. Task cancellation revokes its lease. Simulator reset revokes leases on deterministic demo tasks inside the reset transaction.
 
 Lease tokens are bearer capabilities. API responses return the token to the owning worker, but events and audits contain only a short SHA-256 fingerprint. A mismatched, expired, released, cancelled, reset, or superseded token receives `TASK_LEASE_LOST` and must stop processing.
@@ -52,4 +52,4 @@ Useful operator responses:
 
 The control plane guarantees one active owner, rejects stale writes, and commits task/attempt/audit/outbox state atomically. It therefore prevents concurrent duplicate execution and duplicate durable completion.
 
-No lease algorithm can prove that an uncoordinated external side effect did not occur immediately before a process crashed. Future external adapters must accept and enforce the fencing token or their own idempotency key. Until those adapters exist, Phase 2B remains a local simulated execution boundary and does not claim exactly-once external effects.
+No lease algorithm can prove that a model call did not finish immediately before a process crashed. Phase 2C revalidates the lease before and after inference and before result/task commits, so stale output cannot become durable. A crash before validated-result persistence may repeat the local call; a crash after result persistence resumes finalization without a second call. Exactly-once inference is not claimed.

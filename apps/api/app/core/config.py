@@ -9,6 +9,7 @@ from pydantic import AnyHttpUrl, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.model_providers.contracts import BUILTIN_ADAPTER_CAPABILITIES
+from app.model_providers.http import is_loopback_endpoint
 
 
 class Settings(BaseSettings):
@@ -43,6 +44,37 @@ class Settings(BaseSettings):
         le=5_000_000,
     )
     context_cross_project_allowed: bool = Field(False, alias="JARVIS_CONTEXT_CROSS_PROJECT_ALLOWED")
+    autonomous_worker_enabled: bool = Field(False, alias="JARVIS_AUTONOMOUS_WORKER_ENABLED")
+    autonomous_worker_actor_id: str = Field(
+        "", alias="JARVIS_AUTONOMOUS_WORKER_ACTOR_ID", max_length=80
+    )
+    autonomous_worker_instance_id: str = Field(
+        "", alias="JARVIS_AUTONOMOUS_WORKER_INSTANCE_ID", max_length=120
+    )
+    autonomous_worker_poll_interval_ms: int = Field(
+        1000, alias="JARVIS_AUTONOMOUS_WORKER_POLL_INTERVAL_MS", ge=100, le=60_000
+    )
+    autonomous_worker_max_concurrency: Literal[1] = Field(
+        1, alias="JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY"
+    )
+    autonomous_worker_lease_seconds: int = Field(
+        60, alias="JARVIS_AUTONOMOUS_WORKER_LEASE_SECONDS", ge=15, le=3600
+    )
+    autonomous_worker_heartbeat_interval_seconds: int = Field(
+        15,
+        alias="JARVIS_AUTONOMOUS_WORKER_HEARTBEAT_INTERVAL_SECONDS",
+        ge=1,
+        le=300,
+    )
+    autonomous_worker_max_execution_seconds: int = Field(
+        300, alias="JARVIS_AUTONOMOUS_WORKER_MAX_EXECUTION_SECONDS", ge=1, le=3600
+    )
+    autonomous_worker_max_repair_calls: int = Field(
+        1, alias="JARVIS_AUTONOMOUS_WORKER_MAX_REPAIR_CALLS", ge=0, le=1
+    )
+    model_execution_mode: Literal["disabled", "local_only"] = Field(
+        "disabled", alias="JARVIS_MODEL_EXECUTION_MODE"
+    )
     model_ollama_enabled: bool = Field(False, alias="JARVIS_MODEL_OLLAMA_ENABLED")
     model_ollama_name: str = Field(
         "ollama", alias="JARVIS_MODEL_OLLAMA_NAME", min_length=1, max_length=120
@@ -120,6 +152,25 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_model_provider_settings(self) -> Settings:
+        if self.autonomous_worker_enabled:
+            if self.model_execution_mode != "local_only":
+                raise ValueError(
+                    "JARVIS_AUTONOMOUS_WORKER_ENABLED requires "
+                    "JARVIS_MODEL_EXECUTION_MODE=local_only"
+                )
+            if not self.autonomous_worker_actor_id.strip():
+                raise ValueError(
+                    "JARVIS_AUTONOMOUS_WORKER_ACTOR_ID is required when the worker is enabled"
+                )
+            if not self.autonomous_worker_instance_id.strip():
+                raise ValueError(
+                    "JARVIS_AUTONOMOUS_WORKER_INSTANCE_ID is required when the worker is enabled"
+                )
+            if (
+                self.autonomous_worker_heartbeat_interval_seconds * 2
+                >= self.autonomous_worker_lease_seconds
+            ):
+                raise ValueError("worker heartbeat interval must be less than half the lease")
         if self.model_openai_compatible_enabled and (
             self.model_openai_compatible_api_key is None
             or not self.model_openai_compatible_api_key.get_secret_value()
@@ -137,6 +188,17 @@ class Settings(BaseSettings):
         ):
             if url.username is not None or url.password is not None or url.query or url.fragment:
                 raise ValueError(f"{label} base URL cannot contain credentials, query, or fragment")
+        if self.model_execution_mode == "local_only":
+            for enabled, label, url in (
+                (self.model_ollama_enabled, "Ollama", self.model_ollama_base_url),
+                (
+                    self.model_openai_compatible_enabled,
+                    "OpenAI-compatible",
+                    self.model_openai_compatible_base_url,
+                ),
+            ):
+                if enabled and not is_loopback_endpoint(str(url)):
+                    raise ValueError(f"{label} must use a structurally loopback base URL")
         supported = {capability.value for capability in BUILTIN_ADAPTER_CAPABILITIES}
         for label, value in (
             ("Ollama", self.model_ollama_capabilities),

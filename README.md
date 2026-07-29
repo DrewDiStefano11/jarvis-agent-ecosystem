@@ -1,6 +1,6 @@
 # Jarvis Agent Ecosystem
 
-Jarvis combines the Phase 2A local deterministic simulation and durable SQLite control plane with Phase 2B fenced task leases and a production-integrated Context Assembler. Tasks, approvals, task ownership, context manifests, audit history, notifications, system state, event delivery, and workflow checkpoints survive backend restarts while all agents, model calls, tools, and external actions remain simulated or unavailable.
+Jarvis combines the local deterministic simulation and durable SQLite control plane with fenced task leases, Context Assembly, identity/RBAC, the Agent Runtime ledger, and one narrow Phase 2C autonomous execution path. With explicit opt-in, a dedicated local worker can consume a queued `planning_review` runtime run, call an approved loopback model, validate a fixed result, and persist it durably. Tools and external side effects remain unavailable.
 
 ## What works in Phase 2A
 
@@ -11,14 +11,15 @@ Jarvis combines the Phase 2A local deterministic simulation and durable SQLite c
 - deterministic departments, five permanent agents, tasks, approvals, artifacts, notifications, and audit fixtures
 - installable PWA metadata, offline shell, reconnection states, HTTP refresh fallback, and a 320px mobile layout
 - YAML agent manifests validated by Pydantic
-- SQLite persistence through typed SQLAlchemy models and Alembic head `20260729_04`
+- SQLite persistence through typed SQLAlchemy models and Alembic head `20260729_05`
 - transactional outbox, durable idempotency keys, workflow runs, per-step checkpoints, and safe restart recovery
 - deterministic context assembly with provenance checks, trust ordering, redaction, injection signals, bounded truncation, durable manifests, and review gating
 - registered worker lifecycle, atomic task acquisition, renewable fencing tokens, attempt history, cancellation revocation, and expired-lease recovery
+- disabled-by-default local planning/review worker with explicit runtime queueing, task fencing, fixed structured output, one repair call, durable staged recovery, and authorization-gated results
 
 ## Explicit non-capabilities
 
-No real AI models, autonomous workers, email, calendars, cloud files, browser/desktop automation, shell execution, financial services, authentication, external database servers, or production infrastructure are included. Context is assembled but never sent to a provider. Telemetry, tools, files, reports, and temporary agents are labeled simulations. LangGraph, Prefect, PostgreSQL, Redis, Phaser, Ollama, and all real integrations are deferred.
+The only real model execution is an explicitly enabled, loopback-only `planning_review` worker. It has no tools and cannot execute code, modify files, browse, call GitHub, use email/calendars/cloud services, send messages, spend money, spawn agents, approve work, or reach a remote model. Ordinary tasks and old runtime records remain non-autonomous. Telemetry, general agents, tools, files, reports, and temporary agents remain simulated. External database servers and production deployment are not included.
 
 ## Architecture
 
@@ -62,6 +63,12 @@ pnpm dev
 
 Open `http://localhost:5173`. API docs are at `http://127.0.0.1:8000/docs`, OpenAPI at `/openapi.json`, health at `/api/health`, and WebSocket events at `ws://127.0.0.1:8000/ws/events`. Use **System → Start demo** to run the demonstration.
 
+The autonomous worker is a separate process and never starts with the API by default. After completing the explicit local-only setup in [docs/autonomous-worker.md](docs/autonomous-worker.md), run it from `apps/api`:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.autonomous_worker
+```
+
 ## Verification commands
 
 ```powershell
@@ -103,4 +110,4 @@ docs/              Product, API, event, manifest, roadmap, testing docs
 .github/workflows/ CI checks
 ```
 
-Runtime data defaults to `apps/api/data/jarvis.db` and is ignored by Git. See [persistence](docs/persistence.md), [migrations](docs/migrations.md), [recovery](docs/recovery.md), and [task leases](docs/task-leases.md).
+Runtime data defaults to `apps/api/data/jarvis.db` and is ignored by Git. See [autonomous worker](docs/autonomous-worker.md), [persistence](docs/persistence.md), [migrations](docs/migrations.md), [recovery](docs/recovery.md), and [task leases](docs/task-leases.md).

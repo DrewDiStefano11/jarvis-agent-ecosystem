@@ -1,6 +1,6 @@
 # Context assembler
 
-The Phase 2B Context Assembler adapts the security and determinism findings from PR #9 into the Phase 2A durable control plane. It builds a provider-neutral model request and manifest but never calls a model, executes a tool, grants a permission, or treats context as approval.
+The Context Assembler builds a provider-neutral model request and manifest. It never calls a model itself, executes a tool, grants a permission, or treats context as approval. Phase 2C may consume one explicitly referenced `completed` assembly through the separate autonomous-worker service.
 
 ## Integration boundary
 
@@ -80,7 +80,8 @@ When `maximumContextTokens` is omitted, the prototype-compatible `estimatedToken
 - Context is not semantically summarized, and external-source truth is not verified.
 - The local API currently has no authentication boundary, so deployment remains local-only.
 - The assembler does not read repository files itself; callers provide bounded content and a matching provenance hash.
-- There is no model provider, tool executor, approval generator, or autonomous worker integration.
+- Only the explicitly queued local `planning_review` worker consumes completed assemblies. It verifies task binding, status, typed payloads, and all three stored request hashes; it never performs a "latest assembly" lookup or reads original sources.
+- There is no tool executor or approval generator.
 - SQLite and the in-process outbox dispatcher target one local API process.
 
-A future provider adapter may consume only `completed` model requests behind a separate permission and approval boundary. A future tokenizer can replace the estimator behind the budget interface without changing API or stored manifest fields. Neither extension should move filesystem, model, or tool access into the assembler.
+The Phase 2C worker maps the provider-neutral request through a deterministic adapter, preserves context as user data, appends one fixed output-schema system instruction, and records a separate execution-request hash. A future tokenizer can replace the estimator behind the budget interface without changing API or stored manifest fields. Filesystem, model, and tool access remain outside the assembler.

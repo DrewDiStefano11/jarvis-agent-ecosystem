@@ -45,6 +45,7 @@ class OllamaProvider(ProviderBase):
             {ModelCapability.CHAT, ModelCapability.TEXT_GENERATION}
         ),
         keep_alive: str | None = None,
+        execution_mode: str = "disabled",
         client: httpx.AsyncClient | None = None,
     ) -> None:
         if not isinstance(name, str) or not name.strip() or len(name) > 120:
@@ -74,12 +75,21 @@ class OllamaProvider(ProviderBase):
         self.timeout_seconds = timeout_seconds
         self.capabilities = capabilities
         self.keep_alive = keep_alive
+        self.execution_mode = execution_mode
         self._client = client
 
     def _client_or_new(self) -> tuple[httpx.AsyncClient, bool]:
         if self._client is not None:
             return self._client, False
-        return httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout_seconds), True
+        return (
+            httpx.AsyncClient(
+                base_url=self.base_url,
+                timeout=self.timeout_seconds,
+                follow_redirects=False,
+                trust_env=False,
+            ),
+            True,
+        )
 
     async def execute(self, request: ModelExecutionRequest) -> ModelExecutionResponse:
         model = request.model or self.default_model
@@ -88,6 +98,8 @@ class OllamaProvider(ProviderBase):
             model=model,
             task_id=request.task_id,
             correlation_id=request.correlation_id,
+            execution_mode=self.execution_mode,
+            is_local=self.is_local,
         )
         payload: dict[str, Any] = {
             "model": model,
@@ -181,7 +193,10 @@ class OllamaProvider(ProviderBase):
             raise error
 
     async def health_check(self) -> ProviderHealth:
-        if not provider_network_health_allowed():
+        network_allowed = provider_network_health_allowed() or (
+            self.execution_mode == "local_only" and self.is_local
+        )
+        if not network_allowed:
             return ProviderHealth(
                 provider=self.name,
                 healthy=True,
@@ -204,7 +219,10 @@ class OllamaProvider(ProviderBase):
             return _unhealthy(self.name, started, error)
 
     async def model_available(self, model: str) -> bool | None:
-        if not provider_network_health_allowed():
+        network_allowed = provider_network_health_allowed() or (
+            self.execution_mode == "local_only" and self.is_local
+        )
+        if not network_allowed:
             return None
         try:
             return model in await self._list_models()
@@ -212,10 +230,15 @@ class OllamaProvider(ProviderBase):
             return None
 
     async def _list_models(self) -> set[str]:
+        network_allowed = provider_network_health_allowed() or (
+            self.execution_mode == "local_only" and self.is_local
+        )
         require_provider_network_health(
             provider=self.name,
             model=self.default_model,
-            allowed=provider_network_health_allowed(),
+            allowed=network_allowed,
+            execution_mode=self.execution_mode,
+            is_local=self.is_local,
         )
         client, owned = self._client_or_new()
         body: object | None = None

@@ -19,6 +19,9 @@ from app.agent_runtime.errors import AgentRuntimeError
 from app.agent_runtime.router import router as agent_runtime_router
 from app.agent_runtime.service import AgentRuntimeService
 from app.agent_runtime.sqlalchemy_repository import SqlAlchemyAgentRuntimeRepository
+from app.autonomous_worker.repository import ModelExecutionRepository
+from app.autonomous_worker.router import router as autonomous_worker_router
+from app.autonomous_worker.service import AutonomousWorkerService
 from app.context import ContextAssembler
 from app.core.config import Settings
 from app.core.errors import DomainError
@@ -26,6 +29,8 @@ from app.core.transitions import InvalidTransitionError, validate_transition
 from app.db.session import create_database_engine, create_session_factory
 from app.identity.router import router as identity_router
 from app.identity.service import IdentityService
+from app.model_providers.factory import build_model_router
+from app.models.autonomous_worker import AutonomousWorkerStatus
 from app.models.context import (
     ContextAssembly,
     ContextAssemblyEventPayload,
@@ -61,7 +66,7 @@ from app.repositories.task_leases import TaskLeaseRepository
 from app.services.events import EventBroker
 from app.simulator.engine import SimulatorEngine
 
-DATABASE_REVISION = "20260729_04"
+DATABASE_REVISION = "20260729_05"
 
 
 def _upgrade_database(settings: Settings) -> None:
@@ -89,7 +94,10 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     app = FastAPI(
         title="Jarvis Agent Ecosystem Simulator",
         version="0.1.0",
-        description="Phase 2A durable deterministic simulator. No real agents or external actions.",
+        description=(
+            "Durable local Jarvis control plane with one explicitly queued, "
+            "disabled-by-default local planning/review worker."
+        ),
     )
     app.add_middleware(
         CORSMiddleware,
@@ -135,7 +143,20 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         app.state.agent_runtime_repository,
         authorizer=IdentityRuntimeAuthorizer(app.state.identity_service),
     )
+    app.state.model_router = build_model_router(settings)
+    app.state.model_execution_repository = ModelExecutionRepository(
+        session_factory,
+        outbox_max_attempts=repository.outbox_max_attempts,
+    )
+    app.state.autonomous_worker_service = AutonomousWorkerService(
+        settings=settings,
+        executions=app.state.model_execution_repository,
+        task_leases=task_leases,
+        runtime=app.state.agent_runtime_service,
+        router=app.state.model_router,
+    )
     app.include_router(agent_runtime_router)
+    app.include_router(autonomous_worker_router)
     app.include_router(identity_router)
     app.state.lease_recovery_task = None
     app.state.recovery_required = restored_workflow_state == "recovery_required"
@@ -370,6 +391,24 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             }
         )
         runtime_persistence = _runtime_health_component(database_reachable, schema_current)
+        provider_ready = bool(
+            [provider for provider in app.state.model_router.registry.list() if provider.is_local]
+        )
+        autonomous_status = (
+            app.state.model_execution_repository.status(
+                enabled=settings.autonomous_worker_enabled,
+                execution_mode=settings.model_execution_mode,
+                provider_ready=provider_ready,
+            )
+            if database_reachable and schema_current
+            else AutonomousWorkerStatus(
+                enabled=settings.autonomous_worker_enabled,
+                modelExecutionMode=settings.model_execution_mode,
+                providerReady=provider_ready,
+                status="degraded" if settings.autonomous_worker_enabled else "disabled",
+                reasonCode="schema_unavailable" if settings.autonomous_worker_enabled else None,
+            )
+        )
         runtime_degraded = runtime_persistence.get("status", "healthy") != "healthy"
         degraded = (
             repository._system.recovery_status == "required"
@@ -379,6 +418,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             or lease_counts["expiredLeaseCount"] > 0
             or lease_counts["staleWorkerCount"] > 0
             or runtime_degraded
+            or (autonomous_status.status == "degraded")
         )
         return {
             "database_reachable": database_reachable,
@@ -389,6 +429,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             "lease_counts": lease_counts,
             "runtime_persistence": runtime_persistence,
             "runtime_degraded": runtime_degraded,
+            "autonomous_status": autonomous_status,
             "degraded": degraded,
         }
 
@@ -412,6 +453,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "contextAssemblyCount": context_status.totalAssemblies if database_reachable else 0,
                 **snapshot["lease_counts"],
                 "runtimePersistence": snapshot["runtime_persistence"],
+                "autonomousWorker": snapshot["autonomous_status"],
                 "simulated": True,
             }
         )
@@ -452,6 +494,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             lastStartupAt=repository._system.last_successful_startup,
             lastCleanShutdown=repository._system.last_clean_shutdown,
             contextAssembler=context_status,
+            autonomousWorker=snapshot["autonomous_status"],
             **snapshot["lease_counts"],
         )
 
@@ -795,7 +838,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.post("/api/workers/{worker_id}/tasks/acquire", response_model=ApiResponse)
     async def acquire_task(worker_id: str, body: AcquireTaskLeaseRequest) -> ApiResponse:
-        acquired = task_leases.acquire_task(worker_id, body.leaseSeconds)
+        acquired = task_leases.acquire_task(worker_id, body.leaseSeconds, body.taskId)
         if acquired is None:
             return ApiResponse(data=None)
         task_item, lease = acquired
