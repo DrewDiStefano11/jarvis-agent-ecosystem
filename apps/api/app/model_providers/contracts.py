@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.model_providers.security import redact_secrets
 
@@ -93,6 +93,11 @@ class ModelExecutionRequest(ProviderContract):
     metadata: dict[str, Any] = Field(default_factory=dict)
     streaming: bool = False
 
+    @field_validator("task_id", "correlation_id")
+    @classmethod
+    def reject_secret_bearing_identifiers(cls, value: str | None) -> str | None:
+        return validate_safe_identifier(value)
+
     @model_validator(mode="after")
     def normalize_and_validate(self) -> ModelExecutionRequest:
         if bool(self.messages) == bool(self.prompt):
@@ -127,6 +132,11 @@ class ModelExecutionResponse(ProviderContract):
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
     routing_metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("task_id", "correlation_id")
+    @classmethod
+    def reject_secret_bearing_identifiers(cls, value: str | None) -> str | None:
+        return validate_safe_identifier(value)
+
     @model_validator(mode="after")
     def derive_and_validate(self) -> ModelExecutionResponse:
         if self.input_tokens is not None and self.output_tokens is not None:
@@ -152,7 +162,7 @@ class ProviderHealth(ProviderContract):
 
 
 class ProviderSummary(ProviderContract):
-    name: str
+    name: str = Field(min_length=1, max_length=120)
     provider_type: ProviderType
     is_local: bool
     capabilities: list[ModelCapability]
@@ -174,6 +184,12 @@ class ModelProvider(Protocol):
     async def execute(self, request: ModelExecutionRequest) -> ModelExecutionResponse: ...
 
     def safe_summary(self) -> ProviderSummary: ...
+
+
+def validate_safe_identifier(value: str | None) -> str | None:
+    if value is not None and redact_secrets(value) != value:
+        raise ValueError("identifier cannot contain secret-bearing text")
+    return value
 
 
 def validate_safe_metadata(metadata: dict[str, Any]) -> None:

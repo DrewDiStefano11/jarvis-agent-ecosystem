@@ -56,8 +56,8 @@ class OpenAICompatibleProvider(ProviderBase):
         custom_headers: dict[str, str] | None = None,
         client: httpx.AsyncClient | None = None,
     ) -> None:
-        if not isinstance(name, str) or not name.strip():
-            raise ProviderConfigurationError("provider name must not be empty")
+        if not isinstance(name, str) or not name.strip() or len(name) > 120:
+            raise ProviderConfigurationError("provider name must contain 1 to 120 characters")
         if not isinstance(default_model, str) or not default_model.strip():
             raise ProviderConfigurationError(
                 "provider default model must not be empty", provider=name

@@ -40,11 +40,11 @@ class ModelProviderError(Exception):
         metadata: dict[str, Any] | None = None,
     ) -> None:
         self.message = str(redact_secrets(message))
-        self.provider = provider
-        self.model = model
+        self.provider = _safe_optional_text(provider)
+        self.model = _safe_optional_text(model)
         self.retry_after_seconds = retry_after_seconds
-        self.task_id = task_id
-        self.correlation_id = correlation_id
+        self.task_id = _safe_optional_text(task_id)
+        self.correlation_id = _safe_optional_text(correlation_id)
         self.status_code = status_code
         sanitized = redact_secrets(metadata or {})
         self.metadata = sanitized if isinstance(sanitized, dict) else {}
@@ -67,6 +67,12 @@ class ModelProviderError(Exception):
             }.items()
             if value is not None
         }
+
+
+def _safe_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return str(redact_secrets(value))
 
 
 class ProviderUnavailableError(ModelProviderError):

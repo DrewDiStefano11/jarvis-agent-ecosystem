@@ -12,7 +12,11 @@ from app.model_providers.contracts import BUILTIN_ADAPTER_CAPABILITIES
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        extra="ignore",
+        hide_input_in_errors=True,
+    )
 
     app_env: str = Field("development", alias="APP_ENV")
     database_url: str = Field("sqlite:///./data/jarvis.db", alias="JARVIS_DATABASE_URL")
@@ -40,7 +44,9 @@ class Settings(BaseSettings):
     )
     context_cross_project_allowed: bool = Field(False, alias="JARVIS_CONTEXT_CROSS_PROJECT_ALLOWED")
     model_ollama_enabled: bool = Field(False, alias="JARVIS_MODEL_OLLAMA_ENABLED")
-    model_ollama_name: str = Field("ollama", alias="JARVIS_MODEL_OLLAMA_NAME", min_length=1)
+    model_ollama_name: str = Field(
+        "ollama", alias="JARVIS_MODEL_OLLAMA_NAME", min_length=1, max_length=120
+    )
     model_ollama_base_url: AnyHttpUrl = Field(
         "http://127.0.0.1:11434", alias="JARVIS_MODEL_OLLAMA_BASE_URL"
     )
@@ -57,7 +63,10 @@ class Settings(BaseSettings):
         False, alias="JARVIS_MODEL_OPENAI_COMPATIBLE_ENABLED"
     )
     model_openai_compatible_name: str = Field(
-        "openai-compatible", alias="JARVIS_MODEL_OPENAI_COMPATIBLE_NAME", min_length=1
+        "openai-compatible",
+        alias="JARVIS_MODEL_OPENAI_COMPATIBLE_NAME",
+        min_length=1,
+        max_length=120,
     )
     model_openai_compatible_base_url: AnyHttpUrl = Field(
         "https://example.invalid/v1", alias="JARVIS_MODEL_OPENAI_COMPATIBLE_BASE_URL"

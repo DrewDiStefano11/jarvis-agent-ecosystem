@@ -150,10 +150,12 @@ def test_openai_compatible_accepts_ordinary_custom_headers() -> None:
     [
         ("ollama", "", "m"),
         ("ollama", "   ", "m"),
+        ("ollama", "x" * 121, "m"),
         ("ollama", "local", ""),
         ("ollama", "local", "   "),
         ("openai", "", "m"),
         ("openai", "   ", "m"),
+        ("openai", "x" * 121, "m"),
         ("openai", "remote", ""),
         ("openai", "remote", "   "),
     ],

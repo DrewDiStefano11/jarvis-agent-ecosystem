@@ -38,6 +38,28 @@ def test_invalid_request_contracts_are_rejected(payload: dict[str, object]) -> N
 
 
 @pytest.mark.parametrize(
+    ("field_name", "identifier"),
+    [
+        ("task_id", "token=" + "private-" + "value"),
+        ("correlation_id", "Bearer " + "private." + "value"),
+    ],
+)
+def test_secret_bearing_execution_identifiers_are_rejected(
+    field_name: str, identifier: str
+) -> None:
+    with pytest.raises(ValidationError):
+        ModelExecutionRequest(prompt="hello", **{field_name: identifier})
+    with pytest.raises(ValidationError):
+        ModelExecutionResponse(
+            content="done",
+            provider="mock",
+            model="model",
+            latency_ms=1,
+            **{field_name: identifier},
+        )
+
+
+@pytest.mark.parametrize(
     "metadata",
     [
         {"authorization": "Bearer abc"},
@@ -107,13 +129,19 @@ def test_recursive_redaction_handles_keys_bearers_and_assignments() -> None:
 
 
 def test_normalized_errors_never_expose_secret_text() -> None:
+    identifier_secret = "private-" + "identifier"
     error = AuthenticationError(
         "failed Authorization: Bearer abc api_key=secret-value",
+        task_id="token=" + identifier_secret,
+        correlation_id="Bearer " + identifier_secret,
         metadata={"password": "hidden"},
     )
     assert "abc" not in str(error)
     assert "secret-value" not in str(error)
     assert "hidden" not in repr(error.safe_details())
+    assert identifier_secret not in repr(error.safe_details())
+    assert error.safe_details()["task_id"] == f"token={REDACTED}"
+    assert error.safe_details()["correlation_id"] == f"Bearer {REDACTED}"
 
 
 def test_settings_and_provider_keys_are_repr_safe() -> None:
@@ -123,6 +151,19 @@ def test_settings_and_provider_keys_are_repr_safe() -> None:
     )
     assert "very-secret" not in repr(settings)
     assert isinstance(settings.model_openai_compatible_api_key, SecretStr)
+
+
+def test_settings_validation_errors_hide_raw_secret_inputs() -> None:
+    secret = "private-" + "settings-" + "value"
+    with pytest.raises(ValidationError) as raised:
+        Settings(
+            _env_file=None,
+            JARVIS_MODEL_OPENAI_COMPATIBLE_ENABLED=True,
+            JARVIS_MODEL_OPENAI_COMPATIBLE_API_KEY=secret,
+            JARVIS_MODEL_OPENAI_COMPATIBLE_BASE_URL="https://example.invalid/v1?invalid=true",
+        )
+    if secret in str(raised.value) or secret in repr(raised.value):
+        pytest.fail("settings validation error exposed a raw secret input")
 
 
 def test_settings_defaults_disable_both_providers() -> None:
@@ -140,6 +181,8 @@ def test_settings_defaults_disable_both_providers() -> None:
             "JARVIS_MODEL_OPENAI_COMPATIBLE_API_KEY": "",
         },
         {"JARVIS_MODEL_PROVIDER_PRIORITY": "a,a"},
+        {"JARVIS_MODEL_OLLAMA_NAME": "x" * 121},
+        {"JARVIS_MODEL_OPENAI_COMPATIBLE_NAME": "x" * 121},
         {"JARVIS_MODEL_OLLAMA_MODEL": ""},
         {"JARVIS_MODEL_OLLAMA_CAPABILITIES": "vision"},
         {"JARVIS_MODEL_OLLAMA_CAPABILITIES": "CHAT"},
