@@ -13,6 +13,18 @@ RUNTIME_ADMIN_RESOURCE_TYPE = "administrative_function"
 RUNTIME_ADMIN_RESOURCE_ID = "agent_runtime"
 RUNTIME_RESOURCE_TYPE = "task"
 
+RUNTIME_RESOURCE_POLICY_ACTIONS: dict[str, str] = {
+    "runtime.read": "view",
+    "runtime.create": "manage",
+    "runtime.queue": "manage",
+    "runtime.execute": "manage",
+    "runtime.pause": "manage",
+    "runtime.cancel": "manage",
+    "runtime.checkpoint": "manage",
+    "runtime.complete": "manage",
+    "runtime.recover": "manage",
+}
+
 RUNTIME_PERMISSION_KEYS: dict[str, str] = {
     "read": "runtime.read",
     "create": "runtime.create",
@@ -161,6 +173,19 @@ class IdentityRuntimeAuthorizer(RuntimeAuthorizer):
                     "resourceType": RUNTIME_RESOURCE_TYPE,
                     "reasonCode": decision.reason_code,
                     "decisionRule": decision.decisive_rule,
+                }
+            )
+        policy_action = RUNTIME_RESOURCE_POLICY_ACTIONS.get(permission_key, "manage")
+        policy_decision = self.identity.check_resource_access(
+            actor.actor_id, RUNTIME_RESOURCE_TYPE, resource_id, policy_action
+        )
+        if policy_decision.matched_denials or policy_decision.reason_code == "resource_denial":
+            raise RuntimePermissionDeniedError(
+                metadata={
+                    "permissionKey": permission_key,
+                    "resourceType": RUNTIME_RESOURCE_TYPE,
+                    "reasonCode": "resource_denial",
+                    "decisionRule": "resource_policy",
                 }
             )
         return RuntimeAuthorizationContext(

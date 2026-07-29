@@ -198,3 +198,55 @@ def test_unauthorized_runtime_command_writes_no_artifacts(tmp_path) -> None:
                 )
             )
         assert runtime_outbox == []
+
+
+def test_runtime_authorization_respects_task_resource_policy_denies(tmp_path) -> None:
+    from app.models.identity import ResourcePolicyRequest
+
+    app = create_app(delay_ms=1, database_url=database_url(tmp_path / "auth-resource-policy.db"))
+    with TestClient(app) as client:
+        permissions = ensure_permissions(app)
+        actor_id = create_actor(app, "runtime-auth-policy")
+        grant(app, actor_id, permissions, "runtime.create", "runtime.read", task_id="task-1")
+        app.state.identity_service.create_resource_policy(
+            ResourcePolicyRequest(
+                subject_type="all",
+                resource_type="task",
+                resource_id="task-1",
+                action="manage",
+                effect="deny",
+                access_state="blocked",
+                reason="block runtime writes",
+            )
+        )
+        body = command_body(actor_id, run_id="policy-denied-create")
+        denied_create = client.post(
+            "/api/agent-runtime/commands", json=body, headers={"X-Jarvis-Actor-Id": actor_id}
+        )
+        assert denied_create.status_code == 403
+        assert denied_create.json()["error"]["code"] == "runtime_permission_denied"
+        assert app.state.agent_runtime_repository.load_run("policy-denied-create") is None
+
+        # Seed a run internally, then block task view to prove protected reads also honor resource policies.
+        create_runtime = __import__(
+            "tests.test_agent_runtime_lineage_pagination",
+            fromlist=["create_runtime_run"],
+        ).create_runtime_run
+        create_runtime(app, "policy-read-run", task_id="task-1", index=1)
+        app.state.identity_service.create_resource_policy(
+            ResourcePolicyRequest(
+                subject_type="all",
+                resource_type="task",
+                resource_id="task-1",
+                action="view",
+                effect="deny",
+                access_state="blocked",
+                reason="block runtime reads",
+            )
+        )
+        denied_read = client.get(
+            "/api/agent-runtime/runs/policy-read-run",
+            headers={"X-Jarvis-Actor-Id": actor_id},
+        )
+        assert denied_read.status_code == 403
+        assert denied_read.json()["error"]["code"] == "runtime_permission_denied"
