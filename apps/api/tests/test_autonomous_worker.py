@@ -20,6 +20,7 @@ from app.models.agent_runtime import (
     QueueAgentRunCommand,
 )
 from app.models.autonomous_worker import PlanningReviewResult
+from app.models.identity import AssignPermissionRequest
 from tests.agent_runtime_testkit import make_spec, ts
 from tests.test_agent_runtime_sql_control_plane import grant_runtime_permissions
 from tests.test_context_integration import context_body
@@ -120,18 +121,19 @@ def create_assembly_and_runtime(
     actor_id: str,
     *,
     run_id: str = "run-autonomous-1",
+    task_id: str = "task-demo",
     assembly_content: str = "Approved planning facts.",
 ) -> str:
     assembly_response = client.post(
         "/api/context/assemblies",
-        json=context_body(assembly_content, task_id="task-demo"),
+        json=context_body(assembly_content, task_id=task_id),
         headers={"Idempotency-Key": f"assembly-{run_id}"},
     )
     assert assembly_response.status_code == 201
     assembly = assembly_response.json()["data"]
     specification = make_spec(
         run_id=run_id,
-        task_id="task-demo",
+        task_id=task_id,
         agent_id=actor_id,
     ).model_copy(
         update={
@@ -268,6 +270,61 @@ async def test_ordinary_task_and_legacy_queued_run_are_ignored(tmp_path: Path) -
         assert await app.state.autonomous_worker_service.run_once(worker.id) is None
         assert router.requests == []
         assert app.state.repository.tasks["task-demo"].status == "queued"
+
+
+@pytest.mark.asyncio
+async def test_unleaseable_oldest_run_does_not_starve_later_work(tmp_path: Path) -> None:
+    app = create_app(
+        delay_ms=1,
+        database_url=database_url(tmp_path / "unleaseable-run-skip.db"),
+    )
+    router = FakeRouter([json.dumps(VALID_RESULT)])
+    with TestClient(app) as client:
+        queue_only_demo_task(app)
+        actor_id = grant_runtime_permissions(
+            app,
+            "actor-unleaseable-skip",
+            task_id="task-demo",
+        )
+        for permission in app.state.identity_service.list_definitions("permission", 0, 100):
+            app.state.identity_service.assign_permission(
+                actor_id,
+                AssignPermissionRequest(
+                    permission_id=permission.id,
+                    effect="allow",
+                    resource_type="task",
+                    resource_id="task-completed",
+                ),
+            )
+        configure_worker(app, actor_id, router)
+        create_assembly_and_runtime(
+            client,
+            app,
+            actor_id,
+            run_id="run-a-unleaseable",
+            task_id="task-completed",
+        )
+        create_assembly_and_runtime(
+            client,
+            app,
+            actor_id,
+            run_id="run-z-eligible",
+            task_id="task-demo",
+        )
+        worker = app.state.task_leases.register_worker(
+            "skip-worker",
+            "skip-worker",
+            60,
+            {"kind": "autonomous_planning_review"},
+        )
+
+        result = await app.state.autonomous_worker_service.run_once(worker.id)
+        assert result is not None
+        assert result.runtimeRunId == "run-z-eligible"
+        assert app.state.repository.tasks["task-demo"].status == "completed"
+        stale = app.state.agent_runtime_service.repository.load_run("run-a-unleaseable")
+        assert stale is not None
+        assert stale.state == "queued"
 
 
 @pytest.mark.asyncio
@@ -539,7 +596,137 @@ async def test_restart_finalizes_durable_result_without_model_recall(
 
 
 @pytest.mark.asyncio
-async def test_restart_finishes_task_after_runtime_success_without_model_recall(
+async def test_restart_preserves_model_requested_human_review(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    review_result = VALID_RESULT | {"requiresHumanReview": True}
+    router = FakeRouter([json.dumps(review_result)])
+    app, client, _, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-autonomous-review-recovery",
+    )
+    service = app.state.autonomous_worker_service
+    original_pause = service._pause_for_review
+
+    def crash_before_review_pause(*args, **kwargs):
+        raise RuntimeError("injected review-pause crash")
+
+    monkeypatch.setattr(service, "_pause_for_review", crash_before_review_pause)
+    try:
+        with pytest.raises(RuntimeError, match="injected review-pause crash"):
+            await service.run_once(worker.id)
+        stored = app.state.model_execution_repository.get_by_run("run-autonomous-review-recovery")
+        assert stored is not None
+        assert stored.stage == "result_persisted"
+        assert stored.requiresHumanReview is True
+
+        with app.state.model_execution_repository.sessions.begin() as session:
+            session.execute(
+                update(TaskLeaseRow)
+                .where(TaskLeaseRow.task_id == "task-demo")
+                .values(expires_at=ts(0))
+            )
+        assert app.state.task_leases.recover_expired_leases() == 1
+        monkeypatch.setattr(service, "_pause_for_review", original_pause)
+
+        recovered = await service.run_once(worker.id)
+        assert recovered is not None
+        assert recovered.stage == "human_review_required"
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-autonomous-review-recovery"
+        )
+        assert runtime is not None
+        assert runtime.state == "paused"
+        assert app.state.repository.tasks["task-demo"].status == "under_review"
+        assert len(router.requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_restart_repeats_pre_result_call_and_completes(
+    tmp_path: Path,
+) -> None:
+    def crash_during_call() -> None:
+        raise RuntimeError("injected provider-response crash")
+
+    router = FakeRouter([json.dumps(VALID_RESULT)], callback=crash_during_call)
+    app, client, _, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-autonomous-pre-result-recovery",
+    )
+    try:
+        with pytest.raises(RuntimeError, match="injected provider-response crash"):
+            await app.state.autonomous_worker_service.run_once(worker.id)
+        stored = app.state.model_execution_repository.get_by_run(
+            "run-autonomous-pre-result-recovery"
+        )
+        assert stored is not None
+        assert stored.stage == "call_started"
+        assert stored.resultHash is None
+
+        with app.state.model_execution_repository.sessions.begin() as session:
+            session.execute(
+                update(TaskLeaseRow)
+                .where(TaskLeaseRow.task_id == "task-demo")
+                .values(expires_at=ts(0))
+            )
+        assert app.state.task_leases.recover_expired_leases() == 1
+        router.callback = None
+
+        recovered = await app.state.autonomous_worker_service.run_once(worker.id)
+        assert recovered is not None
+        assert recovered.stage == "completed"
+        assert len(router.requests) == 2
+        assert app.state.repository.tasks["task-demo"].status == "completed"
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_task_cancellation_wins_before_runtime_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    router = FakeRouter([json.dumps(VALID_RESULT)])
+    app, client, _, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-autonomous-finalization-cancel",
+    )
+    original_complete_task = app.state.task_leases.complete_task
+
+    def cancel_before_completion(task_id, worker_id, lease_token, result):
+        app.state.task_leases.cancel_task(task_id)
+        return original_complete_task(task_id, worker_id, lease_token, result)
+
+    monkeypatch.setattr(
+        app.state.task_leases,
+        "complete_task",
+        cancel_before_completion,
+    )
+    try:
+        with pytest.raises(Exception) as raised:
+            await app.state.autonomous_worker_service.run_once(worker.id)
+        assert getattr(raised.value, "code", None) == "EXECUTION_CANCELLED"
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-autonomous-finalization-cancel"
+        )
+        assert runtime is not None
+        assert runtime.state == "cancelled"
+        assert app.state.repository.tasks["task-demo"].status == "cancelled"
+        stored = app.state.model_execution_repository.get_by_run(
+            "run-autonomous-finalization-cancel"
+        )
+        assert stored is not None
+        assert stored.stage == "failed"
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_restart_finishes_runtime_after_task_completion_without_model_recall(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     router = FakeRouter([json.dumps(VALID_RESULT)])
@@ -549,12 +736,12 @@ async def test_restart_finishes_task_after_runtime_success_without_model_recall(
         run_id="run-autonomous-task-recovery",
     )
     service = app.state.autonomous_worker_service
-    original_complete_task = app.state.task_leases.complete_task
+    original_finalize = service._finalize_committed_task
 
-    def crash_before_task_completion(*args, **kwargs):
+    def crash_after_task_completion(*args, **kwargs):
         raise RuntimeError("injected task-finalization crash")
 
-    monkeypatch.setattr(app.state.task_leases, "complete_task", crash_before_task_completion)
+    monkeypatch.setattr(service, "_finalize_committed_task", crash_after_task_completion)
     try:
         with pytest.raises(RuntimeError, match="injected task-finalization crash"):
             await service.run_once(worker.id)
@@ -565,23 +752,52 @@ async def test_restart_finishes_task_after_runtime_success_without_model_recall(
             "run-autonomous-task-recovery"
         )
         assert runtime is not None
-        assert runtime.state == "succeeded"
-        assert app.state.repository.tasks["task-demo"].status == "in_progress"
+        assert runtime.state == "running"
+        assert app.state.repository.tasks["task-demo"].status == "completed"
         assert len(router.requests) == 1
 
-        with app.state.model_execution_repository.sessions.begin() as session:
-            session.execute(
-                update(TaskLeaseRow)
-                .where(TaskLeaseRow.task_id == "task-demo")
-                .values(expires_at=ts(0))
-            )
-        assert app.state.task_leases.recover_expired_leases() == 1
-        monkeypatch.setattr(app.state.task_leases, "complete_task", original_complete_task)
+        monkeypatch.setattr(service, "_finalize_committed_task", original_finalize)
 
         recovered = await service.run_once(worker.id)
         assert recovered is not None
         assert recovered.stage == "completed"
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-autonomous-task-recovery"
+        )
+        assert runtime is not None
+        assert runtime.state == "succeeded"
         assert app.state.repository.tasks["task-demo"].status == "completed"
         assert len(router.requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_persisted_result_hash_is_verified_on_read(tmp_path: Path) -> None:
+    router = FakeRouter([json.dumps(VALID_RESULT)])
+    app, client, _, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-autonomous-corrupt-result",
+    )
+    try:
+        result = await app.state.autonomous_worker_service.run_once(worker.id)
+        assert result is not None
+        with app.state.model_execution_repository.sessions.begin() as session:
+            session.execute(
+                update(ModelExecutionRow)
+                .where(ModelExecutionRow.execution_id == result.executionId)
+                .values(result_json=VALID_RESULT | {"summary": "Altered but schema-valid"})
+            )
+        with pytest.raises(Exception) as raised:
+            app.state.model_execution_repository.get(result.executionId)
+        assert getattr(raised.value, "code", None) == "MODEL_RESULT_CORRUPT"
+        status = app.state.model_execution_repository.status(
+            enabled=True,
+            execution_mode="local_only",
+            provider_ready=True,
+        )
+        assert status.status == "degraded"
+        assert status.reasonCode == "model_result_corrupt"
     finally:
         client.__exit__(None, None, None)

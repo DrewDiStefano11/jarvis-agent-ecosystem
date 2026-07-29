@@ -69,7 +69,7 @@ Ollama is the supported smoke-test adapter. A loopback OpenAI-compatible adapter
 
 The normal state flow is:
 
-1. select eligible queued run;
+1. scan queued autonomous runs in stable order, skipping tasks that cannot currently be leased;
 2. acquire exact task lease in `BEGIN IMMEDIATE`;
 3. claim the runtime and begin/start its deterministic attempt;
 4. persist `prepared` and a pre-call runtime checkpoint;
@@ -79,23 +79,23 @@ The normal state flow is:
 8. recheck all live policy and fencing conditions;
 9. atomically persist the validated result and `result_persisted` event;
 10. checkpoint the durable result and mark finalization pending;
-11. complete the runtime attempt/run;
-12. complete the fenced task with `model-execution:<execution-id>`;
+11. complete the fenced task with `model-execution:<execution-id>`;
+12. complete the runtime attempt/run from that durable task commit;
 13. mark the execution completed.
 
-The `model_executions` row is keyed by a deterministic execution ID and has a unique `(runtime_run_id, runtime_attempt_id)` constraint. It stores validated content, provider/model identity, assembly and execution request hashes, result hash, bounded token/latency/request/cost metadata, normalized finish reason, stage, review flag, and timestamps. It never stores a key, authorization header, raw request/response, invalid output, repair prompt, source text, exception object, traceback, path, or hidden reasoning.
+The `model_executions` row is keyed by a deterministic execution ID and has a unique `(runtime_run_id, runtime_attempt_id)` constraint. It stores validated content, provider/model identity, assembly and execution request hashes, result hash, bounded token/latency/request/cost metadata, normalized finish reason, stage, review flag, and timestamps. Reads and recovery recompute the canonical result hash and fail closed on a mismatch. The row never stores a key, authorization header, raw request/response, invalid output, repair prompt, source text, exception object, traceback, path, or hidden reasoning.
 
-A model call cannot be transactional. A crash before validated result persistence may cause the local model to be called again after lease recovery. This is the documented duplicate-call window; exactly-once inference is not claimed. Once the validated result is durable, restart recovery completes the runtime/task without calling the model again. Deterministic runtime command IDs, processed-command hashes, unique result constraints, fenced task operations, and deterministic audit/outbox event IDs prevent duplicate durable results and duplicate completion records.
+A model call cannot be transactional. A crash in `prepared`, `call_started`, or `response_received` may cause the local model to be called again after lease recovery. This is the documented duplicate-call window; exactly-once inference is not claimed. Once the validated result is durable, restart recovery completes the review or finalization path without calling the model again. Task completion is the normal-result commit point: cancellation that revokes the lease first wins, while a crash after task completion safely resumes runtime completion. Deterministic runtime command IDs, processed-command hashes, unique result constraints, fenced task operations, and deterministic audit/outbox event IDs prevent duplicate durable results and duplicate completion records.
 
 ## Fencing, authorization, stop, and review
 
-The task lease is the only execution ownership mechanism. Its worker ID and random token are revalidated before each call, after each call, before result persistence, before runtime completion, and before task completion. A background heartbeat renews the lease during inference. Audit/events retain only a SHA-256 fingerprint where a lease reference is needed.
+The task lease is the only execution ownership mechanism. Its worker ID and random token are revalidated before each call, after each call, before result persistence, and before the task completion commit. A background heartbeat renews the lease during inference. Audit/events retain only a SHA-256 fingerprint where a lease reference is needed.
 
 The configured actor is authenticated through `IdentityService`; the established task-scoped runtime permissions are reevaluated by the runtime authorizer throughout execution and before an authorized result read. Administrator denial and resource-policy denial retain their existing precedence.
 
 Emergency stop blocks acquisition, model calls, result commit, and terminal completion. A response that arrives after stop activation is discarded. Cancellation similarly blocks commit and enters the existing runtime cancellation boundary. Lost ownership abandons the active runtime attempt on a bounded best-effort basis and never stores generated output.
 
-A valid result with `requiresHumanReview=true`, or exhausted output repair, pauses the runtime and moves the fenced task to `under_review`. The model cannot approve itself or clear this state.
+A valid result with `requiresHumanReview=true`, or exhausted output repair, pauses the runtime and moves the fenced task to `under_review`. Recovery preserves this branch even if the process exits immediately after result persistence. The model cannot approve itself or clear this state.
 
 ## Configuration and local command
 

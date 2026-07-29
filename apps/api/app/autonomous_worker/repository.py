@@ -8,6 +8,7 @@ from decimal import Decimal
 from hashlib import sha256
 from typing import Any
 
+from pydantic import ValidationError
 from sqlalchemy import JSON, and_, exists, func, or_, select, text
 from sqlalchemy.orm import Session, aliased, sessionmaker
 
@@ -78,17 +79,21 @@ class ModelExecutionRepository:
             session.close()
 
     def select_eligible_queued_run(self) -> AgentRunSnapshot | None:
-        snapshot = self.select_queued_autonomous_run()
-        if snapshot is None:
-            return None
         with self.sessions() as session:
-            return snapshot if self._eligible_in_session(session, snapshot) else None
+            for snapshot in self.list_queued_autonomous_runs():
+                if self._eligible_in_session(session, snapshot):
+                    return snapshot
+            return None
 
     def select_queued_autonomous_run(self) -> AgentRunSnapshot | None:
+        rows = self.list_queued_autonomous_runs()
+        return rows[0] if rows else None
+
+    def list_queued_autonomous_runs(self) -> list[AgentRunSnapshot]:
         with self.sessions() as session:
             state = session.get(SystemStateRow, 1)
             if state is not None and state.emergency_stop:
-                return None
+                return []
             rows = list(
                 session.scalars(
                     select(AgentRuntimeRunRow)
@@ -97,13 +102,14 @@ class ModelExecutionRepository:
                     .limit(100)
                 )
             )
+            snapshots: list[AgentRunSnapshot] = []
             for row in rows:
                 snapshot = AgentRunSnapshot.model_validate_json(row.snapshot_json)
                 request = snapshot.specification.autonomous_execution
                 if request is None or request.execution_type.value != "planning_review":
                     continue
-                return snapshot
-            return None
+                snapshots.append(snapshot)
+            return snapshots
 
     def target_identity_active(self, agent_id: str) -> bool:
         with self.sessions() as session:
@@ -426,6 +432,67 @@ class ModelExecutionRepository:
             )
             return [self._contract(row) for row in rows]
 
+    def recoverable_uncommitted(self) -> list[ModelExecutionResult]:
+        with self.sessions() as session:
+            rows = session.scalars(
+                select(ModelExecutionRow)
+                .where(
+                    ModelExecutionRow.result_hash.is_(None),
+                    ModelExecutionRow.stage.in_(
+                        [
+                            ModelExecutionStage.PREPARED.value,
+                            ModelExecutionStage.CALL_STARTED.value,
+                            ModelExecutionStage.RESPONSE_RECEIVED.value,
+                        ]
+                    ),
+                )
+                .order_by(ModelExecutionRow.updated_at, ModelExecutionRow.execution_id)
+                .limit(100)
+            )
+            return [self._contract(row) for row in rows]
+
+    def reclaim_uncommitted(
+        self,
+        execution_id: str,
+        *,
+        worker_id: str,
+        lease_token: str,
+        task_attempt_number: int,
+    ) -> ModelExecutionResult:
+        now = datetime.now(UTC)
+        with self._write() as session:
+            row = self._require_row(session, execution_id)
+            if row.result_hash is not None or row.stage not in {
+                ModelExecutionStage.PREPARED.value,
+                ModelExecutionStage.CALL_STARTED.value,
+                ModelExecutionStage.RESPONSE_RECEIVED.value,
+            }:
+                raise AutonomousWorkerError("MODEL_RESULT_CONFLICT")
+            state = session.get(SystemStateRow, 1)
+            if state is not None and state.emergency_stop:
+                raise AutonomousWorkerError("EXECUTION_EMERGENCY_STOPPED", status_code=423)
+            lease = session.get(TaskLeaseRow, row.task_id)
+            if (
+                lease is None
+                or lease.worker_id != worker_id
+                or lease.lease_token != lease_token
+                or lease.expires_at.replace(tzinfo=UTC) <= now
+            ):
+                raise AutonomousWorkerError("EXECUTION_LEASE_LOST")
+            row.worker_id = worker_id
+            row.task_attempt_number = task_attempt_number
+            row.lease_token_fingerprint = sha256(lease_token.encode()).hexdigest()
+            row.stage = ModelExecutionStage.PREPARED.value
+            row.updated_at = now
+            self._emit(
+                session,
+                row,
+                "model.execution.recovered",
+                {"previousCallMayHaveCompleted": True},
+            )
+            session.flush()
+            return self._contract(row)
+
     def status(
         self, *, enabled: bool, execution_mode: str, provider_ready: bool
     ) -> AutonomousWorkerStatus:
@@ -483,6 +550,20 @@ class ModelExecutionRepository:
                     )
                 )
                 or 0
+            )
+            corrupt_results += sum(
+                1
+                for result_hash, result_json in session.execute(
+                    select(
+                        ModelExecutionRow.result_hash,
+                        ModelExecutionRow.result_json,
+                    ).where(
+                        ModelExecutionRow.result_hash.is_not(None),
+                        ModelExecutionRow.result_json.is_not(None),
+                    )
+                )
+                if result_json is None
+                or sha256(canonical_json(result_json).encode()).hexdigest() != result_hash
             )
             exhausted_outbox = int(
                 session.scalar(
@@ -706,11 +787,17 @@ class ModelExecutionRepository:
 
     @staticmethod
     def _contract(row: ModelExecutionRow) -> ModelExecutionResult:
-        result = (
-            PlanningReviewResult.model_validate(row.result_json)
-            if row.result_json is not None
-            else None
-        )
+        result: PlanningReviewResult | None = None
+        if row.result_json is not None:
+            actual_hash = sha256(canonical_json(row.result_json).encode()).hexdigest()
+            if row.result_hash is None or actual_hash != row.result_hash:
+                raise AutonomousWorkerError("MODEL_RESULT_CORRUPT")
+            try:
+                result = PlanningReviewResult.model_validate(row.result_json)
+            except ValidationError as exc:
+                raise AutonomousWorkerError("MODEL_RESULT_CORRUPT") from exc
+        elif row.result_hash is not None:
+            raise AutonomousWorkerError("MODEL_RESULT_CORRUPT")
         return ModelExecutionResult(
             executionId=row.execution_id,
             runtimeRunId=row.runtime_run_id,

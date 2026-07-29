@@ -87,28 +87,18 @@ class AutonomousWorkerService:
         recovered = await self._recover_finalization(worker_id, actor)
         if recovered is not None:
             return recovered
-        snapshot = self.executions.select_queued_autonomous_run()
-        if snapshot is None:
+        work = self._acquire_work(worker_id, actor)
+        if work is None:
             return None
-        snapshot = self.runtime.read_run_authorized(snapshot.specification.run_id, actor)
-        if self.runtime.authorizer is not None:
-            self.runtime.authorizer.authorize(actor, "claim", snapshot=snapshot)
+        snapshot, execution, lease = work
         request = snapshot.specification.autonomous_execution
         if request is None:
             raise AutonomousWorkerError("CONTEXT_ASSEMBLY_REQUIRED")
-        acquired = self.task_leases.acquire_task(
-            worker_id,
-            min(
-                self.settings.autonomous_worker_lease_seconds,
-                request.maximum_execution_seconds,
-            ),
-            snapshot.specification.task_id,
+        attempt_id = (
+            execution.runtimeAttemptId
+            if execution is not None
+            else self._attempt_id(snapshot.specification.run_id)
         )
-        if acquired is None:
-            return None
-        _, lease = acquired
-        attempt_id = self._attempt_id(snapshot.specification.run_id)
-        execution: ModelExecutionResult | None = None
         try:
             if not self.executions.target_identity_active(snapshot.specification.agent_id):
                 raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
@@ -116,21 +106,28 @@ class AutonomousWorkerService:
             self._validate_assembly(snapshot, assembly)
             snapshot = self._claim_and_start(snapshot, actor, worker_id, attempt_id)
             messages, execution_request_hash = self._execution_messages(assembly)
-            execution = self.executions.prepare(
-                snapshot=snapshot,
-                attempt_id=attempt_id,
-                assembly=assembly,
-                worker_id=worker_id,
-                task_attempt_number=lease.attemptNumber,
-                lease_token=lease.leaseToken,
-                execution_request_hash=execution_request_hash,
-            )
+            recovered_uncommitted = execution is not None
+            if execution is None:
+                execution = self.executions.prepare(
+                    snapshot=snapshot,
+                    attempt_id=attempt_id,
+                    assembly=assembly,
+                    worker_id=worker_id,
+                    task_attempt_number=lease.attemptNumber,
+                    lease_token=lease.leaseToken,
+                    execution_request_hash=execution_request_hash,
+                )
+            elif (
+                execution.contextAssemblyId != assembly.id
+                or execution.executionRequestHash != execution_request_hash
+            ):
+                raise AutonomousWorkerError("CONTEXT_ASSEMBLY_MISMATCH")
             snapshot = self._checkpoint(
                 snapshot,
                 actor,
                 execution,
                 attempt_id,
-                "prepared",
+                (f"recovered-{lease.attemptNumber}" if recovered_uncommitted else "prepared"),
             )
             try:
                 async with asyncio.timeout(
@@ -225,6 +222,11 @@ class AutonomousWorkerService:
                 task = self.task_leases.repository.tasks.get(snapshot.specification.task_id)
                 if task is not None and task.status == "cancelled":
                     self._best_effort_cancel(snapshot, actor)
+                    if execution is not None:
+                        self.executions.mark_failed(
+                            execution.executionId,
+                            "execution_cancelled",
+                        )
                     raise AutonomousWorkerError("EXECUTION_CANCELLED") from None
                 self._best_effort_abandon(snapshot, actor, attempt_id)
                 raise AutonomousWorkerError("EXECUTION_LEASE_LOST") from None
@@ -234,6 +236,57 @@ class AutonomousWorkerService:
                     "EXECUTION_EMERGENCY_STOPPED", status_code=423
                 ) from None
             raise
+
+    def _acquire_work(
+        self,
+        worker_id: str,
+        actor: RuntimeActorContext,
+    ) -> tuple[AgentRunSnapshot, ModelExecutionResult | None, Any] | None:
+        for execution in self.executions.recoverable_uncommitted():
+            snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
+            request = snapshot.specification.autonomous_execution
+            if request is None:
+                continue
+            if self.runtime.authorizer is not None:
+                self.runtime.authorizer.authorize(actor, "start_attempt", snapshot=snapshot)
+            acquired = self.task_leases.acquire_task(
+                worker_id,
+                min(
+                    self.settings.autonomous_worker_lease_seconds,
+                    request.maximum_execution_seconds,
+                ),
+                execution.taskId,
+            )
+            if acquired is None:
+                continue
+            _, lease = acquired
+            execution = self.executions.reclaim_uncommitted(
+                execution.executionId,
+                worker_id=worker_id,
+                lease_token=lease.leaseToken,
+                task_attempt_number=lease.attemptNumber,
+            )
+            return snapshot, execution, lease
+
+        for snapshot in self.executions.list_queued_autonomous_runs():
+            snapshot = self.runtime.read_run_authorized(snapshot.specification.run_id, actor)
+            if self.runtime.authorizer is not None:
+                self.runtime.authorizer.authorize(actor, "claim", snapshot=snapshot)
+            request = snapshot.specification.autonomous_execution
+            if request is None:
+                continue
+            acquired = self.task_leases.acquire_task(
+                worker_id,
+                min(
+                    self.settings.autonomous_worker_lease_seconds,
+                    request.maximum_execution_seconds,
+                ),
+                snapshot.specification.task_id,
+            )
+            if acquired is not None:
+                _, lease = acquired
+                return snapshot, None, lease
+        return None
 
     def read_result_authorized(
         self, execution_id: str, actor: RuntimeActorContext
@@ -565,7 +618,28 @@ class AutonomousWorkerService:
             worker_id=worker_id,
             lease_token=lease_token,
         )
+        self.task_leases.complete_task(
+            execution.taskId,
+            worker_id,
+            lease_token,
+            f"model-execution:{execution.executionId}",
+        )
         snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
+        return self._finalize_committed_task(snapshot, actor, execution)
+
+    def _finalize_committed_task(
+        self,
+        snapshot: AgentRunSnapshot,
+        actor: RuntimeActorContext,
+        execution: ModelExecutionResult,
+    ) -> ModelExecutionResult:
+        task = self.task_leases.repository.tasks.get(execution.taskId)
+        if (
+            task is None
+            or task.status != "completed"
+            or task.result != f"model-execution:{execution.executionId}"
+        ):
+            raise AutonomousWorkerError("MODEL_RESULT_CONFLICT")
         if snapshot.state == AgentRunState.RUNNING:
             snapshot = self._handle(
                 CompleteAttemptCommand,
@@ -583,13 +657,8 @@ class AutonomousWorkerService:
                 "complete-run",
                 detail="Autonomous planning execution completed",
             )
-        self.task_leases.assert_current(execution.taskId, worker_id, lease_token)
-        self.task_leases.complete_task(
-            execution.taskId,
-            worker_id,
-            lease_token,
-            f"model-execution:{execution.executionId}",
-        )
+        if snapshot.state != AgentRunState.SUCCEEDED:
+            raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
         return self.executions.mark_completed(execution.executionId)
 
     def _pause_for_review(
@@ -600,21 +669,24 @@ class AutonomousWorkerService:
         worker_id: str,
         lease_token: str,
     ) -> ModelExecutionResult:
-        snapshot = self._handle(
-            RequestPauseCommand,
-            snapshot,
-            actor,
-            "request-review",
-            reason_code="model_result_review_required",
-            detail="Validated result requires human review",
-        )
-        self._handle(
-            ConfirmPauseCommand,
-            snapshot,
-            actor,
-            "confirm-review",
-            detail="Execution paused for human review",
-        )
+        if snapshot.state == AgentRunState.RUNNING:
+            snapshot = self._handle(
+                RequestPauseCommand,
+                snapshot,
+                actor,
+                "request-review",
+                reason_code="model_result_review_required",
+                detail="Validated result requires human review",
+            )
+            snapshot = self._handle(
+                ConfirmPauseCommand,
+                snapshot,
+                actor,
+                "confirm-review",
+                detail="Execution paused for human review",
+            )
+        if snapshot.state != AgentRunState.PAUSED:
+            raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
         self.task_leases.pause_for_review(
             execution.taskId,
             worker_id,
@@ -702,12 +774,19 @@ class AutonomousWorkerService:
         for execution in self.executions.recoverable_results():
             snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
             task = self.task_leases.repository.tasks.get(execution.taskId)
-            if (
-                snapshot.state == AgentRunState.SUCCEEDED
-                and task is not None
-                and task.status == "completed"
-            ):
-                return self.executions.mark_completed(execution.executionId)
+            if execution.requiresHumanReview:
+                if (
+                    snapshot.state == AgentRunState.PAUSED
+                    and task is not None
+                    and task.status == "under_review"
+                ):
+                    return self.executions.mark_failed(
+                        execution.executionId,
+                        "human_review_required",
+                        human_review=True,
+                    )
+            elif task is not None and task.status == "completed":
+                return self._finalize_committed_task(snapshot, actor, execution)
             acquired = self.task_leases.acquire_task(
                 worker_id,
                 self.settings.autonomous_worker_lease_seconds,
@@ -716,6 +795,14 @@ class AutonomousWorkerService:
             if acquired is None:
                 continue
             _, lease = acquired
+            if execution.requiresHumanReview:
+                return self._pause_for_review(
+                    snapshot,
+                    actor,
+                    execution,
+                    worker_id,
+                    lease.leaseToken,
+                )
             return self._finalize(snapshot, actor, execution, worker_id, lease.leaseToken)
         return None
 
