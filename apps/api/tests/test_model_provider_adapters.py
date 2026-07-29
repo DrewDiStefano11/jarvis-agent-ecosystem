@@ -553,3 +553,104 @@ def test_timeout_is_normalized_without_raw_details() -> None:
     )
     assert isinstance(error, RequestTimeoutError)
     assert "abc" not in str(error)
+
+
+def _exception_chain_text(exc: BaseException) -> str:
+    seen: set[int] = set()
+    pending: list[BaseException] = [exc]
+    parts: list[str] = []
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        parts.append(repr(current))
+        if current.__cause__ is not None:
+            pending.append(current.__cause__)
+        if current.__context__ is not None:
+            pending.append(current.__context__)
+    return "\n".join(parts)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_name", ["ollama", "openai"])
+async def test_provider_malformed_json_exception_chain_is_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_name: str,
+) -> None:
+    marker = "secret-marker-raw-provider-document"
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=f"{{not-json {marker}}}")
+
+    _allow_execution(monkeypatch)
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://example.invalid"
+    )
+    if provider_name == "ollama":
+        provider = OllamaProvider(default_model="m", client=client)
+    else:
+        provider = OpenAICompatibleProvider(
+            name="remote",
+            base_url="https://example.invalid/v1",
+            api_key=SecretStr("mock"),
+            default_model="m",
+            client=client,
+        )
+
+    with pytest.raises(MalformedProviderResponseError) as raised:
+        await provider.execute(ModelExecutionRequest(prompt="hello"))
+
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+    assert marker not in _exception_chain_text(raised.value)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider_name", ["ollama", "openai"])
+async def test_provider_response_contract_exception_chain_is_sanitized(
+    monkeypatch: pytest.MonkeyPatch,
+    provider_name: str,
+) -> None:
+    marker = "secret-marker-normalized-contract-input"
+    oversized_model = marker + ("x" * 250)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        if provider_name == "ollama":
+            return httpx.Response(
+                200,
+                json={"message": {"content": "ok"}, "model": oversized_model},
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "completion-id",
+                "model": oversized_model,
+                "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    _allow_execution(monkeypatch)
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="https://example.invalid"
+    )
+    if provider_name == "ollama":
+        provider = OllamaProvider(default_model="m", client=client)
+    else:
+        provider = OpenAICompatibleProvider(
+            name="remote",
+            base_url="https://example.invalid/v1",
+            api_key=SecretStr("mock"),
+            default_model="m",
+            client=client,
+        )
+
+    with pytest.raises(MalformedProviderResponseError) as raised:
+        await provider.execute(ModelExecutionRequest(prompt="hello"))
+
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+    assert marker not in _exception_chain_text(raised.value)
+    await client.aclose()

@@ -6,11 +6,17 @@ import re
 from datetime import UTC, datetime
 from enum import StrEnum
 from hashlib import sha256
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from app.models.constraints import MAX_CORRELATION_ID_LENGTH as _MAX_CORRELATION_ID_LENGTH
+
 MAX_IDENTIFIER_LENGTH = 120
+# Correlation IDs are preserved exactly across every runtime, outbox, audit,
+# dispatcher, and websocket layer; the shared maximum is explicit, never a
+# silent truncation point.
+MAX_CORRELATION_ID_LENGTH = _MAX_CORRELATION_ID_LENGTH
 MAX_IDEMPOTENCY_KEY_LENGTH = 200
 MAX_TEXT_LENGTH = 2_000
 MAX_METADATA_DEPTH = 5
@@ -295,7 +301,11 @@ CommandId = Annotated[
 ]
 CorrelationId = Annotated[
     str,
-    AfterValidator(lambda value: validate_identifier(value, field_name="correlation_id")),
+    AfterValidator(
+        lambda value: validate_identifier(
+            value, field_name="correlation_id", max_length=MAX_CORRELATION_ID_LENGTH
+        )
+    ),
 ]
 CausationId = Annotated[
     str,
@@ -903,6 +913,7 @@ class RuntimeCommand(RuntimeContract):
 
 
 class CreateAgentRunCommand(RuntimeContract):
+    command_type: Literal["create"] = "create"
     specification: AgentRunSpecification
     command_id: CommandId
     expected_run_version: int = Field(default=0, ge=0)
@@ -924,6 +935,7 @@ class CreateAgentRunCommand(RuntimeContract):
 
 
 class QueueAgentRunCommand(RuntimeCommand):
+    command_type: Literal["queue"] = "queue"
     detail: str = "Queued for execution"
 
     @field_validator("detail")
@@ -933,6 +945,7 @@ class QueueAgentRunCommand(RuntimeCommand):
 
 
 class ClaimAgentRunCommand(RuntimeCommand):
+    command_type: Literal["claim"] = "claim"
     executor_reference: OpaqueReference
     detail: str = "Claimed for execution"
 
@@ -943,6 +956,7 @@ class ClaimAgentRunCommand(RuntimeCommand):
 
 
 class BeginAttemptCommand(RuntimeCommand):
+    command_type: Literal["begin_attempt"] = "begin_attempt"
     attempt_id: AttemptId | None = None
     executor_reference: OpaqueReference
     resume_from_checkpoint_id: CheckpointId | None = None
@@ -955,6 +969,7 @@ class BeginAttemptCommand(RuntimeCommand):
 
 
 class StartAttemptCommand(RuntimeCommand):
+    command_type: Literal["start_attempt"] = "start_attempt"
     attempt_id: AttemptId | None = None
     detail: str = "Attempt started"
 
@@ -965,6 +980,7 @@ class StartAttemptCommand(RuntimeCommand):
 
 
 class HeartbeatCommand(RuntimeCommand):
+    command_type: Literal["heartbeat"] = "heartbeat"
     attempt_id: AttemptId | None = None
     detail: str = "Heartbeat recorded"
 
@@ -975,6 +991,7 @@ class HeartbeatCommand(RuntimeCommand):
 
 
 class RequestPauseCommand(RuntimeCommand):
+    command_type: Literal["request_pause"] = "request_pause"
     reason_code: ReasonCode
     detail: str
 
@@ -985,6 +1002,7 @@ class RequestPauseCommand(RuntimeCommand):
 
 
 class ConfirmPauseCommand(RuntimeCommand):
+    command_type: Literal["confirm_pause"] = "confirm_pause"
     detail: str = "Run paused"
 
     @field_validator("detail")
@@ -994,6 +1012,7 @@ class ConfirmPauseCommand(RuntimeCommand):
 
 
 class ResumeAgentRunCommand(RuntimeCommand):
+    command_type: Literal["resume"] = "resume"
     detail: str = "Run resumed"
 
     @field_validator("detail")
@@ -1003,6 +1022,7 @@ class ResumeAgentRunCommand(RuntimeCommand):
 
 
 class BlockAgentRunCommand(RuntimeCommand):
+    command_type: Literal["block"] = "block"
     block_code: ReasonCode
     detail: str
     related_reference: OpaqueReference | None = None
@@ -1014,6 +1034,7 @@ class BlockAgentRunCommand(RuntimeCommand):
 
 
 class UnblockAgentRunCommand(RuntimeCommand):
+    command_type: Literal["unblock"] = "unblock"
     detail: str = "Block cleared"
 
     @field_validator("detail")
@@ -1023,6 +1044,7 @@ class UnblockAgentRunCommand(RuntimeCommand):
 
 
 class RequestCancellationCommand(RuntimeCommand):
+    command_type: Literal["request_cancellation"] = "request_cancellation"
     reason_code: ReasonCode
     detail: str
     requester_reference: OpaqueReference
@@ -1034,6 +1056,7 @@ class RequestCancellationCommand(RuntimeCommand):
 
 
 class ConfirmCancellationStartCommand(RuntimeCommand):
+    command_type: Literal["start_cancellation"] = "start_cancellation"
     detail: str = "Cancellation in progress"
 
     @field_validator("detail")
@@ -1043,6 +1066,7 @@ class ConfirmCancellationStartCommand(RuntimeCommand):
 
 
 class ConfirmCancellationCommand(RuntimeCommand):
+    command_type: Literal["confirm_cancellation"] = "confirm_cancellation"
     detail: str = "Run cancelled"
 
     @field_validator("detail")
@@ -1052,6 +1076,7 @@ class ConfirmCancellationCommand(RuntimeCommand):
 
 
 class RecordCheckpointCommand(RuntimeCommand):
+    command_type: Literal["record_checkpoint"] = "record_checkpoint"
     checkpoint_id: CheckpointId | None = None
     attempt_id: AttemptId | None = None
     state_reference: OpaqueReference
@@ -1075,6 +1100,7 @@ class RecordCheckpointCommand(RuntimeCommand):
 
 
 class CompleteAttemptCommand(RuntimeCommand):
+    command_type: Literal["complete_attempt"] = "complete_attempt"
     attempt_id: AttemptId | None = None
     detail: str = "Attempt succeeded"
 
@@ -1085,6 +1111,7 @@ class CompleteAttemptCommand(RuntimeCommand):
 
 
 class FailAttemptCommand(RuntimeCommand):
+    command_type: Literal["fail_attempt"] = "fail_attempt"
     attempt_id: AttemptId | None = None
     failure_category: FailureClassification
     failure_detail: str
@@ -1096,6 +1123,7 @@ class FailAttemptCommand(RuntimeCommand):
 
 
 class TimeoutAttemptCommand(RuntimeCommand):
+    command_type: Literal["timeout_attempt"] = "timeout_attempt"
     attempt_id: AttemptId | None = None
     detail: str = "Attempt timed out"
 
@@ -1106,6 +1134,7 @@ class TimeoutAttemptCommand(RuntimeCommand):
 
 
 class AbandonAttemptCommand(RuntimeCommand):
+    command_type: Literal["abandon_attempt"] = "abandon_attempt"
     attempt_id: AttemptId | None = None
     detail: str = "Attempt abandoned"
 
@@ -1116,6 +1145,7 @@ class AbandonAttemptCommand(RuntimeCommand):
 
 
 class CompleteAgentRunCommand(RuntimeCommand):
+    command_type: Literal["complete_run"] = "complete_run"
     detail: str = "Run succeeded"
 
     @field_validator("detail")
@@ -1125,6 +1155,7 @@ class CompleteAgentRunCommand(RuntimeCommand):
 
 
 class FailAgentRunCommand(RuntimeCommand):
+    command_type: Literal["fail_run"] = "fail_run"
     failure_category: FailureClassification
     failure_detail: str
 
@@ -1135,6 +1166,7 @@ class FailAgentRunCommand(RuntimeCommand):
 
 
 class TimeoutAgentRunCommand(RuntimeCommand):
+    command_type: Literal["timeout_run"] = "timeout_run"
     detail: str = "Run timed out"
 
     @field_validator("detail")
@@ -1144,6 +1176,7 @@ class TimeoutAgentRunCommand(RuntimeCommand):
 
 
 class AbandonAgentRunCommand(RuntimeCommand):
+    command_type: Literal["abandon_run"] = "abandon_run"
     detail: str = "Run abandoned"
 
     @field_validator("detail")
@@ -1153,6 +1186,7 @@ class AbandonAgentRunCommand(RuntimeCommand):
 
 
 class RequestRecoveryPlanCommand(RuntimeCommand):
+    command_type: Literal["request_recovery_plan"] = "request_recovery_plan"
     detail: str = "Recovery plan requested"
 
     @field_validator("detail")
