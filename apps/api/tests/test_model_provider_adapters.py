@@ -8,6 +8,7 @@ from app.model_providers.contracts import ModelExecutionRequest, UsageQuality
 from app.model_providers.errors import (
     AuthenticationError,
     MalformedProviderResponseError,
+    ModelProviderError,
     ProviderConfigurationError,
     ProviderExecutionDisabledError,
     QuotaExhaustedError,
@@ -51,6 +52,28 @@ async def test_phase_gate_prevents_client_creation(monkeypatch: pytest.MonkeyPat
     assert health.status == "configuration_only"
 
 
+@pytest.mark.asyncio
+async def test_phase_gate_is_enforced_inside_network_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ollama = OllamaProvider(default_model="m")
+    compatible = OpenAICompatibleProvider(
+        name="compatible",
+        base_url="https://example.invalid/v1",
+        api_key=SecretStr("mock"),
+        default_model="m",
+    )
+    monkeypatch.setattr(ollama, "_client_or_new", lambda: pytest.fail("client created"))
+    monkeypatch.setattr(compatible, "_client_or_new", lambda: pytest.fail("client created"))
+
+    with pytest.raises(ProviderExecutionDisabledError):
+        await ollama._list_models()
+    with pytest.raises(ProviderExecutionDisabledError):
+        await compatible._get("models")
+    with pytest.raises(ProviderExecutionDisabledError):
+        await compatible._list_models()
+
+
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
@@ -76,7 +99,7 @@ def test_ollama_locality_is_structural(url: str, expected: bool) -> None:
         ("http://127.0.0.1:4000/v1", True),
         ("http://[::1]:4000/v1", True),
         ("https://example.invalid/v1", False),
-        ("http://host.docker.internal:4000/v1", False),
+        ("https://host.docker.internal:4000/v1", False),
     ],
 )
 def test_openai_compatible_locality_is_structural(url: str, expected: bool) -> None:
@@ -101,6 +124,43 @@ def test_provider_urls_and_custom_headers_reject_embedded_secrets() -> None:
             default_model="m",
             custom_headers={"X-Custom": "Bearer hidden"},
         )
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://example.invalid/v1",
+        "http://host.docker.internal:4000/v1",
+        "http://192.168.1.20:4000/v1",
+    ],
+)
+def test_openai_compatible_requires_https_for_remote_keyed_providers(url: str) -> None:
+    with pytest.raises(ProviderConfigurationError) as raised:
+        OpenAICompatibleProvider(
+            name="remote",
+            base_url=url,
+            api_key=SecretStr("mock"),
+            default_model="m",
+        )
+    assert raised.value.message == "remote keyed providers require an HTTPS base URL"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://localhost:4000/v1",
+        "http://127.0.0.1:4000/v1",
+        "http://[::1]:4000/v1",
+    ],
+)
+def test_openai_compatible_allows_http_for_loopback_keyed_providers(url: str) -> None:
+    provider = OpenAICompatibleProvider(
+        name="local",
+        base_url=url,
+        api_key=SecretStr("mock"),
+        default_model="m",
+    )
+    assert provider.is_local is True
 
 
 @pytest.mark.parametrize(
@@ -424,6 +484,42 @@ async def test_openai_health_strategies_do_not_generate_tokens(
     provider.health_strategy = HealthCheckStrategy.CONFIGURATION
     assert (await provider.health_check()).status == "configuration_only"
     assert all("chat/completions" not in path for path in seen)
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["execute", "health"])
+async def test_openai_http_errors_do_not_retain_credential_bearing_exceptions(
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer credential-that-must-not-escape"
+        raise httpx.ConnectError("raw transport failure", request=request)
+
+    _allow_execution(monkeypatch)
+    _allow_health(monkeypatch)
+    client = httpx.AsyncClient(
+        base_url="https://example.invalid/v1/",
+        transport=httpx.MockTransport(handler),
+    )
+    provider = OpenAICompatibleProvider(
+        name="remote",
+        base_url="https://example.invalid/v1",
+        api_key=SecretStr("credential-that-must-not-escape"),
+        default_model="m",
+        client=client,
+    )
+
+    with pytest.raises(ModelProviderError) as raised:
+        if operation == "execute":
+            await provider.execute(ModelExecutionRequest(prompt="hello"))
+        else:
+            await provider._get("models")
+
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+    assert "credential-that-must-not-escape" not in str(raised.value)
     await client.aclose()
 
 

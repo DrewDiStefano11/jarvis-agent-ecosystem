@@ -24,3 +24,16 @@ def require_live_provider_execution(
 
 def provider_network_health_allowed() -> bool:
     return False
+
+
+def require_provider_network_health(
+    *, provider: str, model: str, allowed: bool | None = None
+) -> None:
+    if provider_network_health_allowed() if allowed is None else allowed:
+        return
+    raise ProviderExecutionDisabledError(
+        "provider network health is disabled by the current project phase",
+        provider=provider,
+        model=model,
+        metadata={"policy": CURRENT_PROVIDER_POLICY},
+    )

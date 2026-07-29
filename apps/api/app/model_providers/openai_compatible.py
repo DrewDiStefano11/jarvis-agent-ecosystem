@@ -28,6 +28,7 @@ from app.model_providers.http import is_loopback_endpoint, translate_http_error
 from app.model_providers.policy import (
     provider_network_health_allowed,
     require_live_provider_execution,
+    require_provider_network_health,
 )
 from app.model_providers.security import redact_secrets
 
@@ -78,6 +79,10 @@ class OpenAICompatibleProvider(ProviderBase):
             or parsed.fragment
         ):
             raise ProviderConfigurationError("provider base URL is invalid", provider=name)
+        if parsed.scheme == "http" and not is_loopback_endpoint(base_url):
+            raise ProviderConfigurationError(
+                "remote keyed providers require an HTTPS base URL", provider=name
+            )
         headers = custom_headers or {}
         secret_terms = (
             "api_key",
@@ -156,6 +161,7 @@ class OpenAICompatibleProvider(ProviderBase):
             payload["max_tokens"] = request.max_output_tokens
         client, owned = self._client_or_new()
         started = perf_counter()
+        translated_error: ModelProviderError | None = None
         try:
             response = await client.post(
                 "chat/completions",
@@ -173,16 +179,18 @@ class OpenAICompatibleProvider(ProviderBase):
         except ModelProviderError:
             raise
         except httpx.HTTPError as exc:
-            raise translate_http_error(
+            translated_error = translate_http_error(
                 exc,
                 provider=self.name,
                 model=model,
                 task_id=request.task_id,
                 correlation_id=request.correlation_id,
-            ) from exc
+            )
         finally:
             if owned:
                 await client.aclose()
+        if translated_error is not None:
+            raise translated_error
         normalized = _normalize_completion(body, provider=self.name, requested_model=model)
         try:
             return ModelExecutionResponse(
@@ -261,18 +269,31 @@ class OpenAICompatibleProvider(ProviderBase):
             return None
 
     async def _get(self, path: str) -> httpx.Response:
+        require_provider_network_health(
+            provider=self.name,
+            model=self.default_model,
+            allowed=provider_network_health_allowed(),
+        )
         client, owned = self._client_or_new()
+        response: httpx.Response | None = None
+        translated_error: ModelProviderError | None = None
         try:
             response = await client.get(
                 path, headers=self._headers() if self._client is not None else None
             )
             response.raise_for_status()
-            return response
         except httpx.HTTPError as exc:
-            raise translate_http_error(exc, provider=self.name, model=self.default_model) from exc
+            translated_error = translate_http_error(
+                exc, provider=self.name, model=self.default_model
+            )
         finally:
             if owned:
                 await client.aclose()
+        if translated_error is not None:
+            raise translated_error
+        if response is None:
+            raise RuntimeError("provider request completed without a response")
+        return response
 
     async def _list_models(self) -> set[str]:
         response = await self._get("models")

@@ -27,6 +27,7 @@ from app.model_providers.http import is_loopback_endpoint, translate_http_error
 from app.model_providers.policy import (
     provider_network_health_allowed,
     require_live_provider_execution,
+    require_provider_network_health,
 )
 
 
@@ -107,6 +108,7 @@ class OllamaProvider(ProviderBase):
             payload["keep_alive"] = self.keep_alive
         client, owned = self._client_or_new()
         started = perf_counter()
+        translated_error: ModelProviderError | None = None
         try:
             response = await client.post(
                 "/api/chat", json=payload, timeout=request.timeout_seconds or self.timeout_seconds
@@ -121,16 +123,18 @@ class OllamaProvider(ProviderBase):
         except ModelProviderError:
             raise
         except httpx.HTTPError as exc:
-            raise translate_http_error(
+            translated_error = translate_http_error(
                 exc,
                 provider=self.name,
                 model=model,
                 task_id=request.task_id,
                 correlation_id=request.correlation_id,
-            ) from exc
+            )
         finally:
             if owned:
                 await client.aclose()
+        if translated_error is not None:
+            raise translated_error
         if not isinstance(body, dict):
             raise MalformedProviderResponseError(
                 "Ollama response must be an object", provider=self.name, model=model
@@ -203,7 +207,14 @@ class OllamaProvider(ProviderBase):
             return None
 
     async def _list_models(self) -> set[str]:
+        require_provider_network_health(
+            provider=self.name,
+            model=self.default_model,
+            allowed=provider_network_health_allowed(),
+        )
         client, owned = self._client_or_new()
+        body: object | None = None
+        translated_error: ModelProviderError | None = None
         try:
             response = await client.get("/api/tags")
             response.raise_for_status()
@@ -215,14 +226,18 @@ class OllamaProvider(ProviderBase):
                     provider=self.name,
                     model=self.default_model,
                 ) from exc
-            return _model_names(body, provider=self.name, model=self.default_model)
         except ModelProviderError:
             raise
         except httpx.HTTPError as exc:
-            raise translate_http_error(exc, provider=self.name, model=self.default_model) from exc
+            translated_error = translate_http_error(
+                exc, provider=self.name, model=self.default_model
+            )
         finally:
             if owned:
                 await client.aclose()
+        if translated_error is not None:
+            raise translated_error
+        return _model_names(body, provider=self.name, model=self.default_model)
 
 
 def _optional_integer(value: object, provider: str, model: str) -> int | None:

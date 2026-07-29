@@ -31,6 +31,7 @@ Repository policy currently forbids real models and external integrations. The c
 
 - adapter execution raises `ProviderExecutionDisabledError` before client creation;
 - provider health and model-list network access return configuration-only/unknown results;
+- lowest-level network helpers independently enforce the same phase gate before client creation;
 - no environment variable can enable either network path;
 - enabling provider configuration registers safe metadata only; and
 - application startup does not build a registry, router, or client.
@@ -76,7 +77,8 @@ service names, `host.docker.internal`, and names such as `localhost.example.com`
 `OpenAICompatibleProvider` uses `httpx` directly and posts to relative `chat/completions`, so
 versioned prefixes such as `/v1` and `/v1beta/openai` remain intact. It sends only mapped fields
 and bearer authorization from `SecretStr` configuration. Custom headers must be explicit and
-cannot override secret-bearing header names.
+cannot override secret-bearing header names. Plain HTTP is accepted only for structurally
+loopback endpoints; remote keyed providers require HTTPS.
 
 Health strategies are:
 
@@ -109,7 +111,8 @@ Provider-independent categories cover:
 HTTP status translation distinguishes authentication, invalid requests, unavailable endpoints or
 models, timeouts, temporary throttling, bounded structured hard-quota signals, and transient
 server errors. Remote bodies are not retained or returned. Numeric `Retry-After` is bounded by
-the retry maximum.
+the retry maximum. Normalized errors do not retain credential-bearing HTTP exceptions or request
+objects in their cause/context chains.
 
 ## Retry versus fallback
 
