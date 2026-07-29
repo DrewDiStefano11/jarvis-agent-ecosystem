@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal
+from typing import Any, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.constraints import MAX_CORRELATION_ID_LENGTH
 from app.models.context import ContextAssemblerStatus
 
 AgentStatus = Literal[
@@ -180,7 +181,7 @@ class AuditEvent(ContractModel):
     previousState: str | None = None
     newState: str | None = None
     summary: str
-    correlationId: str
+    correlationId: str = Field(min_length=1, max_length=MAX_CORRELATION_ID_LENGTH)
     sequenceNumber: int
     payload: dict[str, Any] = Field(default_factory=dict)
     artifactIds: list[str] = Field(default_factory=list)
@@ -221,7 +222,7 @@ class SystemStatus(ContractModel):
     lastSynchronizedAt: datetime
     storageBackend: str = "sqlite"
     databaseHealthy: bool = True
-    databaseRevision: str = "a87a487dd714"
+    databaseRevision: str = "20260729_04"
     schemaCurrent: bool = True
     eventSessionId: str
     outboxPendingCount: int = 0
@@ -269,7 +270,7 @@ class EventEnvelope(ContractModel):
     timestamp: datetime
     sequenceNumber: int
     eventSessionId: str | None = None
-    correlationId: str
+    correlationId: str = Field(min_length=1, max_length=MAX_CORRELATION_ID_LENGTH)
     taskId: str | None = None
     agentId: str | None = None
     source: str = "simulator"
@@ -411,6 +412,21 @@ class FailureRequest(ContractModel):
 
 class ApiResponse(ContractModel):
     data: Any
+    meta: dict[str, Any] = Field(default_factory=lambda: {"schemaVersion": "1.0"})
+
+
+DataT = TypeVar("DataT")
+
+
+class TypedApiResponse(ContractModel, Generic[DataT]):
+    """The standard successful-response envelope with a typed ``data`` payload.
+
+    This is the same wire contract as :class:`ApiResponse`; the generic
+    parameter only lets routes declare the inner model so the generated OpenAPI
+    documents the real payload schema instead of an untyped object.
+    """
+
+    data: DataT
     meta: dict[str, Any] = Field(default_factory=lambda: {"schemaVersion": "1.0"})
 
 

@@ -1,10 +1,18 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
+from contextvars import ContextVar
+from dataclasses import replace
 from datetime import UTC, datetime
+from time import sleep
 from typing import Any
 from uuid import uuid4
 
+from app.agent_runtime.authorization import (
+    RuntimeActorContext,
+    RuntimeAuthorizationContext,
+    RuntimeAuthorizer,
+)
 from app.agent_runtime.errors import (
     ActiveAttemptExistsError,
     AttemptLimitExceededError,
@@ -19,6 +27,10 @@ from app.agent_runtime.errors import (
     RecoveryNotAllowedError,
     RunAlreadyExistsError,
     RunNotFoundError,
+    RuntimeActorMismatchError,
+    RuntimeParentUnavailableError,
+    RuntimePermissionDeniedError,
+    RuntimeReplayActorMismatchError,
     TerminalRunImmutableError,
     VersionConflictError,
 )
@@ -125,8 +137,13 @@ class AgentRuntimeService:
         attempt_id_factory: Callable[[], str] | None = None,
         event_id_factory: Callable[[], str] | None = None,
         checkpoint_id_factory: Callable[[], str] | None = None,
+        authorizer: RuntimeAuthorizer | None = None,
     ) -> None:
         self.repository = repository
+        self.authorizer = authorizer
+        self._authorization_context: ContextVar[RuntimeAuthorizationContext | None] = ContextVar(
+            "runtime_authorization_context", default=None
+        )
         self.utc_clock = utc_clock
         self.run_id_factory = run_id_factory or prefixed_identifier_factory("run")
         self.attempt_id_factory = attempt_id_factory or prefixed_identifier_factory("attempt")
@@ -137,6 +154,100 @@ class AgentRuntimeService:
 
     def generate_run_id(self) -> str:
         return self.run_id_factory()
+
+    def authenticate_actor(self, actor_id: str | None) -> RuntimeActorContext:
+        if self.authorizer is None:
+            return RuntimeActorContext(
+                actor_id=actor_id or "runtime-control-plane", stable_key="internal"
+            )
+        return self.authorizer.authenticate(actor_id)
+
+    def handle_authorized(
+        self, command: CommandHandler, actor: RuntimeActorContext
+    ) -> RuntimeCommandResult:
+        command = self._command_with_verified_actor(command, actor)
+        context = self._authorize_command(command, actor)
+        token = self._authorization_context.set(context)
+        try:
+            return self.handle(command)
+        finally:
+            self._authorization_context.reset(token)
+
+    def read_run_authorized(self, run_id: str, actor: RuntimeActorContext) -> AgentRunSnapshot:
+        snapshot = self.repository.load_run(run_id)
+        if snapshot is None:
+            raise RunNotFoundError(run_id=run_id)
+        self._require_authorized(actor, "read", snapshot=snapshot)
+        return snapshot
+
+    def list_runs_authorized(self, query: Any, actor: RuntimeActorContext) -> Any:
+        # Bounded deterministic filtering. We intentionally do not return the raw
+        # unauthorized total count, and we scan at most five pages from the
+        # requested offset to avoid unbounded in-memory filtering.
+        items: list[AgentRunSnapshot] = []
+        scan_offset = query.offset
+        pages = 0
+        next_offset: int | None = None
+        exhausted = False
+        while len(items) < query.limit and pages < 5:
+            page_query = query.model_copy(update={"offset": scan_offset, "limit": query.limit})
+            page = self.repository.query_runs(page_query)
+            consumed_in_page = 0
+            for snapshot in page.items:
+                consumed_in_page += 1
+                try:
+                    self._require_authorized(actor, "read", snapshot=snapshot)
+                except Exception:
+                    continue
+                items.append(snapshot)
+                if len(items) == query.limit:
+                    break
+            pages += 1
+            page_exhausted = page.next_offset is None
+            if len(items) == query.limit:
+                if consumed_in_page < len(page.items):
+                    next_offset = scan_offset + consumed_in_page
+                elif page_exhausted:
+                    next_offset = None
+                    exhausted = True
+                else:
+                    next_offset = page.next_offset
+                break
+            if page_exhausted:
+                exhausted = True
+                next_offset = None
+                break
+            scan_offset = page.next_offset
+            next_offset = scan_offset
+        if not exhausted and len(items) < query.limit and pages >= 5:
+            next_offset = scan_offset if scan_offset > query.offset else None
+        if next_offset is not None and next_offset <= query.offset:
+            next_offset = None
+        from app.models.agent_runtime import AgentRunQueryResult
+
+        return AgentRunQueryResult(
+            items=tuple(items),
+            offset=query.offset,
+            limit=query.limit,
+            next_offset=next_offset,
+            total_count=len(items),
+        )
+
+    def events_authorized(self, run_id: str, actor: RuntimeActorContext):
+        self.read_run_authorized(run_id, actor)
+        return self.repository.list_events(run_id)
+
+    def attempts_authorized(self, run_id: str, actor: RuntimeActorContext):
+        self.read_run_authorized(run_id, actor)
+        return self.repository.load_attempt_history(run_id)
+
+    def checkpoints_authorized(self, run_id: str, actor: RuntimeActorContext):
+        self.read_run_authorized(run_id, actor)
+        return self.repository.list_checkpoints(run_id)
+
+    def lineage_authorized(self, run_id: str, actor: RuntimeActorContext) -> LineageResolution:
+        snapshot = self.read_run_authorized(run_id, actor)
+        return self._resolve_lineage_authorized(snapshot, actor)
 
     def handle(self, command: CommandHandler) -> RuntimeCommandResult:
         if isinstance(command, CreateAgentRunCommand):
@@ -189,12 +300,145 @@ class AgentRuntimeService:
             return self.request_recovery_plan(command)
         raise TypeError(f"Unsupported command type: {type(command)!r}")
 
+    def _command_with_verified_actor(
+        self, command: CommandHandler, actor: RuntimeActorContext
+    ) -> CommandHandler:
+        actor_reference = getattr(command, "actor_reference", None)
+        if actor_reference is not None and actor_reference != actor.actor_id:
+            raise RuntimeActorMismatchError(
+                run_id=getattr(command, "run_id", None)
+                or getattr(getattr(command, "specification", None), "run_id", None),
+                command_id=getattr(command, "command_id", None),
+            )
+        return command.model_copy(update={"actor_reference": actor.actor_id})
+
+    def _authorize_command(
+        self, command: CommandHandler, actor: RuntimeActorContext
+    ) -> RuntimeAuthorizationContext:
+        if self.authorizer is None:
+            from app.models.identity import AuthorizationDecision
+
+            return RuntimeAuthorizationContext(
+                actor=actor,
+                permission_key="runtime.internal",
+                resource_type="internal",
+                resource_id="internal",
+                allowed_by_admin=True,
+                decision=AuthorizationDecision(
+                    allowed=True,
+                    permission_key="runtime.internal",
+                    actor_agent_id=actor.actor_id,
+                    resource_type="internal",
+                    resource_id="internal",
+                    matched_grants=["internal"],
+                    matched_denials=[],
+                    decisive_rule="internal",
+                    reason_code="internal",
+                ),
+            )
+        if isinstance(command, CreateAgentRunCommand):
+            context = self.authorizer.authorize(
+                actor, "create", specification=command.specification
+            )
+            parent_checked, parent_allowed_by_admin, parent_reason, checked_count = (
+                self._authorize_parent_lineage(command.specification, actor)
+            )
+            return replace(
+                context,
+                extra={
+                    **context.extra,
+                    "parentCheckRequired": command.specification.parent_run_id is not None,
+                    "parentCheckPerformed": parent_checked,
+                    "parentCheckAllowedByAdmin": parent_allowed_by_admin,
+                    "parentCheckReasonCode": parent_reason,
+                    "checkedAncestorCount": checked_count,
+                },
+            )
+        aggregate = self._load_current(command.run_id)
+        operation = getattr(command, "command_type", "")
+        return self.authorizer.authorize(actor, operation, snapshot=aggregate.snapshot)
+
+    def _authorize_parent_lineage(
+        self,
+        specification: AgentRunSpecification,
+        actor: RuntimeActorContext,
+    ) -> tuple[bool, bool, str | None, int]:
+        if self.authorizer is None or specification.parent_run_id is None:
+            return False, False, None, 0
+        current_parent = specification.parent_run_id
+        visited = {specification.run_id}
+        depth = 0
+        first_checked = False
+        first_allowed_by_admin = False
+        first_reason: str | None = None
+        checked_count = 0
+        while current_parent is not None and depth < DEFAULT_LINEAGE_DEPTH_LIMIT:
+            if current_parent in visited:
+                break
+            parent_snapshot = self.repository.load_run(current_parent)
+            if parent_snapshot is None:
+                raise RuntimeParentUnavailableError()
+            try:
+                parent_context = self.authorizer.authorize(actor, "read", snapshot=parent_snapshot)
+            except RuntimePermissionDeniedError as exc:
+                raise RuntimeParentUnavailableError() from exc
+            checked_count += 1
+            if not first_checked:
+                first_checked = True
+                first_allowed_by_admin = parent_context.allowed_by_admin
+                first_reason = parent_context.decision.reason_code
+            visited.add(current_parent)
+            current_parent = parent_snapshot.specification.parent_run_id
+            depth += 1
+        if current_parent is not None and depth >= DEFAULT_LINEAGE_DEPTH_LIMIT:
+            raise InvalidRuntimeMetadataError(
+                "Run lineage exceeded the bounded traversal depth.",
+                run_id=specification.run_id,
+            )
+        return first_checked, first_allowed_by_admin, first_reason, checked_count
+
+    def _require_authorized(
+        self,
+        actor: RuntimeActorContext,
+        operation: str,
+        *,
+        snapshot: AgentRunSnapshot,
+    ) -> RuntimeAuthorizationContext:
+        if self.authorizer is None:
+            return self._authorize_command(
+                CreateAgentRunCommand(
+                    specification=snapshot.specification,
+                    command_id="internal-read",
+                    expected_run_version=0,
+                    timestamp=self.utc_clock(),
+                    actor_reference=actor.actor_id,
+                ),
+                actor,
+            )
+        return self.authorizer.authorize(actor, operation, snapshot=snapshot)
+
+    def _assert_replay_actor(
+        self,
+        existing: ProcessedCommandRecord,
+        actor_reference: str | None,
+    ) -> None:
+        if (
+            existing.verified_actor_id
+            and actor_reference
+            and existing.verified_actor_id != actor_reference
+        ):
+            raise RuntimeReplayActorMismatchError(
+                run_id=existing.run_id,
+                command_id=existing.command_id,
+            )
+
     def create_run(self, command: CreateAgentRunCommand) -> RuntimeCommandResult:
         existing = self.repository.load_run(command.specification.run_id)
         if existing_record := self.repository.get_processed_command(
             command.specification.run_id,
             command.command_id,
         ):
+            self._assert_replay_actor(existing_record, command.actor_reference)
             command_hash = stable_hash(command.model_dump(mode="json", exclude_none=False))
             if existing_record.command_hash != command_hash:
                 raise CommandConflictError(
@@ -895,6 +1139,29 @@ class AgentRuntimeService:
         snapshot = self.repository.load_run(run_id)
         if snapshot is None:
             raise RunNotFoundError(run_id=run_id)
+        return self._resolve_lineage_from_snapshot(snapshot, depth_limit=depth_limit)
+
+    def _resolve_lineage_authorized(
+        self,
+        snapshot: AgentRunSnapshot,
+        actor: RuntimeActorContext,
+        *,
+        depth_limit: int = DEFAULT_LINEAGE_DEPTH_LIMIT,
+    ) -> LineageResolution:
+        return self._resolve_lineage_from_snapshot(
+            snapshot,
+            depth_limit=depth_limit,
+            authorize=lambda parent: self._require_authorized(actor, "read", snapshot=parent),
+        )
+
+    def _resolve_lineage_from_snapshot(
+        self,
+        snapshot: AgentRunSnapshot,
+        *,
+        depth_limit: int = DEFAULT_LINEAGE_DEPTH_LIMIT,
+        authorize: Callable[[AgentRunSnapshot], object] | None = None,
+    ) -> LineageResolution:
+        run_id = snapshot.specification.run_id
         entries: list[LineageEntry] = []
         missing_parent_id = None
         current_parent = snapshot.specification.parent_run_id
@@ -907,12 +1174,14 @@ class AgentRuntimeService:
                     run_id=run_id,
                     metadata={"parentRunId": current_parent},
                 )
-            visited.add(current_parent)
             parent_snapshot = self.repository.load_run(current_parent)
             if parent_snapshot is None:
                 missing_parent_id = current_parent
                 entries.append(LineageEntry(run_id=current_parent, exists=False, state=None))
                 break
+            if authorize is not None:
+                authorize(parent_snapshot)
+            visited.add(current_parent)
             entries.append(
                 LineageEntry(
                     run_id=parent_snapshot.specification.run_id,
@@ -1027,10 +1296,17 @@ class AgentRuntimeService:
         if aggregate is None:
             raise RunNotFoundError(run_id=run_id)
         if aggregate.snapshot != snapshot:
-            raise VersionConflictError(
-                "Stored snapshot does not match the execution ledger.",
-                run_id=run_id,
-            )
+            sleep(0.01)
+            state = self.repository.load_run_state(run_id)
+            if state is None:
+                raise RunNotFoundError(run_id=run_id)
+            snapshot, events = state
+            aggregate = replay_execution_ledger(events)
+            if aggregate is None or aggregate.snapshot != snapshot:
+                raise VersionConflictError(
+                    "Stored snapshot does not match the execution ledger.",
+                    run_id=run_id,
+                )
         return aggregate
 
     def _commit(
@@ -1070,12 +1346,16 @@ class AgentRuntimeService:
         recorded_at = getattr(command, "timestamp", None)
         if recorded_at is None:
             recorded_at = self.utc_clock()
+        context = self._authorization_context.get()
         return ProcessedCommandRecord(
             run_id=run_id,
             command_id=command_id,
             command_hash=command_hash,
             result=result,
             recorded_at=recorded_at,
+            verified_actor_id=getattr(command, "actor_reference", None),
+            command_type=getattr(command, "command_type", "runtime"),
+            authorization={} if context is None else context.bounded_metadata(),
         )
 
     def _assert_idempotency(
@@ -1084,6 +1364,7 @@ class AgentRuntimeService:
         existing = self.repository.get_processed_command(run_id, command_id)
         if existing is None:
             return None
+        self._assert_replay_actor(existing, getattr(command, "actor_reference", None))
         current_hash = stable_hash(command.model_dump(mode="json", exclude_none=False))
         if existing.command_hash != current_hash:
             raise CommandConflictError(run_id=run_id, command_id=command_id)

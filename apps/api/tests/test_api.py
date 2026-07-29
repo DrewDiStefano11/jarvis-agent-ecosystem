@@ -32,7 +32,7 @@ def test_health_status_and_lists() -> None:
 
 def test_system_status_contract_advertises_current_database_revision() -> None:
     revision = SystemStatus.model_json_schema()["properties"]["databaseRevision"]
-    assert revision["default"] == "a87a487dd714"
+    assert revision["default"] == "20260729_04"
 
 
 def test_unknown_ids_are_structured() -> None:
@@ -155,3 +155,124 @@ def test_all_manifests_validate() -> None:
         "archive",
         "sentinel",
     }
+
+
+def test_runtime_actor_header_is_allowed_by_cors_preflight() -> None:
+    app = create_app(delay_ms=1)
+    with TestClient(app) as client:
+        response = client.options(
+            "/api/agent-runtime/commands",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "X-Jarvis-Actor-Id, Content-Type, Idempotency-Key",
+            },
+        )
+        assert response.status_code == 200
+        assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+        assert response.headers["access-control-allow-credentials"] == "true"
+        assert "POST" in response.headers["access-control-allow-methods"]
+        allowed_headers = response.headers["access-control-allow-headers"].lower()
+        assert "x-jarvis-actor-id" in allowed_headers
+        assert "content-type" in allowed_headers
+        assert "idempotency-key" in allowed_headers
+
+        get_response = client.options(
+            "/api/agent-runtime/runs",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "X-Jarvis-Actor-Id",
+            },
+        )
+        assert get_response.status_code == 200
+        assert "GET" in get_response.headers["access-control-allow-methods"]
+
+        disallowed = client.options(
+            "/api/agent-runtime/commands",
+            headers={
+                "Origin": "http://evil.example",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "X-Jarvis-Actor-Id",
+            },
+        )
+        assert "access-control-allow-origin" not in disallowed.headers
+
+        unrelated = client.options(
+            "/api/agent-runtime/commands",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "X-Unrelated-Header",
+            },
+        )
+        assert unrelated.status_code == 400
+
+
+def test_system_status_matches_health_for_runtime_component_states() -> None:
+    app = create_app(delay_ms=1)
+    scenarios = [
+        {"configured": True, "nonterminalRunCount": 0},
+        {
+            "configured": True,
+            "nonterminalRunCount": 1,
+            "status": "degraded",
+            "reasonCode": "runtime_projection_corrupt",
+        },
+        {
+            "configured": False,
+            "nonterminalRunCount": 0,
+            "status": "unavailable",
+            "reasonCode": "runtime_persistence_unavailable",
+        },
+        {"not": "a valid response"},
+    ]
+    with TestClient(app) as client:
+        for result in scenarios:
+            app.state.agent_runtime_repository.health_status = lambda result=result: result
+            health = client.get("/api/health").json()["data"]
+            system_status = client.get("/api/system/status").json()["data"]
+            assert system_status["status"] == health["status"]
+            if result == scenarios[0]:
+                assert system_status["status"] == "healthy"
+            else:
+                assert system_status["status"] == "degraded"
+
+
+def test_system_status_runtime_query_failure_is_bounded_and_matches_health() -> None:
+    app = create_app(delay_ms=1)
+
+    def fail_runtime_health() -> dict:
+        raise RuntimeError("SELECT secret from /tmp/runtime.db")
+
+    app.state.agent_runtime_repository.health_status = fail_runtime_health
+    with TestClient(app) as client:
+        health = client.get("/api/health").json()["data"]
+        system_status = client.get("/api/system/status").json()["data"]
+        assert health["status"] == system_status["status"] == "degraded"
+        encoded = str(system_status) + str(health)
+        assert "SELECT" not in encoded
+        assert "/tmp/runtime.db" not in encoded
+        assert "secret" not in encoded
+        assert "Traceback" not in encoded
+
+
+def test_system_status_does_not_query_runtime_when_database_unreachable_or_schema_stale() -> None:
+    app = create_app(delay_ms=1)
+    calls = {"count": 0}
+
+    def fail_if_touched() -> dict:
+        calls["count"] += 1
+        raise AssertionError("runtime health must not be queried")
+
+    app.state.agent_runtime_repository.health_status = fail_if_touched
+    with TestClient(app) as client:
+        app.state.repository.health_probe = lambda _revision: (False, False)
+        health = client.get("/api/health").json()["data"]
+        system_status = client.get("/api/system/status").json()["data"]
+        assert health["status"] == system_status["status"] == "degraded"
+        app.state.repository.health_probe = lambda _revision: (True, False)
+        health = client.get("/api/health").json()["data"]
+        system_status = client.get("/api/system/status").json()["data"]
+        assert health["status"] == system_status["status"] == "degraded"
+    assert calls["count"] == 0

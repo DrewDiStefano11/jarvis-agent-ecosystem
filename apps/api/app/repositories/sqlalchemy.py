@@ -407,11 +407,16 @@ class SqlAlchemyRepository:
 
     @staticmethod
     def _audit_from_row(row: AuditEventRow) -> AuditEvent:
+        payload = row.payload.get("payload", {})
+        actor_id = row.agent_id
+        if actor_id is None and isinstance(payload, dict):
+            verified_actor = payload.get("verifiedActorId")
+            actor_id = verified_actor if isinstance(verified_actor, str) else None
         return AuditEvent(
             id=row.id,
             timestamp=row.timestamp,
             eventType=row.event_type,
-            actorAgentId=row.agent_id,
+            actorAgentId=actor_id,
             taskId=row.task_id,
             previousState=row.previous_state,
             newState=row.new_state,
@@ -532,18 +537,69 @@ class SqlAlchemyRepository:
         return [envelope for _, envelope in self.pending_outbox_records()]
 
     def pending_outbox_records(self) -> list[tuple[str, dict[str, Any]]]:
+        """Return dispatchable outbox rows in deterministic, session-safe order.
+
+        Runtime events are multiplexed by independent event-session IDs. For each
+        runtime session only the lowest unpublished sequence is eligible; an
+        exhausted lower sequence keeps that session blocked. Non-runtime events
+        preserve the existing retryable-row behavior and are not blocked by the
+        runtime head-of-line rules.
+        """
         with self.session_factory() as session:
-            return [
-                (row.id, row.envelope)
-                for row in session.scalars(
+            rows = list(
+                session.scalars(
                     select(OutboxEventRow)
-                    .where(
-                        OutboxEventRow.status.in_(["pending", "failed"]),
-                        OutboxEventRow.publish_attempt_count < self.outbox_max_attempts,
+                    .where(OutboxEventRow.status.in_(["pending", "failed"]))
+                    .order_by(
+                        OutboxEventRow.event_session_id,
+                        OutboxEventRow.sequence_number,
+                        OutboxEventRow.created_at,
+                        OutboxEventRow.id,
                     )
-                    .order_by(OutboxEventRow.created_at)
                 )
-            ]
+            )
+        eligible: list[OutboxEventRow] = []
+        runtime_by_session: dict[str, list[OutboxEventRow]] = {}
+        for row in rows:
+            retryable = row.publish_attempt_count < self.outbox_max_attempts
+            if not row.event_type.startswith("agent_runtime."):
+                if retryable:
+                    eligible.append(row)
+                continue
+            runtime_by_session.setdefault(row.event_session_id or "legacy", []).append(row)
+        for session_rows in runtime_by_session.values():
+            head = min(
+                session_rows,
+                key=lambda row: (
+                    row.sequence_number,
+                    row.created_at,
+                    row.id,
+                ),
+            )
+            if head.publish_attempt_count < self.outbox_max_attempts:
+                eligible.append(head)
+        eligible.sort(
+            key=lambda row: (
+                row.created_at,
+                row.event_session_id or "legacy",
+                row.sequence_number,
+                row.id,
+            )
+        )
+        return [(row.id, row.envelope) for row in eligible]
+
+    def exhausted_outbox_sessions(self) -> set[str]:
+        with self.session_factory() as session:
+            return {
+                row.event_session_id or "legacy"
+                for row in session.scalars(
+                    select(OutboxEventRow).where(
+                        OutboxEventRow.status == "failed",
+                        OutboxEventRow.publish_attempt_count >= self.outbox_max_attempts,
+                        OutboxEventRow.event_type.like("agent_runtime.%"),
+                    )
+                )
+            }
 
     def mark_outbox(self, event_id: str, published: bool, error: str | None = None) -> None:
         with self.session_factory() as session, session.begin():

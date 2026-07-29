@@ -172,10 +172,11 @@ class OpenAICompatibleProvider(ProviderBase):
             response.raise_for_status()
             try:
                 body = response.json()
-            except ValueError as exc:
-                raise MalformedProviderResponseError(
+            except ValueError:
+                body = None
+                translated_error = MalformedProviderResponseError(
                     "provider returned malformed JSON", provider=self.name, model=model
-                ) from exc
+                )
         except ModelProviderError:
             raise
         except httpx.HTTPError as exc:
@@ -207,14 +208,18 @@ class OpenAICompatibleProvider(ProviderBase):
                 correlation_id=request.correlation_id,
                 request_id=response.headers.get("x-request-id") or normalized["response_id"],
             )
-        except ValidationError as exc:
-            raise MalformedProviderResponseError(
+        except ValidationError:
+            error = MalformedProviderResponseError(
                 "provider response violates the normalized response contract",
                 provider=self.name,
                 model=model,
                 task_id=request.task_id,
                 correlation_id=request.correlation_id,
-            ) from exc
+            )
+        else:
+            error = None
+        if error is not None:
+            raise error
 
     async def health_check(self) -> ProviderHealth:
         if not provider_network_health_allowed():
@@ -299,12 +304,16 @@ class OpenAICompatibleProvider(ProviderBase):
         response = await self._get("models")
         try:
             body = response.json()
-        except ValueError as exc:
-            raise MalformedProviderResponseError(
+        except ValueError:
+            error = MalformedProviderResponseError(
                 "provider models response is malformed JSON",
                 provider=self.name,
                 model=self.default_model,
-            ) from exc
+            )
+        else:
+            error = None
+        if error is not None:
+            raise error
         if not isinstance(body, dict) or not isinstance(body.get("data"), list):
             raise MalformedProviderResponseError(
                 "provider models response is malformed",

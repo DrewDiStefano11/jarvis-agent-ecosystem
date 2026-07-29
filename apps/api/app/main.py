@@ -14,6 +14,11 @@ from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.agent_runtime.authorization import IdentityRuntimeAuthorizer
+from app.agent_runtime.errors import AgentRuntimeError
+from app.agent_runtime.router import router as agent_runtime_router
+from app.agent_runtime.service import AgentRuntimeService
+from app.agent_runtime.sqlalchemy_repository import SqlAlchemyAgentRuntimeRepository
 from app.context import ContextAssembler
 from app.core.config import Settings
 from app.core.errors import DomainError
@@ -56,7 +61,7 @@ from app.repositories.task_leases import TaskLeaseRepository
 from app.services.events import EventBroker
 from app.simulator.engine import SimulatorEngine
 
-DATABASE_REVISION = "a87a487dd714"
+DATABASE_REVISION = "20260729_04"
 
 
 def _upgrade_database(settings: Settings) -> None:
@@ -91,7 +96,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         allow_origins=[settings.web_origin],
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH"],
-        allow_headers=["Content-Type", "Idempotency-Key"],
+        allow_headers=["Content-Type", "Idempotency-Key", "X-Jarvis-Actor-Id"],
     )
     broker = EventBroker(repository)
     approval_decision_locks: dict[str, asyncio.Lock] = {}
@@ -123,6 +128,14 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     app.state.engine = engine
     app.state.task_leases = task_leases
     app.state.identity_service = IdentityService(session_factory)
+    app.state.agent_runtime_repository = SqlAlchemyAgentRuntimeRepository(
+        session_factory, outbox_max_attempts=repository.outbox_max_attempts
+    )
+    app.state.agent_runtime_service = AgentRuntimeService(
+        app.state.agent_runtime_repository,
+        authorizer=IdentityRuntimeAuthorizer(app.state.identity_service),
+    )
+    app.include_router(agent_runtime_router)
     app.include_router(identity_router)
     app.state.lease_recovery_task = None
     app.state.recovery_required = restored_workflow_state == "recovery_required"
@@ -227,6 +240,55 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         repository.persist()
         engine.dispose()
 
+    @app.exception_handler(AgentRuntimeError)
+    async def runtime_error(_: Request, exc: AgentRuntimeError) -> JSONResponse:
+        missing_codes = {
+            "run_not_found",
+            "attempt_not_found",
+            "runtime_actor_not_found",
+            "runtime_parent_unavailable",
+        }
+        input_codes = {
+            "invalid_runtime_metadata",
+            "invalid_runtime_identifier",
+            "runtime_actor_mismatch",
+        }
+        internal_codes = {"ledger_replay_error", "runtime_persistence_error"}
+        auth_required_codes = {"runtime_authentication_required"}
+        permission_codes = {
+            "runtime_actor_inactive",
+            "runtime_permission_denied",
+            "runtime_replay_actor_mismatch",
+        }
+        status = (
+            401
+            if exc.code in auth_required_codes
+            else 404
+            if exc.code in missing_codes
+            else 403
+            if exc.code in permission_codes
+            else 400
+            if exc.code in input_codes
+            else 500
+            if exc.code in internal_codes
+            else 409
+        )
+        return JSONResponse(
+            status_code=status,
+            content={
+                "error": {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "details": {
+                        "runId": exc.run_id,
+                        "attemptId": exc.attempt_id,
+                        "commandId": exc.command_id,
+                        "metadata": exc.metadata,
+                    },
+                }
+            },
+        )
+
     @app.exception_handler(DomainError)
     async def domain_error(_: Request, exc: DomainError) -> JSONResponse:
         return JSONResponse(
@@ -234,11 +296,69 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             content={"error": {"code": exc.code, "message": exc.message, "details": {}}},
         )
 
-    @app.get("/api/health", response_model=ApiResponse)
-    async def health() -> ApiResponse:
+    def _bounded_runtime_health(reason_code: str) -> dict:
+        """Bounded runtime component result; it never carries internal detail."""
+        return {
+            "configured": False,
+            "nonterminalRunCount": 0,
+            "status": "unavailable",
+            "reasonCode": reason_code,
+        }
+
+    def _normalize_runtime_health(result: object) -> dict:
+        """Normalize a runtime health result into a bounded, comparable component."""
+        if not isinstance(result, dict):
+            return _bounded_runtime_health("runtime_health_invalid_response")
+        configured = result.get("configured")
+        nonterminal = result.get("nonterminalRunCount", 0)
+        if not isinstance(configured, bool) or isinstance(nonterminal, bool):
+            return _bounded_runtime_health("runtime_health_invalid_response")
+        if not isinstance(nonterminal, int) or nonterminal < 0:
+            return _bounded_runtime_health("runtime_health_invalid_response")
+        status = result.get("status")
+        if status is not None and not isinstance(status, str):
+            return _bounded_runtime_health("runtime_health_invalid_response")
+        reason_code = result.get("reasonCode")
+        if reason_code is not None and not isinstance(reason_code, str):
+            return _bounded_runtime_health("runtime_health_invalid_response")
+        exhausted = result.get("outboxExhaustedCount", 0)
+        if isinstance(exhausted, bool) or not isinstance(exhausted, int) or exhausted < 0:
+            return _bounded_runtime_health("runtime_health_invalid_response")
+        component = dict(result)
+        if not configured:
+            component["status"] = status or "unavailable"
+            component.setdefault("reasonCode", "runtime_persistence_unavailable")
+        elif exhausted > 0:
+            component["status"] = status or "degraded"
+            component.setdefault("reasonCode", "runtime_outbox_exhausted")
+        elif status is None:
+            component["status"] = "healthy" if reason_code is None else "degraded"
+        return component
+
+    def _safe_runtime_health(health_fn: object) -> dict:
+        try:
+            result = health_fn()
+        except Exception:
+            # Unexpected runtime repository failures stay bounded: no exception
+            # text, SQL, database path, or traceback ever reaches the response.
+            return _bounded_runtime_health("runtime_health_query_failed")
+        return _normalize_runtime_health(result)
+
+    def _runtime_health_component(database_reachable: bool, schema_current: bool) -> dict:
+        """Runtime tables are only queried on a reachable, current schema."""
+        if not database_reachable:
+            return _bounded_runtime_health("database_unreachable")
+        if not schema_current:
+            return _bounded_runtime_health("schema_stale")
+        return _safe_runtime_health(app.state.agent_runtime_repository.health_status)
+
+    def _status_snapshot() -> dict:
         database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
+        outbox_pending_count = repository.outbox_pending_count() if database_reachable else 0
         outbox_exhausted_count = repository.outbox_exhausted_count() if database_reachable else 0
         context_status = repository.context_assembler_status()
+        if not database_reachable or not schema_current:
+            context_status = context_status.model_copy(update={"state": "unavailable"})
         lease_counts = (
             task_leases.health_counts()
             if database_reachable and schema_current
@@ -249,6 +369,8 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "staleWorkerCount": 0,
             }
         )
+        runtime_persistence = _runtime_health_component(database_reachable, schema_current)
+        runtime_degraded = runtime_persistence.get("status", "healthy") != "healthy"
         degraded = (
             repository._system.recovery_status == "required"
             or not database_reachable
@@ -256,51 +378,51 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             or outbox_exhausted_count > 0
             or lease_counts["expiredLeaseCount"] > 0
             or lease_counts["staleWorkerCount"] > 0
+            or runtime_degraded
         )
+        return {
+            "database_reachable": database_reachable,
+            "schema_current": schema_current,
+            "outbox_pending_count": outbox_pending_count,
+            "outbox_exhausted_count": outbox_exhausted_count,
+            "context_status": context_status,
+            "lease_counts": lease_counts,
+            "runtime_persistence": runtime_persistence,
+            "runtime_degraded": runtime_degraded,
+            "degraded": degraded,
+        }
+
+    @app.get("/api/health", response_model=ApiResponse)
+    async def health() -> ApiResponse:
+        snapshot = _status_snapshot()
+        database_reachable = snapshot["database_reachable"]
+        schema_current = snapshot["schema_current"]
+        context_status = snapshot["context_status"]
         return ApiResponse(
             data={
-                "status": "degraded" if degraded else "healthy",
+                "status": "degraded" if snapshot["degraded"] else "healthy",
                 "service": "jarvis-simulator-api",
                 "processAlive": True,
                 "databaseReachable": database_reachable,
                 "schemaCurrent": schema_current,
                 "outboxDispatcherRunning": broker.dispatcher_running,
-                "outboxExhaustedCount": outbox_exhausted_count,
+                "outboxExhaustedCount": snapshot["outbox_exhausted_count"],
                 "recoveryRequired": repository._system.recovery_status == "required",
                 "contextAssemblerReady": database_reachable and schema_current,
                 "contextAssemblyCount": context_status.totalAssemblies if database_reachable else 0,
-                **lease_counts,
+                **snapshot["lease_counts"],
+                "runtimePersistence": snapshot["runtime_persistence"],
                 "simulated": True,
             }
         )
 
     def system_status() -> SystemStatus:
-        database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
-        outbox_pending_count = repository.outbox_pending_count() if database_reachable else 0
-        outbox_exhausted_count = repository.outbox_exhausted_count() if database_reachable else 0
-        lease_counts = (
-            task_leases.health_counts()
-            if database_reachable and schema_current
-            else {
-                "activeWorkerCount": 0,
-                "activeLeaseCount": 0,
-                "expiredLeaseCount": 0,
-                "staleWorkerCount": 0,
-            }
-        )
-        degraded = (
-            repository._system.recovery_status == "required"
-            or not database_reachable
-            or not schema_current
-            or outbox_exhausted_count > 0
-            or lease_counts["expiredLeaseCount"] > 0
-            or lease_counts["staleWorkerCount"] > 0
-        )
-        context_status = repository.context_assembler_status()
-        if not database_reachable or not schema_current:
-            context_status = context_status.model_copy(update={"state": "unavailable"})
+        snapshot = _status_snapshot()
+        database_reachable = snapshot["database_reachable"]
+        schema_current = snapshot["schema_current"]
+        context_status = snapshot["context_status"]
         return SystemStatus(
-            status="degraded" if degraded else "healthy",
+            status="degraded" if snapshot["degraded"] else "healthy",
             environment=settings.app_env,
             seedDataVersion=repository._system.seed_data_version,
             emergencyStop=repository.emergency_stop,
@@ -322,15 +444,15 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             databaseRevision=DATABASE_REVISION,
             schemaCurrent=schema_current,
             eventSessionId=repository.event_session_id,
-            outboxPendingCount=outbox_pending_count,
-            outboxExhaustedCount=outbox_exhausted_count,
+            outboxPendingCount=snapshot["outbox_pending_count"],
+            outboxExhaustedCount=snapshot["outbox_exhausted_count"],
             recoveryRequired=repository._system.recovery_status == "required",
             activeWorkflowRunId=repository._system.last_workflow_run_id,
             lastCheckpointId=repository._system.last_checkpoint_id,
             lastStartupAt=repository._system.last_successful_startup,
             lastCleanShutdown=repository._system.last_clean_shutdown,
             contextAssembler=context_status,
-            **lease_counts,
+            **snapshot["lease_counts"],
         )
 
     @app.get("/api/system/status", response_model=ApiResponse)
@@ -861,6 +983,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.get("/api/audit-events", response_model=ApiResponse)
     async def audit() -> ApiResponse:
+        repository.reload()
         return ApiResponse(data=repository.audit)
 
     @app.get("/api/artifacts", response_model=ApiResponse)

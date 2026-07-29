@@ -124,3 +124,43 @@ class InvalidRuntimeMetadataError(AgentRuntimeError):
 class InvalidRuntimeIdentifierError(AgentRuntimeError):
     code = "invalid_runtime_identifier"
     default_message = "Runtime identifiers are invalid."
+
+
+class RuntimePersistenceError(AgentRuntimeError):
+    code = "runtime_persistence_error"
+    default_message = "Runtime persistence failed safely."
+
+
+class RuntimeAuthenticationRequiredError(AgentRuntimeError):
+    code = "runtime_authentication_required"
+    default_message = "A verified runtime actor is required."
+
+
+class RuntimeActorNotFoundError(AgentRuntimeError):
+    code = "runtime_actor_not_found"
+    default_message = "The verified runtime actor was not found."
+
+
+class RuntimeActorInactiveError(AgentRuntimeError):
+    code = "runtime_actor_inactive"
+    default_message = "The verified runtime actor is not active."
+
+
+class RuntimePermissionDeniedError(AgentRuntimeError):
+    code = "runtime_permission_denied"
+    default_message = "The verified runtime actor is not permitted for this operation."
+
+
+class RuntimeActorMismatchError(AgentRuntimeError):
+    code = "runtime_actor_mismatch"
+    default_message = "The command actor does not match the verified runtime actor."
+
+
+class RuntimeReplayActorMismatchError(AgentRuntimeError):
+    code = "runtime_replay_actor_mismatch"
+    default_message = "The processed command result belongs to a different verified actor."
+
+
+class RuntimeParentUnavailableError(AgentRuntimeError):
+    code = "runtime_parent_unavailable"
+    default_message = "The requested parent run is unavailable."
