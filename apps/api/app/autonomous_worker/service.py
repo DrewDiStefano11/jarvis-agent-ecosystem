@@ -270,24 +270,25 @@ class AutonomousWorkerService:
             )
             return snapshot, execution, lease
 
-        for snapshot in self.executions.list_queued_autonomous_runs():
-            snapshot = self.runtime.read_run_authorized(snapshot.specification.run_id, actor)
-            if self.runtime.authorizer is not None:
-                self.runtime.authorizer.authorize(actor, "claim", snapshot=snapshot)
-            request = snapshot.specification.autonomous_execution
-            if request is None:
-                continue
-            acquired = self.task_leases.acquire_task(
-                worker_id,
-                min(
-                    self.settings.autonomous_worker_lease_seconds,
-                    request.maximum_execution_seconds,
-                ),
-                snapshot.specification.task_id,
-            )
-            if acquired is not None:
-                _, lease = acquired
-                return snapshot, None, lease
+        for page in self.executions.iter_queued_autonomous_run_pages():
+            for snapshot in page:
+                snapshot = self.runtime.read_run_authorized(snapshot.specification.run_id, actor)
+                if self.runtime.authorizer is not None:
+                    self.runtime.authorizer.authorize(actor, "claim", snapshot=snapshot)
+                request = snapshot.specification.autonomous_execution
+                if request is None:
+                    continue
+                acquired = self.task_leases.acquire_task(
+                    worker_id,
+                    min(
+                        self.settings.autonomous_worker_lease_seconds,
+                        request.maximum_execution_seconds,
+                    ),
+                    snapshot.specification.task_id,
+                )
+                if acquired is not None:
+                    _, lease = acquired
+                    return snapshot, None, lease
         return None
 
     def read_result_authorized(

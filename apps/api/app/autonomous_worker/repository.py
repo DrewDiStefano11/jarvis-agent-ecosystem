@@ -80,45 +80,65 @@ class ModelExecutionRepository:
 
     def select_eligible_queued_run(self) -> AgentRunSnapshot | None:
         with self.sessions() as session:
-            for snapshot in self.list_queued_autonomous_runs():
-                if self._eligible_in_session(session, snapshot):
-                    return snapshot
+            for page in self.iter_queued_autonomous_run_pages():
+                for snapshot in page:
+                    if self._eligible_in_session(session, snapshot):
+                        return snapshot
             return None
 
     def select_queued_autonomous_run(self) -> AgentRunSnapshot | None:
-        rows = self.list_queued_autonomous_runs()
-        return rows[0] if rows else None
+        for page in self.iter_queued_autonomous_run_pages():
+            return page[0]
+        return None
 
     def list_queued_autonomous_runs(self) -> list[AgentRunSnapshot]:
-        with self.sessions() as session:
-            state = session.get(SystemStateRow, 1)
-            if state is not None and state.emergency_stop:
-                return []
-            snapshots: list[AgentRunSnapshot] = []
-            offset = 0
-            page_size = 100
-            while len(snapshots) < 100:
+        return [snapshot for page in self.iter_queued_autonomous_run_pages() for snapshot in page]
+
+    def iter_queued_autonomous_run_pages(
+        self,
+    ) -> Iterator[list[AgentRunSnapshot]]:
+        cursor: tuple[datetime, str] | None = None
+        page_size = 100
+        while True:
+            with self.sessions() as session:
+                state = session.get(SystemStateRow, 1)
+                if state is not None and state.emergency_stop:
+                    return
+                query = select(AgentRuntimeRunRow).where(
+                    AgentRuntimeRunRow.state == AgentRunState.QUEUED.value
+                )
+                if cursor is not None:
+                    created_at, run_id = cursor
+                    query = query.where(
+                        or_(
+                            AgentRuntimeRunRow.created_at > created_at,
+                            and_(
+                                AgentRuntimeRunRow.created_at == created_at,
+                                AgentRuntimeRunRow.run_id > run_id,
+                            ),
+                        )
+                    )
                 rows = list(
                     session.scalars(
-                        select(AgentRuntimeRunRow)
-                        .where(AgentRuntimeRunRow.state == AgentRunState.QUEUED.value)
-                        .order_by(AgentRuntimeRunRow.created_at, AgentRuntimeRunRow.run_id)
-                        .offset(offset)
-                        .limit(page_size)
+                        query.order_by(
+                            AgentRuntimeRunRow.created_at, AgentRuntimeRunRow.run_id
+                        ).limit(page_size)
                     )
                 )
-                if not rows:
-                    break
-                offset += len(rows)
-                for row in rows:
-                    snapshot = AgentRunSnapshot.model_validate_json(row.snapshot_json)
-                    request = snapshot.specification.autonomous_execution
-                    if request is None or request.execution_type.value != "planning_review":
-                        continue
-                    snapshots.append(snapshot)
-                    if len(snapshots) == 100:
-                        break
-            return snapshots
+            if not rows:
+                return
+            cursor = (rows[-1].created_at, rows[-1].run_id)
+            snapshots: list[AgentRunSnapshot] = []
+            for row in rows:
+                snapshot = AgentRunSnapshot.model_validate_json(row.snapshot_json)
+                request = snapshot.specification.autonomous_execution
+                if request is None or request.execution_type.value != "planning_review":
+                    continue
+                snapshots.append(snapshot)
+            if snapshots:
+                yield snapshots
+            if len(rows) < page_size:
+                return
 
     def target_identity_active(self, agent_id: str) -> bool:
         with self.sessions() as session:
@@ -411,7 +431,8 @@ class ModelExecutionRepository:
                 else ModelExecutionStage.FAILED.value
             )
             row.failure_code = failure_code[:80]
-            row.requires_human_review = human_review
+            if row.result_hash is None:
+                row.requires_human_review = human_review
             row.updated_at = now
             row.completed_at = now
             self._emit(

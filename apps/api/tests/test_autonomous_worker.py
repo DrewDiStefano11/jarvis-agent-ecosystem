@@ -133,6 +133,24 @@ def create_assembly_and_runtime(
     )
     assert assembly_response.status_code == 201
     assembly = assembly_response.json()["data"]
+    queue_autonomous_runtime(
+        app,
+        actor_id,
+        assembly_id=assembly["id"],
+        run_id=run_id,
+        task_id=task_id,
+    )
+    return assembly["id"]
+
+
+def queue_autonomous_runtime(
+    app,
+    actor_id: str,
+    *,
+    assembly_id: str,
+    run_id: str,
+    task_id: str,
+) -> None:
     specification = make_spec(
         run_id=run_id,
         task_id=task_id,
@@ -141,7 +159,7 @@ def create_assembly_and_runtime(
         update={
             "autonomous_execution": AutonomousExecutionSpecification(
                 execution_type=AutonomousExecutionType.PLANNING_REVIEW,
-                context_assembly_id=assembly["id"],
+                context_assembly_id=assembly_id,
                 provider_preference="local-fake",
                 model_name="fixture-model",
                 maximum_provider_requests=2,
@@ -174,7 +192,6 @@ def create_assembly_and_runtime(
         actor,
     )
     assert queued.snapshot is not None
-    return assembly["id"]
 
 
 def worker_fixture(
@@ -732,7 +749,8 @@ async def test_restart_reconciles_cancelled_pre_result_execution(tmp_path: Path)
 async def test_restart_reconciles_cancelled_persisted_result(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    router = FakeRouter([json.dumps(VALID_RESULT)])
+    review_result = VALID_RESULT | {"requiresHumanReview": True}
+    router = FakeRouter([json.dumps(review_result)])
     app, client, _, worker = worker_fixture(
         tmp_path,
         router=router,
@@ -765,6 +783,9 @@ async def test_restart_reconciles_cancelled_persisted_result(
         assert stored is not None
         assert stored.stage == "failed"
         assert stored.failureCode == "execution_cancelled"
+        assert stored.requiresHumanReview is True
+        assert stored.result is not None
+        assert stored.result.requiresHumanReview is True
         runtime = app.state.agent_runtime_service.repository.load_run(
             "run-autonomous-result-cancelled"
         )
@@ -967,6 +988,69 @@ def test_autonomous_scan_paginates_past_ordinary_queued_runs(tmp_path: Path) -> 
         assert [item.specification.run_id for item in candidates] == ["run-zz-autonomous"]
     finally:
         client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_autonomous_scan_continues_past_100_unleaseable_runs(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        delay_ms=1,
+        database_url=database_url(tmp_path / "autonomous-page-skip.db"),
+    )
+    router = FakeRouter([json.dumps(VALID_RESULT)])
+    with TestClient(app) as client:
+        queue_only_demo_task(app)
+        actor_id = grant_runtime_permissions(
+            app,
+            "actor-autonomous-page-skip",
+            task_id="task-demo",
+        )
+        for permission in app.state.identity_service.list_definitions("permission", 0, 100):
+            app.state.identity_service.assign_permission(
+                actor_id,
+                AssignPermissionRequest(
+                    permission_id=permission.id,
+                    effect="allow",
+                    resource_type="task",
+                    resource_id="task-completed",
+                ),
+            )
+        configure_worker(app, actor_id, router)
+        assembly_id = create_assembly_and_runtime(
+            client,
+            app,
+            actor_id,
+            run_id="run-aa-unleaseable-000",
+            task_id="task-completed",
+        )
+        for index in range(1, 100):
+            queue_autonomous_runtime(
+                app,
+                actor_id,
+                assembly_id=assembly_id,
+                run_id=f"run-aa-unleaseable-{index:03d}",
+                task_id="task-completed",
+            )
+        create_assembly_and_runtime(
+            client,
+            app,
+            actor_id,
+            run_id="run-zz-eligible-after-page",
+            task_id="task-demo",
+        )
+        worker = app.state.task_leases.register_worker(
+            "page-skip-worker",
+            "page-skip-worker",
+            60,
+            {"kind": "autonomous_planning_review"},
+        )
+
+        result = await app.state.autonomous_worker_service.run_once(worker.id)
+        assert result is not None
+        assert result.runtimeRunId == "run-zz-eligible-after-page"
+        assert app.state.repository.tasks["task-demo"].status == "completed"
+        assert len(router.requests) == 1
 
 
 @pytest.mark.asyncio
