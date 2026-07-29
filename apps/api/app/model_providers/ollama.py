@@ -51,7 +51,14 @@ class OllamaProvider(ProviderBase):
                 "built-in adapter capabilities contain an unsupported value", provider=name
             )
         parsed = urlsplit(base_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
             raise ProviderConfigurationError("Ollama base URL is invalid", provider=name)
         self.name = name
         self.base_url = base_url.rstrip("/")

@@ -8,6 +8,8 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.model_providers.security import redact_secrets
+
 SECRET_KEY_TERMS = ("api_key", "authorization", "token", "password", "secret", "credential")
 MAX_METADATA_KEYS = 32
 MAX_METADATA_BYTES = 20_000
@@ -187,6 +189,8 @@ def validate_safe_metadata(metadata: dict[str, Any]) -> None:
                 return
             visited.add(identity)
             for key, item in value.items():
+                if not isinstance(key, str):
+                    raise ValueError("metadata keys must be strings")
                 key_count += 1
                 if key_count > MAX_METADATA_KEYS:
                     raise ValueError("metadata exceeds the safe key-count limit")
@@ -201,10 +205,15 @@ def validate_safe_metadata(metadata: dict[str, Any]) -> None:
             visited.add(identity)
             for item in value:
                 validate(item, depth + 1)
+        elif isinstance(value, str):
+            if redact_secrets(value) != value:
+                raise ValueError("secret-bearing metadata values are not allowed")
+        elif value is not None and not isinstance(value, (bool, int, float)):
+            raise ValueError("metadata values must use JSON-compatible scalar types")
 
     validate(metadata)
     try:
-        size = len(json.dumps(metadata, default=str, separators=(",", ":")).encode())
+        size = len(json.dumps(metadata, separators=(",", ":")).encode())
     except (TypeError, ValueError, RecursionError) as exc:
         raise ValueError("metadata must be safely serializable") from exc
     if size > MAX_METADATA_BYTES:

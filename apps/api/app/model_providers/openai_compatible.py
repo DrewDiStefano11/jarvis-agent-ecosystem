@@ -29,6 +29,7 @@ from app.model_providers.policy import (
     provider_network_health_allowed,
     require_live_provider_execution,
 )
+from app.model_providers.security import redact_secrets
 
 
 class HealthCheckStrategy(StrEnum):
@@ -63,7 +64,14 @@ class OpenAICompatibleProvider(ProviderBase):
                 "built-in adapter capabilities contain an unsupported value", provider=name
             )
         parsed = urlsplit(base_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
             raise ProviderConfigurationError("provider base URL is invalid", provider=name)
         headers = custom_headers or {}
         if any(
@@ -73,6 +81,10 @@ class OpenAICompatibleProvider(ProviderBase):
         ):
             raise ProviderConfigurationError(
                 "custom headers cannot override secret-bearing headers", provider=name
+            )
+        if any(redact_secrets(value) != value for value in headers.values()):
+            raise ProviderConfigurationError(
+                "custom header values cannot contain secret patterns", provider=name
             )
         self.name = name
         self.base_url = f"{base_url.rstrip('/')}/"

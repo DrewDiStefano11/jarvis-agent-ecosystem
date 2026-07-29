@@ -8,6 +8,7 @@ from app.model_providers.contracts import ModelExecutionRequest, UsageQuality
 from app.model_providers.errors import (
     AuthenticationError,
     MalformedProviderResponseError,
+    ProviderConfigurationError,
     ProviderExecutionDisabledError,
     QuotaExhaustedError,
     RateLimitError,
@@ -66,6 +67,19 @@ async def test_phase_gate_prevents_client_creation(monkeypatch: pytest.MonkeyPat
 )
 def test_ollama_locality_is_structural(url: str, expected: bool) -> None:
     assert is_loopback_endpoint(url) is expected
+
+
+def test_provider_urls_and_custom_headers_reject_embedded_secrets() -> None:
+    with pytest.raises(ProviderConfigurationError):
+        OllamaProvider(default_model="m", base_url="http://user:password@localhost:11434")
+    with pytest.raises(ProviderConfigurationError):
+        OpenAICompatibleProvider(
+            name="remote",
+            base_url="https://example.invalid/v1",
+            api_key=SecretStr("mock"),
+            default_model="m",
+            custom_headers={"X-Custom": "Bearer hidden"},
+        )
 
 
 @pytest.mark.asyncio

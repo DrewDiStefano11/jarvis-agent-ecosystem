@@ -117,6 +117,12 @@ class Settings(BaseSettings):
             )
         if self.model_retry_initial_backoff_seconds > self.model_retry_maximum_backoff_seconds:
             raise ValueError("initial model retry backoff cannot exceed maximum backoff")
+        for label, url in (
+            ("Ollama", self.model_ollama_base_url),
+            ("OpenAI-compatible", self.model_openai_compatible_base_url),
+        ):
+            if url.username is not None or url.password is not None or url.query or url.fragment:
+                raise ValueError(f"{label} base URL cannot contain credentials, query, or fragment")
         supported = {capability.value for capability in BUILTIN_ADAPTER_CAPABILITIES}
         for label, value in (
             ("Ollama", self.model_ollama_capabilities),
