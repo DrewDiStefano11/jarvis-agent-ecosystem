@@ -182,12 +182,16 @@ class AgentRuntimeService:
         # unauthorized total count, and we scan at most five pages from the
         # requested offset to avoid unbounded in-memory filtering.
         items: list[AgentRunSnapshot] = []
-        scanned_offset = query.offset
+        scan_offset = query.offset
         pages = 0
+        next_offset: int | None = None
+        exhausted = False
         while len(items) < query.limit and pages < 5:
-            page_query = query.model_copy(update={"offset": scanned_offset, "limit": query.limit})
+            page_query = query.model_copy(update={"offset": scan_offset, "limit": query.limit})
             page = self.repository.query_runs(page_query)
+            consumed_in_page = 0
             for snapshot in page.items:
+                consumed_in_page += 1
                 try:
                     self._require_authorized(actor, "read", snapshot=snapshot)
                 except Exception:
@@ -196,16 +200,33 @@ class AgentRuntimeService:
                 if len(items) == query.limit:
                     break
             pages += 1
-            if page.next_offset is None:
+            page_exhausted = page.next_offset is None
+            if len(items) == query.limit:
+                if consumed_in_page < len(page.items):
+                    next_offset = scan_offset + consumed_in_page
+                elif page_exhausted:
+                    next_offset = None
+                    exhausted = True
+                else:
+                    next_offset = page.next_offset
                 break
-            scanned_offset = page.next_offset
+            if page_exhausted:
+                exhausted = True
+                next_offset = None
+                break
+            scan_offset = page.next_offset
+            next_offset = scan_offset
+        if not exhausted and len(items) < query.limit and pages >= 5:
+            next_offset = scan_offset if scan_offset > query.offset else None
+        if next_offset is not None and next_offset <= query.offset:
+            next_offset = None
         from app.models.agent_runtime import AgentRunQueryResult
 
         return AgentRunQueryResult(
             items=tuple(items),
             offset=query.offset,
             limit=query.limit,
-            next_offset=scanned_offset if len(items) == query.limit else None,
+            next_offset=next_offset,
             total_count=len(items),
         )
 
@@ -222,8 +243,8 @@ class AgentRuntimeService:
         return self.repository.list_checkpoints(run_id)
 
     def lineage_authorized(self, run_id: str, actor: RuntimeActorContext) -> LineageResolution:
-        self.read_run_authorized(run_id, actor)
-        return self.resolve_lineage(run_id)
+        snapshot = self.read_run_authorized(run_id, actor)
+        return self._resolve_lineage_authorized(snapshot, actor)
 
     def handle(self, command: CommandHandler) -> RuntimeCommandResult:
         if isinstance(command, CreateAgentRunCommand):
@@ -1060,6 +1081,29 @@ class AgentRuntimeService:
         snapshot = self.repository.load_run(run_id)
         if snapshot is None:
             raise RunNotFoundError(run_id=run_id)
+        return self._resolve_lineage_from_snapshot(snapshot, depth_limit=depth_limit)
+
+    def _resolve_lineage_authorized(
+        self,
+        snapshot: AgentRunSnapshot,
+        actor: RuntimeActorContext,
+        *,
+        depth_limit: int = DEFAULT_LINEAGE_DEPTH_LIMIT,
+    ) -> LineageResolution:
+        return self._resolve_lineage_from_snapshot(
+            snapshot,
+            depth_limit=depth_limit,
+            authorize=lambda parent: self._require_authorized(actor, "read", snapshot=parent),
+        )
+
+    def _resolve_lineage_from_snapshot(
+        self,
+        snapshot: AgentRunSnapshot,
+        *,
+        depth_limit: int = DEFAULT_LINEAGE_DEPTH_LIMIT,
+        authorize: Callable[[AgentRunSnapshot], object] | None = None,
+    ) -> LineageResolution:
+        run_id = snapshot.specification.run_id
         entries: list[LineageEntry] = []
         missing_parent_id = None
         current_parent = snapshot.specification.parent_run_id
@@ -1072,12 +1116,14 @@ class AgentRuntimeService:
                     run_id=run_id,
                     metadata={"parentRunId": current_parent},
                 )
-            visited.add(current_parent)
             parent_snapshot = self.repository.load_run(current_parent)
             if parent_snapshot is None:
                 missing_parent_id = current_parent
                 entries.append(LineageEntry(run_id=current_parent, exists=False, state=None))
                 break
+            if authorize is not None:
+                authorize(parent_snapshot)
+            visited.add(current_parent)
             entries.append(
                 LineageEntry(
                     run_id=parent_snapshot.specification.run_id,

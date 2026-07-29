@@ -3,7 +3,9 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi.testclient import TestClient
+from sqlalchemy import update
 
+from app.db.models import OutboxEventRow
 from app.main import create_app
 from app.models.agent_runtime import AgentRunState, CreateAgentRunCommand, QueueAgentRunCommand
 from app.models.identity import AssignPermissionRequest, CreateAgentRequest, CreatePermissionRequest
@@ -113,6 +115,17 @@ def test_runtime_api_persists_events_audit_outbox_and_restarts(tmp_path) -> None
         assert events.json()["data"][0]["event_type"] == "run_created"
         health = client.get("/api/health").json()["data"]
         assert health["runtimePersistence"]["status"] == "healthy"
+        with app.state.repository.session_factory() as session, session.begin():
+            session.execute(
+                update(OutboxEventRow)
+                .where(OutboxEventRow.event_type.like("agent_runtime.%"))
+                .values(
+                    status="failed", publish_attempt_count=app.state.repository.outbox_max_attempts
+                )
+            )
+        degraded = client.get("/api/health").json()["data"]
+        assert degraded["status"] == "degraded"
+        assert degraded["runtimePersistence"]["reasonCode"] == "runtime_outbox_exhausted"
         audit_rows = [
             row
             for row in client.get("/api/audit-events").json()["data"]
