@@ -1,11 +1,27 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
+
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.db.models import OutboxEventRow
+from app.db.models import (
+    IdentityPermissionRow,
+    OutboxEventRow,
+    ResourceAccessPolicyRow,
+    TeamMembershipRow,
+)
 from app.main import create_app
-from app.models.identity import AssignPermissionRequest, CreateAgentRequest, CreatePermissionRequest
+from app.models.identity import (
+    AssignPermissionRequest,
+    AssignRoleRequest,
+    CreateAgentRequest,
+    CreatePermissionRequest,
+    CreateRankRequest,
+    CreateRoleRequest,
+    CreateTeamRequest,
+)
 from tests.agent_runtime_testkit import make_spec, ts
 from tests.test_persistence import database_url
 
@@ -201,23 +217,18 @@ def test_unauthorized_runtime_command_writes_no_artifacts(tmp_path) -> None:
 
 
 def test_runtime_authorization_respects_task_resource_policy_denies(tmp_path) -> None:
-    from app.models.identity import ResourcePolicyRequest
-
     app = create_app(delay_ms=1, database_url=database_url(tmp_path / "auth-resource-policy.db"))
     with TestClient(app) as client:
         permissions = ensure_permissions(app)
         actor_id = create_actor(app, "runtime-auth-policy")
         grant(app, actor_id, permissions, "runtime.create", "runtime.read", task_id="task-1")
-        app.state.identity_service.create_resource_policy(
-            ResourcePolicyRequest(
-                subject_type="all",
-                resource_type="task",
-                resource_id="task-1",
-                action="manage",
-                effect="deny",
-                access_state="blocked",
-                reason="block runtime writes",
-            )
+        add_policy(
+            app,
+            subject_type="all",
+            resource_id="task-1",
+            action=permission_action(app, "runtime.create"),
+            effect="deny",
+            access_state="blocked",
         )
         body = command_body(actor_id, run_id="policy-denied-create")
         denied_create = client.post(
@@ -233,16 +244,13 @@ def test_runtime_authorization_respects_task_resource_policy_denies(tmp_path) ->
             fromlist=["create_runtime_run"],
         ).create_runtime_run
         create_runtime(app, "policy-read-run", task_id="task-1", index=1)
-        app.state.identity_service.create_resource_policy(
-            ResourcePolicyRequest(
-                subject_type="all",
-                resource_type="task",
-                resource_id="task-1",
-                action="view",
-                effect="deny",
-                access_state="blocked",
-                reason="block runtime reads",
-            )
+        add_policy(
+            app,
+            subject_type="all",
+            resource_id="task-1",
+            action=permission_action(app, "runtime.read"),
+            effect="deny",
+            access_state="blocked",
         )
         denied_read = client.get(
             "/api/agent-runtime/runs/policy-read-run",
@@ -250,3 +258,289 @@ def test_runtime_authorization_respects_task_resource_policy_denies(tmp_path) ->
         )
         assert denied_read.status_code == 403
         assert denied_read.json()["error"]["code"] == "runtime_permission_denied"
+
+
+def permission_action(app, stable_key: str) -> str:
+    with app.state.identity_service.sessions() as session:
+        return session.scalar(
+            select(IdentityPermissionRow.action).where(
+                IdentityPermissionRow.stable_key == stable_key
+            )
+        )
+
+
+def add_policy(
+    app,
+    *,
+    subject_type: str,
+    resource_id: str,
+    action: str,
+    effect: str = "deny",
+    access_state: str | None = None,
+    subject_id: str | None = None,
+    starts_at=None,
+    expires_at=None,
+    revoked_at=None,
+) -> None:
+    now = datetime.now(UTC)
+    with app.state.identity_service.sessions.begin() as session:
+        session.add(
+            ResourceAccessPolicyRow(
+                id=f"policy-{uuid4().hex}",
+                subject_type=subject_type,
+                subject_id=subject_id,
+                resource_type="task",
+                resource_id=resource_id,
+                action=action,
+                effect=effect,
+                access_state=access_state,
+                starts_at=starts_at or now - timedelta(minutes=1),
+                expires_at=expires_at,
+                reason="runtime policy test",
+                created_by=None,
+                created_at=now,
+                revoked_at=revoked_at,
+            )
+        )
+
+
+def test_runtime_resource_policy_uses_permission_definition_action(tmp_path) -> None:
+    app = create_app(delay_ms=1, database_url=database_url(tmp_path / "auth-policy-action.db"))
+    with TestClient(app) as client:
+        permissions = ensure_permissions(app)
+        actor_id = create_actor(app, "runtime-policy-action")
+        grant(app, actor_id, permissions, "runtime.create", task_id="task-1")
+        actual_action = permission_action(app, "runtime.create")
+        assert actual_action not in {"create", "runtime.create", "manage"}
+        for wrong in ("create", "runtime.create", "manage"):
+            add_policy(app, subject_type="all", resource_id="task-1", action=wrong, effect="deny")
+        allowed = client.post(
+            "/api/agent-runtime/commands",
+            json=command_body(actor_id, run_id="policy-action-allowed"),
+            headers={"X-Jarvis-Actor-Id": actor_id},
+        )
+        assert allowed.status_code == 200
+        add_policy(
+            app, subject_type="all", resource_id="task-1", action=actual_action, effect="deny"
+        )
+        denied = client.post(
+            "/api/agent-runtime/commands",
+            json=command_body(actor_id, run_id="policy-action-denied"),
+            headers={"X-Jarvis-Actor-Id": actor_id},
+        )
+        assert denied.status_code == 403
+        assert app.state.agent_runtime_repository.load_run("policy-action-denied") is None
+
+
+def test_runtime_resource_policy_subject_types_and_admin_override(tmp_path) -> None:
+    app = create_app(delay_ms=1, database_url=database_url(tmp_path / "auth-policy-subjects.db"))
+    with TestClient(app) as client:
+        permissions = ensure_permissions(app)
+        identity = app.state.identity_service
+        rank = identity.create_definition(
+            "rank",
+            CreateRankRequest(
+                stable_key="runtime.policy.rank",
+                display_name="Runtime Rank",
+                priority_level=42,
+                hierarchy_level=42,
+            ),
+        )
+        actor = identity.create_agent(
+            CreateAgentRequest(
+                stable_key="runtime-policy-subject",
+                display_name="runtime-policy-subject",
+                agent_type="coordinator",
+                rank_id=rank.id,
+            )
+        )
+        identity.transition(actor.id, "active")
+        role = identity.create_definition(
+            "role",
+            CreateRoleRequest(
+                stable_key="runtime.policy.role",
+                display_name="Runtime Role",
+                role_scope="resource",
+            ),
+        )
+        identity.assign_role(
+            actor.id,
+            AssignRoleRequest(role_id=role.id, scope_type="resource", scope_id="task-1"),
+        )
+        team = identity.create_definition(
+            "team",
+            CreateTeamRequest(
+                stable_key="runtime.policy.team",
+                display_name="Runtime Team",
+                team_type="runtime",
+            ),
+        )
+        with identity.sessions.begin() as session:
+            session.add(
+                TeamMembershipRow(
+                    id=f"tm-{uuid4().hex}",
+                    team_id=team.id,
+                    agent_id=actor.id,
+                    membership_role="member",
+                    starts_at=datetime.now(UTC) - timedelta(minutes=1),
+                    expires_at=None,
+                    assigned_by=None,
+                    created_at=datetime.now(UTC),
+                    revoked_at=None,
+                )
+            )
+        grant(app, actor.id, permissions, "runtime.create", task_id="task-1")
+        action = permission_action(app, "runtime.create")
+        for subject_type, subject_id, run_id in (
+            ("agent", actor.id, "policy-agent-deny"),
+            ("role", role.id, "policy-role-deny"),
+            ("rank", rank.id, "policy-rank-deny"),
+            ("team", team.id, "policy-team-deny"),
+            ("all", None, "policy-all-deny"),
+        ):
+            add_policy(
+                app,
+                subject_type=subject_type,
+                subject_id=subject_id,
+                resource_id="task-1",
+                action=action,
+                effect="deny",
+                access_state="blocked",
+            )
+            response = client.post(
+                "/api/agent-runtime/commands",
+                json=command_body(actor.id, run_id=run_id),
+                headers={"X-Jarvis-Actor-Id": actor.id},
+            )
+            assert response.status_code == 403
+            assert app.state.agent_runtime_repository.load_run(run_id) is None
+            with app.state.identity_service.sessions.begin() as session:
+                for policy in session.scalars(select(ResourceAccessPolicyRow)):
+                    policy.revoked_at = datetime.now(UTC)
+
+        admin = create_actor(app, "runtime-policy-admin")
+        grant(app, admin, permissions, "runtime.create", task_id="task-1")
+        admin_permission = identity.create_definition(
+            "permission",
+            CreatePermissionRequest(
+                stable_key="runtime.admin",
+                display_name="Runtime admin",
+                resource_type="administrative_function",
+                action="runtime_admin",
+            ),
+        )
+        identity.assign_permission(
+            admin,
+            AssignPermissionRequest(
+                permission_id=admin_permission.id,
+                effect="allow",
+                resource_type="administrative_function",
+                resource_id="agent_runtime",
+            ),
+        )
+        add_policy(
+            app,
+            subject_type="all",
+            resource_id="task-1",
+            action=action,
+            effect="deny",
+            access_state="blocked",
+        )
+        allowed = client.post(
+            "/api/agent-runtime/commands",
+            json=command_body(admin, run_id="policy-admin-allowed"),
+            headers={"X-Jarvis-Actor-Id": admin},
+        )
+        assert allowed.status_code == 200
+
+
+def test_runtime_resource_policy_lifecycle_and_allow_precedence(tmp_path) -> None:
+    app = create_app(delay_ms=1, database_url=database_url(tmp_path / "auth-policy-life.db"))
+    with TestClient(app) as client:
+        permissions = ensure_permissions(app)
+        actor_id = create_actor(app, "runtime-policy-life")
+        grant(app, actor_id, permissions, "runtime.create", task_id="task-1")
+        action = permission_action(app, "runtime.create")
+        now = datetime.now(UTC)
+        add_policy(
+            app,
+            subject_type="all",
+            resource_id="task-1",
+            action=action,
+            effect="deny",
+            starts_at=now + timedelta(days=1),
+        )
+        add_policy(
+            app,
+            subject_type="all",
+            resource_id="task-1",
+            action=action,
+            effect="deny",
+            expires_at=now - timedelta(minutes=1),
+        )
+        add_policy(
+            app,
+            subject_type="all",
+            resource_id="task-2",
+            action=action,
+            effect="deny",
+        )
+        add_policy(
+            app,
+            subject_type="all",
+            resource_id="task-1",
+            action="unrelated_action",
+            effect="deny",
+        )
+        add_policy(
+            app,
+            subject_type="all",
+            resource_id="task-1",
+            action=action,
+            effect="deny",
+            revoked_at=now,
+        )
+        allowed = client.post(
+            "/api/agent-runtime/commands",
+            json=command_body(actor_id, run_id="policy-life-allowed"),
+            headers={"X-Jarvis-Actor-Id": actor_id},
+        )
+        assert allowed.status_code == 200
+
+        # Existing IdentityService semantics: policy allow can grant resource access even without a direct assignment,
+        # explicit assignment deny wins before policy allow, and policy deny/blocked wins over allows.
+        allow_actor = create_actor(app, "runtime-policy-allow")
+        add_policy(
+            app,
+            subject_type="agent",
+            subject_id=allow_actor,
+            resource_id="task-1",
+            action=action,
+            effect="allow",
+        )
+        decision = app.state.identity_service.check_permission_resource_access(
+            allow_actor, "runtime.create", "task", "task-1"
+        )
+        assert decision.allowed is True
+        app.state.identity_service.assign_permission(
+            allow_actor,
+            AssignPermissionRequest(permission_id=permissions["runtime.create"], effect="deny"),
+        )
+        denied_by_assignment = app.state.identity_service.check_permission_resource_access(
+            allow_actor, "runtime.create", "task", "task-1"
+        )
+        assert denied_by_assignment.allowed is False
+        assert denied_by_assignment.reason_code == "explicit_denial"
+        add_policy(
+            app,
+            subject_type="agent",
+            subject_id=allow_actor,
+            resource_id="task-1",
+            action=action,
+            effect="deny",
+        )
+        denied_by_policy = app.state.identity_service.check_permission_resource_access(
+            allow_actor, "runtime.create", "task", "task-1"
+        )
+        assert denied_by_policy.allowed is False
+        assert denied_by_policy.reason_code == "resource_denial"

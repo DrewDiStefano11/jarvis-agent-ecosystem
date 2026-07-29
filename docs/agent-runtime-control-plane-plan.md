@@ -98,3 +98,11 @@ PR #40 head inspected as reference only: `5777faaa5792c9f08811338cecb96d2559b187
 - Exact replay still requires the same verified actor plus current child and parent/ancestor authorization. Permission removal or parent/ancestor deletion prevents returning the stored protected result and creates no duplicate artifacts.
 - Rejected parent-unavailable and lineage-validation failures preserve the zero-artifact contract for runtime runs, events, attempts, checkpoints, processed commands, mutation audits, and runtime outbox rows.
 - Regression coverage lives in `apps/api/tests/test_agent_runtime_parent_authorization.py`.
+
+## Resource-policy authorization repair
+
+- Runtime task-scoped authorization now calls `IdentityService.check_permission_resource_access()` rather than `check_permission()`.
+- The shared IdentityService method resolves the enabled permission by stable key, uses the permission definition's stored action, and then delegates to the existing `check_resource_access()` evaluator so role/permission assignments, scoped assignments, resource-policy subjects, lifecycle windows, revocation, explicit denies, blocked state, policy allows, and fail-closed behavior remain authoritative.
+- Runtime does not query `ResourceAccessPolicyRow` directly and does not derive policy actions from runtime operation names or stable-key strings.
+- `runtime.admin` remains the explicit administrative override before task resource-policy evaluation.
+- Regression coverage in `test_agent_runtime_authorization.py` verifies actual permission-action resolution, policy denial/blocked behavior for agent/role/rank/team/all subjects, lifecycle and isolation behavior, policy allow semantics, and admin override behavior.
