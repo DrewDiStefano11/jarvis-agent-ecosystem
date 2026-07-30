@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import delete, func, select, update
 
+from app.agent_runtime.errors import RuntimePermissionDeniedError
 from app.autonomous_worker.__main__ import _run_once_resilient
 from app.autonomous_worker.errors import AutonomousWorkerError
 from app.core.config import Settings
@@ -32,7 +33,7 @@ from app.models.agent_runtime import (
     RequestCancellationCommand,
 )
 from app.models.autonomous_worker import PlanningReviewResult
-from app.models.identity import AssignPermissionRequest
+from app.models.identity import AssignPermissionRequest, CreateAgentRequest
 from tests.agent_runtime_testkit import make_spec, ts
 from tests.test_agent_runtime_sql_control_plane import grant_runtime_permissions
 from tests.test_context_integration import context_body
@@ -135,6 +136,7 @@ def create_assembly_and_runtime(
     run_id: str = "run-autonomous-1",
     task_id: str = "task-demo",
     assembly_content: str = "Approved planning facts.",
+    target_agent_id: str | None = None,
 ) -> str:
     assembly_response = client.post(
         "/api/context/assemblies",
@@ -149,6 +151,7 @@ def create_assembly_and_runtime(
         assembly_id=assembly["id"],
         run_id=run_id,
         task_id=task_id,
+        target_agent_id=target_agent_id,
     )
     return assembly["id"]
 
@@ -160,11 +163,12 @@ def queue_autonomous_runtime(
     assembly_id: str,
     run_id: str,
     task_id: str,
+    target_agent_id: str | None = None,
 ) -> None:
     specification = make_spec(
         run_id=run_id,
         task_id=task_id,
-        agent_id=actor_id,
+        agent_id=target_agent_id or actor_id,
     ).model_copy(
         update={
             "autonomous_execution": AutonomousExecutionSpecification(
@@ -1010,6 +1014,108 @@ async def test_cancelled_recovery_finishes_from_pause_requested(
 
 
 @pytest.mark.asyncio
+async def test_review_recovery_confirms_existing_pause_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    review_result = VALID_RESULT | {"requiresHumanReview": True}
+    router = FakeRouter([json.dumps(review_result)])
+    app, client, _, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-autonomous-pause-requested-recovery",
+    )
+    service = app.state.autonomous_worker_service
+    original_handle = service._handle
+
+    def crash_before_pause_confirmation(command_type, snapshot, actor, suffix, **fields):
+        if command_type is ConfirmPauseCommand:
+            raise RuntimeError("injected pause-confirmation crash")
+        return original_handle(command_type, snapshot, actor, suffix, **fields)
+
+    monkeypatch.setattr(service, "_handle", crash_before_pause_confirmation)
+    try:
+        with pytest.raises(RuntimeError, match="injected pause-confirmation crash"):
+            await service.run_once(worker.id)
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-autonomous-pause-requested-recovery"
+        )
+        assert runtime is not None
+        assert runtime.state == "pause_requested"
+        with app.state.model_execution_repository.sessions.begin() as session:
+            session.execute(
+                update(TaskLeaseRow)
+                .where(TaskLeaseRow.task_id == "task-demo")
+                .values(expires_at=ts(0))
+            )
+        assert app.state.task_leases.recover_expired_leases() == 1
+        monkeypatch.setattr(service, "_handle", original_handle)
+
+        recovered = await service.run_once(worker.id)
+        assert recovered is not None
+        assert recovered.stage == "human_review_required"
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-autonomous-pause-requested-recovery"
+        )
+        assert runtime is not None
+        assert runtime.state == "paused"
+        assert app.state.repository.tasks["task-demo"].status == "under_review"
+        assert len(router.requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_failed_task_recovery_terminalizes_runtime_and_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    router = FakeRouter([json.dumps(VALID_RESULT)])
+    app, client, _, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-autonomous-failed-task-recovery",
+    )
+    service = app.state.autonomous_worker_service
+    original_checkpoint = service._checkpoint
+
+    def crash_after_result(snapshot, actor, execution, attempt_id, name):
+        if name == "result-persisted":
+            raise RuntimeError("injected process crash")
+        return original_checkpoint(snapshot, actor, execution, attempt_id, name)
+
+    with app.state.model_execution_repository.sessions.begin() as session:
+        session.execute(update(TaskRow).where(TaskRow.id == "task-demo").values(maximum_retries=0))
+    monkeypatch.setattr(service, "_checkpoint", crash_after_result)
+    try:
+        with pytest.raises(RuntimeError, match="injected process crash"):
+            await service.run_once(worker.id)
+        with app.state.model_execution_repository.sessions.begin() as session:
+            session.execute(
+                update(TaskLeaseRow)
+                .where(TaskLeaseRow.task_id == "task-demo")
+                .values(expires_at=ts(0))
+            )
+        assert app.state.task_leases.recover_expired_leases() == 1
+        assert app.state.task_leases.task_status("task-demo") == "failed"
+        monkeypatch.setattr(service, "_checkpoint", original_checkpoint)
+
+        assert await service.run_once(worker.id) is None
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-autonomous-failed-task-recovery"
+        )
+        assert runtime is not None
+        assert runtime.state == "failed"
+        stored = app.state.model_execution_repository.get_by_run(
+            "run-autonomous-failed-task-recovery"
+        )
+        assert stored is not None
+        assert stored.stage == "failed"
+        assert stored.failureCode == "task_failed"
+        assert len(router.requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
 async def test_cancelled_recovery_finishes_from_cancelling(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1326,6 +1432,110 @@ async def test_autonomous_scan_continues_past_100_unleaseable_runs(
         assert result is not None
         assert result.runtimeRunId == "run-zz-eligible-after-page"
         assert app.state.repository.tasks["task-demo"].status == "completed"
+        assert len(router.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_unauthorized_queued_run_does_not_block_later_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    router = FakeRouter([json.dumps(VALID_RESULT)])
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-aa-unauthorized",
+    )
+    runtime_service = app.state.agent_runtime_service
+    first = runtime_service.repository.load_run("run-aa-unauthorized")
+    assert first is not None
+    request = first.specification.autonomous_execution
+    assert request is not None
+    queue_autonomous_runtime(
+        app,
+        actor_id,
+        assembly_id=request.context_assembly_id,
+        run_id="run-zz-authorized",
+        task_id="task-demo",
+    )
+    authorizer = runtime_service.authorizer
+    assert authorizer is not None
+    original_authorize = authorizer.authorize
+
+    def deny_first(actor, operation, *, specification=None, snapshot=None):
+        target = specification or (snapshot.specification if snapshot is not None else None)
+        if target is not None and target.run_id == "run-aa-unauthorized":
+            raise RuntimePermissionDeniedError(metadata={"operation": operation})
+        return original_authorize(
+            actor,
+            operation,
+            specification=specification,
+            snapshot=snapshot,
+        )
+
+    monkeypatch.setattr(authorizer, "authorize", deny_first)
+    try:
+        result = await app.state.autonomous_worker_service.run_once(worker.id)
+        assert result is not None
+        assert result.runtimeRunId == "run-zz-authorized"
+        skipped = runtime_service.repository.load_run("run-aa-unauthorized")
+        assert skipped is not None
+        assert skipped.state == "queued"
+        assert len(router.requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_target_suspension_during_model_call_prevents_result_commit(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        delay_ms=1,
+        database_url=database_url(tmp_path / "target-suspension.db"),
+    )
+    with TestClient(app) as client:
+        queue_only_demo_task(app)
+        actor_id = grant_runtime_permissions(
+            app,
+            "actor-target-suspension",
+            task_id="task-demo",
+        )
+        target = app.state.identity_service.create_agent(
+            CreateAgentRequest(
+                stable_key="target-suspension",
+                display_name="Target suspension",
+                agent_type="worker",
+            )
+        )
+        app.state.identity_service.transition(target.id, "active")
+        router = FakeRouter(
+            [json.dumps(VALID_RESULT)],
+            callback=lambda: app.state.identity_service.transition(target.id, "suspended"),
+        )
+        configure_worker(app, actor_id, router)
+        create_assembly_and_runtime(
+            client,
+            app,
+            actor_id,
+            run_id="run-target-suspension",
+            target_agent_id=target.id,
+        )
+        worker = app.state.task_leases.register_worker(
+            "target-suspension-worker",
+            "target-suspension-worker",
+            60,
+            {"kind": "autonomous_planning_review"},
+        )
+
+        result = await app.state.autonomous_worker_service.run_once(worker.id)
+        assert result is not None
+        assert result.stage == "human_review_required"
+        assert result.failureCode == "runtime_execution_not_eligible"
+        assert result.result is None
+        runtime = app.state.agent_runtime_service.repository.load_run("run-target-suspension")
+        assert runtime is not None
+        assert runtime.state == "paused"
+        assert app.state.repository.tasks["task-demo"].status == "under_review"
         assert len(router.requests) == 1
 
 

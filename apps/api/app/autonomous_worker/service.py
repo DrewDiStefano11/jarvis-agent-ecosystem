@@ -9,6 +9,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from app.agent_runtime.authorization import RuntimeActorContext
+from app.agent_runtime.errors import RuntimePermissionDeniedError
 from app.agent_runtime.service import AgentRuntimeService
 from app.autonomous_worker.errors import AutonomousWorkerError
 from app.autonomous_worker.repository import ModelExecutionRepository, canonical_json
@@ -39,6 +40,9 @@ from app.models.agent_runtime import (
     CompleteAgentRunCommand,
     CompleteAttemptCommand,
     ConfirmPauseCommand,
+    FailAgentRunCommand,
+    FailAttemptCommand,
+    FailureClassification,
     RecordCheckpointCommand,
     RequestPauseCommand,
     RuntimeCommand,
@@ -197,6 +201,7 @@ class AutonomousWorkerService:
                 )
                 return None
             if execution is not None and exc.code in {
+                "RUNTIME_EXECUTION_NOT_ELIGIBLE",
                 "MODEL_OUTPUT_INVALID",
                 "MODEL_OUTPUT_REPAIR_EXHAUSTED",
                 "NO_LOCAL_PROVIDER_AVAILABLE",
@@ -249,14 +254,22 @@ class AutonomousWorkerService:
         actor: RuntimeActorContext,
     ) -> tuple[AgentRunSnapshot, ModelExecutionResult | None, Any] | None:
         for execution in self.executions.recoverable_uncommitted():
-            snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
+            try:
+                snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
+            except RuntimePermissionDeniedError:
+                continue
             if self._reconcile_cancelled_recovery(snapshot, actor, execution):
+                continue
+            if self._reconcile_failed_recovery(snapshot, actor, execution):
+                continue
+            try:
+                if self.runtime.authorizer is not None:
+                    self.runtime.authorizer.authorize(actor, "start_attempt", snapshot=snapshot)
+            except RuntimePermissionDeniedError:
                 continue
             request = snapshot.specification.autonomous_execution
             if request is None:
                 continue
-            if self.runtime.authorizer is not None:
-                self.runtime.authorizer.authorize(actor, "start_attempt", snapshot=snapshot)
             acquired = self.task_leases.acquire_task(
                 worker_id,
                 min(
@@ -278,9 +291,14 @@ class AutonomousWorkerService:
 
         for page in self.executions.iter_queued_autonomous_run_pages():
             for snapshot in page:
-                snapshot = self.runtime.read_run_authorized(snapshot.specification.run_id, actor)
-                if self.runtime.authorizer is not None:
-                    self.runtime.authorizer.authorize(actor, "claim", snapshot=snapshot)
+                try:
+                    snapshot = self.runtime.read_run_authorized(
+                        snapshot.specification.run_id, actor
+                    )
+                    if self.runtime.authorizer is not None:
+                        self.runtime.authorizer.authorize(actor, "claim", snapshot=snapshot)
+                except RuntimePermissionDeniedError:
+                    continue
                 request = snapshot.specification.autonomous_execution
                 if request is None:
                     continue
@@ -563,6 +581,8 @@ class AutonomousWorkerService:
     ) -> None:
         self.validate_enabled()
         current = self.runtime.read_run_authorized(snapshot.specification.run_id, actor)
+        if not self.executions.target_identity_active(current.specification.agent_id):
+            raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
         if current.state in {
             AgentRunState.CANCEL_REQUESTED,
             AgentRunState.CANCELLING,
@@ -687,6 +707,7 @@ class AutonomousWorkerService:
                 reason_code="model_result_review_required",
                 detail="Validated result requires human review",
             )
+        if snapshot.state == AgentRunState.PAUSE_REQUESTED:
             snapshot = self._handle(
                 ConfirmPauseCommand,
                 snapshot,
@@ -785,6 +806,8 @@ class AutonomousWorkerService:
             task = self.task_leases.repository.tasks.get(execution.taskId)
             if self._reconcile_cancelled_recovery(snapshot, actor, execution):
                 continue
+            if self._reconcile_failed_recovery(snapshot, actor, execution):
+                continue
             if execution.requiresHumanReview:
                 if (
                     snapshot.state == AgentRunState.PAUSED
@@ -827,6 +850,49 @@ class AutonomousWorkerService:
             return False
         self._best_effort_cancel(snapshot, actor)
         self.executions.mark_failed(execution.executionId, "execution_cancelled")
+        return True
+
+    def _reconcile_failed_recovery(
+        self,
+        snapshot: AgentRunSnapshot,
+        actor: RuntimeActorContext,
+        execution: ModelExecutionResult,
+    ) -> bool:
+        if self.task_leases.task_status(execution.taskId) != "failed":
+            return False
+        current = self.runtime.read_run_authorized(snapshot.specification.run_id, actor)
+        if current.active_attempt_id is not None and current.state in {
+            AgentRunState.STARTING,
+            AgentRunState.RUNNING,
+            AgentRunState.PAUSE_REQUESTED,
+            AgentRunState.PAUSED,
+        }:
+            current = self._handle(
+                FailAttemptCommand,
+                current,
+                actor,
+                "task-failed-attempt",
+                attempt_id=current.active_attempt_id,
+                failure_category=FailureClassification.EXECUTION,
+                failure_detail="The authoritative task failed after lease recovery",
+            )
+        if current.state in {
+            AgentRunState.CREATED,
+            AgentRunState.QUEUED,
+            AgentRunState.CLAIMED,
+            AgentRunState.BLOCKED,
+        }:
+            current = self._handle(
+                FailAgentRunCommand,
+                current,
+                actor,
+                "task-failed-run",
+                failure_category=FailureClassification.EXECUTION,
+                failure_detail="The authoritative task failed after lease recovery",
+            )
+        if current.state != AgentRunState.FAILED:
+            raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
+        self.executions.mark_failed(execution.executionId, "task_failed")
         return True
 
     def _handle(

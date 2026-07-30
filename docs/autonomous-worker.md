@@ -73,10 +73,10 @@ The normal state flow is:
 2. acquire exact task lease in `BEGIN IMMEDIATE`;
 3. claim the runtime and begin/start its deterministic attempt;
 4. persist `prepared` and a pre-call runtime checkpoint;
-5. recheck lease, identity, authorization, emergency stop, and cancellation;
+5. recheck lease, target identity, authorization, emergency stop, and cancellation before local model access;
 6. persist `call_started`, perform one non-streaming local call, and persist `response_received`;
 7. validate, or perform one repair call if the initial call returned text and budget remains;
-8. recheck all live policy and fencing conditions;
+8. recheck all live policy and fencing conditions, including target identity, immediately before durable result persistence;
 9. atomically persist the validated result and `result_persisted` event;
 10. checkpoint the durable result and mark finalization pending;
 11. complete the fenced task with `model-execution:<execution-id>`;
@@ -85,7 +85,7 @@ The normal state flow is:
 
 The `model_executions` row is keyed by a deterministic execution ID and has a unique `(runtime_run_id, runtime_attempt_id)` constraint. It stores validated content, provider/model identity, assembly and execution request hashes, result hash, bounded token/latency/request/cost metadata, normalized finish reason, stage, review flag, and timestamps. Reads and recovery recompute the canonical result hash and fail closed on a mismatch. The row never stores a key, authorization header, raw request/response, invalid output, repair prompt, source text, exception object, traceback, path, or hidden reasoning.
 
-A model call cannot be transactional. A crash in `prepared`, `call_started`, or `response_received` may cause the local model to be called again after lease recovery. This is the documented duplicate-call window; exactly-once inference is not claimed. Once the validated result is durable, restart recovery completes the review or finalization path without calling the model again. Task completion is the normal-result commit point: cancellation that revokes the lease first wins, while a crash after task completion safely resumes runtime completion. Deterministic runtime command IDs, processed-command hashes, unique result constraints, fenced task operations, and deterministic audit/outbox event IDs prevent duplicate durable results and duplicate completion records.
+A model call cannot be transactional. A crash in `prepared`, `call_started`, or `response_received` may cause the local model to be called again after lease recovery. This is the documented duplicate-call window; exactly-once inference is not claimed. Once the validated result is durable, restart recovery completes the review or finalization path without calling the model again. Recovery confirms an already-requested review pause, and an authoritative task failure closes the active attempt, runtime, and model-execution record instead of retrying forever. Task completion is the normal-result commit point: cancellation that revokes the lease first wins, while a crash after task completion safely resumes runtime completion. Deterministic runtime command IDs, processed-command hashes, unique result constraints, fenced task operations, and deterministic audit/outbox event IDs prevent duplicate durable results and duplicate completion records.
 
 ## Fencing, authorization, stop, and review
 
