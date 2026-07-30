@@ -230,6 +230,10 @@ class TaskLeaseRepository:
             ).one_or_none()
             return None if row is None else (row.status, row.result)
 
+    def assert_execution_enabled(self) -> None:
+        with self.session_factory() as session:
+            self._require_execution_enabled(session)
+
     def drain_worker(self, worker_id: str) -> Worker:
         with self._write() as session:
             row = session.get(WorkerRow, worker_id)
