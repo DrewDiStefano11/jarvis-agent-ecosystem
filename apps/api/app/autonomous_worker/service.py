@@ -55,6 +55,16 @@ from app.models.autonomous_worker import (
 from app.models.context import ContextAssembly
 from app.repositories.task_leases import TaskLeaseRepository
 
+PRE_EXECUTION_REVIEW_CODES = frozenset(
+    {
+        "runtime_execution_not_eligible",
+        "context_assembly_required",
+        "context_assembly_unavailable",
+        "context_assembly_review_required",
+        "context_assembly_mismatch",
+    }
+)
+
 
 class AutonomousWorkerService:
     """One-task local planning/review executor with durable staged recovery."""
@@ -89,6 +99,8 @@ class AutonomousWorkerService:
         self.validate_enabled()
         actor = self.runtime.authenticate_actor(self.settings.autonomous_worker_actor_id)
         try:
+            if self._recover_pre_execution_pause(worker_id, actor):
+                return None
             recovered = await self._recover_finalization(worker_id, actor)
             if recovered is not None:
                 return recovered
@@ -253,41 +265,48 @@ class AutonomousWorkerService:
         worker_id: str,
         actor: RuntimeActorContext,
     ) -> tuple[AgentRunSnapshot, ModelExecutionResult | None, Any] | None:
-        for execution in self.executions.recoverable_uncommitted():
-            try:
-                snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
-            except RuntimePermissionDeniedError:
-                continue
-            if self._reconcile_cancelled_recovery(snapshot, actor, execution):
-                continue
-            if self._reconcile_failed_recovery(snapshot, actor, execution):
-                continue
-            try:
-                if self.runtime.authorizer is not None:
-                    self.runtime.authorizer.authorize(actor, "start_attempt", snapshot=snapshot)
-            except RuntimePermissionDeniedError:
-                continue
-            request = snapshot.specification.autonomous_execution
-            if request is None:
-                continue
-            acquired = self.task_leases.acquire_task(
-                worker_id,
-                min(
-                    self.settings.autonomous_worker_lease_seconds,
-                    request.maximum_execution_seconds,
-                ),
-                execution.taskId,
-            )
-            if acquired is None:
-                continue
-            _, lease = acquired
-            execution = self.executions.reclaim_uncommitted(
-                execution.executionId,
-                worker_id=worker_id,
-                lease_token=lease.leaseToken,
-                task_attempt_number=lease.attemptNumber,
-            )
-            return snapshot, execution, lease
+        for page in self.executions.iter_recoverable_uncommitted_pages():
+            for execution in page:
+                try:
+                    snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
+                except RuntimePermissionDeniedError:
+                    continue
+                if self._reconcile_cancelled_recovery(snapshot, actor, execution):
+                    continue
+                if self._reconcile_failed_recovery(snapshot, actor, execution):
+                    continue
+                if self._reconcile_uncommitted_review(snapshot, execution):
+                    continue
+                try:
+                    if self.runtime.authorizer is not None:
+                        self.runtime.authorizer.authorize(
+                            actor,
+                            "start_attempt",
+                            snapshot=snapshot,
+                        )
+                except RuntimePermissionDeniedError:
+                    continue
+                request = snapshot.specification.autonomous_execution
+                if request is None:
+                    continue
+                acquired = self.task_leases.acquire_task(
+                    worker_id,
+                    min(
+                        self.settings.autonomous_worker_lease_seconds,
+                        request.maximum_execution_seconds,
+                    ),
+                    execution.taskId,
+                )
+                if acquired is None:
+                    continue
+                _, lease = acquired
+                execution = self.executions.reclaim_uncommitted(
+                    execution.executionId,
+                    worker_id=worker_id,
+                    lease_token=lease.leaseToken,
+                    task_attempt_number=lease.attemptNumber,
+                )
+                return snapshot, execution, lease
 
         for page in self.executions.iter_queued_autonomous_run_pages():
             for snapshot in page:
@@ -662,11 +681,11 @@ class AutonomousWorkerService:
         actor: RuntimeActorContext,
         execution: ModelExecutionResult,
     ) -> ModelExecutionResult:
-        task = self.task_leases.repository.tasks.get(execution.taskId)
+        task_state = self.task_leases.task_recovery_state(execution.taskId)
         if (
-            task is None
-            or task.status != "completed"
-            or task.result != f"model-execution:{execution.executionId}"
+            task_state is None
+            or task_state[0] != "completed"
+            or task_state[1] != f"model-execution:{execution.executionId}"
         ):
             raise AutonomousWorkerError("MODEL_RESULT_CONFLICT")
         if snapshot.state == AgentRunState.RUNNING:
@@ -698,25 +717,15 @@ class AutonomousWorkerService:
         worker_id: str,
         lease_token: str,
     ) -> ModelExecutionResult:
-        if snapshot.state == AgentRunState.RUNNING:
-            snapshot = self._handle(
-                RequestPauseCommand,
-                snapshot,
-                actor,
-                "request-review",
-                reason_code="model_result_review_required",
-                detail="Validated result requires human review",
-            )
-        if snapshot.state == AgentRunState.PAUSE_REQUESTED:
-            snapshot = self._handle(
-                ConfirmPauseCommand,
-                snapshot,
-                actor,
-                "confirm-review",
-                detail="Execution paused for human review",
-            )
-        if snapshot.state != AgentRunState.PAUSED:
-            raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
+        snapshot = self._confirm_review_pause(
+            snapshot,
+            actor,
+            reason_code="model_result_review_required",
+            request_suffix="request-review",
+            request_detail="Validated result requires human review",
+            confirm_suffix="confirm-review",
+            confirm_detail="Execution paused for human review",
+        )
         self.task_leases.pause_for_review(
             execution.taskId,
             worker_id,
@@ -739,22 +748,20 @@ class AutonomousWorkerService:
         failure_code: str,
     ) -> ModelExecutionResult:
         current = self.runtime.read_run_authorized(snapshot.specification.run_id, actor)
-        if current.state == AgentRunState.RUNNING:
-            current = self._handle(
-                RequestPauseCommand,
-                current,
-                actor,
-                "request-failure-review",
-                reason_code=failure_code,
-                detail="Autonomous execution requires operator review",
-            )
-            self._handle(
-                ConfirmPauseCommand,
-                current,
-                actor,
-                "confirm-failure-review",
-                detail="Execution paused for operator review",
-            )
+        if (
+            current.state in {AgentRunState.PAUSE_REQUESTED, AgentRunState.PAUSED}
+            and current.pause_reason is not None
+        ):
+            failure_code = current.pause_reason.code
+        current = self._confirm_review_pause(
+            current,
+            actor,
+            reason_code=failure_code,
+            request_suffix="request-failure-review",
+            request_detail="Autonomous execution requires operator review",
+            confirm_suffix="confirm-failure-review",
+            confirm_detail="Execution paused for operator review",
+        )
         self.task_leases.pause_for_review(
             execution.taskId,
             worker_id,
@@ -767,6 +774,24 @@ class AutonomousWorkerService:
             human_review=True,
         )
 
+    def _reconcile_uncommitted_review(
+        self,
+        snapshot: AgentRunSnapshot,
+        execution: ModelExecutionResult,
+    ) -> bool:
+        if (
+            snapshot.state != AgentRunState.PAUSED
+            or snapshot.pause_reason is None
+            or self.task_leases.task_status(execution.taskId) != "under_review"
+        ):
+            return False
+        self.executions.mark_failed(
+            execution.executionId,
+            snapshot.pause_reason.code,
+            human_review=True,
+        )
+        return True
+
     def _pause_pre_execution(
         self,
         snapshot: AgentRunSnapshot,
@@ -776,20 +801,19 @@ class AutonomousWorkerService:
         failure_code: str,
     ) -> None:
         current = self.runtime.read_run_authorized(snapshot.specification.run_id, actor)
-        current = self._handle(
-            RequestPauseCommand,
+        current = self._confirm_review_pause(
             current,
             actor,
-            "pre-execution-review-request",
             reason_code=failure_code,
-            detail="Autonomous execution request requires operator review",
-        )
-        self._handle(
-            ConfirmPauseCommand,
-            current,
-            actor,
-            "pre-execution-review-confirm",
-            detail="Autonomous execution paused before model access",
+            request_suffix="pre-execution-review-request",
+            request_detail="Autonomous execution request requires operator review",
+            confirm_suffix="pre-execution-review-confirm",
+            confirm_detail="Autonomous execution paused before model access",
+            requestable_states={
+                AgentRunState.QUEUED,
+                AgentRunState.CLAIMED,
+                AgentRunState.RUNNING,
+            },
         )
         self.task_leases.pause_for_review(
             snapshot.specification.task_id,
@@ -798,46 +822,173 @@ class AutonomousWorkerService:
             None,
         )
 
+    def _recover_pre_execution_pause(
+        self,
+        worker_id: str,
+        actor: RuntimeActorContext,
+    ) -> bool:
+        for page in self.executions.iter_pre_execution_pause_recovery_pages():
+            for candidate in page:
+                try:
+                    current = self.runtime.read_run_authorized(
+                        candidate.specification.run_id,
+                        actor,
+                    )
+                except RuntimePermissionDeniedError:
+                    continue
+                pause_reason = current.pause_reason
+                if pause_reason is None or pause_reason.code not in PRE_EXECUTION_REVIEW_CODES:
+                    continue
+                task_id = current.specification.task_id
+                task_status = self.task_leases.task_status(task_id)
+                if task_status == "cancelled":
+                    self._best_effort_cancel(current, actor)
+                    return True
+                if task_status == "failed":
+                    self._fail_runtime_for_task(current, actor)
+                    return True
+                if current.state == AgentRunState.PAUSED and task_status == "under_review":
+                    continue
+                request = current.specification.autonomous_execution
+                if request is None:
+                    continue
+                acquired = self.task_leases.acquire_task(
+                    worker_id,
+                    min(
+                        self.settings.autonomous_worker_lease_seconds,
+                        request.maximum_execution_seconds,
+                    ),
+                    task_id,
+                )
+                if acquired is None:
+                    continue
+                _, lease = acquired
+                current = self.runtime.read_run_authorized(
+                    current.specification.run_id,
+                    actor,
+                )
+                current = self._confirm_review_pause(
+                    current,
+                    actor,
+                    reason_code=pause_reason.code,
+                    request_suffix="pre-execution-review-request",
+                    request_detail="Autonomous execution request requires operator review",
+                    confirm_suffix="pre-execution-review-confirm",
+                    confirm_detail="Autonomous execution paused before model access",
+                    requestable_states={
+                        AgentRunState.QUEUED,
+                        AgentRunState.CLAIMED,
+                        AgentRunState.RUNNING,
+                    },
+                )
+                try:
+                    self.task_leases.pause_for_review(
+                        task_id,
+                        worker_id,
+                        lease.leaseToken,
+                        None,
+                    )
+                except DomainError as exc:
+                    if exc.code != "TASK_LEASE_LOST":
+                        raise
+                    task_status = self.task_leases.task_status(task_id)
+                    if task_status == "cancelled":
+                        self._best_effort_cancel(current, actor)
+                        return True
+                    if task_status == "failed":
+                        self._fail_runtime_for_task(current, actor)
+                        return True
+                    raise
+                return True
+        return False
+
+    def _confirm_review_pause(
+        self,
+        snapshot: AgentRunSnapshot,
+        actor: RuntimeActorContext,
+        *,
+        reason_code: str,
+        request_suffix: str,
+        request_detail: str,
+        confirm_suffix: str,
+        confirm_detail: str,
+        requestable_states: set[AgentRunState] | None = None,
+    ) -> AgentRunSnapshot:
+        if self.runtime.authorizer is not None:
+            self.runtime.authorizer.authorize(actor, "confirm_pause", snapshot=snapshot)
+        if snapshot.state in (
+            requestable_states if requestable_states is not None else {AgentRunState.RUNNING}
+        ):
+            snapshot = self._handle(
+                RequestPauseCommand,
+                snapshot,
+                actor,
+                request_suffix,
+                reason_code=reason_code,
+                detail=request_detail,
+            )
+        if snapshot.state == AgentRunState.PAUSE_REQUESTED:
+            snapshot = self._handle(
+                ConfirmPauseCommand,
+                snapshot,
+                actor,
+                confirm_suffix,
+                detail=confirm_detail,
+            )
+        if snapshot.state != AgentRunState.PAUSED:
+            raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
+        return snapshot
+
     async def _recover_finalization(
         self, worker_id: str, actor: RuntimeActorContext
     ) -> ModelExecutionResult | None:
-        for execution in self.executions.recoverable_results():
-            snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
-            task = self.task_leases.repository.tasks.get(execution.taskId)
-            if self._reconcile_cancelled_recovery(snapshot, actor, execution):
-                continue
-            if self._reconcile_failed_recovery(snapshot, actor, execution):
-                continue
-            if execution.requiresHumanReview:
-                if (
-                    snapshot.state == AgentRunState.PAUSED
-                    and task is not None
-                    and task.status == "under_review"
-                ):
-                    return self.executions.mark_failed(
-                        execution.executionId,
-                        "human_review_required",
-                        human_review=True,
+        for page in self.executions.iter_recoverable_result_pages():
+            for execution in page:
+                try:
+                    snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
+                except RuntimePermissionDeniedError:
+                    continue
+                task_state = self.task_leases.task_recovery_state(execution.taskId)
+                if self._reconcile_cancelled_recovery(snapshot, actor, execution):
+                    continue
+                if self._reconcile_failed_recovery(snapshot, actor, execution):
+                    continue
+                if execution.requiresHumanReview:
+                    if (
+                        snapshot.state == AgentRunState.PAUSED
+                        and task_state is not None
+                        and task_state[0] == "under_review"
+                    ):
+                        return self.executions.mark_failed(
+                            execution.executionId,
+                            "human_review_required",
+                            human_review=True,
+                        )
+                elif task_state is not None and task_state[0] == "completed":
+                    return self._finalize_committed_task(snapshot, actor, execution)
+                acquired = self.task_leases.acquire_task(
+                    worker_id,
+                    self.settings.autonomous_worker_lease_seconds,
+                    execution.taskId,
+                )
+                if acquired is None:
+                    continue
+                _, lease = acquired
+                if execution.requiresHumanReview:
+                    return self._pause_for_review(
+                        snapshot,
+                        actor,
+                        execution,
+                        worker_id,
+                        lease.leaseToken,
                     )
-            elif task is not None and task.status == "completed":
-                return self._finalize_committed_task(snapshot, actor, execution)
-            acquired = self.task_leases.acquire_task(
-                worker_id,
-                self.settings.autonomous_worker_lease_seconds,
-                execution.taskId,
-            )
-            if acquired is None:
-                continue
-            _, lease = acquired
-            if execution.requiresHumanReview:
-                return self._pause_for_review(
+                return self._finalize(
                     snapshot,
                     actor,
                     execution,
                     worker_id,
                     lease.leaseToken,
                 )
-            return self._finalize(snapshot, actor, execution, worker_id, lease.leaseToken)
         return None
 
     def _reconcile_cancelled_recovery(
@@ -860,6 +1011,15 @@ class AutonomousWorkerService:
     ) -> bool:
         if self.task_leases.task_status(execution.taskId) != "failed":
             return False
+        self._fail_runtime_for_task(snapshot, actor)
+        self.executions.mark_failed(execution.executionId, "task_failed")
+        return True
+
+    def _fail_runtime_for_task(
+        self,
+        snapshot: AgentRunSnapshot,
+        actor: RuntimeActorContext,
+    ) -> AgentRunSnapshot:
         current = self.runtime.read_run_authorized(snapshot.specification.run_id, actor)
         if current.active_attempt_id is not None and current.state in {
             AgentRunState.STARTING,
@@ -892,8 +1052,7 @@ class AutonomousWorkerService:
             )
         if current.state != AgentRunState.FAILED:
             raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
-        self.executions.mark_failed(execution.executionId, "task_failed")
-        return True
+        return current
 
     def _handle(
         self,

@@ -223,6 +223,13 @@ class TaskLeaseRepository:
         with self.session_factory() as session:
             return session.scalar(select(TaskRow.status).where(TaskRow.id == task_id))
 
+    def task_recovery_state(self, task_id: str) -> tuple[str, str | None] | None:
+        with self.session_factory() as session:
+            row = session.execute(
+                select(TaskRow.status, TaskRow.result).where(TaskRow.id == task_id)
+            ).one_or_none()
+            return None if row is None else (row.status, row.result)
+
     def drain_worker(self, worker_id: str) -> Worker:
         with self._write() as session:
             row = session.get(WorkerRow, worker_id)

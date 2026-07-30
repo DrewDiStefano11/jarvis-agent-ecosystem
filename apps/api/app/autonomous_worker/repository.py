@@ -147,6 +147,56 @@ class ModelExecutionRepository:
             if len(rows) < page_size:
                 return
 
+    def iter_pre_execution_pause_recovery_pages(
+        self,
+    ) -> Iterator[list[AgentRunSnapshot]]:
+        cursor: tuple[datetime, str] | None = None
+        page_size = 100
+        while True:
+            with self.sessions() as session:
+                query = select(AgentRuntimeRunRow).where(
+                    AgentRuntimeRunRow.state.in_(
+                        [
+                            AgentRunState.PAUSE_REQUESTED.value,
+                            AgentRunState.PAUSED.value,
+                        ]
+                    ),
+                    ~exists().where(ModelExecutionRow.runtime_run_id == AgentRuntimeRunRow.run_id),
+                )
+                if cursor is not None:
+                    created_at, run_id = cursor
+                    query = query.where(
+                        or_(
+                            AgentRuntimeRunRow.created_at > created_at,
+                            and_(
+                                AgentRuntimeRunRow.created_at == created_at,
+                                AgentRuntimeRunRow.run_id > run_id,
+                            ),
+                        )
+                    )
+                rows = list(
+                    session.scalars(
+                        query.order_by(
+                            AgentRuntimeRunRow.created_at,
+                            AgentRuntimeRunRow.run_id,
+                        ).limit(page_size)
+                    )
+                )
+            if not rows:
+                return
+            cursor = (rows[-1].created_at, rows[-1].run_id)
+            snapshots: list[AgentRunSnapshot] = []
+            for row in rows:
+                snapshot = AgentRunSnapshot.model_validate_json(row.snapshot_json)
+                request = snapshot.specification.autonomous_execution
+                if request is None or request.execution_type.value != "planning_review":
+                    continue
+                snapshots.append(snapshot)
+            if snapshots:
+                yield snapshots
+            if len(rows) < page_size:
+                return
+
     def target_identity_active(self, agent_id: str) -> bool:
         with self.sessions() as session:
             target = session.get(IdentityAgentRow, agent_id)
@@ -452,41 +502,79 @@ class ModelExecutionRepository:
             return self._contract(row)
 
     def recoverable_results(self) -> list[ModelExecutionResult]:
-        with self.sessions() as session:
-            rows = session.scalars(
-                select(ModelExecutionRow)
-                .where(
-                    ModelExecutionRow.result_hash.is_not(None),
-                    ModelExecutionRow.stage.in_(
-                        [
-                            ModelExecutionStage.RESULT_PERSISTED.value,
-                            ModelExecutionStage.FINALIZATION_PENDING.value,
-                        ]
-                    ),
-                )
-                .order_by(ModelExecutionRow.updated_at, ModelExecutionRow.execution_id)
-                .limit(100)
-            )
-            return [self._contract(row) for row in rows]
+        return [execution for page in self.iter_recoverable_result_pages() for execution in page]
 
     def recoverable_uncommitted(self) -> list[ModelExecutionResult]:
-        with self.sessions() as session:
-            rows = session.scalars(
-                select(ModelExecutionRow)
-                .where(
-                    ModelExecutionRow.result_hash.is_(None),
-                    ModelExecutionRow.stage.in_(
-                        [
-                            ModelExecutionStage.PREPARED.value,
-                            ModelExecutionStage.CALL_STARTED.value,
-                            ModelExecutionStage.RESPONSE_RECEIVED.value,
-                        ]
-                    ),
+        return [
+            execution for page in self.iter_recoverable_uncommitted_pages() for execution in page
+        ]
+
+    def iter_recoverable_result_pages(
+        self,
+    ) -> Iterator[list[ModelExecutionResult]]:
+        yield from self._iter_recoverable_pages(result_persisted=True)
+
+    def iter_recoverable_uncommitted_pages(
+        self,
+    ) -> Iterator[list[ModelExecutionResult]]:
+        yield from self._iter_recoverable_pages(result_persisted=False)
+
+    def _iter_recoverable_pages(
+        self,
+        *,
+        result_persisted: bool,
+    ) -> Iterator[list[ModelExecutionResult]]:
+        cursor: tuple[datetime, str] | None = None
+        page_size = 100
+        stages = (
+            [
+                ModelExecutionStage.RESULT_PERSISTED.value,
+                ModelExecutionStage.FINALIZATION_PENDING.value,
+            ]
+            if result_persisted
+            else [
+                ModelExecutionStage.PREPARED.value,
+                ModelExecutionStage.CALL_STARTED.value,
+                ModelExecutionStage.RESPONSE_RECEIVED.value,
+            ]
+        )
+        while True:
+            with self.sessions() as session:
+                result_predicate = (
+                    ModelExecutionRow.result_hash.is_not(None)
+                    if result_persisted
+                    else ModelExecutionRow.result_hash.is_(None)
                 )
-                .order_by(ModelExecutionRow.updated_at, ModelExecutionRow.execution_id)
-                .limit(100)
-            )
-            return [self._contract(row) for row in rows]
+                query = select(ModelExecutionRow).where(
+                    result_predicate,
+                    ModelExecutionRow.stage.in_(stages),
+                )
+                if cursor is not None:
+                    updated_at, execution_id = cursor
+                    query = query.where(
+                        or_(
+                            ModelExecutionRow.updated_at > updated_at,
+                            and_(
+                                ModelExecutionRow.updated_at == updated_at,
+                                ModelExecutionRow.execution_id > execution_id,
+                            ),
+                        )
+                    )
+                rows = list(
+                    session.scalars(
+                        query.order_by(
+                            ModelExecutionRow.updated_at,
+                            ModelExecutionRow.execution_id,
+                        ).limit(page_size)
+                    )
+                )
+                contracts = [self._contract(row) for row in rows]
+            if not rows:
+                return
+            yield contracts
+            cursor = (rows[-1].updated_at, rows[-1].execution_id)
+            if len(rows) < page_size:
+                return
 
     def reclaim_uncommitted(
         self,
