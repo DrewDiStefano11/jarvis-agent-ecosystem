@@ -267,19 +267,29 @@ class AutonomousWorkerService:
         worker_id: str,
         actor: RuntimeActorContext,
     ) -> tuple[AgentRunSnapshot, ModelExecutionResult | None, Any] | None:
+        for page in self.executions.iter_preparation_transition_recovery_pages():
+            for candidate in page:
+                try:
+                    recovered = self._recover_preparation_transition(
+                        candidate,
+                        worker_id,
+                        actor,
+                    )
+                except RuntimePermissionDeniedError:
+                    continue
+                if recovered is not None:
+                    return recovered
+
         for page in self.executions.iter_recoverable_uncommitted_pages():
             for execution in page:
                 try:
                     snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
-                except RuntimePermissionDeniedError:
-                    continue
-                if self._reconcile_cancelled_recovery(snapshot, actor, execution):
-                    continue
-                if self._reconcile_failed_recovery(snapshot, actor, execution):
-                    continue
-                if self._reconcile_uncommitted_review(snapshot, execution):
-                    continue
-                try:
+                    if self._reconcile_cancelled_recovery(snapshot, actor, execution):
+                        continue
+                    if self._reconcile_failed_recovery(snapshot, actor, execution):
+                        continue
+                    if self._reconcile_uncommitted_review(snapshot, execution):
+                        continue
                     if self.runtime.authorizer is not None:
                         self.runtime.authorizer.authorize(
                             actor,
@@ -335,6 +345,58 @@ class AutonomousWorkerService:
                     _, lease = acquired
                     return snapshot, None, lease
         return None
+
+    def _recover_preparation_transition(
+        self,
+        candidate: AgentRunSnapshot,
+        worker_id: str,
+        actor: RuntimeActorContext,
+    ) -> tuple[AgentRunSnapshot, None, Any] | None:
+        snapshot = self.runtime.read_run_authorized(
+            candidate.specification.run_id,
+            actor,
+        )
+        task_status = self.task_leases.task_status(snapshot.specification.task_id)
+        if task_status == "cancelled":
+            self._cancel_runtime(
+                snapshot,
+                actor,
+                reason_code="task_cancelled",
+                detail="Authoritative task cancellation observed",
+            )
+            return None
+        if task_status == "failed":
+            self._fail_runtime_for_task(snapshot, actor)
+            return None
+        if task_status == "completed":
+            self._cancel_runtime(
+                snapshot,
+                actor,
+                reason_code="task_completed_elsewhere",
+                detail="Authoritative task completion superseded autonomous execution",
+            )
+            return None
+        if self.runtime.authorizer is not None:
+            self.runtime.authorizer.authorize(
+                actor,
+                "start_attempt",
+                snapshot=snapshot,
+            )
+        request = snapshot.specification.autonomous_execution
+        if request is None:
+            return None
+        acquired = self.task_leases.acquire_task(
+            worker_id,
+            min(
+                self.settings.autonomous_worker_lease_seconds,
+                request.maximum_execution_seconds,
+            ),
+            snapshot.specification.task_id,
+        )
+        if acquired is None:
+            return None
+        _, lease = acquired
+        return snapshot, None, lease
 
     def read_result_authorized(
         self, execution_id: str, actor: RuntimeActorContext

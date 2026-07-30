@@ -150,17 +150,33 @@ class ModelExecutionRepository:
     def iter_pre_execution_pause_recovery_pages(
         self,
     ) -> Iterator[list[AgentRunSnapshot]]:
+        yield from self._iter_runtime_recovery_pages(
+            {
+                AgentRunState.PAUSE_REQUESTED,
+                AgentRunState.PAUSED,
+            }
+        )
+
+    def iter_preparation_transition_recovery_pages(
+        self,
+    ) -> Iterator[list[AgentRunSnapshot]]:
+        yield from self._iter_runtime_recovery_pages(
+            {
+                AgentRunState.CLAIMED,
+                AgentRunState.STARTING,
+            }
+        )
+
+    def _iter_runtime_recovery_pages(
+        self,
+        states: set[AgentRunState],
+    ) -> Iterator[list[AgentRunSnapshot]]:
         cursor: tuple[datetime, str] | None = None
         page_size = 100
         while True:
             with self.sessions() as session:
                 query = select(AgentRuntimeRunRow).where(
-                    AgentRuntimeRunRow.state.in_(
-                        [
-                            AgentRunState.PAUSE_REQUESTED.value,
-                            AgentRunState.PAUSED.value,
-                        ]
-                    ),
+                    AgentRuntimeRunRow.state.in_([state.value for state in states]),
                     ~exists().where(ModelExecutionRow.runtime_run_id == AgentRuntimeRunRow.run_id),
                 )
                 if cursor is not None:

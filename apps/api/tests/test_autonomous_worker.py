@@ -30,6 +30,7 @@ from app.model_providers.contracts import ModelExecutionResponse, UsageQuality
 from app.models.agent_runtime import (
     AutonomousExecutionSpecification,
     AutonomousExecutionType,
+    BeginAttemptCommand,
     ConfirmCancellationStartCommand,
     ConfirmPauseCommand,
     CreateAgentRunCommand,
@@ -1139,6 +1140,12 @@ async def test_cancellation_authorization_denial_preserves_recovery_record(
         assert runtime is not None
         assert runtime.state == "running"
 
+        assert await _run_once_resilient(app.state.autonomous_worker_service, worker.id) is None
+        still_recoverable = app.state.model_execution_repository.get_by_run(
+            "run-autonomous-cancel-auth-revoked"
+        )
+        assert still_recoverable == stored
+
         cancellation_denied = False
         assert await app.state.autonomous_worker_service.run_once(worker.id) is None
         recovered = app.state.model_execution_repository.get_by_run(
@@ -2071,6 +2078,88 @@ async def test_in_flight_authorization_revocation_does_not_exit_polling(
             app.state.model_execution_repository.get_by_run("run-aa-in-flight-auth-revoked")
             == denied
         )
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_preparation_authorization_revocation_recovers_without_stranding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    router = FakeRouter([json.dumps(VALID_RESULT)])
+    app, client, _, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-preparation-auth-revoked",
+    )
+    service = app.state.autonomous_worker_service
+    authorizer = app.state.agent_runtime_service.authorizer
+    assert authorizer is not None
+    original_authorize = authorizer.authorize
+    original_handle = service._handle
+    authorization_revoked = False
+
+    def revoke_after_begin(command_type, snapshot, actor, suffix, **fields):
+        nonlocal authorization_revoked
+        result = original_handle(command_type, snapshot, actor, suffix, **fields)
+        if command_type is BeginAttemptCommand:
+            authorization_revoked = True
+        return result
+
+    def deny_start(actor, operation, *, specification=None, snapshot=None):
+        target = specification or (snapshot.specification if snapshot is not None else None)
+        if (
+            authorization_revoked
+            and operation == "start_attempt"
+            and target is not None
+            and target.run_id == "run-preparation-auth-revoked"
+        ):
+            raise RuntimePermissionDeniedError(metadata={"operation": operation})
+        return original_authorize(
+            actor,
+            operation,
+            specification=specification,
+            snapshot=snapshot,
+        )
+
+    monkeypatch.setattr(service, "_handle", revoke_after_begin)
+    monkeypatch.setattr(authorizer, "authorize", deny_start)
+    try:
+        assert await _run_once_resilient(service, worker.id) is None
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-preparation-auth-revoked"
+        )
+        assert runtime is not None
+        assert runtime.state == "starting"
+        assert (
+            app.state.model_execution_repository.get_by_run("run-preparation-auth-revoked") is None
+        )
+        assert len(router.requests) == 0
+
+        with app.state.model_execution_repository.sessions.begin() as session:
+            session.execute(
+                update(TaskLeaseRow)
+                .where(TaskLeaseRow.task_id == "task-demo")
+                .values(expires_at=ts(0))
+            )
+        assert app.state.task_leases.recover_expired_leases() == 1
+        assert await _run_once_resilient(service, worker.id) is None
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-preparation-auth-revoked"
+        )
+        assert runtime is not None
+        assert runtime.state == "starting"
+
+        authorization_revoked = False
+        recovered = await service.run_once(worker.id)
+        assert recovered is not None
+        assert recovered.stage == "completed"
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-preparation-auth-revoked"
+        )
+        assert runtime is not None
+        assert runtime.state == "succeeded"
+        assert len(router.requests) == 1
     finally:
         client.__exit__(None, None, None)
 
