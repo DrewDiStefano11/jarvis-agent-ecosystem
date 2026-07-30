@@ -22,6 +22,7 @@ ERROR_MESSAGES = {
     "EXECUTION_LEASE_LOST": "The worker no longer owns the current task lease.",
     "EXECUTION_CANCELLED": "The task or runtime execution was cancelled.",
     "EXECUTION_EMERGENCY_STOPPED": "Emergency stop blocked autonomous execution.",
+    "EXECUTION_AUTHORIZATION_REVOKED": "Authorization changed during autonomous execution.",
 }
 
 

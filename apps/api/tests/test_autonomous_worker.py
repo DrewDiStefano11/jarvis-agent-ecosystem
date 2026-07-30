@@ -1089,6 +1089,74 @@ async def test_task_cancellation_during_call_prevents_commit_and_cancels_runtime
 
 
 @pytest.mark.asyncio
+async def test_cancellation_authorization_denial_preserves_recovery_record(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app_holder: dict[str, Any] = {}
+    cancellation_denied = False
+
+    def cancel_task_and_revoke_cancellation() -> None:
+        nonlocal cancellation_denied
+        app_holder["app"].state.task_leases.cancel_task("task-demo")
+        cancellation_denied = True
+
+    router = FakeRouter([json.dumps(VALID_RESULT)], callback=cancel_task_and_revoke_cancellation)
+    app, client, _, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-autonomous-cancel-auth-revoked",
+    )
+    app_holder["app"] = app
+    authorizer = app.state.agent_runtime_service.authorizer
+    assert authorizer is not None
+    original_authorize = authorizer.authorize
+
+    def deny_cancellation(actor, operation, *, specification=None, snapshot=None):
+        if cancellation_denied and operation in {
+            "request_cancellation",
+            "confirm_cancellation_start",
+            "confirm_cancellation",
+        }:
+            raise RuntimePermissionDeniedError(metadata={"operation": operation})
+        return original_authorize(
+            actor,
+            operation,
+            specification=specification,
+            snapshot=snapshot,
+        )
+
+    monkeypatch.setattr(authorizer, "authorize", deny_cancellation)
+    try:
+        assert await _run_once_resilient(app.state.autonomous_worker_service, worker.id) is None
+        stored = app.state.model_execution_repository.get_by_run(
+            "run-autonomous-cancel-auth-revoked"
+        )
+        assert stored is not None
+        assert stored.stage == "call_started"
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-autonomous-cancel-auth-revoked"
+        )
+        assert runtime is not None
+        assert runtime.state == "running"
+
+        cancellation_denied = False
+        assert await app.state.autonomous_worker_service.run_once(worker.id) is None
+        recovered = app.state.model_execution_repository.get_by_run(
+            "run-autonomous-cancel-auth-revoked"
+        )
+        assert recovered is not None
+        assert recovered.stage == "failed"
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-autonomous-cancel-auth-revoked"
+        )
+        assert runtime is not None
+        assert runtime.state == "cancelled"
+        assert len(router.requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
 async def test_external_task_cancellation_uses_durable_state(tmp_path: Path) -> None:
     app_holder: dict[str, Any] = {}
 
@@ -1645,9 +1713,19 @@ async def test_restart_finishes_runtime_after_task_completion_without_model_reca
         assert app.state.repository.tasks["task-demo"].status == "completed"
         assert len(router.requests) == 1
 
-        app.state.repository.emergency_stop = True
-        app.state.repository.persist()
         monkeypatch.setattr(service, "_finalize_committed_task", original_finalize)
+        original_assert_execution_enabled = app.state.task_leases.assert_execution_enabled
+
+        def activate_stop_after_precheck() -> None:
+            original_assert_execution_enabled()
+            app.state.repository.emergency_stop = True
+            app.state.repository.persist()
+
+        monkeypatch.setattr(
+            app.state.task_leases,
+            "assert_execution_enabled",
+            activate_stop_after_precheck,
+        )
         assert await _run_once_resilient(service, worker.id) is None
         stored_during_stop = app.state.model_execution_repository.get_by_run(
             "run-autonomous-task-recovery"
@@ -1659,6 +1737,11 @@ async def test_restart_finishes_runtime_after_task_completion_without_model_reca
         )
         assert runtime is not None
         assert runtime.state == "running"
+        monkeypatch.setattr(
+            app.state.task_leases,
+            "assert_execution_enabled",
+            original_assert_execution_enabled,
+        )
         app.state.repository.emergency_stop = False
         app.state.repository.persist()
 
@@ -1900,6 +1983,94 @@ async def test_unauthorized_queued_run_does_not_block_later_work(
         assert skipped is not None
         assert skipped.state == "queued"
         assert len(router.requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_in_flight_authorization_revocation_does_not_exit_polling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    authorization_revoked = False
+
+    def revoke_after_provider_call() -> None:
+        nonlocal authorization_revoked
+        authorization_revoked = True
+
+    router = FakeRouter(
+        [json.dumps(VALID_RESULT), json.dumps(VALID_RESULT)],
+        callback=revoke_after_provider_call,
+    )
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-aa-in-flight-auth-revoked",
+    )
+    task = app.state.repository.tasks["task-completed"]
+    task.status = "queued"
+    task.progress = 0
+    task.result = None
+    task.completedAt = None
+    task.statusMessage = "Queued after revoked in-flight execution"
+    app.state.repository.persist()
+    for permission in app.state.identity_service.list_definitions("permission", 0, 100):
+        app.state.identity_service.assign_permission(
+            actor_id,
+            AssignPermissionRequest(
+                permission_id=permission.id,
+                effect="allow",
+                resource_type="task",
+                resource_id="task-completed",
+            ),
+        )
+    create_assembly_and_runtime(
+        client,
+        app,
+        actor_id,
+        run_id="run-zz-authorized-after-revocation",
+        task_id="task-completed",
+    )
+    authorizer = app.state.agent_runtime_service.authorizer
+    assert authorizer is not None
+    original_authorize = authorizer.authorize
+
+    def deny_first_after_call(actor, operation, *, specification=None, snapshot=None):
+        target = specification or (snapshot.specification if snapshot is not None else None)
+        if (
+            authorization_revoked
+            and target is not None
+            and target.run_id == "run-aa-in-flight-auth-revoked"
+        ):
+            raise RuntimePermissionDeniedError(metadata={"operation": operation})
+        return original_authorize(
+            actor,
+            operation,
+            specification=specification,
+            snapshot=snapshot,
+        )
+
+    monkeypatch.setattr(authorizer, "authorize", deny_first_after_call)
+    try:
+        assert await _run_once_resilient(app.state.autonomous_worker_service, worker.id) is None
+        denied = app.state.model_execution_repository.get_by_run("run-aa-in-flight-auth-revoked")
+        assert denied is not None
+        assert denied.stage == "call_started"
+        assert denied.result is None
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-aa-in-flight-auth-revoked"
+        )
+        assert runtime is not None
+        assert runtime.state == "running"
+
+        authorized = await app.state.autonomous_worker_service.run_once(worker.id)
+        assert authorized is not None
+        assert authorized.runtimeRunId == "run-zz-authorized-after-revocation"
+        assert authorized.stage == "completed"
+        assert len(router.requests) == 2
+        assert (
+            app.state.model_execution_repository.get_by_run("run-aa-in-flight-auth-revoked")
+            == denied
+        )
     finally:
         client.__exit__(None, None, None)
 

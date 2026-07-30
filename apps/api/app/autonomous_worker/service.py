@@ -231,8 +231,8 @@ class AutonomousWorkerService:
                     exc.code.lower(),
                 )
             if exc.code == "EXECUTION_CANCELLED":
-                self._best_effort_cancel(snapshot, actor)
-                if execution is not None:
+                cancelled = self._best_effort_cancel(snapshot, actor)
+                if execution is not None and cancelled:
                     self.executions.mark_failed(execution.executionId, "execution_cancelled")
                 raise
             if exc.code == "EXECUTION_EMERGENCY_STOPPED":
@@ -244,8 +244,8 @@ class AutonomousWorkerService:
         except DomainError as exc:
             if exc.code == "TASK_LEASE_LOST":
                 if self.task_leases.task_status(snapshot.specification.task_id) == "cancelled":
-                    self._best_effort_cancel(snapshot, actor)
-                    if execution is not None:
+                    cancelled = self._best_effort_cancel(snapshot, actor)
+                    if execution is not None and cancelled:
                         self.executions.mark_failed(
                             execution.executionId,
                             "execution_cancelled",
@@ -259,6 +259,8 @@ class AutonomousWorkerService:
                     "EXECUTION_EMERGENCY_STOPPED", status_code=423
                 ) from None
             raise
+        except RuntimePermissionDeniedError:
+            raise AutonomousWorkerError("EXECUTION_AUTHORIZATION_REVOKED") from None
 
     def _acquire_work(
         self,
@@ -695,6 +697,7 @@ class AutonomousWorkerService:
                 snapshot,
                 actor,
                 "complete-attempt",
+                require_execution_enabled=True,
                 attempt_id=execution.runtimeAttemptId,
                 detail="Validated planning result persisted",
             )
@@ -704,6 +707,7 @@ class AutonomousWorkerService:
                 snapshot,
                 actor,
                 "complete-run",
+                require_execution_enabled=True,
                 detail="Autonomous planning execution completed",
             )
         if snapshot.state != AgentRunState.SUCCEEDED:
@@ -858,7 +862,12 @@ class AutonomousWorkerService:
         task_status = self.task_leases.task_status(task_id)
         if task_status == "cancelled":
             self._authorize_recovery_action(current, actor, "confirm_cancellation")
-            self._best_effort_cancel(current, actor)
+            self._cancel_runtime(
+                current,
+                actor,
+                reason_code="task_cancelled",
+                detail="Authoritative task cancellation observed",
+            )
             return True
         if task_status == "failed":
             self._authorize_recovery_action(current, actor, "fail_run")
@@ -920,7 +929,12 @@ class AutonomousWorkerService:
                 raise
             task_status = self.task_leases.task_status(task_id)
             if task_status == "cancelled":
-                self._best_effort_cancel(current, actor)
+                self._cancel_runtime(
+                    current,
+                    actor,
+                    reason_code="task_cancelled",
+                    detail="Authoritative task cancellation observed",
+                )
                 return True
             if task_status == "failed":
                 self._fail_runtime_for_task(current, actor)
@@ -1065,7 +1079,12 @@ class AutonomousWorkerService:
     ) -> bool:
         if self.task_leases.task_status(execution.taskId) != "cancelled":
             return False
-        self._best_effort_cancel(snapshot, actor)
+        self._cancel_runtime(
+            snapshot,
+            actor,
+            reason_code="task_cancelled",
+            detail="Authoritative task cancellation observed",
+        )
         self.executions.mark_failed(execution.executionId, "execution_cancelled")
         return True
 
@@ -1126,6 +1145,7 @@ class AutonomousWorkerService:
         snapshot: AgentRunSnapshot,
         actor: RuntimeActorContext,
         suffix: str,
+        require_execution_enabled: bool = False,
         **fields: Any,
     ) -> AgentRunSnapshot:
         command_id = (
@@ -1139,7 +1159,11 @@ class AutonomousWorkerService:
             timestamp=timestamp,
             **fields,
         )
-        result = self.runtime.handle_authorized(command, actor)
+        result = self.runtime.handle_authorized(
+            command,
+            actor,
+            require_execution_enabled=require_execution_enabled,
+        )
         if result.snapshot is None:
             raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
         return result.snapshot
@@ -1258,7 +1282,7 @@ class AutonomousWorkerService:
         *,
         reason_code: str = "task_cancelled",
         detail: str = "Authoritative task cancellation observed",
-    ) -> None:
+    ) -> bool:
         try:
             self._cancel_runtime(
                 snapshot,
@@ -1266,9 +1290,13 @@ class AutonomousWorkerService:
                 reason_code=reason_code,
                 detail=detail,
             )
+        except Exception:
+            return False
+        try:
             self.task_leases.cancel_task(snapshot.specification.task_id)
         except Exception:
-            return
+            pass
+        return True
 
     def _cancel_runtime(
         self,

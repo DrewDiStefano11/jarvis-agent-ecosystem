@@ -126,6 +126,7 @@ class AgentRuntimeRepository(ExecutionLedgerAppender, Protocol):
         expected_version: int,
         expected_sequence: int,
         create: bool = False,
+        require_execution_enabled: bool = False,
     ) -> ProcessedCommandRecord | None: ...
 
 
@@ -316,6 +317,7 @@ class InMemoryAgentRuntimeRepository(AgentRuntimeRepository):
         expected_version: int,
         expected_sequence: int,
         create: bool = False,
+        require_execution_enabled: bool = False,
     ) -> ProcessedCommandRecord | None:
         run_id = snapshot.specification.run_id
         with self._lock:
