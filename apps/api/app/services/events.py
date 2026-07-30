@@ -33,6 +33,40 @@ class EventBroker:
     def disconnect(self, websocket: WebSocket) -> None:
         self.clients.discard(websocket)
 
+    async def send_snapshot(
+        self,
+        websocket: WebSocket,
+        payload: dict[str, object],
+    ) -> EventEnvelope:
+        """Send one synchronization frame without creating a domain event.
+
+        Connection and resynchronization traffic must not consume a durable
+        sequence, grow the outbox, or broadcast a caller-triggered snapshot to
+        unrelated clients.
+        """
+
+        async with self._dispatch_lock:
+            if self.repository:
+                event_session_id, sequence = self.repository.current_event_cursor()
+            else:
+                event_session_id, sequence = None, self.sequence
+            event = EventEnvelope(
+                eventId=f"snapshot-{uuid4().hex[:12]}",
+                eventType="system.snapshot",
+                timestamp=datetime.now(UTC),
+                sequenceNumber=sequence,
+                eventSessionId=event_session_id,
+                correlationId="system-snapshot",
+                source="system",
+                payload=payload,
+            )
+            try:
+                await websocket.send_json(event.model_dump(mode="json"))
+            except Exception:
+                self.disconnect(websocket)
+                raise
+            return event
+
     async def emit(
         self,
         event_type: str,

@@ -3,8 +3,13 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.models.agent_runtime import (
+    normalize_safe_metadata,
+    validate_identifier,
+    validate_safe_text,
+)
 from app.models.autonomous_worker import AutonomousWorkerStatus
 from app.models.constraints import MAX_CORRELATION_ID_LENGTH
 from app.models.context import ContextAssemblerStatus
@@ -46,6 +51,12 @@ TaskStatus = Literal[
 
 class ContractModel(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
+
+
+class RequestContractModel(ContractModel):
+    """Strict base for data accepted from an HTTP caller."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
 class Performance(ContractModel):
@@ -258,6 +269,11 @@ class Worker(ContractModel):
     leaseSeconds: int
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("metadata")
+    @classmethod
+    def metadata_is_safe(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return normalize_safe_metadata(value, field_name="worker.metadata")
+
 
 class TaskLease(ContractModel):
     taskId: str
@@ -355,60 +371,97 @@ class ErrorEvent(EventEnvelope):
     payload: ErrorEventPayload
 
 
-class CreateTaskRequest(ContractModel):
+class CreateTaskRequest(RequestContractModel):
     title: str = Field(min_length=3, max_length=160)
     description: str = Field(min_length=3, max_length=2000)
     priority: Literal["low", "medium", "high", "urgent"] = "medium"
 
 
-class RegisterWorkerRequest(ContractModel):
+class RegisterWorkerRequest(RequestContractModel):
     name: str = Field(min_length=1, max_length=160)
     instanceId: str = Field(min_length=1, max_length=120)
     leaseSeconds: int | None = Field(default=None, ge=1, le=3600)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("metadata")
+    @classmethod
+    def metadata_is_safe(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return normalize_safe_metadata(value, field_name="worker.metadata")
 
-class AcquireTaskLeaseRequest(ContractModel):
+
+class AcquireTaskLeaseRequest(RequestContractModel):
     leaseSeconds: int | None = Field(default=None, ge=1, le=3600)
     taskId: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 
 
-class LeaseCommandRequest(ContractModel):
-    workerId: str
-    leaseToken: str
+class LeaseCommandRequest(RequestContractModel):
+    workerId: str = Field(min_length=1, max_length=80)
+    leaseToken: str = Field(min_length=1, max_length=80)
+
+    @field_validator("workerId", "leaseToken")
+    @classmethod
+    def capability_identifiers_are_safe(cls, value: str, info) -> str:
+        return validate_identifier(value, field_name=str(info.field_name), max_length=80)
 
 
 class RenewTaskLeaseRequest(LeaseCommandRequest):
     leaseSeconds: int | None = Field(default=None, ge=1, le=3600)
-    checkpointId: str | None = None
+    checkpointId: str | None = Field(default=None, min_length=1, max_length=120)
+
+    @field_validator("checkpointId")
+    @classmethod
+    def checkpoint_identifier_is_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_identifier(value, field_name="checkpointId", max_length=120)
 
 
 class CompleteTaskLeaseRequest(LeaseCommandRequest):
     result: str = Field(max_length=20000)
+
+    @field_validator("result")
+    @classmethod
+    def result_is_safe(cls, value: str) -> str:
+        validate_safe_text(
+            value.replace("\r", " ").replace("\n", " ").replace("\t", " "),
+            field_name="lease.result",
+            max_length=20_000,
+        )
+        return value
 
 
 class FailTaskLeaseRequest(LeaseCommandRequest):
     error: dict[str, Any]
     retryable: bool = False
 
+    @field_validator("error")
+    @classmethod
+    def error_is_safe(cls, value: dict[str, Any]) -> dict[str, Any]:
+        return normalize_safe_metadata(value, field_name="lease.error")
 
-class CreateTemporaryAgentRequest(ContractModel):
+
+class CreateTemporaryAgentRequest(RequestContractModel):
     name: str = Field(min_length=2, max_length=60)
     role: str = Field(min_length=2, max_length=100)
     departmentId: str = "research"
 
 
-class DecisionRequest(ContractModel):
+class DecisionRequest(RequestContractModel):
     decisionNote: str | None = Field(default=None, max_length=500)
-    reviewedBy: str = "local-user"
+    reviewedBy: str = Field(default="local-user", min_length=1, max_length=120)
+
+    @field_validator("reviewedBy")
+    @classmethod
+    def reviewer_is_safe(cls, value: str) -> str:
+        return validate_identifier(value, field_name="reviewedBy", max_length=120)
 
 
-class EditApprovalRequest(ContractModel):
+class EditApprovalRequest(RequestContractModel):
     title: str | None = Field(default=None, min_length=3, max_length=160)
     description: str | None = Field(default=None, min_length=3, max_length=1000)
 
 
-class FailureRequest(ContractModel):
+class FailureRequest(RequestContractModel):
     scenario: Literal[
         "scout_research_failure",
         "archive_unavailable",

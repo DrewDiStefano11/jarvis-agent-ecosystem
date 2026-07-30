@@ -29,7 +29,7 @@ class InMemoryRepository:
     @staticmethod
     def require(store: dict[str, object], item_id: str, kind: str) -> object:
         if item_id not in store:
-            raise DomainError(f"{kind.upper()}_NOT_FOUND", f"Unknown {kind} ID: {item_id}", 404)
+            raise DomainError(f"{kind.upper()}_NOT_FOUND", f"The {kind} was not found.", 404)
         return store[item_id]
 
     def add_audit(

@@ -1514,11 +1514,22 @@ def test_outbox_dispatch_stops_at_configured_retry_limit(
     engine.dispose()
 
 
-def test_invalid_outbox_attempt_limits_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    for value in ("0", "-1", "not-a-number"):
-        monkeypatch.setenv("JARVIS_OUTBOX_MAX_ATTEMPTS", value)
-        with pytest.raises(ValidationError):
-            Settings()
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("JARVIS_OUTBOX_MAX_ATTEMPTS", "0"),
+        ("JARVIS_OUTBOX_MAX_ATTEMPTS", "101"),
+        ("JARVIS_OUTBOX_MAX_ATTEMPTS", "not-a-number"),
+        ("JARVIS_OUTBOX_POLL_INTERVAL_MS", "60001"),
+        ("JARVIS_IDEMPOTENCY_LEASE_SECONDS", "3601"),
+    ],
+)
+def test_invalid_persistence_limits_are_rejected(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError):
+        Settings()
 
 
 @pytest.mark.asyncio

@@ -533,6 +533,7 @@ class ModelExecutionRepository:
     def status(
         self, *, enabled: bool, execution_mode: str, provider_ready: bool
     ) -> AutonomousWorkerStatus:
+        runtime_state_corrupt = False
         with self.sessions() as session:
             active = int(
                 session.scalar(
@@ -645,15 +646,18 @@ class ModelExecutionRepository:
                     ModelExecutionRow.stage == ModelExecutionStage.COMPLETED.value
                 )
             )
-            autonomous_workers = list(
+            worker_rows = list(
                 session.scalars(
                     select(WorkerRow).order_by(WorkerRow.last_heartbeat_at.desc()).limit(1000)
                 )
             )
+            if any(not isinstance(row.metadata_json, dict) for row in worker_rows):
+                runtime_state_corrupt = True
             autonomous_workers = [
                 row
-                for row in autonomous_workers
-                if row.metadata_json.get("kind") == "autonomous_planning_review"
+                for row in worker_rows
+                if isinstance(row.metadata_json, dict)
+                and row.metadata_json.get("kind") == "autonomous_planning_review"
             ]
             last_heartbeat = max(
                 (row.last_heartbeat_at for row in autonomous_workers),
@@ -665,10 +669,25 @@ class ModelExecutionRepository:
                 > now
                 for row in autonomous_workers
             )
-            queued = self.count_eligible_queued_runs()
+            try:
+                queued = self.count_eligible_queued_runs()
+            except (AutonomousWorkerError, ValidationError, TypeError, ValueError):
+                queued = 0
+                runtime_state_corrupt = True
         status = "disabled"
         reason = None
-        if enabled:
+        if corrupt_results or runtime_state_corrupt:
+            status = "degraded"
+            reason = (
+                "model_result_corrupt" if corrupt_results else "autonomous_runtime_state_corrupt"
+            )
+        elif exhausted_outbox:
+            status = "degraded"
+            reason = "model_execution_outbox_exhausted"
+        elif active and ownership_lost:
+            status = "degraded"
+            reason = "execution_lease_lost"
+        elif enabled:
             status = "healthy" if execution_mode == "local_only" and provider_ready else "degraded"
             if execution_mode != "local_only":
                 reason = "model_execution_disabled"
@@ -677,15 +696,6 @@ class ModelExecutionRepository:
             elif not live_worker:
                 status = "degraded"
                 reason = "autonomous_worker_unavailable"
-            elif ownership_lost:
-                status = "degraded"
-                reason = "execution_lease_lost"
-            elif corrupt_results:
-                status = "degraded"
-                reason = "model_result_corrupt"
-            elif exhausted_outbox:
-                status = "degraded"
-                reason = "model_execution_outbox_exhausted"
         return AutonomousWorkerStatus(
             enabled=enabled,
             modelExecutionMode=execution_mode,

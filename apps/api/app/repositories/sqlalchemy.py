@@ -181,8 +181,19 @@ class SqlAlchemyRepository:
     def sequence(self) -> int:
         return self._system.current_sequence_number
 
+    def current_event_cursor(self) -> tuple[str, int]:
+        """Read the committed simulator-session cursor without mutating state."""
+
+        with self.session_factory() as session:
+            state = session.get(SystemStateRow, 1)
+            if state is None:
+                raise RuntimeError("System state is unavailable.")
+            return state.event_session_id, state.current_sequence_number
+
     def next_sequence(self) -> int:
-        self._system.current_sequence_number += 1
+        event_session_id, committed_sequence = self.current_event_cursor()
+        self._system.event_session_id = event_session_id
+        self._system.current_sequence_number = committed_sequence + 1
         return self._system.current_sequence_number
 
     def reset_sequence(self) -> None:
@@ -192,7 +203,7 @@ class SqlAlchemyRepository:
     @staticmethod
     def require(store: dict[str, object], item_id: str, kind: str) -> object:
         if item_id not in store:
-            raise DomainError(f"{kind.upper()}_NOT_FOUND", f"Unknown {kind} ID: {item_id}", 404)
+            raise DomainError(f"{kind.upper()}_NOT_FOUND", f"The {kind} was not found.", 404)
         return store[item_id]
 
     def persist(self) -> None:

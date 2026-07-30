@@ -4,6 +4,7 @@ import json
 import math
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import AnyHttpUrl, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -25,9 +26,13 @@ class Settings(BaseSettings):
     sql_echo: bool = Field(False, alias="JARVIS_SQL_ECHO")
     auto_migrate: bool = Field(True, alias="JARVIS_AUTO_MIGRATE")
     simulator_auto_resume: bool = Field(False, alias="JARVIS_SIMULATOR_AUTO_RESUME")
-    outbox_poll_interval_ms: int = Field(250, alias="JARVIS_OUTBOX_POLL_INTERVAL_MS", ge=10)
-    outbox_max_attempts: int = Field(10, alias="JARVIS_OUTBOX_MAX_ATTEMPTS", ge=1)
-    idempotency_lease_seconds: int = Field(30, alias="JARVIS_IDEMPOTENCY_LEASE_SECONDS", ge=1)
+    outbox_poll_interval_ms: int = Field(
+        250, alias="JARVIS_OUTBOX_POLL_INTERVAL_MS", ge=10, le=60_000
+    )
+    outbox_max_attempts: int = Field(10, alias="JARVIS_OUTBOX_MAX_ATTEMPTS", ge=1, le=100)
+    idempotency_lease_seconds: int = Field(
+        30, alias="JARVIS_IDEMPOTENCY_LEASE_SECONDS", ge=1, le=3600
+    )
     task_lease_seconds: int = Field(30, alias="JARVIS_TASK_LEASE_SECONDS", ge=1, le=3600)
     task_lease_recovery_interval_ms: int = Field(
         1000, alias="JARVIS_TASK_LEASE_RECOVERY_INTERVAL_MS", ge=50, le=60000
@@ -83,13 +88,18 @@ class Settings(BaseSettings):
         "http://127.0.0.1:11434", alias="JARVIS_MODEL_OLLAMA_BASE_URL"
     )
     model_ollama_model: str = Field(
-        "configure-a-model", alias="JARVIS_MODEL_OLLAMA_MODEL", min_length=1
+        "configure-a-model",
+        alias="JARVIS_MODEL_OLLAMA_MODEL",
+        min_length=1,
+        max_length=200,
     )
     model_ollama_timeout_seconds: float = Field(
         30, alias="JARVIS_MODEL_OLLAMA_TIMEOUT_SECONDS", gt=0, le=3600
     )
     model_ollama_capabilities: str = Field(
-        "chat,text_generation", alias="JARVIS_MODEL_OLLAMA_CAPABILITIES"
+        "chat,text_generation",
+        alias="JARVIS_MODEL_OLLAMA_CAPABILITIES",
+        max_length=500,
     )
     model_openai_compatible_enabled: bool = Field(
         False, alias="JARVIS_MODEL_OPENAI_COMPATIBLE_ENABLED"
@@ -107,19 +117,26 @@ class Settings(BaseSettings):
         None, alias="JARVIS_MODEL_OPENAI_COMPATIBLE_API_KEY"
     )
     model_openai_compatible_model: str = Field(
-        "configure-a-model", alias="JARVIS_MODEL_OPENAI_COMPATIBLE_MODEL", min_length=1
+        "configure-a-model",
+        alias="JARVIS_MODEL_OPENAI_COMPATIBLE_MODEL",
+        min_length=1,
+        max_length=200,
     )
     model_openai_compatible_timeout_seconds: float = Field(
         30, alias="JARVIS_MODEL_OPENAI_COMPATIBLE_TIMEOUT_SECONDS", gt=0, le=3600
     )
     model_openai_compatible_capabilities: str = Field(
-        "chat,text_generation", alias="JARVIS_MODEL_OPENAI_COMPATIBLE_CAPABILITIES"
+        "chat,text_generation",
+        alias="JARVIS_MODEL_OPENAI_COMPATIBLE_CAPABILITIES",
+        max_length=500,
     )
     model_openai_compatible_health_strategy: Literal["models", "root", "configuration"] = Field(
         "models", alias="JARVIS_MODEL_OPENAI_COMPATIBLE_HEALTH_STRATEGY"
     )
     model_provider_priority: str = Field(
-        "ollama,openai-compatible", alias="JARVIS_MODEL_PROVIDER_PRIORITY"
+        "ollama,openai-compatible",
+        alias="JARVIS_MODEL_PROVIDER_PRIORITY",
+        max_length=500,
     )
     model_allow_remote: bool = Field(False, alias="JARVIS_MODEL_ALLOW_REMOTE")
     model_prefer_local: bool = Field(True, alias="JARVIS_MODEL_PREFER_LOCAL")
@@ -133,22 +150,24 @@ class Settings(BaseSettings):
         5, alias="JARVIS_MODEL_RETRY_MAXIMUM_BACKOFF_SECONDS", ge=0, le=300
     )
     model_default_maximum_requests: int = Field(
-        2, alias="JARVIS_MODEL_DEFAULT_MAXIMUM_REQUESTS", ge=1
+        2, alias="JARVIS_MODEL_DEFAULT_MAXIMUM_REQUESTS", ge=1, le=100
     )
     model_default_maximum_input_tokens: int | None = Field(
-        None, alias="JARVIS_MODEL_DEFAULT_MAXIMUM_INPUT_TOKENS", ge=1
+        None, alias="JARVIS_MODEL_DEFAULT_MAXIMUM_INPUT_TOKENS", ge=1, le=10_000_000
     )
     model_default_maximum_output_tokens: int | None = Field(
-        None, alias="JARVIS_MODEL_DEFAULT_MAXIMUM_OUTPUT_TOKENS", ge=1
+        None, alias="JARVIS_MODEL_DEFAULT_MAXIMUM_OUTPUT_TOKENS", ge=1, le=1_000_000
     )
     model_default_maximum_total_tokens: int | None = Field(
-        None, alias="JARVIS_MODEL_DEFAULT_MAXIMUM_TOTAL_TOKENS", ge=1
+        None, alias="JARVIS_MODEL_DEFAULT_MAXIMUM_TOTAL_TOKENS", ge=1, le=10_000_000
     )
     model_default_maximum_cost_usd: float | None = Field(
-        None, alias="JARVIS_MODEL_DEFAULT_MAXIMUM_COST_USD", gt=0
+        None, alias="JARVIS_MODEL_DEFAULT_MAXIMUM_COST_USD", gt=0, le=1_000_000
     )
-    model_pricing_json: str = Field("{}", alias="JARVIS_MODEL_PRICING_JSON")
-    web_origin: str = Field("http://localhost:5173", alias="WEB_ORIGIN")
+    model_pricing_json: str = Field("{}", alias="JARVIS_MODEL_PRICING_JSON", max_length=100_000)
+    web_origin: str = Field(
+        "http://localhost:5173", alias="WEB_ORIGIN", min_length=1, max_length=2048
+    )
 
     @model_validator(mode="after")
     def validate_model_provider_settings(self) -> Settings:
@@ -188,6 +207,18 @@ class Settings(BaseSettings):
         ):
             if url.username is not None or url.password is not None or url.query or url.fragment:
                 raise ValueError(f"{label} base URL cannot contain credentials, query, or fragment")
+        web_origin = urlsplit(self.web_origin)
+        if (
+            web_origin.scheme not in {"http", "https"}
+            or not web_origin.hostname
+            or web_origin.username is not None
+            or web_origin.password is not None
+            or web_origin.path not in {"", "/"}
+            or web_origin.query
+            or web_origin.fragment
+            or not is_loopback_endpoint(self.web_origin)
+        ):
+            raise ValueError("WEB_ORIGIN must be a credential-free loopback HTTP(S) origin")
         if self.model_execution_mode == "local_only":
             for enabled, label, url in (
                 (self.model_ollama_enabled, "Ollama", self.model_ollama_base_url),
@@ -226,12 +257,26 @@ class Settings(BaseSettings):
             raise ValueError("JARVIS_MODEL_PRICING_JSON must contain an object")
         required = {"input_per_million_usd", "output_per_million_usd"}
         result: dict[str, dict[str, dict[str, float]]] = {}
+        if len(payload) > 32:
+            raise ValueError("pricing accepts at most 32 providers")
         for provider, models in payload.items():
-            if not isinstance(provider, str) or not provider or not isinstance(models, dict):
+            if (
+                not isinstance(provider, str)
+                or not provider
+                or len(provider) > 120
+                or not isinstance(models, dict)
+            ):
                 raise ValueError("pricing entries must map provider names to model objects")
+            if len(models) > 256:
+                raise ValueError("provider pricing accepts at most 256 models")
             result[provider] = {}
             for model, pricing in models.items():
-                if not isinstance(model, str) or not model or not isinstance(pricing, dict):
+                if (
+                    not isinstance(model, str)
+                    or not model
+                    or len(model) > 200
+                    or not isinstance(pricing, dict)
+                ):
                     raise ValueError("provider pricing must map model names to rate objects")
                 if set(pricing) != required:
                     raise ValueError("model pricing entries require exact input and output rates")

@@ -70,6 +70,75 @@ def acquire(client: TestClient, worker_id: str, lease_seconds: int = 30) -> dict
     return response.json()["data"]
 
 
+def test_worker_and_lease_inputs_are_bounded_and_never_reflected(
+    tmp_path: Path,
+) -> None:
+    app = create_app(delay_ms=1, database_url=database_url(tmp_path / "bounded-inputs.db"))
+    secret = "api_key=ABCDEFGHIJKLMNOP1234"
+    with TestClient(app) as client:
+        rejected_worker = client.post(
+            "/api/workers",
+            json={
+                "name": "unsafe-worker",
+                "instanceId": "unsafe-worker",
+                "metadata": {"apiKey": secret},
+            },
+        )
+        assert rejected_worker.status_code == 422
+        assert rejected_worker.json()["error"]["code"] == "REQUEST_VALIDATION_ERROR"
+        assert secret not in rejected_worker.text
+
+        rejected_extra = client.post(
+            "/api/workers",
+            json={
+                "name": "extra-worker",
+                "instanceId": "extra-worker",
+                "unexpected": secret,
+            },
+        )
+        assert rejected_extra.status_code == 422
+        assert secret not in rejected_extra.text
+
+        prepare_empty_queue(app)
+        task_id = create_task(client, "Bounded worker failure", "urgent")
+        worker = register_worker(client, "bounded-worker")
+        acquired = acquire(client, worker["id"])
+        assert acquired is not None
+        token = acquired["lease"]["leaseToken"]
+
+        rejected_failure = client.post(
+            f"/api/tasks/{task_id}/lease/fail",
+            json={
+                "workerId": worker["id"],
+                "leaseToken": token,
+                "error": {"authorization": f"Bearer {secret}"},
+                "retryable": False,
+            },
+        )
+        assert rejected_failure.status_code == 422
+        assert secret not in rejected_failure.text
+        assert client.get(f"/api/tasks/{task_id}").json()["data"]["status"] == "in_progress"
+
+        rejected_result = client.post(
+            f"/api/tasks/{task_id}/lease/complete",
+            json={
+                "workerId": worker["id"],
+                "leaseToken": token,
+                "result": f"unsafe output {secret}",
+            },
+        )
+        assert rejected_result.status_code == 422
+        assert secret not in rejected_result.text
+        assert client.get(f"/api/tasks/{task_id}").json()["data"]["status"] == "in_progress"
+
+        rejected_token = client.post(
+            f"/api/tasks/{task_id}/lease/release",
+            json={"workerId": worker["id"], "leaseToken": "x" * 81},
+        )
+        assert rejected_token.status_code == 422
+        assert "x" * 81 not in rejected_token.text
+
+
 def test_worker_lease_lifecycle_is_fenced_audited_and_published(tmp_path: Path) -> None:
     app = create_app(delay_ms=1, database_url=database_url(tmp_path / "lifecycle.db"))
     with TestClient(app) as client:

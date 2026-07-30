@@ -185,6 +185,8 @@ def test_settings_defaults_disable_both_providers() -> None:
         {"JARVIS_MODEL_DEFAULT_MAXIMUM_REQUESTS": 1},
         {"JARVIS_MODEL_OLLAMA_NAME": "x" * 121},
         {"JARVIS_MODEL_OPENAI_COMPATIBLE_NAME": "x" * 121},
+        {"JARVIS_MODEL_OLLAMA_MODEL": "x" * 201},
+        {"JARVIS_MODEL_OPENAI_COMPATIBLE_MODEL": "x" * 201},
         {"JARVIS_MODEL_OLLAMA_MODEL": ""},
         {"JARVIS_MODEL_OLLAMA_CAPABILITIES": "vision"},
         {"JARVIS_MODEL_OLLAMA_CAPABILITIES": "CHAT"},
@@ -210,6 +212,9 @@ def test_settings_defaults_disable_both_providers() -> None:
                 '{"p":{"m":{"input_per_million_usd":-1,"output_per_million_usd":2}}}'
             )
         },
+        {"JARVIS_MODEL_PRICING_JSON": "x" * 100_001},
+        {"JARVIS_MODEL_DEFAULT_MAXIMUM_REQUESTS": 101},
+        {"JARVIS_MODEL_DEFAULT_MAXIMUM_OUTPUT_TOKENS": 1_000_001},
     ],
 )
 def test_invalid_provider_configuration_fails_closed(kwargs: dict[str, object]) -> None:
