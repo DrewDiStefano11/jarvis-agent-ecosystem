@@ -7,12 +7,19 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 
 from app.autonomous_worker.__main__ import _run_once_resilient
 from app.autonomous_worker.errors import AutonomousWorkerError
 from app.core.config import Settings
-from app.db.models import AuditEventRow, ModelExecutionRow, OutboxEventRow, TaskLeaseRow
+from app.db.models import (
+    AuditEventRow,
+    ModelExecutionRow,
+    OutboxEventRow,
+    TaskLeaseRow,
+    TaskRow,
+    WorkerRow,
+)
 from app.main import create_app
 from app.model_providers.contracts import ModelExecutionResponse, UsageQuality
 from app.models.agent_runtime import (
@@ -489,6 +496,67 @@ async def test_worker_health_reports_durable_safety_failures(tmp_path: Path) -> 
         client.__exit__(None, None, None)
 
 
+def test_worker_health_counts_backlog_and_requires_fresh_live_worker(tmp_path: Path) -> None:
+    router = FakeRouter([json.dumps(VALID_RESULT)])
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-autonomous-health-count-1",
+    )
+    repository = app.state.model_execution_repository
+    try:
+        first = app.state.agent_runtime_service.repository.load_run("run-autonomous-health-count-1")
+        assert first is not None
+        request = first.specification.autonomous_execution
+        assert request is not None
+        queue_autonomous_runtime(
+            app,
+            actor_id,
+            assembly_id=request.context_assembly_id,
+            run_id="run-autonomous-health-count-2",
+            task_id="task-demo",
+        )
+
+        status = repository.status(
+            enabled=True,
+            execution_mode="local_only",
+            provider_ready=True,
+        )
+        assert status.status == "healthy"
+        assert status.queuedEligibleRuntimeCount == 2
+
+        with repository.sessions.begin() as session:
+            session.execute(
+                update(WorkerRow).where(WorkerRow.id == worker.id).values(last_heartbeat_at=ts(0))
+            )
+        status = repository.status(
+            enabled=True,
+            execution_mode="local_only",
+            provider_ready=True,
+        )
+        assert status.status == "degraded"
+        assert status.reasonCode == "autonomous_worker_unavailable"
+
+        app.state.task_leases.heartbeat_worker(worker.id)
+        status = repository.status(
+            enabled=True,
+            execution_mode="local_only",
+            provider_ready=True,
+        )
+        assert status.status == "healthy"
+
+        app.state.task_leases.stop_worker(worker.id)
+        status = repository.status(
+            enabled=True,
+            execution_mode="local_only",
+            provider_ready=True,
+        )
+        assert status.status == "degraded"
+        assert status.reasonCode == "autonomous_worker_unavailable"
+    finally:
+        client.__exit__(None, None, None)
+
+
 @pytest.mark.asyncio
 async def test_invalid_output_uses_one_bounded_repair_call(tmp_path: Path) -> None:
     router = FakeRouter(["not-json", json.dumps(VALID_RESULT)])
@@ -542,6 +610,55 @@ async def test_emergency_stop_after_response_prevents_result_commit(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_emergency_stop_during_recovery_does_not_exit_polling(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    router = FakeRouter([json.dumps(VALID_RESULT)])
+    app, client, _, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-autonomous-recovery-emergency",
+    )
+    service = app.state.autonomous_worker_service
+    original_checkpoint = service._checkpoint
+
+    def crash_after_result(snapshot, actor, execution, attempt_id, name):
+        if name == "result-persisted":
+            raise RuntimeError("injected process crash")
+        return original_checkpoint(snapshot, actor, execution, attempt_id, name)
+
+    monkeypatch.setattr(service, "_checkpoint", crash_after_result)
+    try:
+        with pytest.raises(RuntimeError, match="injected process crash"):
+            await service.run_once(worker.id)
+        with app.state.model_execution_repository.sessions.begin() as session:
+            session.execute(
+                update(TaskLeaseRow)
+                .where(TaskLeaseRow.task_id == "task-demo")
+                .values(expires_at=ts(0))
+            )
+        assert app.state.task_leases.recover_expired_leases() == 1
+        app.state.repository.emergency_stop = True
+        app.state.repository.persist()
+        monkeypatch.setattr(service, "_checkpoint", original_checkpoint)
+
+        assert await _run_once_resilient(service, worker.id) is None
+        stored = app.state.model_execution_repository.get_by_run(
+            "run-autonomous-recovery-emergency"
+        )
+        assert stored is not None
+        assert stored.stage == "result_persisted"
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-autonomous-recovery-emergency"
+        )
+        assert runtime is not None
+        assert runtime.state == "running"
+        assert len(router.requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
 async def test_task_cancellation_during_call_prevents_commit_and_cancels_runtime(
     tmp_path: Path,
 ) -> None:
@@ -565,6 +682,45 @@ async def test_task_cancellation_during_call_prevents_commit_and_cancels_runtime
         assert stored is not None
         assert stored.resultHash is None
         runtime = app.state.agent_runtime_service.repository.load_run("run-autonomous-cancel")
+        assert runtime is not None
+        assert runtime.state == "cancelled"
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_external_task_cancellation_uses_durable_state(tmp_path: Path) -> None:
+    app_holder: dict[str, Any] = {}
+
+    def cancel_without_cache_refresh() -> None:
+        app = app_holder["app"]
+        with app.state.model_execution_repository.sessions.begin() as session:
+            session.execute(
+                update(TaskRow).where(TaskRow.id == "task-demo").values(status="cancelled")
+            )
+            session.execute(delete(TaskLeaseRow).where(TaskLeaseRow.task_id == "task-demo"))
+
+    router = FakeRouter([json.dumps(VALID_RESULT)], callback=cancel_without_cache_refresh)
+    app, client, _, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-autonomous-external-cancel",
+    )
+    app_holder["app"] = app
+    try:
+        assert app.state.repository.tasks["task-demo"].status == "queued"
+        with pytest.raises(AutonomousWorkerError) as raised:
+            await app.state.autonomous_worker_service.run_once(worker.id)
+        assert raised.value.code == "EXECUTION_CANCELLED"
+        assert app.state.repository.tasks["task-demo"].status == "in_progress"
+        assert app.state.task_leases.task_status("task-demo") == "cancelled"
+        stored = app.state.model_execution_repository.get_by_run("run-autonomous-external-cancel")
+        assert stored is not None
+        assert stored.stage == "failed"
+        assert stored.failureCode == "execution_cancelled"
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-autonomous-external-cancel"
+        )
         assert runtime is not None
         assert runtime.state == "cancelled"
     finally:

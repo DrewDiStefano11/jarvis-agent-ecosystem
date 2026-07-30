@@ -84,10 +84,17 @@ class AutonomousWorkerService:
     async def run_once(self, worker_id: str) -> ModelExecutionResult | None:
         self.validate_enabled()
         actor = self.runtime.authenticate_actor(self.settings.autonomous_worker_actor_id)
-        recovered = await self._recover_finalization(worker_id, actor)
-        if recovered is not None:
-            return recovered
-        work = self._acquire_work(worker_id, actor)
+        try:
+            recovered = await self._recover_finalization(worker_id, actor)
+            if recovered is not None:
+                return recovered
+            work = self._acquire_work(worker_id, actor)
+        except DomainError as exc:
+            if exc.code == "EMERGENCY_STOP_ACTIVE":
+                raise AutonomousWorkerError(
+                    "EXECUTION_EMERGENCY_STOPPED", status_code=423
+                ) from None
+            raise
         if work is None:
             return None
         snapshot, execution, lease = work
@@ -219,8 +226,7 @@ class AutonomousWorkerService:
             raise
         except DomainError as exc:
             if exc.code == "TASK_LEASE_LOST":
-                task = self.task_leases.repository.tasks.get(snapshot.specification.task_id)
-                if task is not None and task.status == "cancelled":
+                if self.task_leases.task_status(snapshot.specification.task_id) == "cancelled":
                     self._best_effort_cancel(snapshot, actor)
                     if execution is not None:
                         self.executions.mark_failed(
@@ -817,8 +823,7 @@ class AutonomousWorkerService:
         actor: RuntimeActorContext,
         execution: ModelExecutionResult,
     ) -> bool:
-        task = self.task_leases.repository.tasks.get(execution.taskId)
-        if task is None or task.status != "cancelled":
+        if self.task_leases.task_status(execution.taskId) != "cancelled":
             return False
         self._best_effort_cancel(snapshot, actor)
         self.executions.mark_failed(execution.executionId, "execution_cancelled")

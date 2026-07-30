@@ -142,7 +142,7 @@ This path is manual and must not run in CI:
 
 ## Health, API, and rollback
 
-`/api/health` and `/api/system/status` expose the same bounded autonomous-worker component: enablement, local execution mode, provider configuration readiness, eligible queued count, active/completed/failed/review counts, last worker heartbeat, and last successful execution. Disabled-by-default is healthy. An enabled worker with no eligible local provider or stale infrastructure degrades health without exposing secrets.
+`/api/health` and `/api/system/status` expose the same bounded autonomous-worker component: enablement, local execution mode, provider configuration readiness, the actual eligible queued runtime count, active/completed/failed/review counts, last worker heartbeat, and last successful execution. Disabled-by-default is healthy. When enabled, at least one active autonomous worker must have a heartbeat within its lease window; a missing, stopped, or stale worker degrades health with `autonomous_worker_unavailable`. An enabled worker with no eligible local provider or other stale infrastructure also degrades health without exposing secrets.
 
 `GET /api/model-executions?taskId=...` and `GET /api/model-executions/{id}` require the established `X-Jarvis-Actor-Id` boundary and reauthorize access to the run's task. There is no arbitrary prompt-completion endpoint.
 

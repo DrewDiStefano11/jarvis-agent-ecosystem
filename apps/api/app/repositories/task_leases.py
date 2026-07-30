@@ -219,6 +219,10 @@ class TaskLeaseRepository:
             rows = list(session.scalars(select(WorkerRow).order_by(WorkerRow.started_at)))
             return [self._worker(row) for row in rows]
 
+    def task_status(self, task_id: str) -> str | None:
+        with self.session_factory() as session:
+            return session.scalar(select(TaskRow.status).where(TaskRow.id == task_id))
+
     def drain_worker(self, worker_id: str) -> Worker:
         with self._write() as session:
             row = session.get(WorkerRow, worker_id)

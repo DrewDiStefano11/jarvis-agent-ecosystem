@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from hashlib import sha256
 from typing import Any
@@ -85,6 +85,13 @@ class ModelExecutionRepository:
                     if self._eligible_in_session(session, snapshot):
                         return snapshot
             return None
+
+    def count_eligible_queued_runs(self) -> int:
+        count = 0
+        with self.sessions() as session:
+            for page in self.iter_queued_autonomous_run_pages():
+                count += sum(1 for snapshot in page if self._eligible_in_session(session, snapshot))
+        return count
 
     def select_queued_autonomous_run(self) -> AgentRunSnapshot | None:
         for page in self.iter_queued_autonomous_run_pages():
@@ -643,15 +650,22 @@ class ModelExecutionRepository:
                     select(WorkerRow).order_by(WorkerRow.last_heartbeat_at.desc()).limit(1000)
                 )
             )
+            autonomous_workers = [
+                row
+                for row in autonomous_workers
+                if row.metadata_json.get("kind") == "autonomous_planning_review"
+            ]
             last_heartbeat = max(
-                (
-                    row.last_heartbeat_at
-                    for row in autonomous_workers
-                    if row.metadata_json.get("kind") == "autonomous_planning_review"
-                ),
+                (row.last_heartbeat_at for row in autonomous_workers),
                 default=None,
             )
-            queued = 1 if self.select_eligible_queued_run() is not None else 0
+            live_worker = any(
+                row.status == "active"
+                and row.last_heartbeat_at.replace(tzinfo=UTC) + timedelta(seconds=row.lease_seconds)
+                > now
+                for row in autonomous_workers
+            )
+            queued = self.count_eligible_queued_runs()
         status = "disabled"
         reason = None
         if enabled:
@@ -660,6 +674,9 @@ class ModelExecutionRepository:
                 reason = "model_execution_disabled"
             elif not provider_ready:
                 reason = "no_local_provider_available"
+            elif not live_worker:
+                status = "degraded"
+                reason = "autonomous_worker_unavailable"
             elif ownership_lost:
                 status = "degraded"
                 reason = "execution_lease_lost"
