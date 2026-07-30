@@ -2,7 +2,7 @@
 
 Jarvis combines the local deterministic simulation and durable SQLite control plane with fenced task leases, Context Assembly, identity/RBAC, the Agent Runtime ledger, and one narrow Phase 2C autonomous execution path. With explicit opt-in, a dedicated local worker can consume a queued `planning_review` runtime run, call an approved loopback model, validate a fixed result, and persist it durably. Tools and external side effects remain unavailable.
 
-## What works in Phase 2A
+## What works in the current local phase
 
 - FastAPI HTTP API and multi-client WebSocket event stream
 - deterministic 25-step Caribbean trip workflow with delegation, artifact handoff, review, revision, and delivery
@@ -23,7 +23,16 @@ The only real model execution is an explicitly enabled, loopback-only `planning_
 
 ## Architecture
 
-`apps/api` owns authoritative state and contracts. Route handlers use services, a durable repository, and explicit command boundaries; committed event envelopes are delivered from an SQLite outbox. `apps/web` retains the Phase 1 synchronization contract. See [ARCHITECTURE.md](ARCHITECTURE.md) and [Context assembler](docs/context-assembler.md).
+`apps/api` owns authoritative state and contracts. Route handlers use services, a
+durable repository, and explicit command boundaries; committed event envelopes are
+delivered from an SQLite outbox. `apps/web/src/state` owns the shared
+HTTP/WebSocket synchronization contract. See [ARCHITECTURE.md](ARCHITECTURE.md)
+and [Context assembler](docs/context-assembler.md).
+
+This phase is a loopback-only local control plane. The API and WebSocket reject
+non-loopback peers, and the configured web origin must also be loopback. Do not
+expose it through a LAN/public bind or reverse proxy; no user-authentication
+boundary exists yet.
 
 ## Fresh Windows setup
 
@@ -95,7 +104,9 @@ Run `pnpm build` followed by `pnpm vite preview`, then use browser Application t
 ## Troubleshooting
 
 - CORS errors: keep the web origin at `http://localhost:5173` or set `WEB_ORIGIN` explicitly.
-- WebSocket remains offline: verify the API uses port 8000 and `VITE_WS_URL` matches it.
+- WebSocket remains offline: verify the API uses port 8000 and that
+  `VITE_WS_URL` uses `ws://127.0.0.1:8000/ws/events` unless intentionally
+  overridden.
 - PowerShell blocks activation: run the virtual environment executables directly as shown in verification commands.
 - Stale fixture state: use **System → Reset demo**; reset cancels the active runner before reseeding.
 - Port in use: change both the server port and corresponding frontend environment URL.
