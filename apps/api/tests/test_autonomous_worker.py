@@ -36,6 +36,7 @@ from app.models.agent_runtime import (
     CreateAgentRunCommand,
     QueueAgentRunCommand,
     RequestCancellationCommand,
+    StartAttemptCommand,
 )
 from app.models.autonomous_worker import PlanningReviewResult
 from app.models.identity import AssignPermissionRequest, CreateAgentRequest
@@ -218,6 +219,7 @@ def worker_fixture(
     *,
     router: FakeRouter,
     run_id: str = "run-autonomous-1",
+    assembly_content: str = "Approved planning facts.",
 ):
     app = create_app(delay_ms=1, database_url=database_url(tmp_path / f"{run_id}.db"))
     client = TestClient(app)
@@ -225,7 +227,13 @@ def worker_fixture(
     queue_only_demo_task(app)
     actor_id = grant_runtime_permissions(app, f"actor-{run_id}", task_id="task-demo")
     configure_worker(app, actor_id, router)
-    create_assembly_and_runtime(client, app, actor_id, run_id=run_id)
+    create_assembly_and_runtime(
+        client,
+        app,
+        actor_id,
+        run_id=run_id,
+        assembly_content=assembly_content,
+    )
     worker = app.state.task_leases.register_worker(
         "phase-2c-test-worker",
         "phase-2c-test-worker",
@@ -1293,6 +1301,239 @@ async def test_restart_preserves_model_requested_human_review(
         assert runtime.state == "paused"
         assert app.state.repository.tasks["task-demo"].status == "under_review"
         assert len(router.requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_crash_after_execution_prepare_before_runtime_start_recovers_same_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    router = FakeRouter([json.dumps(VALID_RESULT)])
+    app, client, _, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-prepare-before-start-recovery",
+    )
+    service = app.state.autonomous_worker_service
+    original_handle = service._handle
+    boundary_checked = False
+
+    def crash_before_runtime_start(command_type, snapshot, actor, suffix, **fields):
+        nonlocal boundary_checked
+        if command_type is StartAttemptCommand:
+            execution = app.state.model_execution_repository.get_by_run(
+                "run-prepare-before-start-recovery"
+            )
+            assert execution is not None
+            assert execution.stage == "prepared"
+            assert execution.runtimeAttemptId == snapshot.active_attempt_id
+            assert snapshot.state == "starting"
+            assert router.requests == []
+            boundary_checked = True
+            raise RuntimeError("injected crash after execution prepare")
+        return original_handle(command_type, snapshot, actor, suffix, **fields)
+
+    monkeypatch.setattr(service, "_handle", crash_before_runtime_start)
+    try:
+        with pytest.raises(RuntimeError, match="crash after execution prepare"):
+            await service.run_once(worker.id)
+        assert boundary_checked
+        starting = app.state.agent_runtime_service.repository.load_run(
+            "run-prepare-before-start-recovery"
+        )
+        assert starting is not None
+        assert starting.state == "starting"
+        attempt_id = starting.active_attempt_id
+        assert attempt_id is not None
+        prepared = app.state.model_execution_repository.get_by_run(starting.specification.run_id)
+        assert prepared is not None
+        assert prepared.executionId == app.state.model_execution_repository.execution_id(
+            starting.specification.run_id,
+            attempt_id,
+        )
+        assert prepared.runtimeAttemptId == attempt_id
+        assert prepared.stage == "prepared"
+        assert router.requests == []
+
+        with app.state.model_execution_repository.sessions.begin() as session:
+            session.execute(
+                update(TaskLeaseRow)
+                .where(TaskLeaseRow.task_id == "task-demo")
+                .values(expires_at=ts(0))
+            )
+        assert app.state.task_leases.recover_expired_leases() == 1
+        monkeypatch.setattr(service, "_handle", original_handle)
+
+        recovered = await service.run_once(worker.id)
+        assert recovered is not None
+        assert recovered.stage == "completed"
+        assert recovered.executionId == prepared.executionId
+        assert recovered.runtimeAttemptId == attempt_id
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-prepare-before-start-recovery"
+        )
+        assert runtime is not None
+        assert runtime.state == "succeeded"
+        assert runtime.attempt_count == 1
+        assert app.state.task_leases.task_status("task-demo") == "completed"
+        assert len(router.requests) == 1
+        with app.state.model_execution_repository.sessions() as session:
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(ModelExecutionRow)
+                    .where(
+                        ModelExecutionRow.runtime_run_id == runtime.specification.run_id,
+                        ModelExecutionRow.runtime_attempt_id == attempt_id,
+                    )
+                )
+                == 1
+            )
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_crash_after_runtime_start_with_prepared_execution_recovers_without_stranding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    router = FakeRouter([json.dumps(VALID_RESULT)])
+    test_only_secret = "test-only-secret-must-not-persist"
+    app, client, _, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-start-before-checkpoint-recovery",
+        assembly_content=f"Approved planning facts: {test_only_secret}",
+    )
+    service = app.state.autonomous_worker_service
+    original_handle = service._handle
+    original_provider_call = service._provider_call
+    boundary_checked = False
+
+    def crash_after_runtime_start(command_type, snapshot, actor, suffix, **fields):
+        nonlocal boundary_checked
+        result = original_handle(command_type, snapshot, actor, suffix, **fields)
+        if command_type is StartAttemptCommand:
+            execution = app.state.model_execution_repository.get_by_run(
+                "run-start-before-checkpoint-recovery"
+            )
+            assert execution is not None
+            assert execution.stage == "prepared"
+            assert execution.runtimeAttemptId == result.active_attempt_id
+            assert result.state == "running"
+            # The model cannot be called before this committed recovery marker.
+            assert router.requests == []
+            boundary_checked = True
+            raise RuntimeError("injected crash after runtime start")
+        return result
+
+    async def require_marker_before_provider(*args, **kwargs):
+        execution = app.state.model_execution_repository.get_by_run(
+            "run-start-before-checkpoint-recovery"
+        )
+        assert execution is not None
+        assert execution.stage in {"prepared", "call_started", "response_received"}
+        return await original_provider_call(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_handle", crash_after_runtime_start)
+    monkeypatch.setattr(service, "_provider_call", require_marker_before_provider)
+    try:
+        with pytest.raises(RuntimeError, match="crash after runtime start"):
+            await service.run_once(worker.id)
+        assert boundary_checked
+        running = app.state.agent_runtime_service.repository.load_run(
+            "run-start-before-checkpoint-recovery"
+        )
+        assert running is not None
+        assert running.state == "running"
+        attempt_id = running.active_attempt_id
+        assert attempt_id is not None
+        execution_id = app.state.model_execution_repository.execution_id(
+            running.specification.run_id,
+            attempt_id,
+        )
+        prepared = app.state.model_execution_repository.get_by_run(running.specification.run_id)
+        assert prepared is not None
+        assert prepared.executionId == execution_id
+        assert prepared.runtimeAttemptId == attempt_id
+        assert prepared.stage == "prepared"
+        assert prepared.result is None
+        assert router.requests == []
+        assert app.state.task_leases.task_status("task-demo") == "in_progress"
+
+        with app.state.model_execution_repository.sessions.begin() as session:
+            session.execute(
+                update(TaskLeaseRow)
+                .where(TaskLeaseRow.task_id == "task-demo")
+                .values(expires_at=ts(0))
+            )
+        assert app.state.task_leases.recover_expired_leases() == 1
+        monkeypatch.setattr(service, "_handle", original_handle)
+
+        recovered = await service.run_once(worker.id)
+        assert recovered is not None
+        assert recovered.stage == "completed"
+        assert recovered.executionId == execution_id
+        assert recovered.runtimeAttemptId == attempt_id
+        assert recovered.resultHash is not None
+        assert app.state.task_leases.task_status("task-demo") == "completed"
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-start-before-checkpoint-recovery"
+        )
+        assert runtime is not None
+        assert runtime.state == "succeeded"
+        assert runtime.attempt_count == 1
+        assert runtime.active_attempt_id is None
+        assert len(router.requests) == 1  # Within the documented pre-result allowance of two.
+
+        with app.state.model_execution_repository.sessions() as session:
+            rows = list(
+                session.scalars(
+                    select(ModelExecutionRow).where(
+                        ModelExecutionRow.runtime_run_id == runtime.specification.run_id
+                    )
+                )
+            )
+            assert len(rows) == 1
+            row = rows[0]
+            assert row.execution_id == execution_id
+            assert row.runtime_attempt_id == attempt_id
+            assert row.result_hash == recovered.resultHash
+            assert row.stage == "completed"
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(OutboxEventRow)
+                    .where(OutboxEventRow.event_type == "model.result.persisted")
+                )
+                == 1
+            )
+            safe_row = json.dumps(
+                {
+                    column.name: getattr(row, column.name)
+                    for column in ModelExecutionRow.__table__.columns
+                },
+                default=str,
+                sort_keys=True,
+            )
+            assert test_only_secret not in safe_row
+            forbidden_column_fragments = (
+                "prompt",
+                "response",
+                "exception",
+                "traceback",
+                "path",
+                "source",
+            )
+            assert all(
+                fragment not in column.name
+                for column in ModelExecutionRow.__table__.columns
+                for fragment in forbidden_column_fragments
+            )
+
+        # The next polling iteration remains healthy after the expected recovery path.
+        assert await _run_once_resilient(service, worker.id) is None
     finally:
         client.__exit__(None, None, None)
 

@@ -307,6 +307,16 @@ class ModelExecutionRepository:
         execution_id = self.execution_id(snapshot.specification.run_id, attempt_id)
         now = datetime.now(UTC)
         with self._write() as session:
+            # The preparation row is the durable recovery marker.  Fence its
+            # transaction just like result-stage transitions so a stale worker
+            # cannot manufacture recovery state after lease loss or stop.
+            self._require_task_fence(
+                session,
+                snapshot.specification.task_id,
+                worker_id,
+                lease_token,
+                now,
+            )
             existing = session.get(ModelExecutionRow, execution_id)
             if existing is not None:
                 return self._contract(existing)
@@ -840,9 +850,9 @@ class ModelExecutionRepository:
         return row
 
     @staticmethod
-    def _require_fence(
+    def _require_task_fence(
         session: Session,
-        row: ModelExecutionRow,
+        task_id: str,
         worker_id: str,
         lease_token: str,
         now: datetime,
@@ -850,7 +860,7 @@ class ModelExecutionRepository:
         state = session.get(SystemStateRow, 1)
         if state is not None and state.emergency_stop:
             raise AutonomousWorkerError("EXECUTION_EMERGENCY_STOPPED", status_code=423)
-        lease = session.get(TaskLeaseRow, row.task_id)
+        lease = session.get(TaskLeaseRow, task_id)
         if (
             lease is None
             or lease.worker_id != worker_id
@@ -858,6 +868,17 @@ class ModelExecutionRepository:
             or lease.expires_at.replace(tzinfo=UTC) <= now
         ):
             raise AutonomousWorkerError("EXECUTION_LEASE_LOST")
+
+    @classmethod
+    def _require_fence(
+        cls,
+        session: Session,
+        row: ModelExecutionRow,
+        worker_id: str,
+        lease_token: str,
+        now: datetime,
+    ) -> None:
+        cls._require_task_fence(session, row.task_id, worker_id, lease_token, now)
 
     def _emit(
         self,

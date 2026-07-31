@@ -127,24 +127,19 @@ class AutonomousWorkerService:
                 raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
             assembly = self.executions.load_context_assembly(request.context_assembly_id)
             self._validate_assembly(snapshot, assembly)
-            snapshot = self._claim_and_start(snapshot, actor, worker_id, attempt_id)
             messages, execution_request_hash = self._execution_messages(assembly)
             recovered_uncommitted = execution is not None
-            if execution is None:
-                execution = self.executions.prepare(
-                    snapshot=snapshot,
-                    attempt_id=attempt_id,
-                    assembly=assembly,
-                    worker_id=worker_id,
-                    task_attempt_number=lease.attemptNumber,
-                    lease_token=lease.leaseToken,
-                    execution_request_hash=execution_request_hash,
-                )
-            elif (
-                execution.contextAssemblyId != assembly.id
-                or execution.executionRequestHash != execution_request_hash
-            ):
-                raise AutonomousWorkerError("CONTEXT_ASSEMBLY_MISMATCH")
+            snapshot, execution = self._claim_prepare_and_start(
+                snapshot,
+                actor,
+                worker_id,
+                attempt_id,
+                execution=execution,
+                assembly=assembly,
+                task_attempt_number=lease.attemptNumber,
+                lease_token=lease.leaseToken,
+                execution_request_hash=execution_request_hash,
+            )
             snapshot = self._checkpoint(
                 snapshot,
                 actor,
@@ -239,7 +234,11 @@ class AutonomousWorkerService:
                 self._best_effort_emergency_pause(snapshot, actor, worker_id, lease.leaseToken)
                 raise
             if exc.code == "EXECUTION_LEASE_LOST":
-                self._best_effort_abandon(snapshot, actor, attempt_id)
+                # A prepared STARTING attempt is already recoverable.  Do not
+                # convert it to BLOCKED on a lease race before the start transition,
+                # because recovery must resume its same deterministic attempt.
+                if snapshot.state != AgentRunState.STARTING:
+                    self._best_effort_abandon(snapshot, actor, attempt_id)
             raise
         except DomainError as exc:
             if exc.code == "TASK_LEASE_LOST":
@@ -251,7 +250,8 @@ class AutonomousWorkerService:
                             "execution_cancelled",
                         )
                     raise AutonomousWorkerError("EXECUTION_CANCELLED") from None
-                self._best_effort_abandon(snapshot, actor, attempt_id)
+                if snapshot.state != AgentRunState.STARTING:
+                    self._best_effort_abandon(snapshot, actor, attempt_id)
                 raise AutonomousWorkerError("EXECUTION_LEASE_LOST") from None
             if exc.code == "EMERGENCY_STOP_ACTIVE":
                 self._best_effort_emergency_pause(snapshot, actor, worker_id, lease.leaseToken)
@@ -417,14 +417,35 @@ class AutonomousWorkerService:
             authorized.append(result)
         return authorized
 
-    def _claim_and_start(
+    def _claim_prepare_and_start(
         self,
         snapshot: AgentRunSnapshot,
         actor: RuntimeActorContext,
         worker_id: str,
         attempt_id: str,
-    ) -> AgentRunSnapshot:
+        *,
+        execution: ModelExecutionResult | None,
+        assembly: ContextAssembly,
+        task_attempt_number: int,
+        lease_token: str,
+        execution_request_hash: str,
+    ) -> tuple[AgentRunSnapshot, ModelExecutionResult]:
+        """Durably prepare an attempt before it may become ``RUNNING``.
+
+        The model-execution row is the recovery marker for the deterministic runtime
+        attempt.  It is deliberately committed while the runtime remains ``STARTING``;
+        therefore a committed ``RUNNING`` transition can never be the first durable
+        evidence that this worker owns an autonomous request.
+        """
+        if execution is not None and (
+            execution.runtimeAttemptId != attempt_id
+            or execution.contextAssemblyId != assembly.id
+            or execution.executionRequestHash != execution_request_hash
+        ):
+            raise AutonomousWorkerError("CONTEXT_ASSEMBLY_MISMATCH")
+
         if snapshot.state == AgentRunState.QUEUED:
+            self._assert_live_policy(snapshot, actor, worker_id, lease_token)
             snapshot = self._handle(
                 ClaimAgentRunCommand,
                 snapshot,
@@ -434,6 +455,7 @@ class AutonomousWorkerService:
                 detail="Autonomous planning execution claimed",
             )
         if snapshot.state == AgentRunState.CLAIMED:
+            self._assert_live_policy(snapshot, actor, worker_id, lease_token)
             snapshot = self._handle(
                 BeginAttemptCommand,
                 snapshot,
@@ -444,17 +466,43 @@ class AutonomousWorkerService:
                 detail="Autonomous planning execution start requested",
             )
         if snapshot.state == AgentRunState.STARTING:
+            # Reauthorize and fence the preparation write itself.  ``prepare``
+            # repeats the exact lease/emergency check in its transaction.
+            self._assert_live_policy(snapshot, actor, worker_id, lease_token)
+            if execution is None:
+                execution = self.executions.prepare(
+                    snapshot=snapshot,
+                    attempt_id=attempt_id,
+                    assembly=assembly,
+                    worker_id=worker_id,
+                    task_attempt_number=task_attempt_number,
+                    lease_token=lease_token,
+                    execution_request_hash=execution_request_hash,
+                )
+                if (
+                    execution.runtimeAttemptId != attempt_id
+                    or execution.contextAssemblyId != assembly.id
+                    or execution.executionRequestHash != execution_request_hash
+                ):
+                    raise AutonomousWorkerError("CONTEXT_ASSEMBLY_MISMATCH")
+            # A stop, cancellation, lease loss, target change, or permission
+            # revocation after preparation must not advance the runtime to running.
+            self._assert_live_policy(snapshot, actor, worker_id, lease_token)
             snapshot = self._handle(
                 StartAttemptCommand,
                 snapshot,
                 actor,
                 "start",
+                require_execution_enabled=True,
                 attempt_id=attempt_id,
                 detail="Autonomous planning execution started",
             )
-        if snapshot.state != AgentRunState.RUNNING:
+        if snapshot.state != AgentRunState.RUNNING or execution is None:
             raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
-        return snapshot
+        # Prepared-execution recovery also rechecks live authorization, lifecycle,
+        # emergency stop, and the exact fresh lease before checkpoint or provider use.
+        self._assert_live_policy(snapshot, actor, worker_id, lease_token)
+        return snapshot, execution
 
     async def _call_and_validate(
         self,

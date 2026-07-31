@@ -70,22 +70,29 @@ Ollama is the supported smoke-test adapter. A loopback OpenAI-compatible adapter
 The normal state flow is:
 
 1. scan queued autonomous runs in stable order, skipping tasks that cannot currently be leased;
-2. acquire exact task lease in `BEGIN IMMEDIATE`;
-3. claim the runtime and begin/start its deterministic attempt;
-4. persist `prepared` and a pre-call runtime checkpoint;
-5. recheck lease, target identity, authorization, emergency stop, and cancellation before local model access;
-6. persist `call_started`, perform one non-streaming local call, and persist `response_received`;
-7. validate, or perform one repair call if the initial call returned text and budget remains;
-8. recheck all live policy and fencing conditions, including target identity, immediately before durable result persistence;
-9. atomically persist the validated result and `result_persisted` event;
-10. checkpoint the durable result and mark finalization pending;
-11. complete the fenced task with `model-execution:<execution-id>`;
-12. complete the runtime attempt/run from that durable task commit;
-13. mark the execution completed.
+2. acquire the exact task lease in `BEGIN IMMEDIATE`;
+3. claim the runtime and begin its deterministic attempt, leaving the runtime in `STARTING`;
+4. recheck current read/execute authorization, target lifecycle, emergency stop, cancellation, worker configuration, and the exact lease; then durably persist the deterministic `prepared` `model_executions` row **while the runtime is still `STARTING`**;
+5. recheck those live fences again, then commit the attempt-start transition to `RUNNING`; the runtime command also checks emergency stop in its ledger transaction;
+6. checkpoint the prepared execution, recheck live policy, and only then permit local model access;
+7. persist `call_started`, perform one non-streaming local call, and persist `response_received`;
+8. validate, or perform one repair call if the initial call returned text and budget remains;
+9. recheck all live policy and fencing conditions, including target identity, immediately before durable result persistence;
+10. atomically persist the validated result and `result_persisted` event;
+11. checkpoint the durable result and mark finalization pending;
+12. complete the fenced task with `model-execution:<execution-id>`;
+13. complete the runtime attempt/run from that durable task commit;
+14. mark the execution completed.
+
+The durable-ordering invariant is: an autonomous `planning_review` runtime never durably enters `RUNNING` unless its deterministic execution row for that same runtime attempt is already committed. `prepared` is therefore sufficient recovery state for both a `STARTING` runtime (crash before attempt start) and a `RUNNING` runtime (crash immediately after attempt start). The worker does not use a broad `RUNNING` scan: recovery is limited to autonomous `planning_review` requests with the validated immutable execution specification, either through their prepared execution row or, for the earlier no-row window, through the narrow `CLAIMED`/`STARTING` transitional scan.
 
 The `model_executions` row is keyed by a deterministic execution ID and has a unique `(runtime_run_id, runtime_attempt_id)` constraint. It stores validated content, provider/model identity, assembly and execution request hashes, result hash, bounded token/latency/request/cost metadata, normalized finish reason, stage, review flag, and timestamps. Reads and recovery recompute the canonical result hash and fail closed on a mismatch. The row never stores a key, authorization header, raw request/response, invalid output, repair prompt, source text, exception object, traceback, path, or hidden reasoning.
 
-A model call cannot be transactional. A crash in `prepared`, `call_started`, or `response_received` may cause the local model to be called again after lease recovery. This is the documented duplicate-call window; exactly-once inference is not claimed. Once the validated result is durable, restart recovery completes the review or finalization path without calling the model again. A known pre-execution safety pause is itself a durable recovery marker: restart scans only autonomous `planning_review` runs paused with one of those bounded reason codes and no model-execution row, then requires current authorization and a fresh exact task lease before completing the task review transition. The same narrow no-execution-row scan recovers autonomous runs stranded in `claimed` or `starting` by a crash or authorization change between runtime start commands; it resumes only after current authorization and exact task reacquisition. If another worker has already completed that task, recovery cancels the superseded autonomous runtime instead of retrying an impossible acquisition; expected lease loss remains a contained poll outcome. Recovery confirms an already-requested review pause, and an authoritative task failure closes the active attempt, runtime, and model-execution record instead of retrying forever. Task completion is the normal-result commit point: cancellation that revokes the lease first wins, while a crash after task completion safely resumes runtime completion only while emergency stop remains inactive. Deterministic runtime command IDs, processed-command hashes, unique result constraints, fenced task operations, and deterministic audit/outbox event IDs prevent duplicate durable results and duplicate completion records.
+A model call cannot be transactional. A crash after `call_started` (which is recorded immediately before a provider call) or `response_received` and before validated-result persistence may cause the local model to be called again after lease recovery. A crash in `prepared`, including one immediately after the `RUNNING` transition but before the first provider call, has the already-committed marker but no prior local call to repeat. These are the only documented pre-result duplicate-call windows; exactly-once inference is not claimed. Exactly-once **durable result persistence** is enforced by the deterministic execution ID, the unique `(runtime_run_id, runtime_attempt_id)` constraint, result hash conflict checks, and fenced result transaction.
+
+Recovery first reconciles known pre-execution safety pauses. It then scans prepared/call-started/response-received execution rows, reauthorizes the exact runtime and reacquires its exact task lease, and resumes the same deterministic runtime attempt. A prepared row with a `STARTING` runtime commits only the pending start transition; a prepared row with a `RUNNING` runtime continues through the established uncommitted-execution path. It never creates a second runtime attempt or conflicting execution row. The narrow no-execution-row scan handles only autonomous `planning_review` runs stranded in `CLAIMED` or `STARTING` before preparation; it rechecks current authorization, target lifecycle, worker lifecycle, emergency stop, cancellation, and exact task ownership before resuming. No provider call is possible in that earlier window.
+
+If another worker has already completed the authoritative task, recovery cancels the superseded autonomous runtime without overwriting the completed task or its result. Authoritative cancellation wins: recovery cancels the runtime before marking the execution terminal, and an authorization denial leaves the execution recoverable. An authoritative failed task closes the active attempt, runtime, and execution instead of retrying forever. Recovery confirms an already-requested human-review pause, preserves a model-requested review, and resumes finalization after task completion only while emergency stop remains inactive. Expected per-run lease loss, cancellation, stop, and task-scoped authorization outcomes are contained by the polling loop; unexpected failures still propagate. Deterministic runtime command IDs, processed-command hashes, unique result constraints, fenced task operations, and deterministic audit/outbox event IDs prevent duplicate durable results and duplicate completion records.
 
 ## Fencing, authorization, stop, and review
 
