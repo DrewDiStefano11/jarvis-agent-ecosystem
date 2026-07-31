@@ -286,6 +286,8 @@ class AutonomousWorkerService:
                     snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
                     if self._reconcile_cancelled_recovery(snapshot, actor, execution):
                         continue
+                    if self._reconcile_completed_elsewhere_recovery(snapshot, actor, execution):
+                        continue
                     if self._reconcile_failed_recovery(snapshot, actor, execution):
                         continue
                     if self._reconcile_uncommitted_review(snapshot, execution):
@@ -1125,6 +1127,11 @@ class AutonomousWorkerService:
         task_status = None if task_state is None else task_state[0]
         if task_status == "cancelled":
             self._authorize_recovery_action(snapshot, actor, "confirm_cancellation")
+        elif (
+            task_status == "completed"
+            and task_state[1] != f"model-execution:{execution.executionId}"
+        ):
+            self._authorize_recovery_action(snapshot, actor, "confirm_cancellation")
         elif task_status == "failed":
             self._authorize_recovery_action(snapshot, actor, "fail_run")
         elif execution.requiresHumanReview:
@@ -1132,6 +1139,8 @@ class AutonomousWorkerService:
         else:
             self._authorize_recovery_action(snapshot, actor, "complete_run")
         if self._reconcile_cancelled_recovery(snapshot, actor, execution):
+            return None
+        if self._reconcile_completed_elsewhere_recovery(snapshot, actor, execution):
             return None
         if self._reconcile_failed_recovery(snapshot, actor, execution):
             return None
@@ -1196,6 +1205,31 @@ class AutonomousWorkerService:
             detail="Authoritative task cancellation observed",
         )
         self.executions.mark_failed(execution.executionId, "execution_cancelled")
+        return True
+
+    def _reconcile_completed_elsewhere_recovery(
+        self,
+        snapshot: AgentRunSnapshot,
+        actor: RuntimeActorContext,
+        execution: ModelExecutionResult,
+    ) -> bool:
+        task_state = self.task_leases.task_recovery_state(execution.taskId)
+        if (
+            task_state is None
+            or task_state[0] != "completed"
+            or task_state[1] == f"model-execution:{execution.executionId}"
+        ):
+            return False
+        # Another authoritative completion wins.  Runtime cancellation is required
+        # to succeed before the execution is terminalized, preserving a recoverable
+        # row when task-scoped cancellation authorization is currently denied.
+        self._cancel_runtime(
+            snapshot,
+            actor,
+            reason_code="task_completed_elsewhere",
+            detail="Authoritative task completion superseded autonomous execution",
+        )
+        self.executions.mark_failed(execution.executionId, "task_completed_elsewhere")
         return True
 
     def _reconcile_failed_recovery(

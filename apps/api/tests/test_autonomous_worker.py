@@ -1395,6 +1395,70 @@ async def test_crash_after_execution_prepare_before_runtime_start_recovers_same_
 
 
 @pytest.mark.asyncio
+async def test_prepared_execution_recovery_cancels_superseded_completed_task(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    router = FakeRouter([json.dumps(VALID_RESULT)])
+    app, client, _, worker = worker_fixture(
+        tmp_path,
+        router=router,
+        run_id="run-prepared-external-completion",
+    )
+    service = app.state.autonomous_worker_service
+    original_handle = service._handle
+
+    def crash_before_runtime_start(command_type, snapshot, actor, suffix, **fields):
+        if command_type is StartAttemptCommand:
+            raise RuntimeError("injected crash after execution prepare")
+        return original_handle(command_type, snapshot, actor, suffix, **fields)
+
+    monkeypatch.setattr(service, "_handle", crash_before_runtime_start)
+    try:
+        with pytest.raises(RuntimeError, match="crash after execution prepare"):
+            await service.run_once(worker.id)
+        with app.state.model_execution_repository.sessions.begin() as session:
+            session.execute(
+                update(TaskLeaseRow)
+                .where(TaskLeaseRow.task_id == "task-demo")
+                .values(expires_at=ts(0))
+            )
+        assert app.state.task_leases.recover_expired_leases() == 1
+        other = app.state.task_leases.register_worker(
+            "completion-worker",
+            "completion-worker-instance",
+            60,
+        )
+        acquired = app.state.task_leases.acquire_task(other.id, 60, "task-demo")
+        assert acquired is not None
+        _, lease = acquired
+        app.state.task_leases.complete_task(
+            "task-demo",
+            other.id,
+            lease.leaseToken,
+            "external-authoritative-result",
+        )
+        monkeypatch.setattr(service, "_handle", original_handle)
+
+        assert await service.run_once(worker.id) is None
+        runtime = app.state.agent_runtime_service.repository.load_run(
+            "run-prepared-external-completion"
+        )
+        assert runtime is not None
+        assert runtime.state == "cancelled"
+        execution = app.state.model_execution_repository.get_by_run(runtime.specification.run_id)
+        assert execution is not None
+        assert execution.stage == "failed"
+        assert execution.failureCode == "task_completed_elsewhere"
+        assert app.state.task_leases.task_recovery_state("task-demo") == (
+            "completed",
+            "external-authoritative-result",
+        )
+        assert router.requests == []
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
 async def test_crash_after_runtime_start_with_prepared_execution_recovers_without_stranding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
