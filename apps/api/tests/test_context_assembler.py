@@ -5,6 +5,7 @@ import logging
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import ValidationError
 
 from app.context.assembler import ContextAssembler, hash_content
 from app.core.errors import DomainError
@@ -91,6 +92,21 @@ def assembler(**overrides: object) -> ContextAssembler:
         **overrides,
     }
     return ContextAssembler(**settings)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "additional",
+    [
+        {"api_key": "not-persistable"},
+        {"nested": {"a": {"b": {"c": {"d": {"e": "too deep"}}}}}},
+        {f"key-{index}": index for index in range(65)},
+    ],
+)
+def test_source_metadata_rejects_secret_bearing_or_unbounded_values(
+    additional: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        ContextSourceMetadata(additional=additional)
 
 
 def test_assembly_is_deterministic_across_source_order() -> None:

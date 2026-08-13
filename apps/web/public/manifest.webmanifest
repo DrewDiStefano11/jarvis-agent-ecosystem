@@ -1,8 +1,8 @@
 {
   "name": "Jarvis Agent Ecosystem Simulator",
   "short_name": "Jarvis Sim",
-  "description": "Installable Phase 1 shell for a deterministic local agent simulator.",
-  "start_url": "/", "scope": "/", "display": "standalone",
+  "description": "Installable shell for the local durable Jarvis agent control plane.",
+  "start_url": ".", "scope": ".", "display": "standalone",
   "background_color": "#071611", "theme_color": "#071611",
-  "icons": [{"src": "/jarvis-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}]
+  "icons": [{"src": "jarvis-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable"}]
 }

@@ -14,6 +14,12 @@ EXPECTED_RUN_ERRORS = {
 }
 
 
+def _create_worker_app():
+    """Compose worker dependencies without declaring an API process restart."""
+
+    return create_app(recover_interrupted_workflow=False)
+
+
 async def _run_once_resilient(service, worker_id: str):
     try:
         return await service.run_once(worker_id)
@@ -24,7 +30,9 @@ async def _run_once_resilient(service, worker_id: str):
 
 
 async def run() -> None:
-    app = create_app()
+    # The sidecar shares durable services with the API, but it is not an API
+    # restart and must never run simulator crash-recovery initialization.
+    app = _create_worker_app()
     settings = app.state.settings
     service = app.state.autonomous_worker_service
     service.validate_enabled()

@@ -11,5 +11,8 @@
 - Preserve compatible response envelopes, error codes, event schema versions, and sequence semantics.
 - Update contracts, tests, and docs together. Never add secrets or commit `.env`, virtual environments, dependencies, or builds.
 - Tests must use isolated temporary databases. Runtime databases and SQLite sidecars must never be committed.
-- Phase 1 prohibits real models, external integrations, databases, automation, shell tools for agents, and misleading capability placeholders.
+- Phase 2C permits only the disabled-by-default, explicitly queued local-only
+  `planning_review` worker documented in `docs/autonomous-worker.md`. Remote models,
+  provider fallback, agent tools, external side effects, and misleading capability
+  placeholders remain prohibited.
 - Work on feature branches. Never merge directly into `main`, delete the feature branch, or push without approval.

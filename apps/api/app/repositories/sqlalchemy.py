@@ -181,8 +181,25 @@ class SqlAlchemyRepository:
     def sequence(self) -> int:
         return self._system.current_sequence_number
 
+    def current_event_cursor(self) -> tuple[str, int]:
+        """Read the committed simulator-session cursor without mutating state."""
+
+        with self.session_factory() as session:
+            state = session.get(SystemStateRow, 1)
+            if state is None:
+                raise RuntimeError("System state is unavailable.")
+            return state.event_session_id, state.current_sequence_number
+
     def next_sequence(self) -> int:
-        self._system.current_sequence_number += 1
+        """Allocate the pre-reset audit sequence used only by simulator reset.
+
+        Ordinary domain events allocate their cursor atomically with the outbox
+        insert in ``enqueue_event``.
+        """
+
+        event_session_id, committed_sequence = self.current_event_cursor()
+        self._system.event_session_id = event_session_id
+        self._system.current_sequence_number = committed_sequence + 1
         return self._system.current_sequence_number
 
     def reset_sequence(self) -> None:
@@ -192,8 +209,26 @@ class SqlAlchemyRepository:
     @staticmethod
     def require(store: dict[str, object], item_id: str, kind: str) -> object:
         if item_id not in store:
-            raise DomainError(f"{kind.upper()}_NOT_FOUND", f"Unknown {kind} ID: {item_id}", 404)
+            raise DomainError(f"{kind.upper()}_NOT_FOUND", f"The {kind} was not found.", 404)
         return store[item_id]
+
+    def list_tasks_durable(self) -> list[Task]:
+        """Read task state from the shared database instead of process-local cache."""
+
+        with self.session_factory() as session:
+            return [
+                Task.model_validate(row.payload)
+                for row in session.scalars(select(TaskRow).order_by(TaskRow.created_at, TaskRow.id))
+            ]
+
+    def get_task_durable(self, task_id: str) -> Task:
+        """Read one task from the shared database and preserve public not-found semantics."""
+
+        with self.session_factory() as session:
+            row = session.get(TaskRow, task_id)
+            if row is None:
+                raise DomainError("TASK_NOT_FOUND", "The task was not found.", 404)
+            return Task.model_validate(row.payload)
 
     def persist(self) -> None:
         try:
@@ -492,13 +527,50 @@ class SqlAlchemyRepository:
         self,
         envelope: dict[str, Any],
         idempotency: IdempotencyResult | None = None,
-    ) -> None:
+    ) -> dict[str, Any]:
+        audit = envelope.pop("_audit", None)
         pending_checkpoint = self._pending_checkpoint
         pending_workflow_run = self._pending_workflow_run
         try:
             with UnitOfWork(self.session_factory) as uow:
                 assert uow.session is not None
                 session = uow.session
+                cursor = session.execute(
+                    update(SystemStateRow)
+                    .where(SystemStateRow.id == 1)
+                    .values(
+                        current_sequence_number=SystemStateRow.current_sequence_number + 1,
+                        updated_at=datetime.now(UTC),
+                    )
+                    .returning(
+                        SystemStateRow.event_session_id,
+                        SystemStateRow.current_sequence_number,
+                    )
+                ).one_or_none()
+                if cursor is None:
+                    raise RuntimeError("System state is unavailable.")
+                event_session_id, sequence_number = cursor
+                envelope.update(
+                    {
+                        "eventSessionId": event_session_id,
+                        "sequenceNumber": sequence_number,
+                    }
+                )
+                self._system.event_session_id = event_session_id
+                self._system.current_sequence_number = sequence_number
+                if isinstance(audit, dict):
+                    self.stage_audit(
+                        str(envelope["eventType"]),
+                        str(audit["summary"]),
+                        sequence_number,
+                        str(envelope["taskId"]) if envelope.get("taskId") else None,
+                        str(envelope["agentId"]) if envelope.get("agentId") else None,
+                        str(audit["previous"]) if audit.get("previous") is not None else None,
+                        str(audit["new"]) if audit.get("new") is not None else None,
+                        audit.get("payload") if isinstance(audit.get("payload"), dict) else None,
+                        event_session_id=event_session_id,
+                        correlation_id=str(envelope["correlationId"]),
+                    )
                 self._persist_entities(session)
                 self._persist_audit(session)
                 self._system.updated_at = datetime.now(UTC)
@@ -532,6 +604,7 @@ class SqlAlchemyRepository:
             self._system.last_checkpoint_id = pending_checkpoint["id"]
             self._system.simulator_status = pending_checkpoint["status"]
             self._pending_checkpoint = None
+        return envelope
 
     def pending_outbox(self) -> list[dict[str, Any]]:
         return [envelope for _, envelope in self.pending_outbox_records()]
@@ -1091,11 +1164,12 @@ class SqlAlchemyRepository:
             raise
 
     def snapshot(self) -> dict[str, object]:
+        tasks = self.list_tasks_durable()
         return deepcopy(
             {
                 "departments": list(self.departments.values()),
                 "agents": list(self.agents.values()),
-                "tasks": list(self.tasks.values()),
+                "tasks": tasks,
                 "approvals": list(self.approvals.values()),
                 "artifacts": list(self.artifacts.values()),
                 "notifications": list(self.notifications.values()),

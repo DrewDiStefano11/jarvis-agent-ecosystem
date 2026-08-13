@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import delete, func, select, update
 
+import app.autonomous_worker.__main__ as worker_main
 from app.agent_runtime.errors import (
     RuntimeActorInactiveError,
     RuntimePermissionDeniedError,
@@ -18,6 +19,7 @@ from app.autonomous_worker.errors import AutonomousWorkerError
 from app.core.config import Settings
 from app.core.errors import DomainError
 from app.db.models import (
+    AgentRuntimeRunRow,
     AuditEventRow,
     ModelExecutionRow,
     OutboxEventRow,
@@ -68,6 +70,20 @@ VALID_RESULT = {
     "missingInformation": [],
     "requiresHumanReview": False,
 }
+
+
+def test_worker_dependency_composition_skips_api_recovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    sentinel = object()
+    received: dict[str, object] = {}
+
+    def fake_create_app(**kwargs):
+        received.update(kwargs)
+        return sentinel
+
+    monkeypatch.setattr(worker_main, "create_app", fake_create_app)
+
+    assert worker_main._create_worker_app() is sentinel
+    assert received == {"recover_interrupted_workflow": False}
 
 
 class FakeProvider:
@@ -879,6 +895,13 @@ async def test_worker_health_reports_durable_safety_failures(tmp_path: Path) -> 
         )
         assert status.status == "degraded"
         assert status.reasonCode == "model_result_corrupt"
+        disabled_status = repository.status(
+            enabled=False,
+            execution_mode="disabled",
+            provider_ready=False,
+        )
+        assert disabled_status.status == "degraded"
+        assert disabled_status.reasonCode == "model_result_corrupt"
 
         with repository.sessions.begin() as session:
             session.execute(
@@ -901,6 +924,33 @@ async def test_worker_health_reports_durable_safety_failures(tmp_path: Path) -> 
         )
         assert status.status == "degraded"
         assert status.reasonCode == "model_execution_outbox_exhausted"
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_worker_health_fails_closed_for_malformed_queued_runtime_state(
+    tmp_path: Path,
+) -> None:
+    app, client, _, _ = worker_fixture(
+        tmp_path,
+        router=FakeRouter([json.dumps(VALID_RESULT)]),
+        run_id="run-autonomous-malformed-health",
+    )
+    try:
+        with app.state.model_execution_repository.sessions.begin() as session:
+            session.execute(
+                update(AgentRuntimeRunRow)
+                .where(AgentRuntimeRunRow.run_id == "run-autonomous-malformed-health")
+                .values(snapshot_json="{not-valid-json")
+            )
+
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        payload = response.json()["data"]
+        assert payload["status"] == "degraded"
+        assert payload["autonomousWorker"]["status"] == "degraded"
+        assert payload["autonomousWorker"]["reasonCode"] == "autonomous_runtime_state_corrupt"
+        assert "not-valid-json" not in response.text
     finally:
         client.__exit__(None, None, None)
 

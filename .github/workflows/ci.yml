@@ -20,6 +20,8 @@ jobs:
           python -m alembic upgrade head
           python -m alembic current
           python -m alembic history
+          python -m alembic downgrade 20260729_04
+          python -m alembic upgrade head
         working-directory: apps/api
       - run: ruff format . --check
         working-directory: apps/api
@@ -45,3 +47,21 @@ jobs:
         working-directory: apps/web
       - run: pnpm build
         working-directory: apps/web
+  repository-integrity:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject tracked runtime and generated artifacts
+        shell: pwsh
+        run: |
+          git diff --check
+          $tracked = git ls-files
+          $forbidden = $tracked | Where-Object {
+            $_ -match '(^|/)(node_modules|dist|build|coverage|data|\.venv|__pycache__|\.pytest_cache|\.ruff_cache)(/|$)' -or
+            $_ -match '\.(db|db-shm|db-wal|pyc|tsbuildinfo)$' -or
+            $_ -match '(^|/)\.env$'
+          }
+          if ($forbidden) {
+            $forbidden | ForEach-Object { Write-Error "Forbidden tracked artifact: $_" }
+            throw "Generated or sensitive runtime artifacts are tracked."
+          }

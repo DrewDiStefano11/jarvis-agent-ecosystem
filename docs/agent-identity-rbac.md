@@ -2,6 +2,15 @@
 
 This subsystem is a durable organizational identity and authorization boundary. It does **not** authenticate users, execute agents, call models, assign tasks, track occupancy, or run approval workflows.
 
+The current HTTP control plane trusts one local operator and has no user
+authentication. The application therefore rejects non-loopback HTTP and WebSocket
+peers, and `WEB_ORIGIN` must be a structurally loopback HTTP(S) origin. Do not place
+this phase behind a remote reverse proxy or bind it for LAN/public access. The
+`X-Jarvis-Actor-Id` header selects an existing runtime identity only inside that
+trusted local boundary; it does not authenticate the caller and is not a user
+credential. A future remote or
+multi-user deployment requires a separately reviewed authentication architecture.
+
 ## Terms and architecture
 
 An **identity** is stable even when its display name changes. Lifecycle (`provisioned`, `active`, `suspended`, `retired`) is durable and separate from operational status. Retirement is terminal. A **rank** provides deterministic ordering and optional explicit ceilings, but grants nothing by itself. A **role** is a reusable permission collection. A **capability** is descriptive eligibility and never authorization. Teams and directed supervisor relationships describe organization; hierarchy alone grants no authority.

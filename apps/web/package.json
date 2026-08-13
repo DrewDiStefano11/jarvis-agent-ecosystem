@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
-    "lint": "eslint .",
+    "lint": "eslint . && node --check public/sw.js",
     "test": "vitest run"
   },
   "dependencies": {

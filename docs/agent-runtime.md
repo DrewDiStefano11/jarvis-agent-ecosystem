@@ -2,20 +2,25 @@
 
 ## Purpose
 
-The agent runtime package is a backend-only domain foundation for representing, validating, recording, replaying, and explaining the lifecycle of one Jarvis agent execution run.
+The agent runtime domain is the authoritative foundation for representing,
+validating, recording, replaying, and explaining one Jarvis agent execution run.
 
-It is intentionally isolated from:
+Its contracts, transition table, replay logic, and recovery planner are
+intentionally isolated from:
 
 - FastAPI routes
 - SQLAlchemy persistence
 - model providers
-- identity and RBAC
 - task schedulers and workers
 - tool execution
 - network calls
 - office or frontend state
 
-The package provides deterministic contracts, an append-only execution ledger, optimistic concurrency rules, idempotent command handling, a reference in-memory repository, and a pure recovery planner.
+The repository also contains production composition around that domain:
+`app.agent_runtime.router` exposes the HTTP control plane,
+`app.agent_runtime.sqlalchemy_repository` stores durable runs/events/checkpoints and
+outbox records, and `app.agent_runtime.authorization` applies identity/RBAC checks.
+The in-memory repository remains a deterministic reference adapter for unit tests.
 
 ## Terminology
 
@@ -432,18 +437,19 @@ It still enforces:
 
 ## Integration boundaries
 
-Future integrations may attach this package to:
+The durable control plane currently composes the domain with:
 
 - durable task and lease ownership
 - identity references and authorization decisions
 - model routing
 - context assembly
-- tool invocation
 - checkpoint storage adapters
 - audit and observability pipelines
 - a transactional outbox publisher
 
-Those integrations are deferred on purpose. This package uses opaque IDs and safe metadata only.
+Tool invocation remains deliberately absent. These integrations call the runtime
+service boundary; they do not mutate runtime projections directly. The domain
+contracts continue to use opaque identifiers and bounded safe metadata.
 
 ## Examples
 
