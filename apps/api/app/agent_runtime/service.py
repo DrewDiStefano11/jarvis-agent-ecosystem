@@ -949,7 +949,7 @@ class AgentRuntimeService:
             None,
         )
         if existing_checkpoint is not None:
-            submitted_attempt_id = command.attempt_id or snapshot.active_attempt_id
+            submitted_attempt_id = command.attempt_id or existing_checkpoint.attempt_id
             if self._checkpoint_matches_command(
                 existing_checkpoint,
                 command,
