@@ -135,7 +135,6 @@ def test_identical_historical_checkpoint_resubmission_is_a_deterministic_no_op()
         timestamp=ts(5),
         actor_reference="worker-1",
         checkpoint_id="checkpoint-a",
-        attempt_id=attempt_id,
         state_reference="checkpoint://state/a",
         integrity_digest="sha256:aaaaaaaaaaaaaaaa",
         resume_cursor="cursor-a",
