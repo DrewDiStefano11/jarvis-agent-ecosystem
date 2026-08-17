@@ -6,7 +6,9 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.core.errors import DomainError
 from app.db.models import (
@@ -210,6 +212,134 @@ def test_duplicate_and_invalid_stable_key(service):
         CreateAgentRequest(stable_key="Not Valid", display_name="x", agent_type="worker")
 
 
+@pytest.mark.parametrize("rank_id", ["", " ", "   ", "\t", "\n", " \t "])
+def test_agent_rank_id_rejects_empty_and_whitespace_at_contract_boundary(rank_id):
+    with pytest.raises(ValidationError):
+        CreateAgentRequest(
+            stable_key="agent.invalid-rank",
+            display_name="Invalid rank",
+            agent_type="worker",
+            rank_id=rank_id,
+        )
+
+
+def test_agent_rank_validation_and_lookup_are_atomic_at_api_boundary(service):
+    rank = service.create_definition(
+        "rank",
+        CreateRankRequest(
+            stable_key="rank.agent-create",
+            display_name="Agent create rank",
+            priority_level=1,
+            hierarchy_level=1,
+        ),
+    )
+    app = create_app(database_url=str(service.sessions.kw["bind"].url))
+    before = len(service.audits(0, 100, "agent.created"))
+    requests = [
+        (
+            {"stable_key": "agent.rank-omitted", "display_name": "Omitted", "agent_type": "worker"},
+            201,
+        ),
+        (
+            {
+                "stable_key": "agent.rank-null",
+                "display_name": "Null",
+                "agent_type": "worker",
+                "rank_id": None,
+            },
+            201,
+        ),
+        (
+            {
+                "stable_key": "agent.rank-existing",
+                "display_name": "Existing",
+                "agent_type": "worker",
+                "rank_id": rank.id,
+            },
+            201,
+        ),
+        (
+            {
+                "stable_key": "agent.rank-empty",
+                "display_name": "Empty",
+                "agent_type": "worker",
+                "rank_id": "",
+            },
+            422,
+        ),
+        (
+            {
+                "stable_key": "agent.rank-whitespace",
+                "display_name": "Whitespace",
+                "agent_type": "worker",
+                "rank_id": " \t ",
+            },
+            422,
+        ),
+        (
+            {
+                "stable_key": "agent.rank-missing",
+                "display_name": "Missing",
+                "agent_type": "worker",
+                "rank_id": "rank-missing",
+            },
+            404,
+        ),
+    ]
+
+    with TestClient(app) as client:
+        responses = [client.post("/api/identity/agents", json=body) for body, _ in requests]
+
+    assert [response.status_code for response in responses] == [status for _, status in requests]
+    assert responses[3].json()["error"]["code"] == "REQUEST_VALIDATION_ERROR"
+    assert responses[4].json()["error"]["code"] == "REQUEST_VALIDATION_ERROR"
+    assert responses[5].json()["error"]["code"] == "RANK_NOT_FOUND"
+    persisted = {row.stable_key: row for row in service.list_agents(0, 100)}
+    assert set(persisted) >= {
+        "agent.rank-omitted",
+        "agent.rank-null",
+        "agent.rank-existing",
+    }
+    assert not {
+        "agent.rank-empty",
+        "agent.rank-whitespace",
+        "agent.rank-missing",
+    } & set(persisted)
+    assert persisted["agent.rank-omitted"].rank_id is None
+    assert persisted["agent.rank-null"].rank_id is None
+    assert persisted["agent.rank-existing"].rank_id == rank.id
+    assert len(service.audits(0, 100, "agent.created")) == before + 3
+
+
+def test_agent_creation_does_not_misclassify_unrelated_integrity_error(service):
+    invalid = CreateAgentRequest.model_construct(
+        stable_key="agent.unrelated-integrity",
+        display_name="Unrelated integrity",
+        description="",
+        agent_type="worker",
+        rank_id="",
+        is_system_agent=False,
+    )
+    before = len(service.audits(0, 100, "agent.created"))
+
+    with pytest.raises(IntegrityError):
+        service.create_agent(invalid)
+
+    assert not any(
+        row.stable_key == "agent.unrelated-integrity" for row in service.list_agents(0, 100)
+    )
+    assert len(service.audits(0, 100, "agent.created")) == before
+
+
+def test_successful_agent_creation_keeps_expected_audit(service):
+    created = agent(service, "agent.audit-success")
+
+    event = service.audits(0, 100, "agent.created")[0]
+    assert event.target_type == "agent"
+    assert event.target_id == created.id
+    assert event.changes == {}
+
+
 def test_explicit_deny_overrides_role_grant(service):
     actor = agent(service, "agent.authorized")
     service.transition(actor.id, "active")
@@ -265,6 +395,72 @@ def test_role_assignment_audits_identify_role_and_assignment(service):
         }
         for role, assignment in zip(roles, assignments, strict=True)
     }
+
+
+def test_role_permission_attachment_audits_identify_permission_and_effect(service):
+    role = service.create_definition(
+        "role",
+        CreateRoleRequest(
+            stable_key="role.permission-audit",
+            display_name="Permission audit role",
+            role_scope="global",
+        ),
+    )
+    permissions = [
+        service.create_definition(
+            "permission",
+            CreatePermissionRequest(
+                stable_key=f"artifact.permission-audit-{effect}",
+                display_name=f"Permission audit {effect}",
+                resource_type="artifact",
+                action=f"permission-audit-{effect}",
+            ),
+        )
+        for effect in ("allow", "deny")
+    ]
+
+    for permission, effect in zip(permissions, ("allow", "deny"), strict=True):
+        service.attach_permission(role.id, permission.id, effect)
+
+    events = service.audits(0, 100, "role.permission_attached")
+    changes_by_permission = {event.changes["permission_id"]: event for event in events}
+    assert set(changes_by_permission) == {permission.id for permission in permissions}
+    for permission, effect in zip(permissions, ("allow", "deny"), strict=True):
+        event = changes_by_permission[permission.id]
+        assert event.target_type == "role"
+        assert event.target_id == role.id
+        assert event.changes == {"permission_id": permission.id, "effect": effect}
+
+
+def test_failed_role_permission_attachments_do_not_append_success_audits(service):
+    role = service.create_definition(
+        "role",
+        CreateRoleRequest(
+            stable_key="role.permission-audit-failure",
+            display_name="Permission audit failure role",
+            role_scope="global",
+        ),
+    )
+    permission = service.create_definition(
+        "permission",
+        CreatePermissionRequest(
+            stable_key="artifact.permission-audit-failure",
+            display_name="Permission audit failure",
+            resource_type="artifact",
+            action="permission-audit-failure",
+        ),
+    )
+    service.attach_permission(role.id, permission.id, "allow")
+    before = len(service.audits(0, 100, "role.permission_attached"))
+
+    with pytest.raises(DomainError) as duplicate:
+        service.attach_permission(role.id, permission.id, "allow")
+    with pytest.raises(DomainError) as missing:
+        service.attach_permission(role.id, "permission-missing", "deny")
+
+    assert duplicate.value.code == "DUPLICATE_ASSIGNMENT"
+    assert missing.value.code == "PERMISSION_NOT_FOUND"
+    assert len(service.audits(0, 100, "role.permission_attached")) == before
 
 
 def test_permission_assignment_audits_identify_authorization_change(service):
