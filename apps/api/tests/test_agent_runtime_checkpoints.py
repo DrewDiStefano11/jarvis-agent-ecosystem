@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
 import pytest
 
 from app.agent_runtime.errors import (
@@ -227,6 +230,66 @@ def test_identical_historical_checkpoint_resubmission_is_a_deterministic_no_op()
     )
     assert plan.selected_checkpoint is not None
     assert plan.selected_checkpoint.checkpoint_id == "checkpoint-b"
+
+
+def test_concurrent_same_command_historical_checkpoint_no_op_replays_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = make_service()
+    prepare_running_run(service)
+    checkpoint_a = RecordCheckpointCommand(
+        run_id="run-1",
+        command_id="cmd-checkpoint-a",
+        expected_run_version=6,
+        timestamp=ts(5),
+        actor_reference="worker-1",
+        checkpoint_id="checkpoint-a",
+        state_reference="checkpoint://state/a",
+        integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+        resume_cursor="cursor-a",
+        checkpoint_metadata={"step": 1},
+        source_metadata={"source": "test"},
+    )
+    service.record_checkpoint(checkpoint_a)
+    service.record_checkpoint(
+        checkpoint_a.model_copy(
+            update={
+                "command_id": "cmd-checkpoint-b",
+                "expected_run_version": 7,
+                "timestamp": ts(6),
+                "checkpoint_id": "checkpoint-b",
+                "state_reference": "checkpoint://state/b",
+                "integrity_digest": "sha256:bbbbbbbbbbbbbbbb",
+            }
+        )
+    )
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    before_checkpoints = service.repository.list_checkpoints("run-1")
+    command = checkpoint_a.model_copy(
+        update={
+            "command_id": "cmd-checkpoint-a-concurrent-resubmit",
+            "expected_run_version": 8,
+        }
+    )
+    barrier = Barrier(2)
+    original_commit = service.repository.commit_command
+
+    def wrapped_commit(*args, **kwargs):
+        barrier.wait()
+        return original_commit(*args, **kwargs)
+
+    monkeypatch.setattr(service.repository, "commit_command", wrapped_commit)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: service.record_checkpoint(command), range(2)))
+
+    assert sorted(result.idempotent_replay for result in results) == [False, True]
+    assert all(result.snapshot == before_snapshot for result in results)
+    assert all(result.events == () for result in results)
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
+    assert service.repository.list_checkpoints("run-1") == before_checkpoints
 
 
 @pytest.mark.parametrize(

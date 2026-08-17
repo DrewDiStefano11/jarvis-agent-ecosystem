@@ -957,13 +957,17 @@ class AgentRuntimeService:
             ):
                 result = RuntimeCommandResult(run_id=command.run_id, snapshot=snapshot, events=())
                 record = self._processed_record(command.run_id, command.command_id, command, result)
-                self.repository.commit_command(
+                existing_record = self.repository.commit_command(
                     snapshot=snapshot,
                     events=(),
                     processed_command=record,
                     expected_version=snapshot.version,
                     expected_sequence=snapshot.event_sequence_number,
                 )
+                if existing_record is not None:
+                    return existing_record.result.model_copy(
+                        update={"idempotent_replay": True}, deep=True
+                    )
                 return result
             raise CheckpointSequenceConflictError(
                 "The checkpoint ID already exists with different contents or lineage.",
