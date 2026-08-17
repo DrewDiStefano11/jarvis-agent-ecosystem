@@ -1,5 +1,6 @@
-const CACHE = 'jarvis-shell-v2'
 const SCOPE = self.registration.scope
+const CACHE_NAMESPACE = `jarvis-shell:${SCOPE}`
+const CACHE = `${CACHE_NAMESPACE}:v2`
 const SHELL = [
   SCOPE,
   new URL('manifest.webmanifest', SCOPE).href,
@@ -15,7 +16,11 @@ self.addEventListener('activate', (event) => {
     caches
       .keys()
       .then((keys) =>
-        Promise.all(keys.filter((key) => key !== CACHE).map((key) => caches.delete(key))),
+        Promise.all(
+          keys
+            .filter((key) => key.startsWith(`${CACHE_NAMESPACE}:`) && key !== CACHE)
+            .map((key) => caches.delete(key)),
+        ),
       )
       .then(() => self.clients.claim()),
   )

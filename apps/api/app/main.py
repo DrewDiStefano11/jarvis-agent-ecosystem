@@ -1216,7 +1216,7 @@ def create_app(
         try:
             await broker.send_snapshot(
                 websocket,
-                {
+                lambda: {
                     "snapshot": _json_snapshot(repository.snapshot()),
                     "system": system_status().model_dump(mode="json"),
                 },
@@ -1229,7 +1229,7 @@ def create_app(
                 if message == "resync":
                     await broker.send_snapshot(
                         websocket,
-                        {
+                        lambda: {
                             "snapshot": _json_snapshot(repository.snapshot()),
                             "system": system_status().model_dump(mode="json"),
                         },

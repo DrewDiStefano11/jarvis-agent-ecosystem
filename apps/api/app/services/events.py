@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -36,7 +37,7 @@ class EventBroker:
     async def send_snapshot(
         self,
         websocket: WebSocket,
-        payload: dict[str, object],
+        payload_factory: Callable[[], dict[str, object]],
     ) -> EventEnvelope:
         """Send one synchronization frame without creating a domain event.
 
@@ -50,6 +51,7 @@ class EventBroker:
                 event_session_id, sequence = self.repository.current_event_cursor()
             else:
                 event_session_id, sequence = None, self.sequence
+            payload = payload_factory()
             event = EventEnvelope(
                 eventId=f"snapshot-{uuid4().hex[:12]}",
                 eventType="system.snapshot",

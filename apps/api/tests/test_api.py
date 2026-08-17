@@ -261,6 +261,31 @@ def test_websocket_resync_is_requester_only_and_does_not_create_outbox_state() -
             assert app.state.repository.outbox_pending_count() == outbox_before
 
 
+def test_websocket_snapshot_captures_cursor_before_reading_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_app(delay_ms=1)
+    with TestClient(app) as api:
+        cursor_captured = False
+        original_cursor = app.state.repository.current_event_cursor
+        original_snapshot = app.state.repository.snapshot
+
+        def current_event_cursor():
+            nonlocal cursor_captured
+            cursor_captured = True
+            return original_cursor()
+
+        def snapshot():
+            assert cursor_captured
+            return original_snapshot()
+
+        monkeypatch.setattr(app.state.repository, "current_event_cursor", current_event_cursor)
+        monkeypatch.setattr(app.state.repository, "snapshot", snapshot)
+
+        with api.websocket_connect("/ws/events") as socket:
+            assert socket.receive_json()["eventType"] == "system.snapshot"
+
+
 def test_demo_completes_deterministically() -> None:
     app = create_app(delay_ms=1)
     with TestClient(app) as api:
