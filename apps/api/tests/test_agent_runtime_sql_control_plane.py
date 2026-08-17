@@ -3,9 +3,9 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi.testclient import TestClient
-from sqlalchemy import text, update
+from sqlalchemy import select, text, update
 
-from app.db.models import OutboxEventRow
+from app.db.models import AuditEventRow, OutboxEventRow
 from app.main import create_app
 from app.models.agent_runtime import (
     AgentRunState,
@@ -237,6 +237,14 @@ def test_runtime_sql_historical_checkpoint_no_op_does_not_rewrite_projection(tmp
                 ),
                 {"run_id": "run-1", "checkpoint_id": "checkpoint-a"},
             ).scalar_one()
+            audit_session_id = service.repository._runtime_session_id("run-1")
+            before_audit_sequence = session.execute(
+                text(
+                    "SELECT MAX(sequence_number) FROM audit_events "
+                    "WHERE event_session_id = :event_session_id"
+                ),
+                {"event_session_id": audit_session_id},
+            ).scalar_one()
 
         before_snapshot = service.repository.load_run("run-1")
         before_events = service.repository.list_events("run-1")
@@ -267,6 +275,33 @@ def test_runtime_sql_historical_checkpoint_no_op_does_not_rewrite_projection(tmp
             service.repository.get_processed_command("run-1", "cmd-checkpoint-a-resubmit")
             is not None
         )
+        service.record_checkpoint(
+            original.model_copy(
+                update={
+                    "command_id": "cmd-checkpoint-c",
+                    "expected_run_version": 8,
+                    "timestamp": ts(7),
+                    "checkpoint_id": "checkpoint-c",
+                    "state_reference": "checkpoint://state/c",
+                    "integrity_digest": "sha256:cccccccccccccccc",
+                }
+            )
+        )
+        with app.state.agent_runtime_repository.sessions() as session:
+            audit_rows = list(
+                session.scalars(
+                    select(AuditEventRow)
+                    .where(AuditEventRow.event_session_id == audit_session_id)
+                    .order_by(AuditEventRow.sequence_number)
+                )
+            )
+        audit_sequences = [row.sequence_number for row in audit_rows]
+        audit_by_command = {row.payload["payload"]["commandId"]: row for row in audit_rows}
+        assert len(audit_sequences) == len(set(audit_sequences))
+        assert audit_by_command["cmd-checkpoint-a-resubmit"].sequence_number == (
+            before_audit_sequence + 1
+        )
+        assert audit_by_command["cmd-checkpoint-c"].sequence_number == before_audit_sequence + 2
 
 
 def test_concurrent_different_create_commands_return_run_already_exists(tmp_path) -> None:
