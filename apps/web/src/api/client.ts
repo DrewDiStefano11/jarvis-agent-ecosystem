@@ -1,7 +1,7 @@
 import type { ApiEnvelope } from '../types/contracts'
 
-export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
-export const WS_URL = import.meta.env.VITE_WS_URL ?? 'ws://localhost:8000/ws/events'
+export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000'
+export const WS_URL = import.meta.env.VITE_WS_URL ?? 'ws://127.0.0.1:8000/ws/events'
 
 export class ApiError extends Error { constructor(public code:string, message:string, public status:number){super(message)} }
 

@@ -57,6 +57,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
         "context_assemblies",
         "departments",
         "idempotency_records",
+        "model_executions",
         "notifications",
         "outbox_events",
         "system_state",
@@ -140,7 +141,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
         item["name"] for item in inspector.get_check_constraints("identity_agent_permissions")
     }
     with engine.connect() as connection:
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260729_04"
+        assert connection.scalar(text("select version_num from alembic_version")) == "20260729_05"
     engine.dispose()
     command.downgrade(config, "20260723_02")
     lease_engine = create_engine(database_url(path))
@@ -153,7 +154,13 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     phase_2a_engine = create_engine(database_url(path))
     phase_2a_tables = set(inspect(phase_2a_engine).get_table_names())
     phase_2a_engine.dispose()
-    phase_2b_tables = {"context_assemblies", "task_attempts", "task_leases", "workers"}
+    phase_2b_tables = {
+        "context_assemblies",
+        "model_executions",
+        "task_attempts",
+        "task_leases",
+        "workers",
+    }
     assert not phase_2b_tables & phase_2a_tables
     assert expected_tables - phase_2b_tables <= phase_2a_tables
     command.upgrade(config, "head")
@@ -179,7 +186,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     command.current(config)
     with create_database_engine(database_url(path)).connect() as connection:
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260729_04"
+        assert connection.scalar(text("select version_num from alembic_version")) == "20260729_05"
     for revision in (root / "migrations" / "versions").glob("*.py"):
         source = revision.read_text(encoding="utf-8")
         assert "Base.metadata" not in source
@@ -1507,11 +1514,22 @@ def test_outbox_dispatch_stops_at_configured_retry_limit(
     engine.dispose()
 
 
-def test_invalid_outbox_attempt_limits_are_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
-    for value in ("0", "-1", "not-a-number"):
-        monkeypatch.setenv("JARVIS_OUTBOX_MAX_ATTEMPTS", value)
-        with pytest.raises(ValidationError):
-            Settings()
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("JARVIS_OUTBOX_MAX_ATTEMPTS", "0"),
+        ("JARVIS_OUTBOX_MAX_ATTEMPTS", "101"),
+        ("JARVIS_OUTBOX_MAX_ATTEMPTS", "not-a-number"),
+        ("JARVIS_OUTBOX_POLL_INTERVAL_MS", "60001"),
+        ("JARVIS_IDEMPOTENCY_LEASE_SECONDS", "3601"),
+    ],
+)
+def test_invalid_persistence_limits_are_rejected(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError):
+        Settings()
 
 
 @pytest.mark.asyncio

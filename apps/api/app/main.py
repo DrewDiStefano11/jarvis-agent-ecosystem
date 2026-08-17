@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import os
 import sys
 import tempfile
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Annotated
 from uuid import uuid4
 
 from alembic import command
 from alembic.config import Config
 from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -19,6 +23,9 @@ from app.agent_runtime.errors import AgentRuntimeError
 from app.agent_runtime.router import router as agent_runtime_router
 from app.agent_runtime.service import AgentRuntimeService
 from app.agent_runtime.sqlalchemy_repository import SqlAlchemyAgentRuntimeRepository
+from app.autonomous_worker.repository import ModelExecutionRepository
+from app.autonomous_worker.router import router as autonomous_worker_router
+from app.autonomous_worker.service import AutonomousWorkerService
 from app.context import ContextAssembler
 from app.core.config import Settings
 from app.core.errors import DomainError
@@ -26,6 +33,8 @@ from app.core.transitions import InvalidTransitionError, validate_transition
 from app.db.session import create_database_engine, create_session_factory
 from app.identity.router import router as identity_router
 from app.identity.service import IdentityService
+from app.model_providers.factory import build_model_router
+from app.models.autonomous_worker import AutonomousWorkerStatus
 from app.models.context import (
     ContextAssembly,
     ContextAssemblyEventPayload,
@@ -61,7 +70,29 @@ from app.repositories.task_leases import TaskLeaseRepository
 from app.services.events import EventBroker
 from app.simulator.engine import SimulatorEngine
 
-DATABASE_REVISION = "20260729_04"
+DATABASE_REVISION = "20260729_05"
+IdempotencyKeyHeader = Annotated[
+    str | None,
+    Header(
+        alias="Idempotency-Key",
+        min_length=1,
+        max_length=200,
+        pattern=r"^[^\x00-\x1f\x7f]+$",
+    ),
+]
+
+
+def _is_loopback_peer(host: str | None) -> bool:
+    if host == "testclient":
+        # Starlette's in-process test transport has no network peer. This literal
+        # cannot be produced by a direct TCP connection.
+        return True
+    if not host:
+        return False
+    try:
+        return ipaddress.ip_address(host.split("%", 1)[0]).is_loopback
+    except ValueError:
+        return False
 
 
 def _upgrade_database(settings: Settings) -> None:
@@ -72,7 +103,71 @@ def _upgrade_database(settings: Settings) -> None:
     command.upgrade(config, "head")
 
 
-def create_app(delay_ms: int | None = None, database_url: str | None = None) -> FastAPI:
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    repository = app.state.repository
+    broker = app.state.broker
+    simulator = app.state.simulator
+    settings = app.state.settings
+    task_leases = app.state.task_leases
+    restored_workflow_state = app.state.restored_workflow_state
+    lease_recovery_task = None
+    startup_completed = False
+
+    async def recover_expired_task_leases() -> None:
+        while True:
+            await asyncio.sleep(settings.task_lease_recovery_interval_ms / 1000)
+            database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
+            if not database_reachable or not schema_current:
+                continue
+            recovered = task_leases.recover_expired_leases()
+            if recovered:
+                await broker.dispatch_pending()
+
+    try:
+        repository._system.last_successful_startup = datetime.now(UTC)
+        repository._system.startup_was_clean = False
+        repository.persist()
+        await broker.dispatch_pending()
+        await broker.start_dispatcher(settings.outbox_poll_interval_ms)
+        database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
+        if database_reachable and schema_current:
+            task_leases.recover_expired_leases()
+            await broker.dispatch_pending()
+        lease_recovery_task = asyncio.create_task(recover_expired_task_leases())
+        app.state.lease_recovery_task = lease_recovery_task
+        if restored_workflow_state == "recovery_required" and settings.simulator_auto_resume:
+            await simulator.resume()
+        startup_completed = True
+        yield
+    finally:
+        if lease_recovery_task:
+            lease_recovery_task.cancel()
+            try:
+                await lease_recovery_task
+            except asyncio.CancelledError:
+                pass
+        if simulator._runner and not simulator._runner.done():
+            simulator._stopped = True
+            simulator._runner.cancel()
+            try:
+                await simulator._runner
+            except asyncio.CancelledError:
+                pass
+        await broker.stop_dispatcher()
+        if startup_completed:
+            repository._system.last_clean_shutdown = datetime.now(UTC)
+            repository._system.startup_was_clean = True
+            repository.persist()
+        app.state.engine.dispose()
+
+
+def create_app(
+    delay_ms: int | None = None,
+    database_url: str | None = None,
+    *,
+    recover_interrupted_workflow: bool = True,
+) -> FastAPI:
     settings = Settings(JARVIS_DATABASE_URL=database_url) if database_url else Settings()
     settings.ensure_runtime_directory()
     if settings.auto_migrate:
@@ -85,11 +180,17 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         settings.outbox_max_attempts,
     )
     task_leases = TaskLeaseRepository(repository, session_factory, settings.task_lease_seconds)
-    restored_workflow_state = repository.mark_interrupted_workflow()
+    restored_workflow_state = (
+        repository.mark_interrupted_workflow() if recover_interrupted_workflow else None
+    )
     app = FastAPI(
         title="Jarvis Agent Ecosystem Simulator",
         version="0.1.0",
-        description="Phase 2A durable deterministic simulator. No real agents or external actions.",
+        description=(
+            "Durable local Jarvis control plane with one explicitly queued, "
+            "disabled-by-default local planning/review worker."
+        ),
+        lifespan=_lifespan,
     )
     app.add_middleware(
         CORSMiddleware,
@@ -135,9 +236,23 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         app.state.agent_runtime_repository,
         authorizer=IdentityRuntimeAuthorizer(app.state.identity_service),
     )
+    app.state.model_router = build_model_router(settings)
+    app.state.model_execution_repository = ModelExecutionRepository(
+        session_factory,
+        outbox_max_attempts=repository.outbox_max_attempts,
+    )
+    app.state.autonomous_worker_service = AutonomousWorkerService(
+        settings=settings,
+        executions=app.state.model_execution_repository,
+        task_leases=task_leases,
+        runtime=app.state.agent_runtime_service,
+        router=app.state.model_router,
+    )
     app.include_router(agent_runtime_router)
+    app.include_router(autonomous_worker_router)
     app.include_router(identity_router)
     app.state.lease_recovery_task = None
+    app.state.restored_workflow_state = restored_workflow_state
     app.state.recovery_required = restored_workflow_state == "recovery_required"
 
     def replay_idempotent(
@@ -168,6 +283,21 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 repository.idempotency_abandon(*claim)
         return response
 
+    @app.middleware("http")
+    async def enforce_local_control_plane(request: Request, call_next):
+        if not _is_loopback_peer(request.client.host if request.client else None):
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "error": {
+                        "code": "LOCAL_CONTROL_PLANE_ONLY",
+                        "message": "This phase accepts loopback clients only.",
+                        "details": {},
+                    }
+                },
+            )
+        return await call_next(request)
+
     def idempotency_result(
         request: Request,
         key: str | None,
@@ -192,53 +322,6 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             lease_expires_at=claim[2],
             resource_id=resource_id,
         )
-
-    @app.on_event("startup")
-    async def startup() -> None:
-        repository._system.last_successful_startup = datetime.now(UTC)
-        repository._system.startup_was_clean = False
-        repository.persist()
-        await broker.dispatch_pending()
-        await broker.start_dispatcher(settings.outbox_poll_interval_ms)
-
-        async def recover_expired_task_leases() -> None:
-            while True:
-                await asyncio.sleep(settings.task_lease_recovery_interval_ms / 1000)
-                database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
-                if not database_reachable or not schema_current:
-                    continue
-                recovered = task_leases.recover_expired_leases()
-                if recovered:
-                    await broker.dispatch_pending()
-
-        database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
-        if database_reachable and schema_current:
-            task_leases.recover_expired_leases()
-            await broker.dispatch_pending()
-        app.state.lease_recovery_task = asyncio.create_task(recover_expired_task_leases())
-        if restored_workflow_state == "recovery_required" and settings.simulator_auto_resume:
-            await simulator.resume()
-
-    @app.on_event("shutdown")
-    async def shutdown() -> None:
-        if app.state.lease_recovery_task:
-            app.state.lease_recovery_task.cancel()
-            try:
-                await app.state.lease_recovery_task
-            except asyncio.CancelledError:
-                pass
-        if simulator._runner and not simulator._runner.done():
-            simulator._stopped = True
-            simulator._runner.cancel()
-            try:
-                await simulator._runner
-            except asyncio.CancelledError:
-                pass
-        await broker.stop_dispatcher()
-        repository._system.last_clean_shutdown = datetime.now(UTC)
-        repository._system.startup_was_clean = True
-        repository.persist()
-        engine.dispose()
 
     @app.exception_handler(AgentRuntimeError)
     async def runtime_error(_: Request, exc: AgentRuntimeError) -> JSONResponse:
@@ -294,6 +377,37 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         return JSONResponse(
             status_code=exc.status_code,
             content={"error": {"code": exc.code, "message": exc.message, "details": {}}},
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_error(_: Request, exc: RequestValidationError) -> JSONResponse:
+        # FastAPI's default response includes the rejected input. That can reflect a
+        # credential, oversized payload, or other sensitive value supplied at a
+        # boundary. Return only bounded structural diagnostics.
+        issues = []
+        for error in exc.errors()[:32]:
+            location = [
+                str(part)[:80] for part in error.get("loc", ()) if isinstance(part, str | int)
+            ][:12]
+            issues.append(
+                {
+                    "location": location,
+                    "type": str(error.get("type", "value_error"))[:80],
+                }
+            )
+        return JSONResponse(
+            status_code=422,
+            content={
+                "error": {
+                    "code": "REQUEST_VALIDATION_ERROR",
+                    "message": "The request did not satisfy the API contract.",
+                    "details": {
+                        "issueCount": min(len(exc.errors()), 32),
+                        "issues": issues,
+                        "truncated": len(exc.errors()) > 32,
+                    },
+                }
+            },
         )
 
     def _bounded_runtime_health(reason_code: str) -> dict:
@@ -352,6 +466,36 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             return _bounded_runtime_health("schema_stale")
         return _safe_runtime_health(app.state.agent_runtime_repository.health_status)
 
+    def _autonomous_status_component(
+        database_reachable: bool,
+        schema_current: bool,
+        provider_ready: bool,
+    ) -> AutonomousWorkerStatus:
+        if not database_reachable or not schema_current:
+            return AutonomousWorkerStatus(
+                enabled=settings.autonomous_worker_enabled,
+                modelExecutionMode=settings.model_execution_mode,
+                providerReady=provider_ready,
+                status="degraded" if settings.autonomous_worker_enabled else "disabled",
+                reasonCode="schema_unavailable" if settings.autonomous_worker_enabled else None,
+            )
+        try:
+            return app.state.model_execution_repository.status(
+                enabled=settings.autonomous_worker_enabled,
+                execution_mode=settings.model_execution_mode,
+                provider_ready=provider_ready,
+            )
+        except Exception:
+            # Persisted-state or query failures remain visible but never expose SQL,
+            # malformed payloads, paths, or exception text through health.
+            return AutonomousWorkerStatus(
+                enabled=settings.autonomous_worker_enabled,
+                modelExecutionMode=settings.model_execution_mode,
+                providerReady=provider_ready,
+                status="degraded",
+                reasonCode="autonomous_worker_status_unavailable",
+            )
+
     def _status_snapshot() -> dict:
         database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
         outbox_pending_count = repository.outbox_pending_count() if database_reachable else 0
@@ -370,6 +514,14 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             }
         )
         runtime_persistence = _runtime_health_component(database_reachable, schema_current)
+        provider_ready = bool(
+            [provider for provider in app.state.model_router.registry.list() if provider.is_local]
+        )
+        autonomous_status = _autonomous_status_component(
+            database_reachable,
+            schema_current,
+            provider_ready,
+        )
         runtime_degraded = runtime_persistence.get("status", "healthy") != "healthy"
         degraded = (
             repository._system.recovery_status == "required"
@@ -379,6 +531,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             or lease_counts["expiredLeaseCount"] > 0
             or lease_counts["staleWorkerCount"] > 0
             or runtime_degraded
+            or (autonomous_status.status == "degraded")
         )
         return {
             "database_reachable": database_reachable,
@@ -389,6 +542,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             "lease_counts": lease_counts,
             "runtime_persistence": runtime_persistence,
             "runtime_degraded": runtime_degraded,
+            "autonomous_status": autonomous_status,
             "degraded": degraded,
         }
 
@@ -412,6 +566,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
                 "contextAssemblyCount": context_status.totalAssemblies if database_reachable else 0,
                 **snapshot["lease_counts"],
                 "runtimePersistence": snapshot["runtime_persistence"],
+                "autonomousWorker": snapshot["autonomous_status"],
                 "simulated": True,
             }
         )
@@ -452,6 +607,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             lastStartupAt=repository._system.last_successful_startup,
             lastCleanShutdown=repository._system.last_clean_shutdown,
             contextAssembler=context_status,
+            autonomousWorker=snapshot["autonomous_status"],
             **snapshot["lease_counts"],
         )
 
@@ -491,7 +647,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     async def create_temporary(
         request: Request,
         body: CreateTemporaryAgentRequest,
-        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        idempotency_key: IdempotencyKeyHeader = None,
     ) -> ApiResponse:
         payload = body.model_dump(mode="json")
         if replay := replay_idempotent(request, idempotency_key, "temporary-agent.create", payload):
@@ -553,17 +709,17 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.get("/api/tasks", response_model=ApiResponse)
     async def tasks() -> ApiResponse:
-        return ApiResponse(data=list(repository.tasks.values()))
+        return ApiResponse(data=repository.list_tasks_durable())
 
     @app.get("/api/tasks/{task_id}", response_model=ApiResponse)
     async def task(task_id: str) -> ApiResponse:
-        return ApiResponse(data=repository.require(repository.tasks, task_id, "task"))
+        return ApiResponse(data=repository.get_task_durable(task_id))
 
     @app.post("/api/tasks", response_model=ApiResponse, status_code=201)
     async def create_task(
         request: Request,
         body: CreateTaskRequest,
-        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        idempotency_key: IdempotencyKeyHeader = None,
     ) -> ApiResponse:
         payload = body.model_dump(mode="json")
         if replay := replay_idempotent(request, idempotency_key, "task.create", payload):
@@ -604,8 +760,8 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
             item = task_leases.cancel_task(task_id)
             await broker.dispatch_pending()
             return item
-        item = repository.require(repository.tasks, task_id, "task")
-        assert isinstance(item, Task)
+        item = repository.get_task_durable(task_id)
+        repository.tasks[item.id] = item
         if action == "pause":
             if item.status in {"completed", "cancelled", "paused"}:
                 raise DomainError(
@@ -657,7 +813,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     async def retry_task(
         request: Request,
         task_id: str,
-        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        idempotency_key: IdempotencyKeyHeader = None,
     ) -> ApiResponse:
         payload = {"taskId": task_id}
         if replay := replay_idempotent(request, idempotency_key, "task.retry", payload):
@@ -697,7 +853,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     async def create_context_assembly(
         request: Request,
         body: CreateContextAssemblyRequest,
-        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        idempotency_key: IdempotencyKeyHeader = None,
     ) -> ApiResponse | JSONResponse:
         payload = body.model_dump(mode="json")
         replay = replay_idempotent(
@@ -795,7 +951,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.post("/api/workers/{worker_id}/tasks/acquire", response_model=ApiResponse)
     async def acquire_task(worker_id: str, body: AcquireTaskLeaseRequest) -> ApiResponse:
-        acquired = task_leases.acquire_task(worker_id, body.leaseSeconds)
+        acquired = task_leases.acquire_task(worker_id, body.leaseSeconds, body.taskId)
         if acquired is None:
             return ApiResponse(data=None)
         task_item, lease = acquired
@@ -929,7 +1085,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         request: Request,
         approval_id: str,
         body: DecisionRequest,
-        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        idempotency_key: IdempotencyKeyHeader = None,
     ) -> ApiResponse:
         payload = {"approvalId": approval_id, **body.model_dump(mode="json")}
         if replay := replay_idempotent(request, idempotency_key, "approval.approve", payload):
@@ -950,7 +1106,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
         request: Request,
         approval_id: str,
         body: DecisionRequest,
-        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        idempotency_key: IdempotencyKeyHeader = None,
     ) -> ApiResponse:
         payload = {"approvalId": approval_id, **body.model_dump(mode="json")}
         if replay := replay_idempotent(request, idempotency_key, "approval.reject", payload):
@@ -1005,7 +1161,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     @app.post("/api/simulator/start", response_model=ApiResponse)
     async def start_simulator(
         request: Request,
-        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        idempotency_key: IdempotencyKeyHeader = None,
     ) -> ApiResponse:
         payload = {"action": "start"}
         if replay := replay_idempotent(request, idempotency_key, "simulator.start", payload):
@@ -1027,7 +1183,7 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
     @app.post("/api/simulator/reset", response_model=ApiResponse)
     async def reset_simulator(
         request: Request,
-        idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+        idempotency_key: IdempotencyKeyHeader = None,
     ) -> ApiResponse:
         payload = {"action": "reset"}
         if replay := replay_idempotent(request, idempotency_key, "simulator.reset", payload):
@@ -1053,26 +1209,37 @@ def create_app(delay_ms: int | None = None, database_url: str | None = None) -> 
 
     @app.websocket("/ws/events")
     async def websocket_events(websocket: WebSocket) -> None:
+        if not _is_loopback_peer(websocket.client.host if websocket.client else None):
+            await websocket.close(code=1008, reason="This phase accepts loopback clients only.")
+            return
         await broker.connect(websocket)
         try:
-            await broker.emit(
-                "system.snapshot",
-                {
+            await broker.send_snapshot(
+                websocket,
+                lambda: {
                     "snapshot": _json_snapshot(repository.snapshot()),
                     "system": system_status().model_dump(mode="json"),
                 },
             )
             while True:
                 message = await websocket.receive_text()
+                if len(message) > 32:
+                    await websocket.close(code=1009, reason="WebSocket command is too large.")
+                    return
                 if message == "resync":
-                    await broker.emit(
-                        "system.snapshot",
-                        {
+                    await broker.send_snapshot(
+                        websocket,
+                        lambda: {
                             "snapshot": _json_snapshot(repository.snapshot()),
                             "system": system_status().model_dump(mode="json"),
                         },
                     )
+                else:
+                    await websocket.close(code=1008, reason="Unsupported WebSocket command.")
+                    return
         except WebSocketDisconnect:
+            pass
+        finally:
             broker.disconnect(websocket)
 
     return app

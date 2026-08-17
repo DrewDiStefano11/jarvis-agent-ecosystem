@@ -208,7 +208,7 @@ class TaskLeaseRepository:
         with self._write() as session:
             row = session.get(WorkerRow, worker_id)
             if row is None:
-                raise DomainError("WORKER_NOT_FOUND", f"Unknown worker ID: {worker_id}", 404)
+                raise DomainError("WORKER_NOT_FOUND", "The worker was not found.", 404)
             if row.status == "stopped":
                 raise DomainError("WORKER_STOPPED", "A stopped worker cannot heartbeat.", 409)
             row.last_heartbeat_at = datetime.now(UTC)
@@ -219,11 +219,26 @@ class TaskLeaseRepository:
             rows = list(session.scalars(select(WorkerRow).order_by(WorkerRow.started_at)))
             return [self._worker(row) for row in rows]
 
+    def task_status(self, task_id: str) -> str | None:
+        with self.session_factory() as session:
+            return session.scalar(select(TaskRow.status).where(TaskRow.id == task_id))
+
+    def task_recovery_state(self, task_id: str) -> tuple[str, str | None] | None:
+        with self.session_factory() as session:
+            row = session.execute(
+                select(TaskRow.status, TaskRow.result).where(TaskRow.id == task_id)
+            ).one_or_none()
+            return None if row is None else (row.status, row.result)
+
+    def assert_execution_enabled(self) -> None:
+        with self.session_factory() as session:
+            self._require_execution_enabled(session)
+
     def drain_worker(self, worker_id: str) -> Worker:
         with self._write() as session:
             row = session.get(WorkerRow, worker_id)
             if row is None:
-                raise DomainError("WORKER_NOT_FOUND", f"Unknown worker ID: {worker_id}", 404)
+                raise DomainError("WORKER_NOT_FOUND", "The worker was not found.", 404)
             row.status = "draining"
             row.last_heartbeat_at = datetime.now(UTC)
             leases = list(
@@ -245,7 +260,7 @@ class TaskLeaseRepository:
         with self._write() as session:
             row = session.get(WorkerRow, worker_id)
             if row is None:
-                raise DomainError("WORKER_NOT_FOUND", f"Unknown worker ID: {worker_id}", 404)
+                raise DomainError("WORKER_NOT_FOUND", "The worker was not found.", 404)
             now = datetime.now(UTC)
             leases = list(
                 session.scalars(select(TaskLeaseRow).where(TaskLeaseRow.worker_id == worker_id))
@@ -266,14 +281,17 @@ class TaskLeaseRepository:
         return self._worker(row)
 
     def acquire_task(
-        self, worker_id: str, lease_seconds: int | None = None
+        self,
+        worker_id: str,
+        lease_seconds: int | None = None,
+        task_id: str | None = None,
     ) -> tuple[Task, TaskLease] | None:
         self.recover_expired_leases()
         now = datetime.now(UTC)
         with self._write() as session:
             worker = session.get(WorkerRow, worker_id)
             if worker is None:
-                raise DomainError("WORKER_NOT_FOUND", f"Unknown worker ID: {worker_id}", 404)
+                raise DomainError("WORKER_NOT_FOUND", "The worker was not found.", 404)
             if worker.status != "active":
                 raise DomainError(
                     "WORKER_NOT_ACTIVE", "Only an active worker may acquire tasks.", 409
@@ -296,14 +314,15 @@ class TaskLeaseRepository:
             active_lease = exists(
                 select(TaskLeaseRow.task_id).where(TaskLeaseRow.task_id == TaskRow.id)
             )
+            task_query = select(TaskRow).where(
+                TaskRow.status.in_(ELIGIBLE_TASK_STATES),
+                ~active_lease,
+                ~unsatisfied_dependency,
+            )
+            if task_id is not None:
+                task_query = task_query.where(TaskRow.id == task_id)
             task = session.scalar(
-                select(TaskRow)
-                .where(
-                    TaskRow.status.in_(ELIGIBLE_TASK_STATES),
-                    ~active_lease,
-                    ~unsatisfied_dependency,
-                )
-                .order_by(
+                task_query.order_by(
                     case(
                         (TaskRow.priority == "urgent", 1),
                         (TaskRow.priority == "high", 2),
@@ -313,8 +332,7 @@ class TaskLeaseRepository:
                     ),
                     TaskRow.created_at,
                     TaskRow.id,
-                )
-                .limit(1)
+                ).limit(1)
             )
             if task is None:
                 return None
@@ -409,6 +427,23 @@ class TaskLeaseRepository:
         self.repository.reload()
         return self.repository.tasks[task.id], self._lease(lease, recovery_checkpoint_id)
 
+    def assert_current(
+        self,
+        task_id: str,
+        worker_id: str,
+        lease_token: str,
+        *,
+        require_execution_enabled: bool = True,
+    ) -> TaskLease:
+        """Revalidate fencing and emergency-stop state without mutating the lease."""
+
+        now = datetime.now(UTC)
+        with self.session_factory() as session:
+            lease = self._require_lease(session, task_id, worker_id, lease_token, now)
+            if require_execution_enabled:
+                self._require_execution_enabled(session)
+            return self._lease(lease)
+
     def renew_lease(
         self,
         task_id: str,
@@ -468,11 +503,63 @@ class TaskLeaseRepository:
         self.repository.reload()
         return self.repository.tasks[task_id]
 
+    def pause_for_review(
+        self,
+        task_id: str,
+        worker_id: str,
+        lease_token: str,
+        result_reference: str | None = None,
+    ) -> Task:
+        now = datetime.now(UTC)
+        with self._write() as session:
+            lease = self._require_lease(session, task_id, worker_id, lease_token, now)
+            self._require_execution_enabled(session)
+            task = session.get(TaskRow, task_id)
+            assert task is not None
+            payload = dict(task.payload)
+            payload.update(
+                {
+                    "status": "under_review",
+                    "statusMessage": "Paused for human review",
+                    "result": result_reference,
+                    "updatedAt": now.isoformat(),
+                }
+            )
+            task.status = "under_review"
+            task.status_message = "Paused for human review"
+            task.result = result_reference
+            task.updated_at = now
+            task.payload = payload
+            attempt = session.scalar(
+                select(TaskAttemptRow).where(TaskAttemptRow.lease_token == lease_token)
+            )
+            if attempt:
+                attempt.ended_at = now
+                attempt.outcome = "human_review_required"
+            session.delete(lease)
+            self._add_event(
+                session,
+                "task.review_required",
+                f"Task {task_id} paused for human review",
+                task_id=task_id,
+                worker_id=worker_id,
+                previous="in_progress",
+                new="under_review",
+                payload={
+                    "workerId": worker_id,
+                    "attemptNumber": lease.attempt_number,
+                    "leaseTokenFingerprint": self._token_fingerprint(lease_token),
+                    "resultReference": result_reference,
+                },
+            )
+        self.repository.reload()
+        return self.repository.tasks[task_id]
+
     def _release_in_transaction(self, session: Session, lease: TaskLeaseRow, outcome: str) -> None:
         now = datetime.now(UTC)
         task = session.get(TaskRow, lease.task_id)
         if task is None:
-            raise DomainError("TASK_NOT_FOUND", f"Unknown task ID: {lease.task_id}", 404)
+            raise DomainError("TASK_NOT_FOUND", "The task was not found.", 404)
         payload = dict(task.payload)
         payload.update(
             {
@@ -648,7 +735,7 @@ class TaskLeaseRepository:
         with self._write() as session:
             task = session.get(TaskRow, task_id)
             if task is None:
-                raise DomainError("TASK_NOT_FOUND", f"Unknown task ID: {task_id}", 404)
+                raise DomainError("TASK_NOT_FOUND", "The task was not found.", 404)
             if task.status in TERMINAL_TASK_STATES:
                 raise DomainError(
                     "TASK_NOT_CANCELLABLE", f"Task in {task.status} cannot be cancelled.", 409

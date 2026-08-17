@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -33,6 +34,41 @@ class EventBroker:
     def disconnect(self, websocket: WebSocket) -> None:
         self.clients.discard(websocket)
 
+    async def send_snapshot(
+        self,
+        websocket: WebSocket,
+        payload_factory: Callable[[], dict[str, object]],
+    ) -> EventEnvelope:
+        """Send one synchronization frame without creating a domain event.
+
+        Connection and resynchronization traffic must not consume a durable
+        sequence, grow the outbox, or broadcast a caller-triggered snapshot to
+        unrelated clients.
+        """
+
+        async with self._dispatch_lock:
+            if self.repository:
+                event_session_id, sequence = self.repository.current_event_cursor()
+            else:
+                event_session_id, sequence = None, self.sequence
+            payload = payload_factory()
+            event = EventEnvelope(
+                eventId=f"snapshot-{uuid4().hex[:12]}",
+                eventType="system.snapshot",
+                timestamp=datetime.now(UTC),
+                sequenceNumber=sequence,
+                eventSessionId=event_session_id,
+                correlationId="system-snapshot",
+                source="system",
+                payload=payload,
+            )
+            try:
+                await websocket.send_json(event.model_dump(mode="json"))
+            except Exception:
+                self.disconnect(websocket)
+                raise
+            return event
+
     async def emit(
         self,
         event_type: str,
@@ -44,16 +80,14 @@ class EventBroker:
         audit: dict[str, object] | None = None,
         idempotency: IdempotencyResult | None = None,
     ) -> EventEnvelope:
-        if self.repository:
-            self.sequence = self.repository.next_sequence()
-        else:
+        if not self.repository:
             self.sequence += 1
         event = EventEnvelope(
             eventId=f"evt-{uuid4().hex[:12]}",
             eventType=event_type,
             timestamp=datetime.now(UTC),
             sequenceNumber=self.sequence,
-            eventSessionId=self.repository.event_session_id if self.repository else None,
+            eventSessionId=None,
             correlationId=correlation_id,
             taskId=task_id,
             agentId=agent_id,
@@ -63,19 +97,13 @@ class EventBroker:
         envelope = event.model_dump(mode="json")
         if self.repository:
             if audit:
-                self.repository.stage_audit(
-                    event_type,
-                    str(audit["summary"]),
-                    event.sequenceNumber,
-                    task_id,
-                    agent_id,
-                    audit.get("previous"),
-                    audit.get("new"),
-                    audit.get("payload"),
-                    correlation_id=event.correlationId,
-                )
+                envelope["_audit"] = audit
             try:
-                self.repository.enqueue_event(envelope, idempotency)
+                committed = self.repository.enqueue_event(envelope, idempotency)
+                if committed is not None:
+                    envelope = committed
+                event = EventEnvelope.model_validate(envelope)
+                self.sequence = event.sequenceNumber
             except Exception:
                 self.sequence = self.repository.sequence
                 raise

@@ -19,3 +19,12 @@ The durable local control plane is implemented with SQLite, Alembic, typed persi
 ## Phase 2B context-assembler status
 
 The PR #9 prototype findings are integrated behind typed API contracts and Phase 2A durability. Provenance, structural isolation, redaction, injection signals, deterministic ordering/deduplication, bounded truncation, durable manifests, review gating, health metrics, and recovery-safe event publication are implemented. No model provider, autonomous worker, repository reader, or tool executor is part of this increment.
+
+## Phase 2C local execution status
+
+Provider-neutral contracts, disabled-by-default loopback model adapters, durable
+Agent Runtime persistence, task leases, identity/RBAC authorization, and one narrow
+`planning_review` autonomous worker are implemented. The worker has no tool,
+filesystem, shell, browser, or external-integration execution path. Remote access,
+general-purpose autonomous orchestration, and production user authentication remain
+deferred.

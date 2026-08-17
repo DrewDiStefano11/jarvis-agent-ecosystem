@@ -56,6 +56,16 @@ def agent(service, key):
     )
 
 
+def test_identity_mutation_contracts_reject_unknown_fields() -> None:
+    with pytest.raises(ValueError):
+        CreateAgentRequest(
+            stable_key="agent.strict",
+            display_name="Strict",
+            agent_type="worker",
+            unexpected="must-not-be-ignored",
+        )
+
+
 def test_lifecycle_is_audited_and_retirement_terminal(service):
     row = agent(service, "agent.alpha")
     identity = row.id
@@ -1542,8 +1552,8 @@ def test_patch_cors_preflight_and_existing_methods(service):
                 "raw_path": b"/api/identity/agents/example",
                 "query_string": b"",
                 "headers": headers,
-                "client": ("test", 123),
-                "server": ("test", 80),
+                "client": ("127.0.0.1", 123),
+                "server": ("127.0.0.1", 8000),
                 "root_path": "",
             },
             receive,

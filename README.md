@@ -1,8 +1,8 @@
 # Jarvis Agent Ecosystem
 
-Jarvis combines the Phase 2A local deterministic simulation and durable SQLite control plane with Phase 2B fenced task leases and a production-integrated Context Assembler. Tasks, approvals, task ownership, context manifests, audit history, notifications, system state, event delivery, and workflow checkpoints survive backend restarts while all agents, model calls, tools, and external actions remain simulated or unavailable.
+Jarvis combines the local deterministic simulation and durable SQLite control plane with fenced task leases, Context Assembly, identity/RBAC, the Agent Runtime ledger, and one narrow Phase 2C autonomous execution path. With explicit opt-in, a dedicated local worker can consume a queued `planning_review` runtime run, call an approved loopback model, validate a fixed result, and persist it durably. Tools and external side effects remain unavailable.
 
-## What works in Phase 2A
+## What works in the current local phase
 
 - FastAPI HTTP API and multi-client WebSocket event stream
 - deterministic 25-step Caribbean trip workflow with delegation, artifact handoff, review, revision, and delivery
@@ -11,18 +11,28 @@ Jarvis combines the Phase 2A local deterministic simulation and durable SQLite c
 - deterministic departments, five permanent agents, tasks, approvals, artifacts, notifications, and audit fixtures
 - installable PWA metadata, offline shell, reconnection states, HTTP refresh fallback, and a 320px mobile layout
 - YAML agent manifests validated by Pydantic
-- SQLite persistence through typed SQLAlchemy models and Alembic head `20260729_04`
+- SQLite persistence through typed SQLAlchemy models and Alembic head `20260729_05`
 - transactional outbox, durable idempotency keys, workflow runs, per-step checkpoints, and safe restart recovery
 - deterministic context assembly with provenance checks, trust ordering, redaction, injection signals, bounded truncation, durable manifests, and review gating
 - registered worker lifecycle, atomic task acquisition, renewable fencing tokens, attempt history, cancellation revocation, and expired-lease recovery
+- disabled-by-default local planning/review worker with explicit runtime queueing, task fencing, fixed structured output, one repair call, durable staged recovery, and authorization-gated results
 
 ## Explicit non-capabilities
 
-No real AI models, autonomous workers, email, calendars, cloud files, browser/desktop automation, shell execution, financial services, authentication, external database servers, or production infrastructure are included. Context is assembled but never sent to a provider. Telemetry, tools, files, reports, and temporary agents are labeled simulations. LangGraph, Prefect, PostgreSQL, Redis, Phaser, Ollama, and all real integrations are deferred.
+The only real model execution is an explicitly enabled, loopback-only `planning_review` worker. It has no tools and cannot execute code, modify files, browse, call GitHub, use email/calendars/cloud services, send messages, spend money, spawn agents, approve work, or reach a remote model. Ordinary tasks and old runtime records remain non-autonomous. Telemetry, general agents, tools, files, reports, and temporary agents remain simulated. External database servers and production deployment are not included.
 
 ## Architecture
 
-`apps/api` owns authoritative state and contracts. Route handlers use services, a durable repository, and explicit command boundaries; committed event envelopes are delivered from an SQLite outbox. `apps/web` retains the Phase 1 synchronization contract. See [ARCHITECTURE.md](ARCHITECTURE.md) and [Context assembler](docs/context-assembler.md).
+`apps/api` owns authoritative state and contracts. Route handlers use services, a
+durable repository, and explicit command boundaries; committed event envelopes are
+delivered from an SQLite outbox. `apps/web/src/state` owns the shared
+HTTP/WebSocket synchronization contract. See [ARCHITECTURE.md](ARCHITECTURE.md)
+and [Context assembler](docs/context-assembler.md).
+
+This phase is a loopback-only local control plane. The API and WebSocket reject
+non-loopback peers, and the configured web origin must also be loopback. Do not
+expose it through a LAN/public bind or reverse proxy; no user-authentication
+boundary exists yet.
 
 ## Fresh Windows setup
 
@@ -62,6 +72,12 @@ pnpm dev
 
 Open `http://localhost:5173`. API docs are at `http://127.0.0.1:8000/docs`, OpenAPI at `/openapi.json`, health at `/api/health`, and WebSocket events at `ws://127.0.0.1:8000/ws/events`. Use **System → Start demo** to run the demonstration.
 
+The autonomous worker is a separate process and never starts with the API by default. After completing the explicit local-only setup in [docs/autonomous-worker.md](docs/autonomous-worker.md), run it from `apps/api`:
+
+```powershell
+.\.venv\Scripts\python.exe -m app.autonomous_worker
+```
+
 ## Verification commands
 
 ```powershell
@@ -88,7 +104,9 @@ Run `pnpm build` followed by `pnpm vite preview`, then use browser Application t
 ## Troubleshooting
 
 - CORS errors: keep the web origin at `http://localhost:5173` or set `WEB_ORIGIN` explicitly.
-- WebSocket remains offline: verify the API uses port 8000 and `VITE_WS_URL` matches it.
+- WebSocket remains offline: verify the API uses port 8000 and that
+  `VITE_WS_URL` uses `ws://127.0.0.1:8000/ws/events` unless intentionally
+  overridden.
 - PowerShell blocks activation: run the virtual environment executables directly as shown in verification commands.
 - Stale fixture state: use **System → Reset demo**; reset cancels the active runner before reseeding.
 - Port in use: change both the server port and corresponding frontend environment URL.
@@ -103,4 +121,4 @@ docs/              Product, API, event, manifest, roadmap, testing docs
 .github/workflows/ CI checks
 ```
 
-Runtime data defaults to `apps/api/data/jarvis.db` and is ignored by Git. See [persistence](docs/persistence.md), [migrations](docs/migrations.md), [recovery](docs/recovery.md), and [task leases](docs/task-leases.md).
+Runtime data defaults to `apps/api/data/jarvis.db` and is ignored by Git. See [autonomous worker](docs/autonomous-worker.md), [persistence](docs/persistence.md), [migrations](docs/migrations.md), [recovery](docs/recovery.md), and [task leases](docs/task-leases.md).

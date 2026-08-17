@@ -7,6 +7,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.models.agent_runtime import SafeMetadataValue, normalize_safe_metadata
+
 
 class ContextContract(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
@@ -67,15 +69,13 @@ class ContextSourceMetadata(ContextContract):
     inclusionPriority: int = Field(default=0, ge=-1000, le=1000)
     truncationAllowed: bool = True
     exactPreservationRequired: bool = False
-    additional: dict[str, Any] = Field(default_factory=dict)
+    additional: dict[str, SafeMetadataValue] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_additional_metadata(self) -> ContextSourceMetadata:
-        if len(self.additional) > 32:
-            raise ValueError("metadata.additional accepts at most 32 keys")
-        encoded = str(self.additional)
-        if len(encoded) > 10_000:
-            raise ValueError("metadata.additional exceeds the size limit")
+        self.additional = normalize_safe_metadata(
+            self.additional, field_name="context_source.metadata.additional"
+        )
         return self
 
 

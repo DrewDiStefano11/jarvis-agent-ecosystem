@@ -25,6 +25,7 @@ from app.agent_runtime.errors import (
 from app.agent_runtime.ledger import replay_execution_ledger
 from app.agent_runtime.repository import AgentRuntimeRepository, validate_lineage_invariant
 from app.agent_runtime.transitions import TERMINAL_STATES
+from app.core.errors import DomainError
 from app.db.models import (
     AgentRuntimeAttemptRow,
     AgentRuntimeCheckpointRow,
@@ -33,6 +34,7 @@ from app.db.models import (
     AgentRuntimeRunRow,
     AuditEventRow,
     OutboxEventRow,
+    SystemStateRow,
     TaskRow,
 )
 from app.models.agent_runtime import (
@@ -203,6 +205,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
         expected_version,
         expected_sequence,
         create=False,
+        require_execution_enabled=False,
     ):
         run_id = snapshot.specification.run_id
         try:
@@ -225,6 +228,16 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 replay = self._replay_processed_command(s, run_id, processed_command, refresh=True)
                 if replay is not None:
                     return replay
+                if require_execution_enabled:
+                    system_state = s.scalar(
+                        select(SystemStateRow).where(SystemStateRow.id == 1).with_for_update()
+                    )
+                    if system_state is not None and system_state.emergency_stop:
+                        raise DomainError(
+                            "EMERGENCY_STOP_ACTIVE",
+                            "Emergency stop is active.",
+                            423,
+                        )
                 old = []
                 previous_state: str | None = None
                 if create:

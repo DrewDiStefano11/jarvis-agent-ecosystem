@@ -74,7 +74,7 @@ def test_context_command_commits_record_audit_outbox_and_safe_event(tmp_path: Pa
         assert event["source"] == "context-assembler"
         assert event["correlationId"] == assembly["id"]
         assert event["taskId"] == "task-demo"
-        assert event["sequenceNumber"] == 2
+        assert event["sequenceNumber"] == 1
         assert event["eventId"].startswith("evt-")
         assert "content" not in event["payload"]
         assert api.get(f"/api/context/assemblies/{assembly['id']}").json()["data"] == assembly

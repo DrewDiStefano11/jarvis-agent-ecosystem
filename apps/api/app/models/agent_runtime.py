@@ -32,7 +32,12 @@ DEFAULT_LINEAGE_DEPTH_LIMIT = 32
 
 _CONTROL_CHARACTER_PATTERN = re.compile(r"[\x00-\x1F\x7F]")
 _SECRET_KEY_PATTERN = re.compile(
-    r"(?:api[_-]?key|secret|token|password|credential|authorization|private[_-]?key)",
+    r"(?:api[_-]?key|secret|password|credential|authorization|private[_-]?key)",
+    re.IGNORECASE,
+)
+_TOKEN_SECRET_KEY_PATTERN = re.compile(
+    r"(?:^|[_-])(?:token|access[_-]?token|refresh[_-]?token|lease[_-]?token|auth[_-]?token)"
+    r"(?:$|[_-])",
     re.IGNORECASE,
 )
 _SECRET_VALUE_PATTERNS = (
@@ -224,7 +229,9 @@ def _normalize_safe_json(
             if not isinstance(key, str):
                 raise ValueError(f"{field_name} keys must be strings")
             normalized_key = validate_identifier(key, field_name=f"{field_name}.key", max_length=80)
-            if _SECRET_KEY_PATTERN.search(normalized_key):
+            if _SECRET_KEY_PATTERN.search(normalized_key) or _TOKEN_SECRET_KEY_PATTERN.search(
+                normalized_key
+            ):
                 raise ValueError(f"{field_name} contains a secret-bearing key name")
             if normalized_key in normalized:
                 raise ValueError(f"{field_name} contains colliding normalized key names")
@@ -482,6 +489,38 @@ class CancellationRecord(RuntimeContract):
         return normalize_safe_metadata(value, field_name="cancellation.metadata")
 
 
+class AutonomousExecutionType(StrEnum):
+    PLANNING_REVIEW = "planning_review"
+
+
+class AutonomousExecutionSpecification(RuntimeContract):
+    """The fixed, explicitly queued execution request supported by Phase 2C."""
+
+    execution_type: AutonomousExecutionType
+    context_assembly_id: OpaqueReference
+    output_schema_version: Literal["1.0"] = "1.0"
+    provider_preference: OpaqueReference | None = None
+    model_name: str | None = Field(default=None, min_length=1, max_length=200)
+    maximum_provider_requests: int = Field(default=2, ge=1, le=2)
+    maximum_repair_calls: int = Field(default=1, ge=0, le=1)
+    maximum_output_tokens: int = Field(default=2048, ge=128, le=16_384)
+    maximum_execution_seconds: int = Field(default=300, ge=1, le=3600)
+
+    @field_validator("model_name")
+    @classmethod
+    def _validate_model_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_safe_text(value, field_name="model_name", max_length=200)
+
+    @model_validator(mode="after")
+    def _validate_request_budget(self) -> AutonomousExecutionSpecification:
+        required_requests = 1 + self.maximum_repair_calls
+        if self.maximum_provider_requests < required_requests:
+            raise ValueError("maximum_provider_requests must cover the initial and repair calls")
+        return self
+
+
 class AgentRunSpecification(RuntimeContract):
     run_id: RunId
     task_id: TaskId
@@ -497,6 +536,7 @@ class AgentRunSpecification(RuntimeContract):
     metadata: dict[str, SafeMetadataValue] = Field(default_factory=dict)
     requested_capabilities: tuple[CapabilityKey, ...] = ()
     execution_constraints: ExecutionConstraints | None = None
+    autonomous_execution: AutonomousExecutionSpecification | None = None
 
     @field_validator("requested_operation")
     @classmethod

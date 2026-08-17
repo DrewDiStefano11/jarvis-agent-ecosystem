@@ -719,3 +719,48 @@ class AgentRuntimeProcessedCommandRow(Base):
     authorization_json: Mapped[str] = mapped_column(Text, default="{}")
     result_json: Mapped[str] = mapped_column(Text)
     processed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ModelExecutionRow(Base):
+    __tablename__ = "model_executions"
+    execution_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    runtime_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runtime_runs.run_id", ondelete="CASCADE"), index=True
+    )
+    runtime_attempt_id: Mapped[str] = mapped_column(String(120), index=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), index=True)
+    target_agent_id: Mapped[str] = mapped_column(ForeignKey("identity_agents.id"), index=True)
+    context_assembly_id: Mapped[str] = mapped_column(
+        ForeignKey("context_assemblies.id"), index=True
+    )
+    worker_id: Mapped[str] = mapped_column(ForeignKey("workers.id"), index=True)
+    task_attempt_number: Mapped[int] = mapped_column(Integer)
+    lease_token_fingerprint: Mapped[str] = mapped_column(String(64))
+    stage: Mapped[str] = mapped_column(String(40), index=True)
+    schema_version: Mapped[str] = mapped_column(String(20))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    execution_request_hash: Mapped[str] = mapped_column(String(64))
+    result_hash: Mapped[str | None] = mapped_column(String(64))
+    provider: Mapped[str | None] = mapped_column(String(120))
+    model: Mapped[str | None] = mapped_column(String(200))
+    result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    request_count: Mapped[int] = mapped_column(Integer, default=0)
+    latency_ms: Mapped[float | None] = mapped_column(Numeric(14, 3))
+    finish_reason: Mapped[str | None] = mapped_column(String(120))
+    estimated_cost_usd: Mapped[float | None] = mapped_column(Numeric(14, 8))
+    requires_human_review: Mapped[bool] = mapped_column(Boolean, default=False)
+    failure_code: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    __table_args__ = (
+        UniqueConstraint(
+            "runtime_run_id",
+            "runtime_attempt_id",
+            name="uq_model_executions_runtime_attempt",
+        ),
+        CheckConstraint("request_count >= 0 AND request_count <= 2"),
+        Index("ix_model_executions_recovery", "stage", "updated_at"),
+    )

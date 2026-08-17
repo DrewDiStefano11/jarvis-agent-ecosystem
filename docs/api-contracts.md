@@ -21,7 +21,13 @@ Approvals are idempotency-guarded: processed, expired, unknown, black-risk, or e
 
 Simulator start accepts only idle state with emergency stop inactive. Running, paused, recovery-required, completed, and failed states return typed conflicts without creating a run, checkpoint, audit, or outbox event. Controlled failure is terminal: active or paused work commits a failed checkpoint and becomes ineligible for resume, while idle failure persists system/task state without fabricating a workflow run.
 
-Phase 2A mutation routes accept an optional `Idempotency-Key` header for task creation, approval decisions, task retry, temporary-agent creation, simulator start, and reset. Same-key/same-request calls replay the durable response; changed content returns `IDEMPOTENCY_KEY_CONFLICT` (409). System status additively reports storage, migration, event-session, outbox, checkpoint, and recovery fields. Health distinguishes process, database, schema, dispatcher, and recovery state without exposing database paths.
+Phase 2A mutation routes accept an optional, printable `Idempotency-Key` header of
+at most 200 characters for task creation, approval decisions, task retry,
+temporary-agent creation, simulator start, and reset. Same-key/same-request calls
+replay the durable response; changed content returns `IDEMPOTENCY_KEY_CONFLICT`
+(409). System status additively reports storage, migration, event-session, outbox,
+checkpoint, and recovery fields. Health distinguishes process, database, schema,
+dispatcher, and recovery state without exposing database paths.
 
 Context creation also accepts `Idempotency-Key`. Its typed request binds an existing task and project to a bounded policy and source set. A new durable assembly returns 201; identical canonical input already stored returns 200 without a duplicate audit or event. `completed` responses include the sanitized `modelRequest`; `review_required` responses withhold it and retain the manifest/report. Stable context errors include `CONTEXT_PROJECT_MISMATCH` (409), configured size/source/token policy errors (422), and the normal task/assembly not-found codes (404). OpenAPI defines the full context request, response, manifest, and model-request shapes.
 

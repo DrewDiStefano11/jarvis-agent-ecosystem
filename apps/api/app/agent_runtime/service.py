@@ -144,6 +144,9 @@ class AgentRuntimeService:
         self._authorization_context: ContextVar[RuntimeAuthorizationContext | None] = ContextVar(
             "runtime_authorization_context", default=None
         )
+        self._execution_enabled_required: ContextVar[bool] = ContextVar(
+            "runtime_execution_enabled_required", default=False
+        )
         self.utc_clock = utc_clock
         self.run_id_factory = run_id_factory or prefixed_identifier_factory("run")
         self.attempt_id_factory = attempt_id_factory or prefixed_identifier_factory("attempt")
@@ -163,15 +166,21 @@ class AgentRuntimeService:
         return self.authorizer.authenticate(actor_id)
 
     def handle_authorized(
-        self, command: CommandHandler, actor: RuntimeActorContext
+        self,
+        command: CommandHandler,
+        actor: RuntimeActorContext,
+        *,
+        require_execution_enabled: bool = False,
     ) -> RuntimeCommandResult:
         command = self._command_with_verified_actor(command, actor)
         context = self._authorize_command(command, actor)
-        token = self._authorization_context.set(context)
+        authorization_token = self._authorization_context.set(context)
+        execution_token = self._execution_enabled_required.set(require_execution_enabled)
         try:
             return self.handle(command)
         finally:
-            self._authorization_context.reset(token)
+            self._execution_enabled_required.reset(execution_token)
+            self._authorization_context.reset(authorization_token)
 
     def read_run_authorized(self, run_id: str, actor: RuntimeActorContext) -> AgentRunSnapshot:
         snapshot = self.repository.load_run(run_id)
@@ -1330,6 +1339,7 @@ class AgentRuntimeService:
             processed_command=record,
             expected_version=aggregate.snapshot.version,
             expected_sequence=aggregate.snapshot.event_sequence_number,
+            require_execution_enabled=self._execution_enabled_required.get(),
         )
         if existing_record is not None:
             return existing_record.result.model_copy(update={"idempotent_replay": True}, deep=True)
