@@ -41,7 +41,7 @@ class CreateAgentRequest(IdentityModel):
     display_name: str = Field(min_length=1, max_length=160)
     description: str = Field(default="", max_length=2000)
     agent_type: AgentType
-    rank_id: str | None = Field(default=None, max_length=80)
+    rank_id: str | None = Field(default=None, min_length=1, max_length=80)
     is_system_agent: bool = False
 
     @field_validator("stable_key")
@@ -49,6 +49,13 @@ class CreateAgentRequest(IdentityModel):
     def stable_key_valid(cls, value: str) -> str:
         if not _KEY.fullmatch(value):
             raise ValueError("must be a normalized stable key")
+        return value
+
+    @field_validator("rank_id")
+    @classmethod
+    def rank_id_nonblank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("must not be blank")
         return value
 
 
