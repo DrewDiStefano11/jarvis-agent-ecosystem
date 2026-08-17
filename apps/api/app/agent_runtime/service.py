@@ -957,6 +957,7 @@ class AgentRuntimeService:
             ):
                 result = RuntimeCommandResult(run_id=command.run_id, snapshot=snapshot, events=())
                 record = self._processed_record(command.run_id, command.command_id, command, result)
+                record = record.model_copy(update={"recorded_at": self.utc_clock()})
                 existing_record = self.repository.commit_command(
                     snapshot=snapshot,
                     events=(),

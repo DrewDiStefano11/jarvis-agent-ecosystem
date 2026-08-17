@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC
 
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text, update
@@ -249,6 +250,7 @@ def test_runtime_sql_historical_checkpoint_no_op_does_not_rewrite_projection(tmp
         before_snapshot = service.repository.load_run("run-1")
         before_events = service.repository.list_events("run-1")
         before_checkpoints = service.repository.list_checkpoints("run-1")
+        service.utc_clock = lambda: ts(100)
         result = service.record_checkpoint(
             original.model_copy(
                 update={
@@ -275,12 +277,17 @@ def test_runtime_sql_historical_checkpoint_no_op_does_not_rewrite_projection(tmp
             service.repository.get_processed_command("run-1", "cmd-checkpoint-a-resubmit")
             is not None
         )
+        processed_no_op = service.repository.get_processed_command(
+            "run-1", "cmd-checkpoint-a-resubmit"
+        )
+        assert processed_no_op is not None
+        assert processed_no_op.recorded_at == ts(100)
         service.record_checkpoint(
             original.model_copy(
                 update={
                     "command_id": "cmd-checkpoint-c",
                     "expected_run_version": 8,
-                    "timestamp": ts(7),
+                    "timestamp": ts(101),
                     "checkpoint_id": "checkpoint-c",
                     "state_reference": "checkpoint://state/c",
                     "integrity_digest": "sha256:cccccccccccccccc",
@@ -302,6 +309,10 @@ def test_runtime_sql_historical_checkpoint_no_op_does_not_rewrite_projection(tmp
             before_audit_sequence + 1
         )
         assert audit_by_command["cmd-checkpoint-c"].sequence_number == before_audit_sequence + 2
+        no_op_audit_timestamp = audit_by_command["cmd-checkpoint-a-resubmit"].timestamp
+        checkpoint_c_audit_timestamp = audit_by_command["cmd-checkpoint-c"].timestamp
+        assert no_op_audit_timestamp.replace(tzinfo=UTC) == ts(100)
+        assert checkpoint_c_audit_timestamp.replace(tzinfo=UTC) == ts(101)
 
 
 def test_concurrent_different_create_commands_return_run_already_exists(tmp_path) -> None:
