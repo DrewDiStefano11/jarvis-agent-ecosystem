@@ -307,6 +307,11 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 ag = replay_execution_ledger(old + list(events))
                 if not ag or ag.snapshot != snapshot:
                     raise LedgerReplayError("Ledger/projection mismatch", run_id=run_id)
+                if not create and not events:
+                    self._store(s, processed_command)
+                    self._store_audit(s, processed_command, snapshot, events, previous_state)
+                    s.flush()
+                    return None
                 if create:
                     run_row = AgentRuntimeRunRow(
                         run_id=run_id,
