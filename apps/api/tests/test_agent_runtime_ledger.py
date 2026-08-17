@@ -22,6 +22,8 @@ from app.models.agent_runtime import (
     ClaimAgentRunCommand,
     CompleteAgentRunCommand,
     CompleteAttemptCommand,
+    ConfirmCancellationCommand,
+    ConfirmCancellationStartCommand,
     ConfirmPauseCommand,
     FailAgentRunCommand,
     FailAttemptCommand,
@@ -30,6 +32,7 @@ from app.models.agent_runtime import (
     RequestPauseCommand,
     RequestRecoveryPlanCommand,
     ResumeAgentRunCommand,
+    RuntimeCommandResult,
     RuntimeEventEnvelope,
     TimeoutAgentRunCommand,
     TimeoutAttemptCommand,
@@ -424,6 +427,45 @@ def _prepare_cancellation_request_events() -> list[RuntimeEventEnvelope]:
     return service.repository.list_events("run-1")
 
 
+def _prepare_cancelled_run_events() -> list[RuntimeEventEnvelope]:
+    service = make_service()
+    prepare_running_run(service)
+    service.request_cancellation(
+        RequestCancellationCommand(
+            run_id="run-1",
+            command_id="cmd-cancel-request-1",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="operator-1",
+            requester_reference="operator-1",
+            reason_code="operator_cancel",
+            detail="Stop the run",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.confirm_cancellation_start(
+        ConfirmCancellationStartCommand(
+            run_id="run-1",
+            command_id="cmd-cancel-start-1",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="worker-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.confirm_cancellation(
+        ConfirmCancellationCommand(
+            run_id="run-1",
+            command_id="cmd-cancel-confirm-1",
+            expected_run_version=8,
+            timestamp=ts(7),
+            actor_reference="worker-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    return service.repository.list_events("run-1")
+
+
 def _prepare_checkpoint_events() -> list[RuntimeEventEnvelope]:
     service = make_service()
     prepare_running_run(service)
@@ -801,6 +843,140 @@ def test_replay_rejects_active_cancellation_that_skips_cancelling() -> None:
     ]
     with pytest.raises(InvalidTransitionError):
         replay_execution_ledger(broken)
+
+
+def test_replay_cancels_the_attempt_identified_by_the_event() -> None:
+    events = _prepare_cancelled_run_events()
+    active_attempt_id = events[-1].attempt_id
+    replayed = replay_execution_ledger(events)
+    assert replayed is not None
+    assert active_attempt_id is not None
+    assert replayed.snapshot.active_attempt_id is None
+    assert replayed.attempts[-1].attempt_id == active_attempt_id
+    assert replayed.attempts[-1].state == AttemptState.CANCELLED
+
+
+@pytest.mark.parametrize(
+    ("attempt_id", "reason"),
+    [
+        (None, "cancellation_attempt_missing"),
+        ("attempt-unrelated", "cancellation_attempt_mismatch"),
+        ("bad\nattempt", "cancellation_attempt_invalid"),
+    ],
+)
+def test_replay_rejects_invalid_active_cancellation_attempt_lineage(
+    attempt_id: str | None,
+    reason: str,
+) -> None:
+    events = _prepare_cancelled_run_events()
+    broken = [event.model_copy(deep=True) for event in events]
+    broken[-1] = broken[-1].model_copy(update={"attempt_id": attempt_id})
+    with pytest.raises(LedgerReplayError) as exc_info:
+        replay_execution_ledger(broken)
+    assert exc_info.value.code == "ledger_replay_error"
+    assert exc_info.value.metadata["eventType"] == "run_cancelled"
+    assert exc_info.value.metadata["reason"] == reason
+
+
+def test_invalid_cancellation_commit_is_atomic() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    service.request_cancellation(
+        RequestCancellationCommand(
+            run_id="run-1",
+            command_id="cmd-cancel-request-1",
+            expected_run_version=6,
+            timestamp=ts(5),
+            actor_reference="operator-1",
+            requester_reference="operator-1",
+            reason_code="operator_cancel",
+            detail="Stop the run",
+            source_metadata={"source": "test"},
+        )
+    )
+    service.confirm_cancellation_start(
+        ConfirmCancellationStartCommand(
+            run_id="run-1",
+            command_id="cmd-cancel-start-1",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="worker-1",
+            source_metadata={"source": "test"},
+        )
+    )
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    before_attempts = service.repository.load_attempt_history("run-1")
+    assert before_snapshot is not None
+    command = ConfirmCancellationCommand(
+        run_id="run-1",
+        command_id="cmd-cancel-invalid",
+        expected_run_version=before_snapshot.version,
+        timestamp=ts(7),
+        actor_reference="worker-1",
+        source_metadata={"source": "test"},
+    )
+    event = RuntimeEventEnvelope(
+        event_id="event-cancel-invalid",
+        event_type="run_cancelled",
+        run_id="run-1",
+        attempt_id="attempt-unrelated",
+        sequence_number=before_snapshot.event_sequence_number + 1,
+        run_version=before_snapshot.version + 1,
+        timestamp=command.timestamp,
+        actor_reference=command.actor_reference,
+        command_id=command.command_id,
+        correlation_id="run-1",
+        causation_id=command.command_id,
+        payload={"detail": command.detail},
+        metadata=command.source_metadata,
+    )
+    record = service._processed_record(
+        "run-1",
+        command.command_id,
+        command,
+        RuntimeCommandResult(run_id="run-1", snapshot=before_snapshot, events=()),
+    )
+    with pytest.raises(LedgerReplayError):
+        service.repository.commit_command(
+            snapshot=before_snapshot,
+            events=(event,),
+            processed_command=record,
+            expected_version=before_snapshot.version,
+            expected_sequence=before_snapshot.event_sequence_number,
+        )
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
+    assert service.repository.load_attempt_history("run-1") == before_attempts
+    assert service.repository.get_processed_command("run-1", command.command_id) is None
+
+
+def test_prestart_cancellation_attempt_lineage() -> None:
+    service = make_service()
+    create_run(service)
+    queue_run(service, "run-1", expected_run_version=1)
+    result = service.request_cancellation(
+        RequestCancellationCommand(
+            run_id="run-1",
+            command_id="cmd-cancel-prestart",
+            expected_run_version=2,
+            timestamp=ts(2),
+            actor_reference="operator-1",
+            requester_reference="operator-1",
+            reason_code="operator_cancel",
+            detail="Stop before execution",
+            source_metadata={"source": "test"},
+        )
+    )
+    assert result.events[-1].attempt_id is None
+    events = service.repository.list_events("run-1")
+    replayed = replay_execution_ledger(events)
+    assert replayed is not None and replayed.snapshot.state == AgentRunState.CANCELLED
+    broken = [event.model_copy(deep=True) for event in events]
+    broken[-1] = broken[-1].model_copy(update={"attempt_id": "attempt-unrelated"})
+    with pytest.raises(LedgerReplayError) as exc_info:
+        replay_execution_ledger(broken)
+    assert exc_info.value.metadata["reason"] == "cancellation_attempt_unexpected"
 
 
 def test_replay_rejects_resume_target_mismatching_pause_reason() -> None:
