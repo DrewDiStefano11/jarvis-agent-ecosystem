@@ -943,6 +943,38 @@ class AgentRuntimeService:
             return existing
         snapshot = aggregate.snapshot
         self._ensure_expected_version(snapshot, command.expected_run_version, command)
+        checkpoint_id = command.checkpoint_id or self.checkpoint_id_factory()
+        existing_checkpoint = next(
+            (item for item in aggregate.checkpoints if item.checkpoint_id == checkpoint_id),
+            None,
+        )
+        if existing_checkpoint is not None:
+            submitted_attempt_id = command.attempt_id or snapshot.active_attempt_id
+            if self._checkpoint_matches_command(
+                existing_checkpoint,
+                command,
+                submitted_attempt_id,
+            ):
+                result = RuntimeCommandResult(run_id=command.run_id, snapshot=snapshot, events=())
+                record = self._processed_record(command.run_id, command.command_id, command, result)
+                self.repository.commit_command(
+                    snapshot=snapshot,
+                    events=(),
+                    processed_command=record,
+                    expected_version=snapshot.version,
+                    expected_sequence=snapshot.event_sequence_number,
+                )
+                return result
+            raise CheckpointSequenceConflictError(
+                "The checkpoint ID already exists with different contents or lineage.",
+                run_id=command.run_id,
+                attempt_id=submitted_attempt_id,
+                command_id=command.command_id,
+                metadata={
+                    "checkpointId": checkpoint_id,
+                    "existingAttemptId": existing_checkpoint.attempt_id,
+                },
+            )
         if snapshot.state in TERMINAL_STATES:
             raise CheckpointNotAllowedError(
                 "Terminal runs reject new checkpoints.",
@@ -963,39 +995,6 @@ class AgentRuntimeService:
                 metadata={"state": snapshot.state},
             )
         attempt = self._require_active_attempt(aggregate, command.attempt_id, command)
-        checkpoint_id = command.checkpoint_id or self.checkpoint_id_factory()
-        existing_checkpoint = next(
-            (item for item in aggregate.checkpoints if item.checkpoint_id == checkpoint_id),
-            None,
-        )
-        if existing_checkpoint is not None:
-            if self._checkpoint_matches_command(
-                existing_checkpoint,
-                command,
-                attempt.attempt_id,
-                snapshot=snapshot,
-                checkpoint_count=len(aggregate.checkpoints),
-            ):
-                result = RuntimeCommandResult(run_id=command.run_id, snapshot=snapshot, events=())
-                record = self._processed_record(command.run_id, command.command_id, command, result)
-                self.repository.commit_command(
-                    snapshot=snapshot,
-                    events=(),
-                    processed_command=record,
-                    expected_version=snapshot.version,
-                    expected_sequence=snapshot.event_sequence_number,
-                )
-                return result
-            raise CheckpointSequenceConflictError(
-                "The checkpoint ID already exists with different contents or lineage.",
-                run_id=command.run_id,
-                attempt_id=attempt.attempt_id,
-                command_id=command.command_id,
-                metadata={
-                    "checkpointId": checkpoint_id,
-                    "existingAttemptId": existing_checkpoint.attempt_id,
-                },
-            )
         checkpoint = AgentRunCheckpoint(
             checkpoint_id=checkpoint_id,
             run_id=command.run_id,
@@ -1457,18 +1456,12 @@ class AgentRuntimeService:
     def _checkpoint_matches_command(
         checkpoint: AgentRunCheckpoint,
         command: RecordCheckpointCommand,
-        attempt_id: str,
-        *,
-        snapshot: AgentRunSnapshot,
-        checkpoint_count: int,
+        attempt_id: str | None,
     ) -> bool:
         return (
             checkpoint.run_id == command.run_id
             and checkpoint.attempt_id == attempt_id
             and checkpoint.checkpoint_id == (command.checkpoint_id or checkpoint.checkpoint_id)
-            and checkpoint.checkpoint_sequence == checkpoint_count
-            and checkpoint.run_version == snapshot.version
-            and checkpoint.event_sequence == snapshot.event_sequence_number
             and checkpoint.timestamp == command.timestamp
             and checkpoint.state_reference == command.state_reference
             and checkpoint.integrity_digest == command.integrity_digest
