@@ -78,6 +78,24 @@ The autonomous worker is a separate process and never starts with the API by def
 .\.venv\Scripts\python.exe -m app.autonomous_worker
 ```
 
+## 24/7 supervised local operation
+
+After the normal Windows setup and an explicit `pnpm build` in `apps/web`, Jarvis can run under the
+separate local runtime supervisor:
+
+```powershell
+.\scripts\jarvis.ps1 doctor
+.\scripts\jarvis.ps1 start
+.\scripts\jarvis.ps1 status
+```
+
+The supervisor keeps the loopback-only API and built web UI available, recovers owned child crashes
+with bounded backoff, and manages the autonomous worker only when its existing configuration already
+enables it. It provides graceful stop/restart, JSON status, rotating logs, consistent retained SQLite
+backups, disk warnings, and optional least-privilege Task Scheduler startup at current-user logon.
+It never opens LAN/public access, starts or kills Ollama, clears emergency stop, updates Git, or adds
+coding/provider capabilities. See [Windows-first runtime supervisor](docs/runtime-supervisor.md).
+
 ## Verification commands
 
 ```powershell
