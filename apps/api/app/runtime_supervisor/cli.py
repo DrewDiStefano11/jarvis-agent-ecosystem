@@ -16,7 +16,7 @@ from app.runtime_supervisor.config import SupervisorConfig, SupervisorConfigurat
 from app.runtime_supervisor.doctor import run_doctor
 from app.runtime_supervisor.io import atomic_write_json, ensure_runtime_home, utc_now
 from app.runtime_supervisor.status import load_status
-from app.runtime_supervisor.supervisor import RuntimeSupervisor
+from app.runtime_supervisor.supervisor import RuntimeSupervisor, shutdown_wait_seconds
 
 
 def _default_repository() -> Path:
@@ -166,9 +166,7 @@ def stop(config: SupervisorConfig) -> dict[str, Any]:
         config.stop_request_path,
         {"kind": "jarvis-supervisor-stop", "instanceId": instance_id, "requestedAt": utc_now()},
     )
-    deadline = (
-        time.monotonic() + config.graceful_shutdown_seconds + config.health_interval_seconds + 10
-    )
+    deadline = time.monotonic() + shutdown_wait_seconds(config)
     while time.monotonic() < deadline:
         time.sleep(0.2)
         current = load_status(config)

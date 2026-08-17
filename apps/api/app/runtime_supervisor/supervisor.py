@@ -68,6 +68,8 @@ class ManagedProcess:
 ProcessFactory = Callable[..., subprocess.Popen[str]]
 Clock = Callable[[], float]
 Probe = Callable[..., HealthResult]
+FORCED_TERMINATION_SECONDS = 5
+SHUTDOWN_CONFIRMATION_OVERHEAD_SECONDS = 10
 
 
 def _git_sha(repository: Path) -> str | None:
@@ -133,6 +135,16 @@ def build_process_registry(config: SupervisorConfig) -> list[ProcessDefinition]:
     ]
 
 
+def shutdown_wait_seconds(config: SupervisorConfig) -> float:
+    enabled_processes = sum(definition.enabled for definition in build_process_registry(config))
+    per_process = config.graceful_shutdown_seconds + FORCED_TERMINATION_SECONDS
+    return (
+        config.health_interval_seconds
+        + enabled_processes * per_process
+        + SHUTDOWN_CONFIRMATION_OVERHEAD_SECONDS
+    )
+
+
 class RuntimeSupervisor:
     def __init__(
         self,
@@ -174,9 +186,14 @@ class RuntimeSupervisor:
         self.last_backup_failure: str | None = None
         secret_name = re.compile(r"(SECRET|TOKEN|PASSWORD|API_KEY|CREDENTIAL)", re.IGNORECASE)
         self.secret_values = tuple(
-            value
-            for key, value in config.environment.items()
-            if secret_name.search(key) and len(value) >= 4
+            sorted(
+                {
+                    value
+                    for key, value in config.environment.items()
+                    if secret_name.search(key) and len(value) >= 4
+                },
+                key=lambda value: (-len(value), value),
+            )
         )
 
     def run(self) -> int:
@@ -193,6 +210,7 @@ class RuntimeSupervisor:
         if not lock.acquire():
             log.error("startup refused: another supervisor owns this installation")
             return 2
+        supervisor_failure: str | None = None
         try:
             self.job = WindowsJob()
             self._install_signal_handlers()
@@ -212,17 +230,23 @@ class RuntimeSupervisor:
             return 0
         except BaseException as exc:
             log.exception("supervisor failure: %s", exc)
-            self._write_state("failed", supervisor_failure=str(exc)[:500])
+            supervisor_failure = str(exc)[:500]
             return 1
         finally:
             self.stopping = True
             self._shutdown_all()
-            self.last_clean_shutdown = utc_now()
-            self._write_state("stopped")
+            if supervisor_failure is None:
+                self.last_clean_shutdown = utc_now()
+                self._write_state("stopped")
+            else:
+                self._write_state("failed", supervisor_failure=supervisor_failure)
             if self.job is not None:
                 self.job.close()
             lock.release()
-            log.info("supervisor stopped cleanly")
+            if supervisor_failure is None:
+                log.info("supervisor stopped cleanly")
+            else:
+                log.error("supervisor stopped after failure")
 
     def _install_signal_handlers(self) -> None:
         def request_stop(_signum: int, _frame: object) -> None:
@@ -454,7 +478,7 @@ class RuntimeSupervisor:
             log.warning("grace period expired; forcing termination")
             try:
                 process.kill()
-                process.wait(timeout=5)
+                process.wait(timeout=FORCED_TERMINATION_SECONDS)
             except (subprocess.TimeoutExpired, OSError):
                 log.error("process did not exit after forced termination")
         managed.last_exit_code = process.poll()

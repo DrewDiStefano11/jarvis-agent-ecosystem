@@ -24,7 +24,11 @@ from app.runtime_supervisor.io import atomic_write_json, ensure_runtime_home, re
 from app.runtime_supervisor.logging_utils import child_output_logger
 from app.runtime_supervisor.ownership import SingletonLock, process_identity, state_ownership
 from app.runtime_supervisor.status import load_status
-from app.runtime_supervisor.supervisor import RuntimeSupervisor, build_process_registry
+from app.runtime_supervisor.supervisor import (
+    RuntimeSupervisor,
+    build_process_registry,
+    shutdown_wait_seconds,
+)
 
 
 def make_config(tmp_path: Path, **environment: str) -> SupervisorConfig:
@@ -244,6 +248,26 @@ def test_stop_does_not_signal_process_from_stale_state(tmp_path: Path) -> None:
     result = stop(config)
     assert result["result"] == "already_stopped"
     assert not config.stop_request_path.exists()
+
+
+def test_stop_wait_budget_covers_every_enabled_child(tmp_path: Path) -> None:
+    config = make_config(
+        tmp_path,
+        JARVIS_SUPERVISOR_GRACEFUL_SHUTDOWN_SECONDS="7",
+        JARVIS_SUPERVISOR_HEALTH_INTERVAL_SECONDS="3",
+    )
+    assert shutdown_wait_seconds(config) == 3 + 2 * (7 + 5) + 10
+
+    worker_config = make_config(
+        tmp_path / "worker",
+        JARVIS_SUPERVISOR_GRACEFUL_SHUTDOWN_SECONDS="7",
+        JARVIS_SUPERVISOR_HEALTH_INTERVAL_SECONDS="3",
+        JARVIS_AUTONOMOUS_WORKER_ENABLED="true",
+        JARVIS_MODEL_EXECUTION_MODE="local_only",
+        JARVIS_AUTONOMOUS_WORKER_ACTOR_ID="operator",
+        JARVIS_AUTONOMOUS_WORKER_INSTANCE_ID="runtime-worker",
+    )
+    assert shutdown_wait_seconds(worker_config) == 3 + 3 * (7 + 5) + 10
 
 
 def test_atomic_json_never_leaves_partial_target(tmp_path: Path) -> None:
@@ -569,6 +593,50 @@ def test_child_output_redacts_configured_secrets_and_rotates(tmp_path: Path) -> 
     for _ in range(20):
         logger.info("bounded output line")
     assert (config.logs_directory / "rotation.log.1").is_file()
+
+
+def test_child_output_redacts_overlapping_secrets_longest_first(tmp_path: Path) -> None:
+    config = make_config(
+        tmp_path,
+        JARVIS_SHORT_SECRET="pass",
+        JARVIS_LONG_SECRET="password123",
+    )
+    config.logs_directory.mkdir(parents=True)
+    supervisor = RuntimeSupervisor(config)
+    assert supervisor.secret_values[:2] == ("password123", "pass")
+
+    supervisor._forward_output("api", "stderr", io.StringIO("password123 pass\n"))
+    content = (config.logs_directory / "api.log").read_text(encoding="utf-8")
+    assert "password123" not in content
+    assert "word123" not in content
+    assert content.count("[REDACTED]") == 2
+
+
+def test_supervisor_failure_remains_terminal_state(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(tmp_path)
+    supervisor = RuntimeSupervisor(config)
+
+    class FakeJob:
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("app.runtime_supervisor.supervisor.WindowsJob", FakeJob)
+    monkeypatch.setattr(supervisor, "_install_signal_handlers", lambda: None)
+    monkeypatch.setattr(
+        supervisor,
+        "_probe_dependencies",
+        lambda: (_ for _ in ()).throw(RuntimeError("dependency probe failed")),
+    )
+    monkeypatch.setattr(supervisor, "_shutdown_all", lambda: None)
+
+    assert supervisor.run() == 1
+    state = read_json(config.state_path)
+    assert state is not None
+    assert state["supervisorState"] == "failed"
+    assert state["supervisor_failure"] == "dependency probe failed"
+    assert state["lastCleanSupervisorShutdown"] is None
 
 
 def test_known_good_metadata_records_healthy_sha_state(tmp_path: Path) -> None:
