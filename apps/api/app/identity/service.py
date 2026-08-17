@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -60,6 +61,13 @@ def effective_interval(data) -> tuple[datetime, datetime | None]:
     return starts_at, expires_at
 
 
+def is_duplicate_agent_stable_key(exc: IntegrityError) -> bool:
+    return (
+        isinstance(exc.orig, sqlite3.IntegrityError)
+        and exc.orig.sqlite_errorcode == sqlite3.SQLITE_CONSTRAINT_UNIQUE
+    )
+
+
 class IdentityService:
     def __init__(self, sessions: sessionmaker[Session]) -> None:
         self.sessions = sessions
@@ -108,6 +116,8 @@ class IdentityService:
             try:
                 uow.session.flush()
             except IntegrityError as exc:
+                if not is_duplicate_agent_stable_key(exc):
+                    raise
                 raise DomainError(
                     "DUPLICATE_STABLE_KEY", "Agent stable key already exists.", 409
                 ) from exc
@@ -336,7 +346,13 @@ class IdentityService:
                 raise DomainError("PERMISSION_NOT_FOUND", "Permission was not found.", 404)
             row = RolePermissionRow(role_id=role_id, permission_id=permission_id, effect=effect)
             uow.session.add(row)
-            self._audit(uow.session, "role.permission_attached", "role", role_id)
+            self._audit(
+                uow.session,
+                "role.permission_attached",
+                "role",
+                role_id,
+                changes={"permission_id": permission_id, "effect": effect},
+            )
             try:
                 uow.session.flush()
             except IntegrityError as exc:
