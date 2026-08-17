@@ -1405,6 +1405,12 @@ def _validate_rule(
                 "eventType": event.event_type,
             },
         )
+    if event.event_type == AgentRuntimeEventType.RUN_CANCELLED:
+        _validate_cancellation_attempt_lineage(
+            event=event,
+            attempts=attempts,
+            active_attempt_id=active_attempt_id,
+        )
     if (
         event.event_type == AgentRuntimeEventType.RUN_CANCELLED
         and source_state == AgentRunState.CANCEL_REQUESTED
@@ -1451,6 +1457,66 @@ def _validate_rule(
                 attempt_id=active_attempt_id,
                 command_id=event.command_id,
             )
+
+
+def _validate_cancellation_attempt_lineage(
+    *,
+    event: RuntimeEventEnvelope,
+    attempts: dict[str, AgentRunAttempt],
+    active_attempt_id: str | None,
+) -> None:
+    metadata: dict[str, object] = {
+        "eventType": AgentRuntimeEventType.RUN_CANCELLED.value,
+        "activeAttemptId": active_attempt_id,
+    }
+    if event.attempt_id is None:
+        if active_attempt_id is None:
+            return
+        metadata["reason"] = "cancellation_attempt_missing"
+        raise LedgerReplayError(
+            "Active cancellation requires the authoritative attempt ID.",
+            run_id=event.run_id,
+            command_id=event.command_id,
+            metadata=metadata,
+        )
+    try:
+        event_attempt_id = validate_identifier(event.attempt_id, field_name="attempt_id")
+    except (TypeError, ValueError) as exc:
+        metadata["reason"] = "cancellation_attempt_invalid"
+        raise LedgerReplayError(
+            "Cancellation references an invalid attempt ID.",
+            run_id=event.run_id,
+            command_id=event.command_id,
+            metadata=metadata,
+        ) from exc
+    metadata["eventAttemptId"] = event_attempt_id
+    if active_attempt_id is None:
+        metadata["reason"] = "cancellation_attempt_unexpected"
+        raise LedgerReplayError(
+            "Pre-start cancellation must not reference an attempt.",
+            run_id=event.run_id,
+            attempt_id=event_attempt_id,
+            command_id=event.command_id,
+            metadata=metadata,
+        )
+    if event_attempt_id != active_attempt_id:
+        metadata["reason"] = "cancellation_attempt_mismatch"
+        raise LedgerReplayError(
+            "Cancellation attempt ID must match the active attempt ID.",
+            run_id=event.run_id,
+            attempt_id=event_attempt_id,
+            command_id=event.command_id,
+            metadata=metadata,
+        )
+    if event_attempt_id not in attempts:
+        metadata["reason"] = "cancellation_attempt_missing_from_history"
+        raise LedgerReplayError(
+            "The cancellation attempt does not exist in history.",
+            run_id=event.run_id,
+            attempt_id=event_attempt_id,
+            command_id=event.command_id,
+            metadata=metadata,
+        )
 
 
 def _resolve_target_state(

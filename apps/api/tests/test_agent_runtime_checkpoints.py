@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+from threading import Barrier
+
 import pytest
 
 from app.agent_runtime.errors import (
     CheckpointLineageError,
     CheckpointNotAllowedError,
     CheckpointSequenceConflictError,
+    CommandConflictError,
     LedgerReplayError,
 )
 from app.agent_runtime.ledger import replay_execution_ledger
@@ -14,6 +18,7 @@ from app.models.agent_runtime import (
     BeginAttemptCommand,
     ConfirmCancellationCommand,
     ConfirmCancellationStartCommand,
+    HeartbeatCommand,
     RecordCheckpointCommand,
     RequestCancellationCommand,
     RequestRecoveryPlanCommand,
@@ -120,6 +125,234 @@ def test_duplicate_checkpoint_id_with_same_attempt_and_identical_content_is_a_no
     assert second.snapshot == first.snapshot
     assert len(service.repository.list_events("run-1")) == event_count
     assert len(service.repository.list_checkpoints("run-1")) == checkpoint_count
+
+
+def test_identical_historical_checkpoint_resubmission_is_a_deterministic_no_op() -> None:
+    service = make_service()
+    prepare_running_run(service)
+    attempt_id = service.repository.load_attempt_history("run-1")[-1].attempt_id
+    checkpoint_a_command = RecordCheckpointCommand(
+        run_id="run-1",
+        command_id="cmd-checkpoint-a",
+        expected_run_version=6,
+        timestamp=ts(5),
+        actor_reference="worker-1",
+        checkpoint_id="checkpoint-a",
+        state_reference="checkpoint://state/a",
+        integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+        resume_cursor="cursor-a",
+        checkpoint_metadata={"step": 1, "nested": {"value": True}},
+        source_metadata={"source": "test"},
+    )
+    service.record_checkpoint(checkpoint_a_command)
+    service.record_heartbeat(
+        HeartbeatCommand(
+            run_id="run-1",
+            command_id="cmd-heartbeat-1",
+            expected_run_version=7,
+            timestamp=ts(6),
+            actor_reference="worker-1",
+            attempt_id=attempt_id,
+            source_metadata={"source": "test"},
+        )
+    )
+    service.record_checkpoint(
+        RecordCheckpointCommand(
+            run_id="run-1",
+            command_id="cmd-checkpoint-b",
+            expected_run_version=8,
+            timestamp=ts(7),
+            actor_reference="worker-1",
+            checkpoint_id="checkpoint-b",
+            attempt_id=attempt_id,
+            state_reference="checkpoint://state/b",
+            integrity_digest="sha256:bbbbbbbbbbbbbbbb",
+            resume_cursor="cursor-b",
+            checkpoint_metadata={"step": 2},
+            source_metadata={"source": "test"},
+        )
+    )
+    service.record_heartbeat(
+        HeartbeatCommand(
+            run_id="run-1",
+            command_id="cmd-heartbeat-2",
+            expected_run_version=9,
+            timestamp=ts(8),
+            actor_reference="worker-1",
+            attempt_id=attempt_id,
+            source_metadata={"source": "test"},
+        )
+    )
+    fail_attempt(
+        service,
+        "run-1",
+        expected_run_version=10,
+        command_id="cmd-fail-before-resubmit",
+        second=9,
+    )
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    before_checkpoints = service.repository.list_checkpoints("run-1")
+    original_a = before_checkpoints[0]
+    no_op_command = checkpoint_a_command.model_copy(
+        update={
+            "command_id": "cmd-checkpoint-a-resubmit",
+            "expected_run_version": 11,
+        }
+    )
+
+    result = service.record_checkpoint(no_op_command)
+
+    assert result.snapshot == before_snapshot
+    assert result.events == ()
+    assert result.idempotent_replay is False
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
+    assert service.repository.list_checkpoints("run-1") == before_checkpoints
+    assert service.repository.list_checkpoints("run-1")[0] == original_a
+    assert service.repository.list_checkpoints("run-1")[-1].checkpoint_sequence == 2
+    assert service.repository.get_processed_command("run-1", no_op_command.command_id) is not None
+
+    replay = service.record_checkpoint(no_op_command)
+    assert replay.snapshot == before_snapshot
+    assert replay.events == ()
+    assert replay.idempotent_replay is True
+    with pytest.raises(CommandConflictError):
+        service.record_checkpoint(
+            no_op_command.model_copy(update={"state_reference": "checkpoint://state/changed"})
+        )
+
+    plan = plan_recovery(
+        service.repository.load_run("run-1"),
+        service.repository.load_attempt_history("run-1"),
+        service.repository.list_checkpoints("run-1"),
+        service.repository.list_events("run-1"),
+    )
+    assert plan.selected_checkpoint is not None
+    assert plan.selected_checkpoint.checkpoint_id == "checkpoint-b"
+
+
+def test_concurrent_same_command_historical_checkpoint_no_op_replays_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = make_service()
+    prepare_running_run(service)
+    checkpoint_a = RecordCheckpointCommand(
+        run_id="run-1",
+        command_id="cmd-checkpoint-a",
+        expected_run_version=6,
+        timestamp=ts(5),
+        actor_reference="worker-1",
+        checkpoint_id="checkpoint-a",
+        state_reference="checkpoint://state/a",
+        integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+        resume_cursor="cursor-a",
+        checkpoint_metadata={"step": 1},
+        source_metadata={"source": "test"},
+    )
+    service.record_checkpoint(checkpoint_a)
+    service.record_checkpoint(
+        checkpoint_a.model_copy(
+            update={
+                "command_id": "cmd-checkpoint-b",
+                "expected_run_version": 7,
+                "timestamp": ts(6),
+                "checkpoint_id": "checkpoint-b",
+                "state_reference": "checkpoint://state/b",
+                "integrity_digest": "sha256:bbbbbbbbbbbbbbbb",
+            }
+        )
+    )
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    before_checkpoints = service.repository.list_checkpoints("run-1")
+    command = checkpoint_a.model_copy(
+        update={
+            "command_id": "cmd-checkpoint-a-concurrent-resubmit",
+            "expected_run_version": 8,
+        }
+    )
+    barrier = Barrier(2)
+    original_commit = service.repository.commit_command
+
+    def wrapped_commit(*args, **kwargs):
+        barrier.wait()
+        return original_commit(*args, **kwargs)
+
+    monkeypatch.setattr(service.repository, "commit_command", wrapped_commit)
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _: service.record_checkpoint(command), range(2)))
+
+    assert sorted(result.idempotent_replay for result in results) == [False, True]
+    assert all(result.snapshot == before_snapshot for result in results)
+    assert all(result.events == () for result in results)
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
+    assert service.repository.list_checkpoints("run-1") == before_checkpoints
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"timestamp": ts(6)},
+        {"state_reference": "checkpoint://state/changed"},
+        {"integrity_digest": "sha256:bbbbbbbbbbbbbbbb"},
+        {"resume_cursor": "cursor-changed"},
+        {"checkpoint_metadata": {"step": 2}},
+        {"attempt_id": "attempt-unrelated"},
+    ],
+)
+def test_historical_checkpoint_resubmission_rejects_immutable_content_changes(
+    changes: dict[str, object],
+) -> None:
+    service = make_service()
+    prepare_running_run(service)
+    attempt_id = service.repository.load_attempt_history("run-1")[-1].attempt_id
+    original = RecordCheckpointCommand(
+        run_id="run-1",
+        command_id="cmd-checkpoint-original",
+        expected_run_version=6,
+        timestamp=ts(5),
+        actor_reference="worker-1",
+        checkpoint_id="checkpoint-stable",
+        attempt_id=attempt_id,
+        state_reference="checkpoint://state/1",
+        integrity_digest="sha256:aaaaaaaaaaaaaaaa",
+        resume_cursor="cursor-1",
+        checkpoint_metadata={"step": 1},
+        source_metadata={"source": "test"},
+    )
+    service.record_checkpoint(original)
+    service.record_checkpoint(
+        original.model_copy(
+            update={
+                "command_id": "cmd-checkpoint-later",
+                "expected_run_version": 7,
+                "checkpoint_id": "checkpoint-later",
+                "timestamp": ts(6),
+                "state_reference": "checkpoint://state/2",
+                "integrity_digest": "sha256:cccccccccccccccc",
+            }
+        )
+    )
+    before_snapshot = service.repository.load_run("run-1")
+    before_events = service.repository.list_events("run-1")
+    before_checkpoints = service.repository.list_checkpoints("run-1")
+    with pytest.raises(CheckpointSequenceConflictError):
+        service.record_checkpoint(
+            original.model_copy(
+                update={
+                    "command_id": "cmd-checkpoint-conflict",
+                    "expected_run_version": 8,
+                    **changes,
+                }
+            )
+        )
+    assert service.repository.load_run("run-1") == before_snapshot
+    assert service.repository.list_events("run-1") == before_events
+    assert service.repository.list_checkpoints("run-1") == before_checkpoints
+    assert service.repository.get_processed_command("run-1", "cmd-checkpoint-conflict") is None
 
 
 def test_duplicate_checkpoint_id_with_different_contents_conflicts() -> None:

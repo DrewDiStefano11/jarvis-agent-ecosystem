@@ -307,6 +307,11 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 ag = replay_execution_ledger(old + list(events))
                 if not ag or ag.snapshot != snapshot:
                     raise LedgerReplayError("Ledger/projection mismatch", run_id=run_id)
+                if not create and not events:
+                    self._store(s, processed_command)
+                    self._store_audit(s, processed_command, snapshot, events, previous_state)
+                    s.flush()
+                    return None
                 if create:
                     run_row = AgentRuntimeRunRow(
                         run_id=run_id,
@@ -514,6 +519,15 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
         previous_state: str | None,
     ) -> None:
         event_list = list(events)
+        event_session_id = self._runtime_session_id(command.run_id)
+        audit_sequence = (
+            session.scalar(
+                select(func.max(AuditEventRow.sequence_number)).where(
+                    AuditEventRow.event_session_id == event_session_id
+                )
+            )
+            or 0
+        ) + 1
         audit_identity = canonical_json(
             {"commandId": command.command_id, "runId": command.run_id}
         ).encode()
@@ -535,8 +549,8 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 previous_state=previous_state,
                 new_state=snapshot.state.value,
                 correlation_id=snapshot.specification.correlation_id or command.run_id,
-                sequence_number=snapshot.event_sequence_number,
-                event_session_id=self._runtime_session_id(command.run_id),
+                sequence_number=audit_sequence,
+                event_session_id=event_session_id,
                 timestamp=command.recorded_at,
                 payload={
                     "summary": f"Runtime command {command.command_type}",
