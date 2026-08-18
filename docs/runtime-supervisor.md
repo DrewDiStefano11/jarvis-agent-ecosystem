@@ -27,7 +27,9 @@ One lifetime-held operating-system file lock owns an installation. The state fil
 lock with a random instance ID, PID, and operating-system process creation identity. Status therefore
 distinguishes running, stale, and not-running state without treating a PID file as authority. A stop
 request is addressed to the current random instance ID; stale state never causes an unrelated reused
-PID to be terminated.
+PID to be terminated. Lock, state, and stop-request files stay in a repository-keyed coordination
+directory under local application data even when the configurable runtime home changes, so operator
+commands cannot lose or duplicate a running installation.
 
 On Windows, the detached supervisor allocates a hidden console for process-group shutdown signals,
 and children enter a kill-on-close Job Object. Normal stop is still graceful: the supervisor signals
@@ -143,13 +145,16 @@ By default, supervisor-owned state lives at:
 filesystem root, the repository, or a directory inside the repository. A repository-identity marker
 prevents cleanup from operating on another installation's directory.
 
+The override relocates logs, backups, and known-good metadata. Singleton coordination remains at the
+default repository-keyed location and is reported separately by `status` and `doctor`.
+
 Files include:
 
-- `state.json`, `known-good.json`, and the lifetime lock;
+- coordination `state.json`, the lifetime lock, and the authenticated stop-request file;
+- runtime-home `known-good.json` and `last-backup.json`;
 - `logs\supervisor.log` for supervisor events;
 - `logs\api.log`, `logs\web.log`, and `logs\autonomous_worker.log` for child output;
 - `backups\jarvis-<UTC timestamp>.sqlite3` and matching JSON manifests;
-- `last-backup.json`.
 
 Logs are UTF-8 and rotate by size. Defaults are 5 MiB per file plus five retained rotations. Child
 lines are separated from supervisor events and configured values whose names look like credentials,

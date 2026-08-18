@@ -59,6 +59,12 @@ def ensure_runtime_home(path: Path, repository: Path) -> None:
         )
 
 
+def ensure_supervisor_homes(runtime_home: Path, coordination_home: Path, repository: Path) -> None:
+    ensure_runtime_home(coordination_home, repository)
+    if runtime_home != coordination_home:
+        ensure_runtime_home(runtime_home, repository)
+
+
 def verified_runtime_home(path: Path, repository: Path) -> bool:
     marker = read_json(path / ".jarvis-supervisor-runtime.json")
     return bool(

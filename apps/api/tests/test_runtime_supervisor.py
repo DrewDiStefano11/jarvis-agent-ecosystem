@@ -47,6 +47,7 @@ def make_config(tmp_path: Path, **environment: str) -> SupervisorConfig:
     (repository / "apps" / "web" / "dist").mkdir(exist_ok=True)
     (repository / "apps" / "web" / "dist" / "index.html").write_text("ok", encoding="utf-8")
     values = {
+        "LOCALAPPDATA": str(tmp_path / "local app data"),
         "JARVIS_SUPERVISOR_RUNTIME_HOME": str(tmp_path / "runtime home"),
         "JARVIS_SUPERVISOR_NODE_EXECUTABLE": sys.executable,
         "JARVIS_SUPERVISOR_PYTHON_EXECUTABLE": sys.executable,
@@ -116,6 +117,8 @@ def test_configuration_resolves_repository_with_spaces_and_external_runtime(tmp_
     config = make_config(tmp_path)
     assert "Repository With Spaces" in str(config.repository)
     assert config.runtime_home == (tmp_path / "runtime home").resolve()
+    assert config.coordination_home.parent.name == "Supervisor"
+    assert config.coordination_home != config.runtime_home
     assert config.database_path == (config.api_directory / "data" / "jarvis.db").resolve()
 
 
@@ -125,6 +128,66 @@ def test_configuration_parses_sqlite_query_parameters(tmp_path: Path) -> None:
         JARVIS_DATABASE_URL="sqlite:///./data/jarvis.db?timeout=30",
     )
     assert config.database_path == (config.api_directory / "data" / "jarvis.db").resolve()
+
+
+def test_configuration_preserves_literal_sqlite_percent_sequences(tmp_path: Path) -> None:
+    config = make_config(
+        tmp_path,
+        JARVIS_DATABASE_URL="sqlite:///./data/jarvis%20.db",
+    )
+    assert config.database_path == (config.api_directory / "data" / "jarvis%20.db").resolve()
+
+
+def test_coordination_paths_are_stable_across_runtime_home_changes(tmp_path: Path) -> None:
+    first = make_config(
+        tmp_path,
+        JARVIS_SUPERVISOR_RUNTIME_HOME=str(tmp_path / "runtime-a"),
+    )
+    second = make_config(
+        tmp_path,
+        JARVIS_SUPERVISOR_RUNTIME_HOME=str(tmp_path / "runtime-b"),
+    )
+    assert first.runtime_home != second.runtime_home
+    assert first.coordination_home == second.coordination_home
+    assert first.lock_path == second.lock_path
+    assert first.state_path == second.state_path
+    assert first.stop_request_path == second.stop_request_path
+
+
+def test_start_discovers_running_supervisor_after_runtime_home_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = make_config(
+        tmp_path,
+        JARVIS_SUPERVISOR_RUNTIME_HOME=str(tmp_path / "runtime-a"),
+    )
+    second = make_config(
+        tmp_path,
+        JARVIS_SUPERVISOR_RUNTIME_HOME=str(tmp_path / "runtime-b"),
+    )
+    ensure_runtime_home(first.coordination_home, first.repository)
+    atomic_write_json(
+        first.state_path,
+        {
+            "supervisorState": "running",
+            "pid": 123,
+            "processIdentity": "live-supervisor",
+            "instanceId": "stable-instance",
+        },
+    )
+    monkeypatch.setattr(
+        "app.runtime_supervisor.ownership.process_identity",
+        lambda _pid: "live-supervisor",
+    )
+    monkeypatch.setattr(
+        "app.runtime_supervisor.cli._spawn_daemon",
+        lambda _config: pytest.fail("must not spawn a duplicate supervisor"),
+    )
+
+    result = start(second)
+    assert result["result"] == "already_running"
+    assert result["instanceId"] == "stable-instance"
+    assert not second.runtime_home.exists()
 
 
 @pytest.mark.parametrize(

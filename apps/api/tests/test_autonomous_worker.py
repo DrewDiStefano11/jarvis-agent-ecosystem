@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ from app.agent_runtime.errors import (
     RuntimeActorInactiveError,
     RuntimePermissionDeniedError,
 )
-from app.autonomous_worker.__main__ import _run_once_resilient
+from app.autonomous_worker.__main__ import _run_once_or_stop, _run_once_resilient
 from app.autonomous_worker.errors import AutonomousWorkerError
 from app.core.config import Settings
 from app.core.errors import DomainError
@@ -119,6 +120,29 @@ def test_worker_installs_sigbreak_fallback_handler(monkeypatch: pytest.MonkeyPat
     installed[sigbreak](sigbreak, None)
     assert callbacks == [stop.set]
     assert stop.is_set is True
+
+
+@pytest.mark.asyncio
+async def test_worker_stop_cancels_active_run_once() -> None:
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    stop = asyncio.Event()
+
+    class Service:
+        async def run_once(self, _worker_id: str):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+    task = asyncio.create_task(_run_once_or_stop(Service(), "worker-id", stop))
+    await started.wait()
+    stop.set()
+
+    assert await asyncio.wait_for(task, timeout=1) == (None, True)
+    assert cancelled.is_set()
 
 
 class FakeProvider:

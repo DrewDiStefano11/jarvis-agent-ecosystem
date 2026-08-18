@@ -131,6 +131,26 @@ def run_doctor(config: SupervisorConfig) -> dict[str, Any]:
     ):
         writable = False
     checks.append(_check("runtime_home", "pass" if writable else "fail", str(config.runtime_home)))
+    coordination_parent = next(
+        (
+            parent
+            for parent in [config.coordination_home, *config.coordination_home.parents]
+            if parent.exists()
+        ),
+        None,
+    )
+    coordination_valid = bool(coordination_parent and os.access(coordination_parent, os.W_OK))
+    if config.coordination_home.exists() and not verified_runtime_home(
+        config.coordination_home, config.repository
+    ):
+        coordination_valid = False
+    checks.append(
+        _check(
+            "coordination_home",
+            "pass" if coordination_valid else "fail",
+            str(config.coordination_home),
+        )
+    )
     current = load_status(config)
     running = current.get("ownership") == "running"
     processes = current.get("processes")
@@ -226,6 +246,7 @@ def run_doctor(config: SupervisorConfig) -> dict[str, Any]:
         else "pass",
         "checks": checks,
         "runtimeHome": str(config.runtime_home),
+        "coordinationHome": str(config.coordination_home),
         "logsDirectory": str(config.logs_directory),
         "backupsDirectory": str(config.backups_directory),
         "supervisorOwnership": state_ownership(read_json(config.state_path)),

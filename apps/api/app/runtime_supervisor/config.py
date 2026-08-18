@@ -6,7 +6,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import urlsplit
 
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
@@ -161,19 +161,28 @@ def _owned_frontend_url(
     return f"{scheme}://{_url_host(host)}:{port}{suffix}"
 
 
+def _coordination_home(repository: Path, values: dict[str, str]) -> Path:
+    base = values.get("LOCALAPPDATA") or values.get("XDG_STATE_HOME")
+    if not base:
+        base = str(Path.home() / ".local" / "state")
+    install_id = hashlib.sha256(str(repository).lower().encode("utf-8")).hexdigest()[:12]
+    result = (Path(base) / "Jarvis" / "Supervisor" / install_id).resolve()
+    anchor = Path(result.anchor).resolve()
+    if result == anchor or result == repository or repository in result.parents:
+        raise SupervisorConfigurationError(
+            "supervisor coordination home cannot be a filesystem root or inside the repository"
+        )
+    return result
+
+
 def _safe_runtime_home(repository: Path, values: dict[str, str]) -> Path:
     configured = values.get("JARVIS_SUPERVISOR_RUNTIME_HOME", "").strip()
-    if configured:
-        configured_path = Path(configured).expanduser()
-        if not configured_path.is_absolute():
-            raise SupervisorConfigurationError("JARVIS_SUPERVISOR_RUNTIME_HOME must be absolute")
-        result = configured_path.resolve()
-    else:
-        base = values.get("LOCALAPPDATA") or values.get("XDG_STATE_HOME")
-        if not base:
-            base = str(Path.home() / ".local" / "state")
-        install_id = hashlib.sha256(str(repository).lower().encode("utf-8")).hexdigest()[:12]
-        result = (Path(base) / "Jarvis" / "Supervisor" / install_id).resolve()
+    if not configured:
+        return _coordination_home(repository, values)
+    configured_path = Path(configured).expanduser()
+    if not configured_path.is_absolute():
+        raise SupervisorConfigurationError("JARVIS_SUPERVISOR_RUNTIME_HOME must be absolute")
+    result = configured_path.resolve()
     anchor = Path(result.anchor).resolve()
     if result == anchor or result == repository or repository in result.parents:
         raise SupervisorConfigurationError(
@@ -191,7 +200,7 @@ def _sqlite_path(repository: Path, value: str) -> Path:
         raise SupervisorConfigurationError(
             "the runtime supervisor requires a file-backed SQLite URL"
         )
-    raw_path = unquote(url.database)
+    raw_path = url.database
     if raw_path.startswith("/") and len(raw_path) > 3 and raw_path[2] == ":":
         raw_path = raw_path[1:]
     candidate = Path(raw_path)
@@ -204,6 +213,7 @@ def _sqlite_path(repository: Path, value: str) -> Path:
 class SupervisorConfig:
     repository: Path
     runtime_home: Path
+    coordination_home: Path
     python_executable: Path
     node_executable: Path | None
     api_url: str
@@ -335,6 +345,7 @@ class SupervisorConfig:
         return cls(
             repository=repository,
             runtime_home=_safe_runtime_home(repository, values),
+            coordination_home=_coordination_home(repository, values),
             python_executable=api_python.resolve(),
             node_executable=node.resolve() if node else None,
             api_url=api_url,
@@ -421,15 +432,15 @@ class SupervisorConfig:
 
     @property
     def state_path(self) -> Path:
-        return self.runtime_home / "state.json"
+        return self.coordination_home / "state.json"
 
     @property
     def lock_path(self) -> Path:
-        return self.runtime_home / "supervisor.lock"
+        return self.coordination_home / "supervisor.lock"
 
     @property
     def stop_request_path(self) -> Path:
-        return self.runtime_home / "stop-request.json"
+        return self.coordination_home / "stop-request.json"
 
     @property
     def task_name(self) -> str:

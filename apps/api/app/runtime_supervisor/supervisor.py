@@ -23,7 +23,7 @@ from app.runtime_supervisor.frontend_build import validate_frontend_build
 from app.runtime_supervisor.health import HealthResult, probe_http
 from app.runtime_supervisor.io import (
     atomic_write_json,
-    ensure_runtime_home,
+    ensure_supervisor_homes,
     read_json,
     utc_now,
 )
@@ -200,7 +200,11 @@ class RuntimeSupervisor:
 
     def run(self) -> int:
         validate_frontend_build(self.config)
-        ensure_runtime_home(self.config.runtime_home, self.config.repository)
+        ensure_supervisor_homes(
+            self.config.runtime_home,
+            self.config.coordination_home,
+            self.config.repository,
+        )
         self.config.logs_directory.mkdir(parents=True, exist_ok=True)
         self.config.backups_directory.mkdir(parents=True, exist_ok=True)
         self.logger = configure_logging(
@@ -643,6 +647,7 @@ class RuntimeSupervisor:
             "repository": str(self.config.repository),
             "gitSha": self.git_sha,
             "runtimeHome": str(self.config.runtime_home),
+            "coordinationHome": str(self.config.coordination_home),
             "startedAt": self.started_at,
             "uptimeSeconds": max(0, self.clock() - self.started_monotonic),
             "updatedAt": utc_now(),

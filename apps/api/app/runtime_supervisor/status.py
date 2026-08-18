@@ -41,6 +41,7 @@ def load_status(config: SupervisorConfig) -> dict[str, Any]:
             "uptimeSeconds": 0,
             "repository": str(config.repository),
             "runtimeHome": str(config.runtime_home),
+            "coordinationHome": str(config.coordination_home),
             "gitSha": current_sha,
             "currentGitSha": current_sha,
             "processes": {

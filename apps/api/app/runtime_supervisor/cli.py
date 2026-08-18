@@ -15,7 +15,11 @@ from app.runtime_supervisor.backup import create_backup
 from app.runtime_supervisor.config import SupervisorConfig, SupervisorConfigurationError
 from app.runtime_supervisor.doctor import run_doctor
 from app.runtime_supervisor.frontend_build import validate_frontend_build
-from app.runtime_supervisor.io import atomic_write_json, ensure_runtime_home, utc_now
+from app.runtime_supervisor.io import (
+    atomic_write_json,
+    ensure_runtime_home,
+    utc_now,
+)
 from app.runtime_supervisor.status import load_status
 from app.runtime_supervisor.supervisor import RuntimeSupervisor, shutdown_wait_seconds
 
@@ -63,6 +67,7 @@ def _emit(payload: dict[str, Any], *, as_json: bool) -> None:
             f"Current Git SHA: {payload.get('currentGitSha') or payload.get('gitSha') or 'unknown'}"
         )
         print(f"Runtime home: {payload.get('runtimeHome')}")
+        print(f"Coordination home: {payload.get('coordinationHome')}")
         for name, process in payload.get("processes", {}).items():
             print(
                 f"  {name}: {process.get('processState')} health={process.get('healthState', 'unknown')} "
@@ -138,10 +143,12 @@ def _spawn_daemon(config: SupervisorConfig) -> int:
 
 def start(config: SupervisorConfig) -> dict[str, Any]:
     validate_frontend_build(config)
-    ensure_runtime_home(config.runtime_home, config.repository)
+    ensure_runtime_home(config.coordination_home, config.repository)
     current = load_status(config)
     if current.get("ownership") == "running":
         return {"result": "already_running", **current}
+    if config.runtime_home != config.coordination_home:
+        ensure_runtime_home(config.runtime_home, config.repository)
     launcher_pid = _spawn_daemon(config)
     deadline = time.monotonic() + min(config.startup_timeout_seconds, 20)
     while time.monotonic() < deadline:
