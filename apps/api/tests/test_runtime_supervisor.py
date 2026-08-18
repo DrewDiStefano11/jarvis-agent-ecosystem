@@ -452,6 +452,34 @@ def test_failed_api_prevents_web_and_worker_start(tmp_path: Path) -> None:
     assert "uvicorn" in calls[0]
 
 
+def test_initial_spawn_failure_is_counted_once(tmp_path: Path) -> None:
+    config = make_config(
+        tmp_path,
+        JARVIS_SUPERVISOR_RESTART_INITIAL_SECONDS="2",
+    )
+
+    def failing_factory(_argv: list[str], **_kwargs: object) -> FakeProcess:
+        raise OSError("spawn failed")
+
+    supervisor = RuntimeSupervisor(
+        config,
+        process_factory=failing_factory,
+        clock=lambda: 10,
+    )
+    attach_logger(supervisor)
+    managed = supervisor.processes["api"]
+
+    supervisor._start_process(managed)
+    assert managed.restart_count == 1
+    assert managed.consecutive_failures == 1
+    assert managed.next_restart_at == 12
+
+    assert supervisor._wait_available(managed) is False
+    assert managed.restart_count == 1
+    assert managed.consecutive_failures == 1
+    assert managed.next_restart_at == 12
+
+
 def test_explicitly_enabled_worker_starts_last_and_recovers_crash(tmp_path: Path) -> None:
     config = make_config(
         tmp_path,

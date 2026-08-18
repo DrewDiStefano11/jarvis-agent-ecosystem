@@ -283,9 +283,10 @@ class RuntimeSupervisor:
             if self.stop_requested:
                 return False
             process = managed.process
-            if process is None or process.poll() is not None:
-                if process is not None:
-                    managed.last_exit_code = process.poll()
+            if process is None:
+                return False
+            if process.poll() is not None:
+                managed.last_exit_code = process.poll()
                 managed.process = None
                 self._record_failure(managed, "process exited during startup")
                 return False

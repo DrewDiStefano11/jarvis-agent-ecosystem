@@ -29,6 +29,25 @@ async def _run_once_resilient(service, worker_id: str):
         return None
 
 
+def _install_stop_handlers(loop, stop: asyncio.Event) -> None:
+    signal_names = [signal.SIGINT, signal.SIGTERM]
+    sigbreak = getattr(signal, "SIGBREAK", None)
+    if sigbreak is not None:
+        signal_names.append(sigbreak)
+
+    def request_stop(_signum, _frame) -> None:
+        loop.call_soon_threadsafe(stop.set)
+
+    for signal_name in signal_names:
+        try:
+            loop.add_signal_handler(signal_name, stop.set)
+        except NotImplementedError:
+            try:
+                signal.signal(signal_name, request_stop)
+            except (OSError, ValueError):
+                pass
+
+
 async def run() -> None:
     # The sidecar shares durable services with the API, but it is not an API
     # restart and must never run simulator crash-recovery initialization.
@@ -44,11 +63,7 @@ async def run() -> None:
     )
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
-    for signal_name in (signal.SIGINT, signal.SIGTERM):
-        try:
-            loop.add_signal_handler(signal_name, stop.set)
-        except NotImplementedError:
-            pass
+    _install_stop_handlers(loop, stop)
     try:
         while not stop.is_set():
             app.state.task_leases.heartbeat_worker(worker.id)

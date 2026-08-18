@@ -86,6 +86,41 @@ def test_worker_dependency_composition_skips_api_recovery(monkeypatch: pytest.Mo
     assert received == {"recover_interrupted_workflow": False}
 
 
+def test_worker_installs_sigbreak_fallback_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    sigbreak = 21
+    installed: dict[int, object] = {}
+    callbacks: list[object] = []
+
+    class FakeLoop:
+        def add_signal_handler(self, _signal_name, _callback) -> None:
+            raise NotImplementedError
+
+        def call_soon_threadsafe(self, callback) -> None:
+            callbacks.append(callback)
+            callback()
+
+    class FakeStop:
+        is_set = False
+
+        def set(self) -> None:
+            self.is_set = True
+
+    stop = FakeStop()
+    monkeypatch.setattr(worker_main.signal, "SIGBREAK", sigbreak, raising=False)
+    monkeypatch.setattr(
+        worker_main.signal,
+        "signal",
+        lambda signal_name, handler: installed.__setitem__(signal_name, handler),
+    )
+
+    worker_main._install_stop_handlers(FakeLoop(), stop)
+
+    assert {worker_main.signal.SIGINT, worker_main.signal.SIGTERM, sigbreak} <= installed.keys()
+    installed[sigbreak](sigbreak, None)
+    assert callbacks == [stop.set]
+    assert stop.is_set is True
+
+
 class FakeProvider:
     name = "local-fake"
     model = "fixture-model"
