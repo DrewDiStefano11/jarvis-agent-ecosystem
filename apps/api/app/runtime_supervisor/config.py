@@ -136,6 +136,31 @@ def _owned_service_url(value: str, name: str, host: str, port: int) -> str:
     return f"http://{_url_host(host)}:{port}"
 
 
+def _owned_frontend_url(
+    value: str,
+    name: str,
+    scheme: str,
+    host: str,
+    port: int,
+    path: str,
+) -> str:
+    configured = _require_loopback_url(value, name, {scheme})
+    parsed = urlsplit(configured)
+    configured_host = parsed.hostname.rstrip(".").lower() if parsed.hostname else ""
+    try:
+        configured_port = parsed.port or (443 if scheme in {"https", "wss"} else 80)
+    except ValueError as exc:
+        raise SupervisorConfigurationError(f"{name} contains an invalid port") from exc
+    if (
+        configured_host != host.rstrip(".").lower()
+        or configured_port != port
+        or parsed.path.rstrip("/") != path.rstrip("/")
+    ):
+        raise SupervisorConfigurationError(f"{name} must target the supervisor's owned endpoint")
+    suffix = path if path.startswith("/") else f"/{path}" if path else ""
+    return f"{scheme}://{_url_host(host)}:{port}{suffix}"
+
+
 def _safe_runtime_home(repository: Path, values: dict[str, str]) -> Path:
     configured = values.get("JARVIS_SUPERVISOR_RUNTIME_HOME", "").strip()
     if configured:
@@ -255,15 +280,30 @@ class SupervisorConfig:
             "JARVIS_MODEL_OLLAMA_BASE_URL",
             {"http", "https"},
         )
-        web_origin = _require_loopback_url(
-            values.get("WEB_ORIGIN", f"http://localhost:{web_port}"),
+        web_origin = _owned_frontend_url(
+            values.get("WEB_ORIGIN", f"http://{_url_host(web_host)}:{web_port}"),
             "WEB_ORIGIN",
-            {"http", "https"},
+            "http",
+            web_host,
+            web_port,
+            "",
         )
-        if vite_api := values.get("VITE_API_BASE_URL", "").strip():
-            _require_loopback_url(vite_api, "VITE_API_BASE_URL", {"http", "https"})
-        if vite_ws := values.get("VITE_WS_URL", "").strip():
-            _require_loopback_url(vite_ws, "VITE_WS_URL", {"ws", "wss"})
+        vite_api = _owned_frontend_url(
+            values.get("VITE_API_BASE_URL", f"http://{_url_host(api_host)}:{api_port}"),
+            "VITE_API_BASE_URL",
+            "http",
+            api_host,
+            api_port,
+            "",
+        )
+        vite_ws = _owned_frontend_url(
+            values.get("VITE_WS_URL", f"ws://{_url_host(api_host)}:{api_port}/ws/events"),
+            "VITE_WS_URL",
+            "ws",
+            api_host,
+            api_port,
+            "/ws/events",
+        )
         python_value = values.get("JARVIS_SUPERVISOR_PYTHON_EXECUTABLE", "").strip()
         if python_value:
             api_python = Path(python_value).expanduser()
@@ -290,6 +330,8 @@ class SupervisorConfig:
         environment["API_HOST"] = api_host
         environment["API_PORT"] = str(api_port)
         environment["WEB_ORIGIN"] = web_origin
+        environment["VITE_API_BASE_URL"] = vite_api
+        environment["VITE_WS_URL"] = vite_ws
         return cls(
             repository=repository,
             runtime_home=_safe_runtime_home(repository, values),

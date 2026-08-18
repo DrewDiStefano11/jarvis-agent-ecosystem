@@ -29,10 +29,11 @@ distinguishes running, stale, and not-running state without treating a PID file 
 request is addressed to the current random instance ID; stale state never causes an unrelated reused
 PID to be terminated.
 
-On Windows, children enter a kill-on-close Job Object. Normal stop is still graceful: the supervisor
-signals worker, web, and API in reverse order, waits the configured grace period, and forces only a
-child it directly created if the grace period expires. Closing the Job Object is a final orphan
-safety net if the supervisor itself crashes.
+On Windows, the detached supervisor allocates a hidden console for process-group shutdown signals,
+and children enter a kill-on-close Job Object. Normal stop is still graceful: the supervisor signals
+worker, web, and API in reverse order, waits the configured grace period, and forces only a child it
+directly created if the grace period expires. Closing the Job Object is a final orphan safety net if
+the supervisor itself crashes.
 
 ## Prerequisites and stable setup
 
@@ -195,9 +196,11 @@ The safe defaults in `.env.example` cover health cadence, health-failure thresho
 restart/backoff bounds, log size/retention, backup interval/retention, disk thresholds, and the web
 loopback port. Keep overrides in an untracked repository/app `.env` or the process environment.
 
-The supervisor rejects non-loopback API, web, Vite API/WebSocket, and Ollama URLs before launching
-children. Commands are fixed argument lists with `shell=False`; configuration is never concatenated
-into a shell command. Do not place credentials in supervisor settings or its runtime home.
+The supervisor rejects non-loopback API, web, and Ollama URLs before launching children. Its web
+origin and Vite API/WebSocket endpoints must also match the exact host and port of the processes it
+owns; omitted frontend endpoints are derived from those bind settings. Commands are fixed argument
+lists with `shell=False`; configuration is never concatenated into a shell command. Do not place
+credentials in supervisor settings or its runtime home.
 
 ## Recovery and limitations
 

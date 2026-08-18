@@ -29,6 +29,7 @@ from app.runtime_supervisor.supervisor import (
     build_process_registry,
     shutdown_wait_seconds,
 )
+from app.runtime_supervisor.windows_console import ensure_hidden_console
 
 
 def make_config(tmp_path: Path, **environment: str) -> SupervisorConfig:
@@ -156,6 +157,67 @@ def test_configuration_rejects_remote_frontend_endpoints(
 ) -> None:
     with pytest.raises(SupervisorConfigurationError, match="loopback"):
         make_config(tmp_path, **{name: value})
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("WEB_ORIGIN", "http://localhost:5173"),
+        ("WEB_ORIGIN", "http://127.0.0.1:5174"),
+        ("VITE_API_BASE_URL", "http://127.0.0.1:8001"),
+        ("VITE_API_BASE_URL", "http://127.0.0.1:8000/api"),
+        ("VITE_WS_URL", "ws://127.0.0.1:8001/ws/events"),
+        ("VITE_WS_URL", "ws://127.0.0.1:8000/ws/other"),
+    ],
+)
+def test_configuration_rejects_frontend_endpoint_not_owned_by_supervisor(
+    tmp_path: Path, name: str, value: str
+) -> None:
+    with pytest.raises(SupervisorConfigurationError, match="owned endpoint"):
+        make_config(tmp_path, **{name: value})
+
+
+def test_configuration_derives_frontend_endpoints_from_owned_binds(tmp_path: Path) -> None:
+    config = make_config(
+        tmp_path,
+        API_HOST="localhost",
+        API_PORT="8123",
+        JARVIS_SUPERVISOR_WEB_HOST="localhost",
+        JARVIS_SUPERVISOR_WEB_PORT="5234",
+    )
+    assert config.environment["WEB_ORIGIN"] == "http://localhost:5234"
+    assert config.environment["VITE_API_BASE_URL"] == "http://localhost:8123"
+    assert config.environment["VITE_WS_URL"] == "ws://localhost:8123/ws/events"
+
+
+def test_windows_supervisor_allocates_and_hides_console_for_child_signals() -> None:
+    class Kernel32:
+        def __init__(self) -> None:
+            self.window = 0
+            self.allocated = False
+
+        def GetConsoleCP(self) -> int:
+            return 65001 if self.allocated else 0
+
+        def GetConsoleWindow(self) -> int:
+            return self.window
+
+        def AllocConsole(self) -> int:
+            self.allocated = True
+            self.window = 123
+            return 1
+
+    class User32:
+        hidden: list[tuple[int, int]] = []
+
+        def ShowWindow(self, window: int, command: int) -> None:
+            self.hidden.append((window, command))
+
+    kernel32 = Kernel32()
+    user32 = User32()
+    ensure_hidden_console(platform="nt", kernel32=kernel32, user32=user32)
+    assert kernel32.allocated is True
+    assert user32.hidden == [(123, 0)]
 
 
 def test_worker_remains_disabled_by_default(tmp_path: Path) -> None:

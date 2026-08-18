@@ -32,6 +32,7 @@ from app.runtime_supervisor.logging_utils import (
     configure_logging,
 )
 from app.runtime_supervisor.ownership import SingletonLock, process_identity
+from app.runtime_supervisor.windows_console import ensure_hidden_console
 from app.runtime_supervisor.windows_job import WindowsJob
 
 
@@ -213,6 +214,7 @@ class RuntimeSupervisor:
             return 2
         supervisor_failure: str | None = None
         try:
+            ensure_hidden_console()
             self.job = WindowsJob()
             self._install_signal_handlers()
             self.config.stop_request_path.unlink(missing_ok=True)

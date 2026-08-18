@@ -121,10 +121,10 @@ Run `pnpm build` followed by `pnpm vite preview`, then use browser Application t
 
 ## Troubleshooting
 
-- CORS errors: keep the web origin at `http://localhost:5173` or set `WEB_ORIGIN` explicitly.
-- WebSocket remains offline: verify the API uses port 8000 and that
-  `VITE_WS_URL` uses `ws://127.0.0.1:8000/ws/events` unless intentionally
-  overridden.
+- CORS errors: keep `WEB_ORIGIN` aligned with the supervised web host and port
+  (`http://127.0.0.1:5173` by default).
+- WebSocket remains offline: keep `VITE_WS_URL` aligned with the supervised API host and port
+  (`ws://127.0.0.1:8000/ws/events` by default).
 - PowerShell blocks activation: run the virtual environment executables directly as shown in verification commands.
 - Stale fixture state: use **System → Reset demo**; reset cancels the active runner before reseeding.
 - Port in use: change both the server port and corresponding frontend environment URL.
