@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 import os
 import sqlite3
@@ -16,7 +17,7 @@ import pytest
 from app.runtime_supervisor.autostart import status as autostart_status
 from app.runtime_supervisor.autostart import task_arguments, task_xml
 from app.runtime_supervisor.backup import BackupError, create_backup, prune_backups
-from app.runtime_supervisor.cli import stop
+from app.runtime_supervisor.cli import start, stop
 from app.runtime_supervisor.config import SupervisorConfig, SupervisorConfigurationError
 from app.runtime_supervisor.doctor import run_doctor
 from app.runtime_supervisor.health import HealthResult, probe_http
@@ -51,6 +52,18 @@ def make_config(tmp_path: Path, **environment: str) -> SupervisorConfig:
         "JARVIS_DATABASE_URL": "sqlite:///./data/jarvis.db",
     }
     values.update(environment)
+    api_host = values.get("API_HOST", "127.0.0.1")
+    api_port = values.get("API_PORT", "8000")
+    (repository / "apps" / "web" / "dist" / "runtime-supervisor.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "apiBaseUrl": values.get("VITE_API_BASE_URL", f"http://{api_host}:{api_port}"),
+                "webSocketUrl": values.get("VITE_WS_URL", f"ws://{api_host}:{api_port}/ws/events"),
+            }
+        ),
+        encoding="utf-8",
+    )
     return SupervisorConfig.load(repository, values)
 
 
@@ -188,6 +201,34 @@ def test_configuration_derives_frontend_endpoints_from_owned_binds(tmp_path: Pat
     assert config.environment["WEB_ORIGIN"] == "http://localhost:5234"
     assert config.environment["VITE_API_BASE_URL"] == "http://localhost:8123"
     assert config.environment["VITE_WS_URL"] == "ws://localhost:8123/ws/events"
+
+
+def test_start_refuses_frontend_built_for_different_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(tmp_path)
+    (config.web_directory / "dist" / "runtime-supervisor.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "apiBaseUrl": "http://127.0.0.1:9000",
+                "webSocketUrl": "ws://127.0.0.1:9000/ws/events",
+            }
+        ),
+        encoding="utf-8",
+    )
+    spawned = False
+
+    def spawn(_config: SupervisorConfig) -> int:
+        nonlocal spawned
+        spawned = True
+        return 123
+
+    monkeypatch.setattr("app.runtime_supervisor.cli._spawn_daemon", spawn)
+    with pytest.raises(SupervisorConfigurationError, match="frontend build endpoint mismatch"):
+        start(config)
+    assert spawned is False
+    assert not config.runtime_home.exists()
 
 
 def test_windows_supervisor_allocates_and_hides_console_for_child_signals() -> None:
@@ -532,7 +573,49 @@ def test_doctor_is_read_only_and_reports_prerequisites(tmp_path: Path) -> None:
     report = run_doctor(config)
     assert not config.runtime_home.exists()
     names = {item["name"] for item in report["checks"]}
-    assert {"python", "node", "frontend_build", "disk_space", "autostart"} <= names
+    assert {
+        "python",
+        "node",
+        "frontend_build",
+        "frontend_build_endpoints",
+        "disk_space",
+        "autostart",
+    } <= names
+
+
+def test_doctor_attributes_occupied_ports_to_each_managed_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(tmp_path)
+    monkeypatch.setattr("app.runtime_supervisor.doctor._port_available", lambda *_args: False)
+    monkeypatch.setattr(
+        "app.runtime_supervisor.doctor.load_status",
+        lambda _config: {
+            "ownership": "running",
+            "processes": {
+                "api": {
+                    "processState": "failed",
+                    "pid": None,
+                    "processIdentity": None,
+                },
+                "web": {
+                    "processState": "running",
+                    "pid": 222,
+                    "processIdentity": "web-child",
+                },
+            },
+        },
+    )
+    monkeypatch.setattr(
+        "app.runtime_supervisor.doctor.process_identity",
+        lambda pid: "web-child" if pid == 222 else None,
+    )
+
+    checks = {item["name"]: item for item in run_doctor(config)["checks"]}
+    assert checks["api_port"]["status"] == "fail"
+    assert checks["api_port"]["detail"].endswith("in use")
+    assert checks["web_port"]["status"] == "pass"
+    assert checks["web_port"]["detail"].endswith("owned by running supervisor child web")
 
 
 def test_ordered_start_waits_for_api_before_web(tmp_path: Path) -> None:

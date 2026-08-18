@@ -19,6 +19,7 @@ from typing import TextIO
 
 from app.runtime_supervisor.backup import BackupError, create_backup, last_backup
 from app.runtime_supervisor.config import SupervisorConfig
+from app.runtime_supervisor.frontend_build import validate_frontend_build
 from app.runtime_supervisor.health import HealthResult, probe_http
 from app.runtime_supervisor.io import (
     atomic_write_json,
@@ -199,6 +200,7 @@ class RuntimeSupervisor:
         )
 
     def run(self) -> int:
+        validate_frontend_build(self.config)
         ensure_runtime_home(self.config.runtime_home, self.config.repository)
         self.config.logs_directory.mkdir(parents=True, exist_ok=True)
         self.config.backups_directory.mkdir(parents=True, exist_ok=True)

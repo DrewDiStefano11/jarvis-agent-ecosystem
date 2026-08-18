@@ -47,6 +47,10 @@ pnpm build
 Set-Location ..\..
 ```
 
+The build emits `dist/runtime-supervisor.json` with the API and WebSocket endpoints compiled into
+the browser bundle. Start refuses a missing or mismatched metadata file, so changing an API bind or
+Vite endpoint requires another `pnpm build` before the supervisor can launch the preview server.
+
 The supervisor uses the repository virtual environment at
 `apps\api\.venv\Scripts\python.exe`, the installed Vite JavaScript entry point, and the system Node
 executable. It runs Uvicorn without `--reload` and serves the built `dist` tree with Vite's local-only
@@ -198,9 +202,9 @@ loopback port. Keep overrides in an untracked repository/app `.env` or the proce
 
 The supervisor rejects non-loopback API, web, and Ollama URLs before launching children. Its web
 origin and Vite API/WebSocket endpoints must also match the exact host and port of the processes it
-owns; omitted frontend endpoints are derived from those bind settings. Commands are fixed argument
-lists with `shell=False`; configuration is never concatenated into a shell command. Do not place
-credentials in supervisor settings or its runtime home.
+owns; omitted frontend endpoints are derived from those bind settings and checked against the build
+metadata. Commands are fixed argument lists with `shell=False`; configuration is never concatenated
+into a shell command. Do not place credentials in supervisor settings or its runtime home.
 
 ## Recovery and limitations
 

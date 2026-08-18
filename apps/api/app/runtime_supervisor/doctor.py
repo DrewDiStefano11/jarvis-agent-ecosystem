@@ -10,9 +10,10 @@ from typing import Any
 from app.core.config import Settings
 from app.runtime_supervisor import autostart
 from app.runtime_supervisor.config import SupervisorConfig
+from app.runtime_supervisor.frontend_build import inspect_frontend_build
 from app.runtime_supervisor.health import probe_http
 from app.runtime_supervisor.io import read_json, verified_runtime_home
-from app.runtime_supervisor.ownership import state_ownership
+from app.runtime_supervisor.ownership import process_identity, state_ownership
 from app.runtime_supervisor.status import load_status
 
 
@@ -100,6 +101,14 @@ def run_doctor(config: SupervisorConfig) -> dict[str, Any]:
     checks.append(
         _check("frontend_build", "pass" if web_build.is_file() else "fail", str(web_build))
     )
+    frontend_endpoints_valid, frontend_endpoints_detail = inspect_frontend_build(config)
+    checks.append(
+        _check(
+            "frontend_build_endpoints",
+            "pass" if frontend_endpoints_valid else "fail",
+            frontend_endpoints_detail,
+        )
+    )
     database_parent = config.database_path.parent
     checks.append(
         _check(
@@ -124,15 +133,28 @@ def run_doctor(config: SupervisorConfig) -> dict[str, Any]:
     checks.append(_check("runtime_home", "pass" if writable else "fail", str(config.runtime_home)))
     current = load_status(config)
     running = current.get("ownership") == "running"
-    for label, host, port in (
-        ("api_port", config.api_host, config.api_port),
-        ("web_port", config.web_host, config.web_port),
+    processes = current.get("processes")
+    process_states = processes if isinstance(processes, dict) else {}
+    for label, process_name, host, port in (
+        ("api_port", "api", config.api_host, config.api_port),
+        ("web_port", "web", config.web_host, config.web_port),
     ):
         available = _port_available(host, port)
-        status = "pass" if available or running else "fail"
+        process = process_states.get(process_name)
+        child_owned = False
+        if running and isinstance(process, dict):
+            pid = process.get("pid")
+            identity = process.get("processIdentity")
+            child_owned = (
+                process.get("processState") == "running"
+                and isinstance(pid, int)
+                and isinstance(identity, str)
+                and process_identity(pid) == identity
+            )
+        status = "pass" if available or child_owned else "fail"
         detail = (
-            "owned by running supervisor"
-            if running and not available
+            f"owned by running supervisor child {process_name}"
+            if child_owned and not available
             else "available"
             if available
             else "in use"
