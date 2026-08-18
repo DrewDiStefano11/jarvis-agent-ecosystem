@@ -98,8 +98,7 @@ def build_process_registry(config: SupervisorConfig) -> list[ProcessDefinition]:
             argv=(
                 str(config.python_executable),
                 "-m",
-                "uvicorn",
-                "app.main:app",
+                "app.runtime_supervisor.api_child",
                 "--host",
                 config.api_host,
                 "--port",

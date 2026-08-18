@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from app.runtime_supervisor import api_child
 from app.runtime_supervisor.autostart import status as autostart_status
 from app.runtime_supervisor.autostart import task_arguments, task_xml
 from app.runtime_supervisor.backup import BackupError, create_backup, prune_backups
@@ -335,6 +336,32 @@ def test_process_registry_is_shell_free_loopback_and_stable(tmp_path: Path) -> N
     assert all("0.0.0.0" not in value for item in definitions for value in item.argv)
 
 
+def test_api_child_converts_sigbreak_to_graceful_uvicorn_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Server:
+        should_exit = False
+
+    calls: list[tuple[int, object]] = []
+    previous = object()
+
+    def register(signum: int, handler: object) -> object:
+        calls.append((signum, handler))
+        return previous
+
+    monkeypatch.setattr(api_child.signal, "SIGBREAK", 21, raising=False)
+    monkeypatch.setattr(api_child.signal, "signal", register)
+    server = Server()
+    registration = api_child._install_break_handler(server)  # type: ignore[arg-type]
+    assert registration == (21, previous)
+    handler = calls[0][1]
+    assert callable(handler)
+    handler(21, None)
+    assert server.should_exit is True
+    api_child._restore_break_handler(registration)
+    assert calls[-1] == (21, previous)
+
+
 def test_singleton_lock_allows_only_one_owner(tmp_path: Path) -> None:
     first = SingletonLock(tmp_path / "owner.lock")
     second = SingletonLock(tmp_path / "owner.lock")
@@ -624,7 +651,7 @@ def test_ordered_start_waits_for_api_before_web(tmp_path: Path) -> None:
 
     def factory(argv: list[str], **kwargs: object) -> FakeProcess:
         del kwargs
-        calls.append("api" if "uvicorn" in argv else "web")
+        calls.append("api" if "app.runtime_supervisor.api_child" in argv else "web")
         return FakeProcess(argv)
 
     supervisor = RuntimeSupervisor(
@@ -653,7 +680,7 @@ def test_failed_api_prevents_web_and_worker_start(tmp_path: Path) -> None:
     attach_logger(supervisor)
     supervisor._start_ordered()
     assert len(calls) == 1
-    assert "uvicorn" in calls[0]
+    assert "app.runtime_supervisor.api_child" in calls[0]
 
 
 def test_initial_spawn_failure_is_counted_once(tmp_path: Path) -> None:
@@ -698,7 +725,11 @@ def test_explicitly_enabled_worker_starts_last_and_recovers_crash(tmp_path: Path
 
     def factory(argv: list[str], **_kwargs: object) -> FakeProcess:
         label = (
-            "api" if "uvicorn" in argv else "worker" if "app.autonomous_worker" in argv else "web"
+            "api"
+            if "app.runtime_supervisor.api_child" in argv
+            else "worker"
+            if "app.autonomous_worker" in argv
+            else "web"
         )
         labels.append(label)
         return FakeProcess(argv)

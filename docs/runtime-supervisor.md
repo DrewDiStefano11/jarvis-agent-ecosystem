@@ -53,9 +53,10 @@ Vite endpoint requires another `pnpm build` before the supervisor can launch the
 
 The supervisor uses the repository virtual environment at
 `apps\api\.venv\Scripts\python.exe`, the installed Vite JavaScript entry point, and the system Node
-executable. It runs Uvicorn without `--reload` and serves the built `dist` tree with Vite's local-only
-preview server. Vite preview is the smallest supported fit for the current frontend toolchain; it is
-not presented as an internet-facing production server.
+executable. It runs Uvicorn without `--reload` through a small wrapper that maps Windows
+`CTRL_BREAK` to Uvicorn's graceful-exit flag, preserving FastAPI lifespan cleanup. It serves the
+built `dist` tree with Vite's local-only preview server. Vite preview is the smallest supported fit
+for the current frontend toolchain; it is not presented as an internet-facing production server.
 
 Run doctor before the first start:
 
