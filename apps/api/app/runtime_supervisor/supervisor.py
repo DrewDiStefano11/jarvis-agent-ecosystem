@@ -11,6 +11,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from contextlib import closing
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -235,6 +236,7 @@ class RuntimeSupervisor:
         finally:
             self.stopping = True
             self._shutdown_all()
+            self._refresh_application_shutdown_metadata()
             if supervisor_failure is None:
                 self.last_clean_shutdown = utc_now()
                 self._write_state("stopped")
@@ -489,6 +491,34 @@ class RuntimeSupervisor:
     def _shutdown_all(self) -> None:
         for name in ("autonomous_worker", "web", "api"):
             self._terminate(self.processes[name], reason="supervisor shutdown")
+
+    def _refresh_application_shutdown_metadata(self) -> None:
+        if not self.config.database_path.is_file():
+            return
+        database_uri = f"{self.config.database_path.as_uri()}?mode=ro"
+        try:
+            with closing(sqlite3.connect(database_uri, uri=True, timeout=5)) as connection:
+                row = connection.execute(
+                    "SELECT last_clean_shutdown FROM system_state WHERE id = 1"
+                ).fetchone()
+        except (OSError, sqlite3.Error) as exc:
+            component_logger(self.logger, "supervisor").warning(  # type: ignore[arg-type]
+                "could not refresh application shutdown metadata: %s", exc
+            )
+            return
+        if not row or not row[0]:
+            return
+        raw = str(row[0])
+        try:
+            timestamp = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.replace(tzinfo=UTC)
+            value = timestamp.astimezone(UTC).isoformat().replace("+00:00", "Z")
+        except ValueError:
+            value = raw
+        status = dict(self.last_system_status or {})
+        status["lastCleanShutdown"] = value
+        self.last_system_status = status
 
     def _read_stop_request(self) -> None:
         request = read_json(self.config.stop_request_path)

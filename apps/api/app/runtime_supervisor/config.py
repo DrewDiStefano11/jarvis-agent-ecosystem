@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
+
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
 
@@ -114,6 +117,25 @@ def _require_loopback_url(value: str, name: str, schemes: set[str]) -> str:
     return value.rstrip("/")
 
 
+def _owned_service_url(value: str, name: str, host: str, port: int) -> str:
+    configured = _require_loopback_url(value, name, {"http"})
+    parsed = urlsplit(configured)
+    configured_host = parsed.hostname.rstrip(".").lower() if parsed.hostname else ""
+    try:
+        configured_port = parsed.port or 80
+    except ValueError as exc:
+        raise SupervisorConfigurationError(f"{name} contains an invalid port") from exc
+    if (
+        configured_host != host.rstrip(".").lower()
+        or configured_port != port
+        or parsed.path not in {"", "/"}
+    ):
+        raise SupervisorConfigurationError(
+            f"{name} must match the supervisor's launched host and port"
+        )
+    return f"http://{_url_host(host)}:{port}"
+
+
 def _safe_runtime_home(repository: Path, values: dict[str, str]) -> Path:
     configured = values.get("JARVIS_SUPERVISOR_RUNTIME_HOME", "").strip()
     if configured:
@@ -136,11 +158,15 @@ def _safe_runtime_home(repository: Path, values: dict[str, str]) -> Path:
 
 
 def _sqlite_path(repository: Path, value: str) -> Path:
-    if value == "sqlite:///:memory:" or not value.startswith("sqlite:///"):
+    try:
+        url = make_url(value)
+    except ArgumentError as exc:
+        raise SupervisorConfigurationError("JARVIS_DATABASE_URL is invalid") from exc
+    if url.get_backend_name() != "sqlite" or not url.database or url.database == ":memory:":
         raise SupervisorConfigurationError(
             "the runtime supervisor requires a file-backed SQLite URL"
         )
-    raw_path = unquote(value.removeprefix("sqlite:///"))
+    raw_path = unquote(url.database)
     if raw_path.startswith("/") and len(raw_path) > 3 and raw_path[2] == ":":
         raw_path = raw_path[1:]
     candidate = Path(raw_path)
@@ -197,15 +223,17 @@ class SupervisorConfig:
         web_port = _int(values, "JARVIS_SUPERVISOR_WEB_PORT", 5173, 1, 65535)
         if api_port == web_port:
             raise SupervisorConfigurationError("API and web ports must differ")
-        api_url = _require_loopback_url(
+        api_url = _owned_service_url(
             values.get("JARVIS_SUPERVISOR_API_URL", f"http://{_url_host(api_host)}:{api_port}"),
             "JARVIS_SUPERVISOR_API_URL",
-            {"http"},
+            api_host,
+            api_port,
         )
-        web_url = _require_loopback_url(
+        web_url = _owned_service_url(
             values.get("JARVIS_SUPERVISOR_WEB_URL", f"http://{_url_host(web_host)}:{web_port}"),
             "JARVIS_SUPERVISOR_WEB_URL",
-            {"http"},
+            web_host,
+            web_port,
         )
         worker_enabled = _bool(values, "JARVIS_AUTONOMOUS_WORKER_ENABLED", False)
         execution_mode = values.get("JARVIS_MODEL_EXECUTION_MODE", "disabled").strip()

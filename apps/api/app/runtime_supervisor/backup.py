@@ -107,11 +107,6 @@ def create_backup(config: SupervisorConfig) -> dict[str, Any]:
 def _create_backup(config: SupervisorConfig) -> dict[str, Any]:
     if not config.database_path.is_file():
         raise BackupError(f"database does not exist: {config.database_path}")
-    free = shutil.disk_usage(config.runtime_home).free
-    source_size = config.database_path.stat().st_size
-    required = max(config.disk_critical_bytes, source_size * 2 + 16 * 1024 * 1024)
-    if free < required:
-        raise BackupError(f"insufficient disk space for backup ({free} bytes free)")
     config.backups_directory.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
     final_path = config.backups_directory / f"{BACKUP_PREFIX}{stamp}{BACKUP_SUFFIX}"
@@ -119,6 +114,18 @@ def _create_backup(config: SupervisorConfig) -> dict[str, Any]:
     revision: str | None = None
     try:
         with closing(sqlite3.connect(config.database_path, timeout=30)) as source:
+            page_count_row = source.execute("PRAGMA page_count").fetchone()
+            page_size_row = source.execute("PRAGMA page_size").fetchone()
+            if not page_count_row or not page_size_row:
+                raise BackupError("could not determine the logical SQLite database size")
+            logical_size = int(page_count_row[0]) * int(page_size_row[0])
+            free = shutil.disk_usage(config.runtime_home).free
+            required = max(
+                config.disk_critical_bytes,
+                logical_size * 2 + 16 * 1024 * 1024,
+            )
+            if free < required:
+                raise BackupError(f"insufficient disk space for backup ({free} bytes free)")
             revision = _alembic_revision(source)
             with closing(sqlite3.connect(partial_path)) as destination:
                 source.backup(destination)

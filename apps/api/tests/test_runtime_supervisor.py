@@ -104,6 +104,30 @@ def test_configuration_resolves_repository_with_spaces_and_external_runtime(tmp_
     assert config.database_path == (config.api_directory / "data" / "jarvis.db").resolve()
 
 
+def test_configuration_parses_sqlite_query_parameters(tmp_path: Path) -> None:
+    config = make_config(
+        tmp_path,
+        JARVIS_DATABASE_URL="sqlite:///./data/jarvis.db?timeout=30",
+    )
+    assert config.database_path == (config.api_directory / "data" / "jarvis.db").resolve()
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
+        ("JARVIS_SUPERVISOR_API_URL", "http://127.0.0.1:9000"),
+        ("JARVIS_SUPERVISOR_API_URL", "http://127.0.0.1:8000/base"),
+        ("JARVIS_SUPERVISOR_WEB_URL", "http://127.0.0.1:9000"),
+        ("JARVIS_SUPERVISOR_WEB_URL", "http://127.0.0.1:5173/base"),
+    ],
+)
+def test_configuration_rejects_probe_endpoint_not_owned_by_supervisor(
+    tmp_path: Path, name: str, value: str
+) -> None:
+    with pytest.raises(SupervisorConfigurationError, match="launched host and port"):
+        make_config(tmp_path, **{name: value})
+
+
 @pytest.mark.parametrize("name", ["API_HOST", "JARVIS_SUPERVISOR_WEB_HOST"])
 def test_configuration_rejects_public_bind(tmp_path: Path, name: str) -> None:
     with pytest.raises(SupervisorConfigurationError, match="loopback"):
@@ -335,6 +359,41 @@ def test_backup_refuses_dangerously_low_disk(
     )
     with pytest.raises(BackupError, match="insufficient"):
         create_backup(config)
+    assert list(config.backups_directory.glob("*.sqlite3")) == []
+
+
+def test_backup_space_check_includes_uncheckpointed_wal_pages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(
+        tmp_path,
+        JARVIS_SUPERVISOR_DISK_WARNING_BYTES=str(2 * 1024 * 1024),
+        JARVIS_SUPERVISOR_DISK_CRITICAL_BYTES=str(1024 * 1024),
+    )
+    ensure_runtime_home(config.runtime_home, config.repository)
+    config.database_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(config.database_path) as writer:
+        assert writer.execute("PRAGMA journal_mode=WAL").fetchone() == ("wal",)
+        writer.execute("PRAGMA wal_autocheckpoint=0")
+        writer.execute("CREATE TABLE sample (payload BLOB)")
+        writer.execute("INSERT INTO sample VALUES (zeroblob(2097152))")
+        writer.commit()
+        logical_size = int(writer.execute("PRAGMA page_count").fetchone()[0]) * int(
+            writer.execute("PRAGMA page_size").fetchone()[0]
+        )
+        main_file_estimate = config.database_path.stat().st_size * 2 + 16 * 1024 * 1024
+        logical_estimate = logical_size * 2 + 16 * 1024 * 1024
+        assert main_file_estimate < logical_estimate
+        monkeypatch.setattr(
+            "app.runtime_supervisor.backup.shutil.disk_usage",
+            lambda _path: SimpleNamespace(
+                total=logical_estimate,
+                used=logical_estimate - main_file_estimate,
+                free=main_file_estimate,
+            ),
+        )
+        with pytest.raises(BackupError, match="insufficient"):
+            create_backup(config)
     assert list(config.backups_directory.glob("*.sqlite3")) == []
 
 
@@ -665,6 +724,42 @@ def test_supervisor_failure_remains_terminal_state(
     assert state["supervisorState"] == "failed"
     assert state["supervisor_failure"] == "dependency probe failed"
     assert state["lastCleanSupervisorShutdown"] is None
+
+
+def test_normal_stop_refreshes_application_shutdown_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(tmp_path)
+    config.database_path.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(config.database_path) as connection:
+        connection.execute(
+            "CREATE TABLE system_state (id INTEGER PRIMARY KEY, last_clean_shutdown TEXT)"
+        )
+        connection.execute("INSERT INTO system_state VALUES (1, NULL)")
+    supervisor = RuntimeSupervisor(config)
+    supervisor.stop_requested = True
+
+    class FakeJob:
+        def close(self) -> None:
+            pass
+
+    def shutdown() -> None:
+        with sqlite3.connect(config.database_path) as connection:
+            connection.execute(
+                "UPDATE system_state SET last_clean_shutdown = ? WHERE id = 1",
+                ("2026-08-18 12:34:56.000000",),
+            )
+
+    monkeypatch.setattr("app.runtime_supervisor.supervisor.WindowsJob", FakeJob)
+    monkeypatch.setattr(supervisor, "_install_signal_handlers", lambda: None)
+    monkeypatch.setattr(supervisor, "_probe_dependencies", lambda: None)
+    monkeypatch.setattr(supervisor, "_start_ordered", lambda: None)
+    monkeypatch.setattr(supervisor, "_shutdown_all", shutdown)
+
+    assert supervisor.run() == 0
+    state = read_json(config.state_path)
+    assert state is not None
+    assert state["lastApplicationCleanShutdown"] == "2026-08-18T12:34:56Z"
 
 
 def test_known_good_metadata_records_healthy_sha_state(tmp_path: Path) -> None:
