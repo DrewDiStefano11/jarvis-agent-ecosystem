@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import queue
 import re
 import shutil
 import signal
@@ -186,6 +187,8 @@ class RuntimeSupervisor:
         self.job: WindowsJob | None = None
         self.last_backup_attempt: float | None = None
         self.last_backup_failure: str | None = None
+        self.backup_thread: threading.Thread | None = None
+        self.backup_result: queue.SimpleQueue[Exception | None] = queue.SimpleQueue()
         secret_name = re.compile(r"(SECRET|TOKEN|PASSWORD|API_KEY|CREDENTIAL)", re.IGNORECASE)
         self.secret_values = tuple(
             sorted(
@@ -243,6 +246,7 @@ class RuntimeSupervisor:
         finally:
             self.stopping = True
             self._shutdown_all()
+            self._collect_periodic_backup()
             self._refresh_application_shutdown_metadata()
             if supervisor_failure is None:
                 self.last_clean_shutdown = utc_now()
@@ -572,9 +576,16 @@ class RuntimeSupervisor:
         atomic_write_json(self.config.runtime_home / "known-good.json", current)
 
     def _periodic_backup(self) -> None:
+        self._collect_periodic_backup()
         interval = self.config.backup_interval_hours
-        if interval == 0 or (
-            self.last_backup_attempt is not None and self.clock() - self.last_backup_attempt < 3600
+        if (
+            interval == 0
+            or self.stop_requested
+            or (self.backup_thread is not None and self.backup_thread.is_alive())
+            or (
+                self.last_backup_attempt is not None
+                and self.clock() - self.last_backup_attempt < 3600
+            )
         ):
             return
         record = last_backup(self.config)
@@ -588,13 +599,36 @@ class RuntimeSupervisor:
         if not due:
             return
         self.last_backup_attempt = self.clock()
+        self.backup_thread = threading.Thread(
+            target=self._run_periodic_backup,
+            name="jarvis-periodic-backup",
+            daemon=True,
+        )
+        self.backup_thread.start()
+
+    def _run_periodic_backup(self) -> None:
         try:
             create_backup(self.config)
+            self.backup_result.put(None)
+        except (BackupError, OSError, sqlite3.Error) as exc:
+            self.backup_result.put(exc)
+
+    def _collect_periodic_backup(self) -> None:
+        thread = self.backup_thread
+        if thread is None or thread.is_alive():
+            return
+        thread.join(timeout=0)
+        self.backup_thread = None
+        try:
+            failure = self.backup_result.get_nowait()
+        except queue.Empty:
+            return
+        if failure is None:
             self.last_backup_failure = None
             component_logger(self.logger, "backup").info("periodic SQLite backup completed")  # type: ignore[arg-type]
-        except (BackupError, OSError, sqlite3.Error) as exc:
-            self.last_backup_failure = f"{utc_now()} {exc}"[:600]
-            component_logger(self.logger, "backup").error("periodic backup failed: %s", exc)  # type: ignore[arg-type]
+        else:
+            self.last_backup_failure = f"{utc_now()} {failure}"[:600]
+            component_logger(self.logger, "backup").error("periodic backup failed: %s", failure)  # type: ignore[arg-type]
 
     def _aggregate_state(self) -> str:
         enabled = [item for item in self.processes.values() if item.definition.enabled]

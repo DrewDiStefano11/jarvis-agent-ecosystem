@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import logging
@@ -8,6 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -136,6 +138,14 @@ def test_configuration_preserves_literal_sqlite_percent_sequences(tmp_path: Path
         JARVIS_DATABASE_URL="sqlite:///./data/jarvis%20.db",
     )
     assert config.database_path == (config.api_directory / "data" / "jarvis%20.db").resolve()
+
+
+def test_configuration_resolves_sqlite_file_uri_like_sqlalchemy(tmp_path: Path) -> None:
+    config = make_config(
+        tmp_path,
+        JARVIS_DATABASE_URL="sqlite:///file:jarvis%20.db?mode=rwc&uri=true",
+    )
+    assert config.database_path == (config.api_directory / "jarvis .db").resolve()
 
 
 def test_coordination_paths_are_stable_across_runtime_home_changes(tmp_path: Path) -> None:
@@ -388,6 +398,30 @@ def test_health_probe_does_not_follow_redirects() -> None:
     assert result.available is False
 
 
+def test_health_probe_treats_truncated_response_as_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TruncatedResponse:
+        status = 200
+
+        def __enter__(self) -> TruncatedResponse:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            pass
+
+        def read(self, _limit: int) -> bytes:
+            raise http.client.IncompleteRead(b"partial", 10)
+
+    class FakeOpener:
+        def open(self, *_args: object, **_kwargs: object) -> TruncatedResponse:
+            return TruncatedResponse()
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *_args: FakeOpener())
+    result = probe_http("http://127.0.0.1:8000/api/health")
+    assert result == HealthResult(False, "unavailable", "IncompleteRead")
+
+
 def test_process_registry_is_shell_free_loopback_and_stable(tmp_path: Path) -> None:
     definitions = build_process_registry(make_config(tmp_path))
     api = definitions[0]
@@ -606,11 +640,45 @@ def test_periodic_backup_failure_retries_at_bounded_hourly_cadence(
     supervisor = RuntimeSupervisor(config, clock=lambda: now[0])
     attach_logger(supervisor)
     supervisor._periodic_backup()
+    assert supervisor.backup_thread is not None
+    supervisor.backup_thread.join(timeout=2)
     now[0] = 200
     supervisor._periodic_backup()
     now[0] = 3700
     supervisor._periodic_backup()
+    assert supervisor.backup_thread is not None
+    supervisor.backup_thread.join(timeout=2)
     assert attempts == [100, 3700]
+
+
+def test_periodic_backup_does_not_block_supervision_loop(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(tmp_path, JARVIS_SUPERVISOR_BACKUP_INTERVAL_HOURS="1")
+    ensure_runtime_home(config.runtime_home, config.repository)
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocked_backup(_config: SupervisorConfig) -> None:
+        started.set()
+        assert release.wait(timeout=2)
+
+    monkeypatch.setattr("app.runtime_supervisor.supervisor.create_backup", blocked_backup)
+    supervisor = RuntimeSupervisor(config)
+    attach_logger(supervisor)
+
+    before = time.monotonic()
+    supervisor._periodic_backup()
+    elapsed = time.monotonic() - before
+    assert elapsed < 0.5
+    assert started.wait(timeout=1)
+    assert supervisor.backup_thread is not None
+    assert supervisor.backup_thread.is_alive()
+
+    release.set()
+    supervisor.backup_thread.join(timeout=2)
+    supervisor._periodic_backup()
+    assert supervisor.backup_thread is None
 
 
 def test_interrupted_backup_never_publishes_valid_artifact(

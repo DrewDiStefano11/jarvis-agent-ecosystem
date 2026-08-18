@@ -6,7 +6,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
@@ -201,6 +201,12 @@ def _sqlite_path(repository: Path, value: str) -> Path:
             "the runtime supervisor requires a file-backed SQLite URL"
         )
     raw_path = url.database
+    uri_enabled = str(url.query.get("uri", "")).lower() in TRUE_VALUES
+    if uri_enabled and raw_path.startswith("file:"):
+        parsed = urlsplit(raw_path)
+        if parsed.netloc not in {"", "localhost"}:
+            raise SupervisorConfigurationError("SQLite file URI authority must be local")
+        raw_path = unquote(parsed.path)
     if raw_path.startswith("/") and len(raw_path) > 3 and raw_path[2] == ":":
         raw_path = raw_path[1:]
     candidate = Path(raw_path)

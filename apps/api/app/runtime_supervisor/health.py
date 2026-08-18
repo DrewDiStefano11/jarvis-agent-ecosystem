@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 import urllib.request
@@ -28,7 +29,7 @@ def probe_http(url: str, *, expect_json: bool = False, timeout: float = 2) -> He
             content = response.read(1_048_576)
             if response.status < 200 or response.status >= 400:
                 return HealthResult(False, "failed", f"HTTP {response.status}")
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except (http.client.HTTPException, urllib.error.URLError, TimeoutError, OSError) as exc:
         return HealthResult(False, "unavailable", exc.__class__.__name__)
     if not expect_json:
         return HealthResult(True, "healthy")
