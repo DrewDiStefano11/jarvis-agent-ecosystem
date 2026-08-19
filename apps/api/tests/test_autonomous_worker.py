@@ -2633,7 +2633,10 @@ async def test_denied_result_recovery_does_not_starve_authorized_recovery(
                 .where(TaskLeaseRow.task_id == "task-demo")
                 .values(expires_at=ts(0))
             )
-        assert app.state.task_leases.recover_expired_leases() == 1
+        recovered = app.state.task_leases.recover_expired_leases()
+        # The app's recovery loop may win this race on a slow CI runner.
+        assert recovered in {0, 1}
+        assert app.state.task_leases.task_status("task-demo") == "retrying"
         denied_before = app.state.model_execution_repository.get_by_run(
             "run-aa-denied-result-recovery"
         )
@@ -2668,7 +2671,10 @@ async def test_denied_result_recovery_does_not_starve_authorized_recovery(
                 .where(TaskLeaseRow.task_id == "task-completed")
                 .values(expires_at=ts(0))
             )
-        assert app.state.task_leases.recover_expired_leases() == 1
+        recovered = app.state.task_leases.recover_expired_leases()
+        # The app's recovery loop may win this race on a slow CI runner.
+        assert recovered in {0, 1}
+        assert app.state.task_leases.task_status("task-completed") == "retrying"
         assert len(router.requests) == 2
         monkeypatch.setattr(service, "_checkpoint", original_checkpoint)
 
