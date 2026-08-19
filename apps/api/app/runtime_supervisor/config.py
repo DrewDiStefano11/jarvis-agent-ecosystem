@@ -207,6 +207,10 @@ def _sqlite_path(repository: Path, value: str) -> Path:
         if parsed.netloc not in {"", "localhost"}:
             raise SupervisorConfigurationError("SQLite file URI authority must be local")
         raw_path = unquote(parsed.path)
+        if raw_path == ":memory:" or str(url.query.get("mode", "")).lower() == "memory":
+            raise SupervisorConfigurationError(
+                "the runtime supervisor requires a file-backed SQLite URL"
+            )
     if raw_path.startswith("/") and len(raw_path) > 3 and raw_path[2] == ":":
         raw_path = raw_path[1:]
     candidate = Path(raw_path)

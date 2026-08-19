@@ -189,6 +189,7 @@ def stop(config: SupervisorConfig) -> dict[str, Any]:
 
 
 def restart(config: SupervisorConfig) -> dict[str, Any]:
+    validate_frontend_build(config)
     stopped = stop(config)
     if stopped.get("result") == "stop_pending":
         return stopped

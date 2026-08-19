@@ -20,7 +20,7 @@ from app.runtime_supervisor import api_child
 from app.runtime_supervisor.autostart import status as autostart_status
 from app.runtime_supervisor.autostart import task_arguments, task_xml
 from app.runtime_supervisor.backup import BackupError, create_backup, prune_backups
-from app.runtime_supervisor.cli import start, stop
+from app.runtime_supervisor.cli import restart, start, stop
 from app.runtime_supervisor.config import SupervisorConfig, SupervisorConfigurationError
 from app.runtime_supervisor.doctor import run_doctor
 from app.runtime_supervisor.health import HealthResult, probe_http
@@ -146,6 +146,20 @@ def test_configuration_resolves_sqlite_file_uri_like_sqlalchemy(tmp_path: Path) 
         JARVIS_DATABASE_URL="sqlite:///file:jarvis%20.db?mode=rwc&uri=true",
     )
     assert config.database_path == (config.api_directory / "jarvis .db").resolve()
+
+
+@pytest.mark.parametrize(
+    "database_url",
+    [
+        "sqlite:///file::memory:?cache=shared&uri=true",
+        "sqlite:///file:memdb1?mode=memory&cache=shared&uri=true",
+    ],
+)
+def test_configuration_rejects_sqlite_in_memory_uri_variants(
+    tmp_path: Path, database_url: str
+) -> None:
+    with pytest.raises(SupervisorConfigurationError, match="file-backed SQLite"):
+        make_config(tmp_path, JARVIS_DATABASE_URL=database_url)
 
 
 def test_coordination_paths_are_stable_across_runtime_home_changes(tmp_path: Path) -> None:
@@ -303,6 +317,24 @@ def test_start_refuses_frontend_built_for_different_api(
         start(config)
     assert spawned is False
     assert not config.runtime_home.exists()
+
+
+def test_restart_validates_frontend_build_before_stopping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(tmp_path)
+    (config.web_directory / "dist" / "runtime-supervisor.json").unlink()
+    stopped = False
+
+    def unexpected_stop(_config: SupervisorConfig) -> dict[str, object]:
+        nonlocal stopped
+        stopped = True
+        return {"result": "stopped"}
+
+    monkeypatch.setattr("app.runtime_supervisor.cli.stop", unexpected_stop)
+    with pytest.raises(SupervisorConfigurationError, match="missing.*build metadata"):
+        restart(config)
+    assert stopped is False
 
 
 def test_windows_supervisor_allocates_and_hides_console_for_child_signals() -> None:
