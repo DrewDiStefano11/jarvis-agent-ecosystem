@@ -2,19 +2,20 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Any
 
 from app.runtime_supervisor.backup import last_backup
-from app.runtime_supervisor.config import SupervisorConfig
+from app.runtime_supervisor.config import SupervisorConfig, SupervisorCoordination
 from app.runtime_supervisor.io import read_json
 from app.runtime_supervisor.ownership import state_ownership
 
 
-def _git_sha(config: SupervisorConfig) -> str | None:
+def _git_sha(repository: Path) -> str | None:
     try:
         return subprocess.run(
             ["git", "rev-parse", "HEAD"],
-            cwd=config.repository,
+            cwd=repository,
             capture_output=True,
             text=True,
             check=True,
@@ -24,10 +25,34 @@ def _git_sha(config: SupervisorConfig) -> str | None:
         return None
 
 
-def load_status(config: SupervisorConfig) -> dict[str, Any]:
+def load_recorded_status(config: SupervisorConfig | SupervisorCoordination) -> dict[str, Any]:
     state = read_json(config.state_path)
     if state is None:
-        current_sha = _git_sha(config)
+        current_sha = _git_sha(config.repository)
+        return {
+            "supervisorState": "not_running",
+            "ownership": "not_running",
+            "pid": None,
+            "instanceId": None,
+            "repository": str(config.repository),
+            "coordinationHome": str(config.coordination_home),
+            "gitSha": current_sha,
+            "currentGitSha": current_sha,
+        }
+    declared = state.get("supervisorState")
+    ownership = "not_running" if declared == "stopped" else state_ownership(state)
+    result = dict(state)
+    result["currentGitSha"] = _git_sha(config.repository)
+    result["ownership"] = ownership
+    if ownership == "stale" and declared not in {"stopped", "failed"}:
+        result["supervisorState"] = "stale"
+    return result
+
+
+def load_status(config: SupervisorConfig) -> dict[str, Any]:
+    recorded = load_recorded_status(config)
+    if recorded["supervisorState"] == "not_running" and not config.state_path.exists():
+        current_sha = recorded["currentGitSha"]
         disk_root = next(
             (path for path in [config.runtime_home, *config.runtime_home.parents] if path.exists()),
             config.repository,
@@ -73,11 +98,4 @@ def load_status(config: SupervisorConfig) -> dict[str, Any]:
             "logsDirectory": str(config.logs_directory),
             "backupsDirectory": str(config.backups_directory),
         }
-    declared = state.get("supervisorState")
-    ownership = "not_running" if declared == "stopped" else state_ownership(state)
-    result = dict(state)
-    result["currentGitSha"] = _git_sha(config)
-    result["ownership"] = ownership
-    if ownership == "stale" and declared not in {"stopped", "failed"}:
-        result["supervisorState"] = "stale"
-    return result
+    return recorded

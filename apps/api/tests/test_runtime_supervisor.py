@@ -16,10 +16,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.runtime_supervisor import api_child
+from app.runtime_supervisor import api_child, cli
 from app.runtime_supervisor.autostart import status as autostart_status
 from app.runtime_supervisor.autostart import task_arguments, task_xml
-from app.runtime_supervisor.backup import BackupError, create_backup, prune_backups
+from app.runtime_supervisor.backup import BackupCancelled, BackupError, create_backup, prune_backups
 from app.runtime_supervisor.cli import restart, start, stop
 from app.runtime_supervisor.config import SupervisorConfig, SupervisorConfigurationError
 from app.runtime_supervisor.doctor import run_doctor
@@ -335,6 +335,26 @@ def test_restart_validates_frontend_build_before_stopping(
     with pytest.raises(SupervisorConfigurationError, match="missing.*build metadata"):
         restart(config)
     assert stopped is False
+
+
+def test_stop_command_ignores_invalid_replacement_runtime_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(tmp_path)
+    (config.repository / ".env").write_text(
+        "this is not a dotenv assignment\nJARVIS_AUTONOMOUS_WORKER_ENABLED=not-a-boolean\n",
+        encoding="utf-8",
+    )
+    captured: list[object] = []
+
+    def fake_stop(coordination: object) -> dict[str, object]:
+        captured.append(coordination)
+        return {"result": "already_stopped"}
+
+    monkeypatch.setattr(cli, "stop", fake_stop)
+    assert cli.main(["--repository", str(config.repository), "--json", "stop"]) == 0
+    assert len(captured) == 1
+    assert captured[0].__class__.__name__ == "SupervisorCoordination"
 
 
 def test_windows_supervisor_allocates_and_hides_console_for_child_signals() -> None:
@@ -664,7 +684,8 @@ def test_periodic_backup_failure_retries_at_bounded_hourly_cadence(
     now = [100.0]
     attempts: list[float] = []
 
-    def fail_backup(_config: SupervisorConfig) -> None:
+    def fail_backup(_config: SupervisorConfig, *, cancel_requested: object) -> None:
+        assert callable(cancel_requested)
         attempts.append(now[0])
         raise BackupError("low disk")
 
@@ -691,7 +712,8 @@ def test_periodic_backup_does_not_block_supervision_loop(
     started = threading.Event()
     release = threading.Event()
 
-    def blocked_backup(_config: SupervisorConfig) -> None:
+    def blocked_backup(_config: SupervisorConfig, *, cancel_requested: object) -> None:
+        assert callable(cancel_requested)
         started.set()
         assert release.wait(timeout=2)
 
@@ -711,6 +733,73 @@ def test_periodic_backup_does_not_block_supervision_loop(
     supervisor.backup_thread.join(timeout=2)
     supervisor._periodic_backup()
     assert supervisor.backup_thread is None
+
+
+def test_supervisor_cancels_and_drains_periodic_backup_before_stopping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(tmp_path, JARVIS_SUPERVISOR_BACKUP_INTERVAL_HOURS="1")
+    ensure_runtime_home(config.runtime_home, config.repository)
+    started = threading.Event()
+    cancelled = threading.Event()
+
+    def cancellable_backup(_config: SupervisorConfig, *, cancel_requested: object) -> None:
+        assert callable(cancel_requested)
+        started.set()
+        deadline = time.monotonic() + 2
+        while not cancel_requested() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        if cancel_requested():
+            cancelled.set()
+            raise BackupCancelled("cancelled")
+
+    monkeypatch.setattr("app.runtime_supervisor.supervisor.create_backup", cancellable_backup)
+    supervisor = RuntimeSupervisor(config)
+    attach_logger(supervisor)
+    supervisor._periodic_backup()
+    assert started.wait(timeout=1)
+
+    class FakeJob:
+        def close(self) -> None:
+            pass
+
+    states: list[tuple[str, bool]] = []
+    supervisor.stop_requested = True
+    monkeypatch.setattr("app.runtime_supervisor.supervisor.WindowsJob", FakeJob)
+    monkeypatch.setattr(supervisor, "_install_signal_handlers", lambda: None)
+    monkeypatch.setattr(supervisor, "_probe_dependencies", lambda: None)
+    monkeypatch.setattr(supervisor, "_start_ordered", lambda: None)
+    monkeypatch.setattr(supervisor, "_shutdown_all", lambda: None)
+    monkeypatch.setattr(supervisor, "_refresh_application_shutdown_metadata", lambda: None)
+    monkeypatch.setattr(
+        supervisor,
+        "_write_state",
+        lambda state, **_extra: states.append((state, cancelled.is_set())),
+    )
+
+    assert supervisor.run() == 0
+
+    assert cancelled.is_set()
+    assert supervisor.backup_thread is None
+    assert supervisor.last_backup_failure is None
+    assert states[-1] == ("stopped", True)
+
+
+def test_cancelled_backup_removes_partial_artifact(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    ensure_runtime_home(config.runtime_home, config.repository)
+    create_database(config)
+    checks = 0
+
+    def cancel_after_start() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks > 1
+
+    with pytest.raises(BackupCancelled, match="cancelled"):
+        create_backup(config, cancel_requested=cancel_after_start)
+    assert list(config.backups_directory.glob("*.partial")) == []
+    assert list(config.backups_directory.glob("*.sqlite3")) == []
 
 
 def test_interrupted_backup_never_publishes_valid_artifact(

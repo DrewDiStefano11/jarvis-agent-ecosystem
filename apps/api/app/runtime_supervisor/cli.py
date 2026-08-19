@@ -12,7 +12,11 @@ from typing import Any
 
 from app.runtime_supervisor import autostart
 from app.runtime_supervisor.backup import create_backup
-from app.runtime_supervisor.config import SupervisorConfig, SupervisorConfigurationError
+from app.runtime_supervisor.config import (
+    SupervisorConfig,
+    SupervisorConfigurationError,
+    SupervisorCoordination,
+)
 from app.runtime_supervisor.doctor import run_doctor
 from app.runtime_supervisor.frontend_build import validate_frontend_build
 from app.runtime_supervisor.io import (
@@ -20,7 +24,7 @@ from app.runtime_supervisor.io import (
     ensure_runtime_home,
     utc_now,
 )
-from app.runtime_supervisor.status import load_status
+from app.runtime_supervisor.status import load_recorded_status, load_status
 from app.runtime_supervisor.supervisor import RuntimeSupervisor, shutdown_wait_seconds
 
 
@@ -164,8 +168,8 @@ def start(config: SupervisorConfig) -> dict[str, Any]:
     }
 
 
-def stop(config: SupervisorConfig) -> dict[str, Any]:
-    current = load_status(config)
+def stop(config: SupervisorConfig | SupervisorCoordination) -> dict[str, Any]:
+    current = load_recorded_status(config)
     if current.get("ownership") != "running":
         return {"result": "already_stopped", **current}
     instance_id = current.get("instanceId")
@@ -175,16 +179,23 @@ def stop(config: SupervisorConfig) -> dict[str, Any]:
         config.stop_request_path,
         {"kind": "jarvis-supervisor-stop", "instanceId": instance_id, "requestedAt": utc_now()},
     )
-    deadline = time.monotonic() + shutdown_wait_seconds(config)
+    configured_wait = current.get("shutdownWaitSeconds")
+    if isinstance(configured_wait, (int, float)) and 1 <= configured_wait <= 3600:
+        wait_seconds = float(configured_wait)
+    elif isinstance(config, SupervisorConfig):
+        wait_seconds = shutdown_wait_seconds(config)
+    else:
+        wait_seconds = 1225
+    deadline = time.monotonic() + wait_seconds
     while time.monotonic() < deadline:
         time.sleep(0.2)
-        current = load_status(config)
+        current = load_recorded_status(config)
         if current.get("ownership") != "running":
             return {"result": "stopped", **current}
     return {
         "result": "stop_pending",
         "detail": "supervisor did not confirm shutdown; no unrelated process was terminated",
-        **load_status(config),
+        **load_recorded_status(config),
     }
 
 
@@ -220,13 +231,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser().parse_args(raw_arguments)
     args.json_output = args.json_output or json_requested
     try:
+        if args.command == "stop":
+            payload = stop(SupervisorCoordination.load(args.repository))
+            _emit(payload, as_json=args.json_output)
+            return 1 if payload.get("result") in {"refused", "stop_pending"} else 0
         config = SupervisorConfig.load(args.repository)
         if args.command == "daemon":
             return RuntimeSupervisor(config).run()
         if args.command == "start":
             payload = start(config)
-        elif args.command == "stop":
-            payload = stop(config)
         elif args.command == "restart":
             payload = restart(config)
         elif args.command == "status":

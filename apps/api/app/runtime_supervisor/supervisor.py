@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TextIO
 
-from app.runtime_supervisor.backup import BackupError, create_backup, last_backup
+from app.runtime_supervisor.backup import BackupCancelled, BackupError, create_backup, last_backup
 from app.runtime_supervisor.config import SupervisorConfig
 from app.runtime_supervisor.frontend_build import validate_frontend_build
 from app.runtime_supervisor.health import HealthResult, probe_http
@@ -188,6 +188,7 @@ class RuntimeSupervisor:
         self.last_backup_attempt: float | None = None
         self.last_backup_failure: str | None = None
         self.backup_thread: threading.Thread | None = None
+        self.backup_cancel = threading.Event()
         self.backup_result: queue.SimpleQueue[Exception | None] = queue.SimpleQueue()
         secret_name = re.compile(r"(SECRET|TOKEN|PASSWORD|API_KEY|CREDENTIAL)", re.IGNORECASE)
         self.secret_values = tuple(
@@ -245,8 +246,9 @@ class RuntimeSupervisor:
             return 1
         finally:
             self.stopping = True
+            self.backup_cancel.set()
             self._shutdown_all()
-            self._collect_periodic_backup()
+            self._drain_periodic_backup()
             self._refresh_application_shutdown_metadata()
             if supervisor_failure is None:
                 self.last_clean_shutdown = utc_now()
@@ -599,19 +601,26 @@ class RuntimeSupervisor:
         if not due:
             return
         self.last_backup_attempt = self.clock()
+        self.backup_cancel.clear()
         self.backup_thread = threading.Thread(
             target=self._run_periodic_backup,
             name="jarvis-periodic-backup",
-            daemon=True,
+            daemon=False,
         )
         self.backup_thread.start()
 
     def _run_periodic_backup(self) -> None:
         try:
-            create_backup(self.config)
+            create_backup(self.config, cancel_requested=self.backup_cancel.is_set)
             self.backup_result.put(None)
         except (BackupError, OSError, sqlite3.Error) as exc:
             self.backup_result.put(exc)
+
+    def _drain_periodic_backup(self) -> None:
+        thread = self.backup_thread
+        if thread is not None:
+            thread.join()
+        self._collect_periodic_backup()
 
     def _collect_periodic_backup(self) -> None:
         thread = self.backup_thread
@@ -626,6 +635,8 @@ class RuntimeSupervisor:
         if failure is None:
             self.last_backup_failure = None
             component_logger(self.logger, "backup").info("periodic SQLite backup completed")  # type: ignore[arg-type]
+        elif isinstance(failure, BackupCancelled):
+            component_logger(self.logger, "backup").info("periodic backup cancelled for shutdown")  # type: ignore[arg-type]
         else:
             self.last_backup_failure = f"{utc_now()} {failure}"[:600]
             component_logger(self.logger, "backup").error("periodic backup failed: %s", failure)  # type: ignore[arg-type]
@@ -684,6 +695,7 @@ class RuntimeSupervisor:
             "coordinationHome": str(self.config.coordination_home),
             "startedAt": self.started_at,
             "uptimeSeconds": max(0, self.clock() - self.started_monotonic),
+            "shutdownWaitSeconds": shutdown_wait_seconds(self.config),
             "updatedAt": utc_now(),
             "processes": {
                 name: self._process_payload(managed) for name, managed in self.processes.items()

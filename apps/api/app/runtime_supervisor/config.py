@@ -175,10 +175,10 @@ def _coordination_home(repository: Path, values: dict[str, str]) -> Path:
     return result
 
 
-def _safe_runtime_home(repository: Path, values: dict[str, str]) -> Path:
+def _safe_runtime_home(repository: Path, values: dict[str, str], coordination_home: Path) -> Path:
     configured = values.get("JARVIS_SUPERVISOR_RUNTIME_HOME", "").strip()
     if not configured:
-        return _coordination_home(repository, values)
+        return coordination_home
     configured_path = Path(configured).expanduser()
     if not configured_path.is_absolute():
         raise SupervisorConfigurationError("JARVIS_SUPERVISOR_RUNTIME_HOME must be absolute")
@@ -219,6 +219,38 @@ def _sqlite_path(repository: Path, value: str) -> Path:
     return candidate.resolve()
 
 
+def _validate_repository(repository: Path) -> Path:
+    repository = repository.resolve()
+    if not (repository / "apps" / "api" / "app" / "main.py").is_file():
+        raise SupervisorConfigurationError("repository does not contain the Jarvis API")
+    return repository
+
+
+@dataclass(frozen=True)
+class SupervisorCoordination:
+    repository: Path
+    coordination_home: Path
+
+    @classmethod
+    def load(
+        cls, repository: Path, environ: dict[str, str] | None = None
+    ) -> SupervisorCoordination:
+        repository = _validate_repository(repository)
+        values = dict(os.environ if environ is None else environ)
+        return cls(
+            repository=repository,
+            coordination_home=_coordination_home(repository, values),
+        )
+
+    @property
+    def state_path(self) -> Path:
+        return self.coordination_home / "state.json"
+
+    @property
+    def stop_request_path(self) -> Path:
+        return self.coordination_home / "stop-request.json"
+
+
 @dataclass(frozen=True)
 class SupervisorConfig:
     repository: Path
@@ -254,10 +286,10 @@ class SupervisorConfig:
 
     @classmethod
     def load(cls, repository: Path, environ: dict[str, str] | None = None) -> SupervisorConfig:
-        repository = repository.resolve()
-        if not (repository / "apps" / "api" / "app" / "main.py").is_file():
-            raise SupervisorConfigurationError("repository does not contain the Jarvis API")
+        repository = _validate_repository(repository)
         values = load_environment(repository, environ)
+        coordination_values = dict(os.environ if environ is None else environ)
+        coordination_home = _coordination_home(repository, coordination_values)
         api_host = values.get("API_HOST", "127.0.0.1").strip()
         web_host = values.get("JARVIS_SUPERVISOR_WEB_HOST", "127.0.0.1").strip()
         if not _is_loopback_host(api_host):
@@ -354,8 +386,8 @@ class SupervisorConfig:
         environment["VITE_WS_URL"] = vite_ws
         return cls(
             repository=repository,
-            runtime_home=_safe_runtime_home(repository, values),
-            coordination_home=_coordination_home(repository, values),
+            runtime_home=_safe_runtime_home(repository, values, coordination_home),
+            coordination_home=coordination_home,
             python_executable=api_python.resolve(),
             node_executable=node.resolve() if node else None,
             api_url=api_url,
