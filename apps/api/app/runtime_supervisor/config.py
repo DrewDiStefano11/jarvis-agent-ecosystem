@@ -315,6 +315,8 @@ class SupervisorConfig:
         )
         worker_enabled = _bool(values, "JARVIS_AUTONOMOUS_WORKER_ENABLED", False)
         execution_mode = values.get("JARVIS_MODEL_EXECUTION_MODE", "disabled").strip()
+        ollama_enabled = _bool(values, "JARVIS_MODEL_OLLAMA_ENABLED", False)
+        openai_compatible_enabled = _bool(values, "JARVIS_MODEL_OPENAI_COMPATIBLE_ENABLED", False)
         if worker_enabled and execution_mode != "local_only":
             raise SupervisorConfigurationError(
                 "enabled autonomous worker requires JARVIS_MODEL_EXECUTION_MODE=local_only"
@@ -327,12 +329,21 @@ class SupervisorConfig:
             raise SupervisorConfigurationError(
                 "enabled autonomous worker requires JARVIS_AUTONOMOUS_WORKER_INSTANCE_ID"
             )
-        ollama_enabled = _bool(values, "JARVIS_MODEL_OLLAMA_ENABLED", False)
+        if worker_enabled and not (ollama_enabled or openai_compatible_enabled):
+            raise SupervisorConfigurationError(
+                "enabled autonomous worker requires at least one enabled local model provider"
+            )
         ollama_url = _require_loopback_url(
             values.get("JARVIS_MODEL_OLLAMA_BASE_URL", "http://127.0.0.1:11434"),
             "JARVIS_MODEL_OLLAMA_BASE_URL",
             {"http", "https"},
         )
+        if openai_compatible_enabled:
+            _require_loopback_url(
+                values.get("JARVIS_MODEL_OPENAI_COMPATIBLE_BASE_URL", "https://example.invalid/v1"),
+                "JARVIS_MODEL_OPENAI_COMPATIBLE_BASE_URL",
+                {"http", "https"},
+            )
         web_origin = _owned_frontend_url(
             values.get("WEB_ORIGIN", f"http://{_url_host(web_host)}:{web_port}"),
             "WEB_ORIGIN",

@@ -421,6 +421,39 @@ def test_autostart_uninstall_ignores_invalid_runtime_settings(
     assert captured[0].__class__.__name__ == "SupervisorCoordination"
 
 
+def test_status_commands_ignore_invalid_replacement_runtime_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(tmp_path)
+    (config.repository / ".env").write_text(
+        "JARVIS_AUTONOMOUS_WORKER_ENABLED=not-a-boolean\n",
+        encoding="utf-8",
+    )
+    runtime_status_calls: list[object] = []
+    autostart_status_calls: list[object] = []
+
+    def fake_runtime_status(coordination: object) -> dict[str, object]:
+        runtime_status_calls.append(coordination)
+        return {"supervisorState": "running", "ownership": "running"}
+
+    def fake_autostart_status(coordination: object) -> SimpleNamespace:
+        autostart_status_calls.append(coordination)
+        return SimpleNamespace(
+            supported=True,
+            installed=True,
+            task_name=coordination.task_name,  # type: ignore[attr-defined]
+            detail="installed",
+        )
+
+    monkeypatch.setattr(cli, "load_recorded_status", fake_runtime_status)
+    monkeypatch.setattr(cli.autostart, "status", fake_autostart_status)
+
+    assert cli.main(["--repository", str(config.repository), "--json", "status"]) == 0
+    assert cli.main(["--repository", str(config.repository), "--json", "autostart", "status"]) == 0
+    assert runtime_status_calls[0].__class__.__name__ == "SupervisorCoordination"
+    assert autostart_status_calls[0].__class__.__name__ == "SupervisorCoordination"
+
+
 def test_windows_supervisor_allocates_and_hides_console_for_child_signals() -> None:
     class Kernel32:
         def __init__(self) -> None:
@@ -459,10 +492,19 @@ def test_worker_remains_disabled_by_default(tmp_path: Path) -> None:
 def test_enabled_worker_requires_existing_local_only_configuration(tmp_path: Path) -> None:
     with pytest.raises(SupervisorConfigurationError, match="local_only"):
         make_config(tmp_path, JARVIS_AUTONOMOUS_WORKER_ENABLED="true")
+    with pytest.raises(SupervisorConfigurationError, match="local model provider"):
+        make_config(
+            tmp_path,
+            JARVIS_AUTONOMOUS_WORKER_ENABLED="true",
+            JARVIS_MODEL_EXECUTION_MODE="local_only",
+            JARVIS_AUTONOMOUS_WORKER_ACTOR_ID="worker-actor",
+            JARVIS_AUTONOMOUS_WORKER_INSTANCE_ID="worker-instance",
+        )
     config = make_config(
         tmp_path,
         JARVIS_AUTONOMOUS_WORKER_ENABLED="true",
         JARVIS_MODEL_EXECUTION_MODE="local_only",
+        JARVIS_MODEL_OLLAMA_ENABLED="true",
         JARVIS_AUTONOMOUS_WORKER_ACTOR_ID="worker-actor",
         JARVIS_AUTONOMOUS_WORKER_INSTANCE_ID="worker-instance",
     )
@@ -677,6 +719,7 @@ def test_stop_wait_budget_covers_every_enabled_child(tmp_path: Path) -> None:
         JARVIS_SUPERVISOR_HEALTH_INTERVAL_SECONDS="3",
         JARVIS_AUTONOMOUS_WORKER_ENABLED="true",
         JARVIS_MODEL_EXECUTION_MODE="local_only",
+        JARVIS_MODEL_OLLAMA_ENABLED="true",
         JARVIS_AUTONOMOUS_WORKER_ACTOR_ID="operator",
         JARVIS_AUTONOMOUS_WORKER_INSTANCE_ID="runtime-worker",
     )
@@ -1104,6 +1147,7 @@ def test_explicitly_enabled_worker_starts_last_and_recovers_crash(tmp_path: Path
         tmp_path,
         JARVIS_AUTONOMOUS_WORKER_ENABLED="true",
         JARVIS_MODEL_EXECUTION_MODE="local_only",
+        JARVIS_MODEL_OLLAMA_ENABLED="true",
         JARVIS_AUTONOMOUS_WORKER_ACTOR_ID="worker-actor",
         JARVIS_AUTONOMOUS_WORKER_INSTANCE_ID="worker-instance",
         JARVIS_SUPERVISOR_RESTART_INITIAL_SECONDS="0.1",
@@ -1148,6 +1192,7 @@ def test_unrelated_healthy_endpoint_does_not_satisfy_child_startup(tmp_path: Pat
         tmp_path,
         JARVIS_AUTONOMOUS_WORKER_ENABLED="true",
         JARVIS_MODEL_EXECUTION_MODE="local_only",
+        JARVIS_MODEL_OLLAMA_ENABLED="true",
         JARVIS_AUTONOMOUS_WORKER_ACTOR_ID="worker-actor",
         JARVIS_AUTONOMOUS_WORKER_INSTANCE_ID="worker-instance",
     )

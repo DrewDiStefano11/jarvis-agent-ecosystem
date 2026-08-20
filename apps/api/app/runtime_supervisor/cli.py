@@ -239,9 +239,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             payload = stop(SupervisorCoordination.load(args.repository))
             _emit(payload, as_json=args.json_output)
             return 1 if payload.get("result") in {"refused", "stop_pending"} else 0
-        if args.command == "autostart" and args.operation == "uninstall":
+        if args.command == "status":
+            payload = load_recorded_status(SupervisorCoordination.load(args.repository))
+            _emit(payload, as_json=args.json_output)
+            return 0
+        if args.command == "autostart" and args.operation in {"status", "uninstall"}:
             coordination = SupervisorCoordination.load(args.repository)
-            payload = _autostart_payload(autostart.uninstall(coordination))
+            value = (
+                autostart.uninstall(coordination)
+                if args.operation == "uninstall"
+                else autostart.status(coordination)
+            )
+            payload = _autostart_payload(value)
             _emit(payload, as_json=args.json_output)
             return 0
         config = SupervisorConfig.load(args.repository)
@@ -251,8 +260,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             payload = start(config)
         elif args.command == "restart":
             payload = restart(config)
-        elif args.command == "status":
-            payload = load_status(config)
         elif args.command == "doctor":
             payload = run_doctor(config)
         elif args.command == "backup":
