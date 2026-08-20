@@ -156,7 +156,7 @@ def _create_backup(
                     ),
                 )
         _raise_if_cancelled(cancel_requested)
-        with closing(sqlite3.connect(f"file:{partial_path.as_posix()}?mode=ro", uri=True)) as check:
+        with closing(sqlite3.connect(f"{partial_path.as_uri()}?mode=ro", uri=True)) as check:
             check.set_progress_handler(
                 lambda: int(cancel_requested is not None and cancel_requested()), 1000
             )

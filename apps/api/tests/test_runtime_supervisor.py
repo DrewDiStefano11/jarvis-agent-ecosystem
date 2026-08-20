@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import os
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -36,6 +37,7 @@ from app.runtime_supervisor.status import load_recorded_status, load_status
 from app.runtime_supervisor.supervisor import (
     RuntimeSupervisor,
     build_process_registry,
+    process_owns_port,
     shutdown_wait_seconds,
 )
 from app.runtime_supervisor.windows_console import ensure_hidden_console
@@ -558,6 +560,14 @@ def test_process_registry_is_shell_free_loopback_and_stable(tmp_path: Path) -> N
     assert all("0.0.0.0" not in value for item in definitions for value in item.argv)
 
 
+def test_process_port_ownership_identifies_current_listener() -> None:
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = int(listener.getsockname()[1])
+        assert process_owns_port(os.getpid(), port) is True
+
+
 def test_api_child_converts_sigbreak_to_graceful_uvicorn_exit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -691,6 +701,31 @@ def test_online_backup_is_consistent_and_records_metadata(tmp_path: Path) -> Non
     with sqlite3.connect(backup_path) as connection:
         assert connection.execute("SELECT value FROM sample").fetchone() == ("value",)
         assert connection.execute("PRAGMA quick_check").fetchone() == ("ok",)
+
+
+def test_backup_integrity_check_encodes_runtime_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(
+        tmp_path,
+        JARVIS_SUPERVISOR_RUNTIME_HOME=str(tmp_path / "runtime # production"),
+    )
+    ensure_runtime_home(config.runtime_home, config.repository)
+    create_database(config)
+    connect = sqlite3.connect
+    integrity_uris: list[str] = []
+
+    def recording_connect(database: object, *args: object, **kwargs: object) -> sqlite3.Connection:
+        if kwargs.get("uri") is True:
+            integrity_uris.append(str(database))
+        return connect(database, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr("app.runtime_supervisor.backup.sqlite3.connect", recording_connect)
+    create_backup(config)
+
+    assert len(integrity_uris) == 1
+    assert "%23" in integrity_uris[0]
+    assert integrity_uris[0].endswith(".partial?mode=ro")
 
 
 def test_backup_singleton_prevents_overlapping_operations(tmp_path: Path) -> None:
@@ -1010,6 +1045,7 @@ def test_ordered_start_waits_for_api_before_web(tmp_path: Path) -> None:
         config,
         process_factory=factory,
         probe=lambda *_args, **_kwargs: HealthResult(True, "healthy"),
+        port_owner=lambda *_args: True,
         sleep=lambda _value: None,
     )
     attach_logger(supervisor)
@@ -1091,6 +1127,7 @@ def test_explicitly_enabled_worker_starts_last_and_recovers_crash(tmp_path: Path
         process_factory=factory,
         clock=lambda: now[0],
         probe=lambda *_args, **_kwargs: HealthResult(True, "healthy"),
+        port_owner=lambda *_args: True,
         sleep=lambda value: now.__setitem__(0, now[0] + value),
     )
     attach_logger(supervisor)
@@ -1104,6 +1141,50 @@ def test_explicitly_enabled_worker_starts_last_and_recovers_crash(tmp_path: Path
     supervisor._monitor_once()
     assert labels == ["api", "web", "worker", "worker"]
     assert worker.restart_count == 1
+
+
+def test_unrelated_healthy_endpoint_does_not_satisfy_child_startup(tmp_path: Path) -> None:
+    config = make_config(
+        tmp_path,
+        JARVIS_AUTONOMOUS_WORKER_ENABLED="true",
+        JARVIS_MODEL_EXECUTION_MODE="local_only",
+        JARVIS_AUTONOMOUS_WORKER_ACTOR_ID="worker-actor",
+        JARVIS_AUTONOMOUS_WORKER_INSTANCE_ID="worker-instance",
+    )
+    now = [0.0]
+    labels: list[str] = []
+    api_process: FakeProcess | None = None
+
+    def factory(argv: list[str], **_kwargs: object) -> FakeProcess:
+        nonlocal api_process
+        label = "api" if "app.runtime_supervisor.api_child" in argv else "other"
+        labels.append(label)
+        process = FakeProcess(argv)
+        if label == "api":
+            api_process = process
+        return process
+
+    def advance(value: float) -> None:
+        now[0] += value
+        assert api_process is not None
+        api_process.returncode = 1
+
+    supervisor = RuntimeSupervisor(
+        config,
+        process_factory=factory,
+        clock=lambda: now[0],
+        sleep=advance,
+        probe=lambda *_args, **_kwargs: HealthResult(True, "healthy"),
+        port_owner=lambda *_args: False,
+    )
+    attach_logger(supervisor)
+
+    supervisor._start_ordered()
+
+    assert labels == ["api"]
+    assert supervisor.processes["api"].restart_count == 1
+    assert supervisor.processes["web"].process is None
+    assert supervisor.processes["autonomous_worker"].process is None
 
 
 def test_startup_health_timeout_stops_child_and_counts_once(tmp_path: Path) -> None:

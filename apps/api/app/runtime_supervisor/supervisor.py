@@ -17,6 +17,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TextIO
+from urllib.parse import urlsplit
+
+import psutil
 
 from app.runtime_supervisor.backup import BackupCancelled, BackupError, create_backup, last_backup
 from app.runtime_supervisor.config import SupervisorConfig
@@ -73,8 +76,22 @@ class ManagedProcess:
 ProcessFactory = Callable[..., subprocess.Popen[str]]
 Clock = Callable[[], float]
 Probe = Callable[..., HealthResult]
+PortOwner = Callable[[int, int], bool]
 FORCED_TERMINATION_SECONDS = 5
 SHUTDOWN_CONFIRMATION_OVERHEAD_SECONDS = 10
+
+
+def process_owns_port(pid: int, port: int) -> bool:
+    try:
+        connections = psutil.Process(pid).net_connections(kind="tcp")
+    except (psutil.Error, OSError):
+        return False
+    return any(
+        connection.status == psutil.CONN_LISTEN
+        and connection.laddr
+        and connection.laddr.port == port
+        for connection in connections
+    )
 
 
 def _git_sha(repository: Path) -> str | None:
@@ -158,12 +175,14 @@ class RuntimeSupervisor:
         clock: Clock = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         probe: Probe = probe_http,
+        port_owner: PortOwner = process_owns_port,
     ) -> None:
         self.config = config
         self.process_factory = process_factory
         self.clock = clock
         self.sleep = sleep
         self.probe = probe
+        self.port_owner = port_owner
         self.instance_id = str(uuid.uuid4())
         self.started_at = utc_now()
         self.started_monotonic = clock()
@@ -426,6 +445,15 @@ class RuntimeSupervisor:
         if url is None:
             return HealthResult(managed.process is not None, "healthy")
         result = self.probe(url, expect_json=managed.definition.health_json, timeout=2)
+        process = managed.process
+        port = urlsplit(url).port
+        if (
+            result.available
+            and process is not None
+            and port is not None
+            and not self.port_owner(process.pid, port)
+        ):
+            result = HealthResult(False, "unavailable", "endpoint not owned by managed process")
         if managed.definition.name == "api":
             self.last_api_health = result
         return result
