@@ -70,7 +70,7 @@ Set-Location apps/web
 pnpm dev
 ```
 
-Open `http://localhost:5173`. API docs are at `http://127.0.0.1:8000/docs`, OpenAPI at `/openapi.json`, health at `/api/health`, and WebSocket events at `ws://127.0.0.1:8000/ws/events`. Use **System → Start demo** to run the demonstration.
+Open `http://127.0.0.1:5173`. API docs are at `http://127.0.0.1:8000/docs`, OpenAPI at `/openapi.json`, health at `/api/health`, and WebSocket events at `ws://127.0.0.1:8000/ws/events`. Use **System → Start demo** to run the demonstration.
 
 The autonomous worker is a separate process and never starts with the API by default. After completing the explicit local-only setup in [docs/autonomous-worker.md](docs/autonomous-worker.md), run it from `apps/api`:
 
