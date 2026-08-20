@@ -10,7 +10,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.runtime_supervisor.config import SupervisorConfig
+from app.runtime_supervisor.config import SupervisorConfig, SupervisorCoordination
 
 
 @dataclass(frozen=True)
@@ -82,7 +82,7 @@ def _schtasks() -> str | None:
     return shutil.which("schtasks.exe") or shutil.which("schtasks")
 
 
-def status(config: SupervisorConfig) -> AutostartStatus:
+def status(config: SupervisorConfig | SupervisorCoordination) -> AutostartStatus:
     executable = _schtasks()
     if os.name != "nt" or executable is None:
         return AutostartStatus(False, False, config.task_name, "Windows Task Scheduler unavailable")
@@ -130,7 +130,7 @@ def install(config: SupervisorConfig) -> AutostartStatus:
     return status(config)
 
 
-def uninstall(config: SupervisorConfig) -> AutostartStatus:
+def uninstall(config: SupervisorConfig | SupervisorCoordination) -> AutostartStatus:
     executable = _schtasks()
     current = status(config)
     if not current.supported or not current.installed:

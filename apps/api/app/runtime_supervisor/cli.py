@@ -207,13 +207,7 @@ def restart(config: SupervisorConfig) -> dict[str, Any]:
     return start(config)
 
 
-def _autostart(config: SupervisorConfig, operation: str) -> dict[str, Any]:
-    if operation == "install":
-        value = autostart.install(config)
-    elif operation == "uninstall":
-        value = autostart.uninstall(config)
-    else:
-        value = autostart.status(config)
+def _autostart_payload(value: autostart.AutostartStatus) -> dict[str, Any]:
     return {
         "supported": value.supported,
         "installed": value.installed,
@@ -222,6 +216,16 @@ def _autostart(config: SupervisorConfig, operation: str) -> dict[str, Any]:
         "trigger": "current-user logon",
         "storesPassword": False,
     }
+
+
+def _autostart(config: SupervisorConfig, operation: str) -> dict[str, Any]:
+    if operation == "install":
+        value = autostart.install(config)
+    elif operation == "uninstall":
+        value = autostart.uninstall(config)
+    else:
+        value = autostart.status(config)
+    return _autostart_payload(value)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -235,6 +239,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             payload = stop(SupervisorCoordination.load(args.repository))
             _emit(payload, as_json=args.json_output)
             return 1 if payload.get("result") in {"refused", "stop_pending"} else 0
+        if args.command == "autostart" and args.operation == "uninstall":
+            coordination = SupervisorCoordination.load(args.repository)
+            payload = _autostart_payload(autostart.uninstall(coordination))
+            _emit(payload, as_json=args.json_output)
+            return 0
         config = SupervisorConfig.load(args.repository)
         if args.command == "daemon":
             return RuntimeSupervisor(config).run()

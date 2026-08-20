@@ -5,7 +5,7 @@ import ipaddress
 import os
 import shutil
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 
 from dotenv import dotenv_values
@@ -153,6 +153,8 @@ def _coordination_home(repository: Path, values: dict[str, str]) -> Path:
     base = values.get("LOCALAPPDATA") or values.get("XDG_STATE_HOME")
     if not base:
         base = str(Path.home() / ".local" / "state")
+    if str(PureWindowsPath(base).anchor).startswith("\\\\"):
+        raise SupervisorConfigurationError("supervisor storage paths must be local")
     install_id = _repository_digest(repository)
     result = (Path(base) / "Jarvis" / "Supervisor" / install_id).resolve()
     anchor = Path(result.anchor).resolve()
@@ -172,6 +174,8 @@ def _safe_runtime_home(repository: Path, values: dict[str, str], coordination_ho
     configured = values.get("JARVIS_SUPERVISOR_RUNTIME_HOME", "").strip()
     if not configured:
         return coordination_home
+    if str(PureWindowsPath(configured).anchor).startswith("\\\\"):
+        raise SupervisorConfigurationError("JARVIS_SUPERVISOR_RUNTIME_HOME must be local")
     configured_path = Path(configured).expanduser()
     if not configured_path.is_absolute():
         raise SupervisorConfigurationError("JARVIS_SUPERVISOR_RUNTIME_HOME must be absolute")
@@ -242,6 +246,10 @@ class SupervisorCoordination:
     @property
     def stop_request_path(self) -> Path:
         return self.coordination_home / "stop-request.json"
+
+    @property
+    def task_name(self) -> str:
+        return f"JarvisSupervisor-{_repository_digest(self.repository)}"
 
 
 @dataclass(frozen=True)

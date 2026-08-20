@@ -392,6 +392,33 @@ def test_stop_command_ignores_invalid_replacement_runtime_settings(
     assert captured[0].__class__.__name__ == "SupervisorCoordination"
 
 
+def test_autostart_uninstall_ignores_invalid_runtime_settings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(tmp_path)
+    (config.repository / ".env").write_text(
+        "JARVIS_AUTONOMOUS_WORKER_ENABLED=not-a-boolean\n",
+        encoding="utf-8",
+    )
+    captured: list[object] = []
+
+    def fake_uninstall(coordination: object) -> SimpleNamespace:
+        captured.append(coordination)
+        return SimpleNamespace(
+            supported=True,
+            installed=False,
+            task_name=coordination.task_name,  # type: ignore[attr-defined]
+            detail="removed",
+        )
+
+    monkeypatch.setattr(cli.autostart, "uninstall", fake_uninstall)
+    assert (
+        cli.main(["--repository", str(config.repository), "--json", "autostart", "uninstall"]) == 0
+    )
+    assert len(captured) == 1
+    assert captured[0].__class__.__name__ == "SupervisorCoordination"
+
+
 def test_windows_supervisor_allocates_and_hides_console_for_child_signals() -> None:
     class Kernel32:
         def __init__(self) -> None:
@@ -447,6 +474,17 @@ def test_runtime_home_rejects_repository_and_filesystem_root(tmp_path: Path) -> 
         )
     with pytest.raises(SupervisorConfigurationError, match="filesystem root"):
         make_config(tmp_path, JARVIS_SUPERVISOR_RUNTIME_HOME=Path(tmp_path.anchor).as_posix())
+
+
+@pytest.mark.parametrize(
+    "runtime_home",
+    [r"\\server\share\jarvis", r"\\?\C:\jarvis", r"\\.\C:\jarvis"],
+)
+def test_runtime_home_rejects_windows_remote_and_device_paths(
+    tmp_path: Path, runtime_home: str
+) -> None:
+    with pytest.raises(SupervisorConfigurationError, match="must be local"):
+        make_config(tmp_path, JARVIS_SUPERVISOR_RUNTIME_HOME=runtime_home)
 
 
 def test_runtime_home_refuses_nonempty_or_corrupt_unowned_directory(tmp_path: Path) -> None:
