@@ -65,6 +65,7 @@ class ManagedProcess:
     started_at_utc: str | None = None
     last_failure: str | None = None
     last_exit_code: int | None = None
+    termination_failed: bool = False
     reader_threads: list[threading.Thread] = field(default_factory=list)
     failure_history: list[str] = field(default_factory=list)
 
@@ -314,8 +315,8 @@ class RuntimeSupervisor:
             self.sleep(min(0.25, self.config.health_interval_seconds))
         if self.stop_requested:
             return False
-        self._terminate(managed, reason="health startup timeout")
-        managed.process = None
+        if self._terminate(managed, reason="health startup timeout"):
+            managed.process = None
         self._record_failure(managed, "health startup timeout")
         return False
 
@@ -367,16 +368,22 @@ class RuntimeSupervisor:
             )
             managed.process = process
             managed.process_identity = process_identity(process.pid)
-            managed.state = "running"
-            managed.health = "starting"
-            managed.health_failures = 0
-            managed.started_at = now
-            managed.started_at_utc = utc_now()
             if self.job is not None and os.name == "nt":
                 try:
                     self.job.assign(process._handle)  # type: ignore[attr-defined]
                 except OSError as exc:
-                    log.warning("could not assign Windows Job Object: %s", exc)
+                    reason = f"could not assign Windows Job Object: {exc}"
+                    log.error("%s", reason)
+                    if self._terminate(managed, reason=reason):
+                        managed.process = None
+                    self._record_failure(managed, f"start failed: {reason}")
+                    return
+            managed.state = "running"
+            managed.health = "starting"
+            managed.termination_failed = False
+            managed.health_failures = 0
+            managed.started_at = now
+            managed.started_at_utc = utc_now()
             managed.reader_threads = []
             child_output_logger(
                 self.config.logs_directory,
@@ -439,6 +446,8 @@ class RuntimeSupervisor:
                 managed.process = None
                 self._record_failure(managed, f"process exited with code {exit_code}")
                 continue
+            if managed.termination_failed:
+                continue
             if (
                 managed.started_at is not None
                 and now - managed.started_at >= self.config.backoff_reset_seconds
@@ -453,8 +462,8 @@ class RuntimeSupervisor:
             else:
                 managed.health_failures += 1
                 if managed.health_failures >= self.config.health_failure_limit:
-                    self._terminate(managed, reason="health endpoint unavailable")
-                    managed.process = None
+                    if self._terminate(managed, reason="health endpoint unavailable"):
+                        managed.process = None
                     self._record_failure(managed, "health endpoint unavailable")
         self._load_system_status()
         self._probe_dependencies()
@@ -478,10 +487,16 @@ class RuntimeSupervisor:
             "%s; retry in %.1fs", reason, delay
         )
 
-    def _terminate(self, managed: ManagedProcess, *, reason: str) -> None:
+    def _terminate(self, managed: ManagedProcess, *, reason: str) -> bool:
         process = managed.process
-        if process is None or process.poll() is not None:
-            return
+        if process is None:
+            return True
+        if process.poll() is not None:
+            managed.last_exit_code = process.poll()
+            managed.termination_failed = False
+            managed.state = "stopped"
+            managed.health = "stopped"
+            return True
         log = component_logger(self.logger, managed.definition.name)  # type: ignore[arg-type]
         log.info("graceful stop requested: %s", reason)
         try:
@@ -498,8 +513,15 @@ class RuntimeSupervisor:
             except (subprocess.TimeoutExpired, OSError):
                 log.error("process did not exit after forced termination")
         managed.last_exit_code = process.poll()
+        if managed.last_exit_code is None:
+            managed.termination_failed = True
+            managed.state = "failed"
+            managed.health = "failed"
+            return False
+        managed.termination_failed = False
         managed.state = "stopped"
         managed.health = "stopped"
+        return True
 
     def _shutdown_all(self) -> None:
         for name in ("autonomous_worker", "web", "api"):

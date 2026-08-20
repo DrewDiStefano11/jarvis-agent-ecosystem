@@ -1308,6 +1308,31 @@ def test_process_start_uses_argument_list_without_shell(tmp_path: Path) -> None:
     assert captured["cwd"] == config.api_directory
 
 
+def test_windows_job_assignment_failure_terminates_uncontained_child(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    process = FakeProcess([])
+    process._handle = object()  # type: ignore[attr-defined]
+
+    class FailingJob:
+        def assign(self, _handle: object) -> None:
+            raise OSError("assignment refused")
+
+    supervisor = RuntimeSupervisor(make_config(tmp_path), process_factory=lambda *_a, **_k: process)
+    attach_logger(supervisor)
+    supervisor.job = FailingJob()  # type: ignore[assignment]
+    monkeypatch.setattr("app.runtime_supervisor.supervisor.os", SimpleNamespace(name="nt"))
+
+    managed = supervisor.processes["api"]
+    supervisor._start_process(managed)
+
+    assert process.returncode == 0
+    assert managed.process is None
+    assert managed.state == "failed"
+    assert managed.restart_count == 1
+    assert "could not assign Windows Job Object" in (managed.last_failure or "")
+
+
 def test_crashed_child_is_scheduled_for_restart(tmp_path: Path) -> None:
     now = [0.0]
     supervisor = RuntimeSupervisor(make_config(tmp_path), clock=lambda: now[0])
@@ -1336,3 +1361,39 @@ def test_health_failure_restarts_only_after_threshold(tmp_path: Path) -> None:
     supervisor._monitor_once()
     assert managed.process is None
     assert managed.restart_count == 1
+
+
+def test_health_failure_retains_child_that_survives_forced_termination(tmp_path: Path) -> None:
+    class UnkillableProcess(FakeProcess):
+        def send_signal(self, _value: int) -> None:
+            raise OSError("signal failed")
+
+        def terminate(self) -> None:
+            raise OSError("terminate failed")
+
+        def kill(self) -> None:
+            raise OSError("kill failed")
+
+    config = make_config(tmp_path, JARVIS_SUPERVISOR_HEALTH_FAILURE_LIMIT="1")
+    probe_calls = 0
+
+    def unavailable(*_args: object, **_kwargs: object) -> HealthResult:
+        nonlocal probe_calls
+        probe_calls += 1
+        return HealthResult(False, "unavailable")
+
+    supervisor = RuntimeSupervisor(config, probe=unavailable)
+    attach_logger(supervisor)
+    managed = supervisor.processes["api"]
+    process = UnkillableProcess([])
+    managed.process = process
+
+    supervisor._monitor_once()
+    supervisor._monitor_once()
+
+    assert managed.process is process
+    assert managed.state == "failed"
+    assert managed.health == "failed"
+    assert managed.termination_failed is True
+    assert managed.restart_count == 1
+    assert probe_calls == 3
