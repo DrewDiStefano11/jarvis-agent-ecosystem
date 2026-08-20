@@ -511,6 +511,21 @@ def test_enabled_worker_requires_existing_local_only_configuration(tmp_path: Pat
     assert config.worker_enabled is True
 
 
+def test_enabled_openai_compatible_provider_requires_complete_application_settings(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(SupervisorConfigurationError, match="API_KEY is required"):
+        make_config(
+            tmp_path,
+            JARVIS_AUTONOMOUS_WORKER_ENABLED="true",
+            JARVIS_MODEL_EXECUTION_MODE="local_only",
+            JARVIS_MODEL_OPENAI_COMPATIBLE_ENABLED="true",
+            JARVIS_MODEL_OPENAI_COMPATIBLE_BASE_URL="http://127.0.0.1:1234/v1",
+            JARVIS_AUTONOMOUS_WORKER_ACTOR_ID="worker-actor",
+            JARVIS_AUTONOMOUS_WORKER_INSTANCE_ID="worker-instance",
+        )
+
+
 def test_runtime_home_rejects_repository_and_filesystem_root(tmp_path: Path) -> None:
     with pytest.raises(SupervisorConfigurationError, match="RUNTIME_HOME"):
         make_config(

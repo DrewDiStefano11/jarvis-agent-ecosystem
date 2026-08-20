@@ -9,8 +9,11 @@ from pathlib import Path, PureWindowsPath
 from urllib.parse import unquote, urlsplit
 
 from dotenv import dotenv_values
+from pydantic import ValidationError
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
+
+from app.core.config import Settings
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
@@ -396,6 +399,15 @@ class SupervisorConfig:
         environment["WEB_ORIGIN"] = web_origin
         environment["VITE_API_BASE_URL"] = vite_api
         environment["VITE_WS_URL"] = vite_ws
+        try:
+            Settings(_env_file=None, **environment)
+        except ValidationError as exc:
+            details = "; ".join(
+                str(error["msg"]) for error in exc.errors(include_input=False, include_url=False)
+            )
+            raise SupervisorConfigurationError(
+                f"application settings are invalid: {details}"
+            ) from exc
         return cls(
             repository=repository,
             runtime_home=_safe_runtime_home(repository, values, coordination_home),
