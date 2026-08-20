@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from dotenv import dotenv_values
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
@@ -34,26 +35,13 @@ def _url_host(value: str) -> str:
 
 
 def _parse_env_file(path: Path) -> dict[str, str]:
-    """Read simple dotenv assignments without interpolation or evaluation."""
-
     if not path.is_file():
         return {}
-    values: dict[str, str] = {}
-    for number, raw_line in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export "):
-            line = line[7:].lstrip()
-        key, separator, value = line.partition("=")
-        key = key.strip()
-        if not separator or not key.replace("_", "a").isalnum() or not key[0].isalpha():
-            raise SupervisorConfigurationError(f"invalid environment assignment at {path}:{number}")
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
-            value = value[1:-1]
-        values[key] = value
-    return values
+    return {
+        key: value
+        for key, value in dotenv_values(path, encoding="utf-8-sig").items()
+        if value is not None
+    }
 
 
 def load_environment(repository: Path, environ: dict[str, str] | None = None) -> dict[str, str]:
@@ -165,7 +153,7 @@ def _coordination_home(repository: Path, values: dict[str, str]) -> Path:
     base = values.get("LOCALAPPDATA") or values.get("XDG_STATE_HOME")
     if not base:
         base = str(Path.home() / ".local" / "state")
-    install_id = hashlib.sha256(str(repository).lower().encode("utf-8")).hexdigest()[:12]
+    install_id = _repository_digest(repository)
     result = (Path(base) / "Jarvis" / "Supervisor" / install_id).resolve()
     anchor = Path(result.anchor).resolve()
     if result == anchor or result == repository or repository in result.parents:
@@ -173,6 +161,11 @@ def _coordination_home(repository: Path, values: dict[str, str]) -> Path:
             "supervisor coordination home cannot be a filesystem root or inside the repository"
         )
     return result
+
+
+def _repository_digest(repository: Path) -> str:
+    normalized = os.path.normcase(str(repository))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:12]
 
 
 def _safe_runtime_home(repository: Path, values: dict[str, str], coordination_home: Path) -> Path:
@@ -486,5 +479,4 @@ class SupervisorConfig:
 
     @property
     def task_name(self) -> str:
-        digest = hashlib.sha256(str(self.repository).lower().encode("utf-8")).hexdigest()[:12]
-        return f"JarvisSupervisor-{digest}"
+        return f"JarvisSupervisor-{_repository_digest(self.repository)}"

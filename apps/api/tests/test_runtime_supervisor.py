@@ -21,7 +21,12 @@ from app.runtime_supervisor.autostart import status as autostart_status
 from app.runtime_supervisor.autostart import task_arguments, task_xml
 from app.runtime_supervisor.backup import BackupCancelled, BackupError, create_backup, prune_backups
 from app.runtime_supervisor.cli import restart, start, stop
-from app.runtime_supervisor.config import SupervisorConfig, SupervisorConfigurationError
+from app.runtime_supervisor.config import (
+    SupervisorConfig,
+    SupervisorConfigurationError,
+    _coordination_home,
+    load_environment,
+)
 from app.runtime_supervisor.doctor import run_doctor
 from app.runtime_supervisor.health import HealthResult, probe_http
 from app.runtime_supervisor.io import atomic_write_json, ensure_runtime_home, read_json
@@ -176,6 +181,36 @@ def test_coordination_paths_are_stable_across_runtime_home_changes(tmp_path: Pat
     assert first.lock_path == second.lock_path
     assert first.state_path == second.state_path
     assert first.stop_request_path == second.stop_request_path
+
+
+def test_coordination_paths_preserve_repository_case_on_case_sensitive_platforms(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("app.runtime_supervisor.config.os.path.normcase", lambda value: value)
+    values = {"XDG_STATE_HOME": str(tmp_path / "state")}
+
+    mixed_case = _coordination_home(tmp_path / "Jarvis", values)
+    lower_case = _coordination_home(tmp_path / "jarvis", values)
+
+    assert mixed_case != lower_case
+
+
+def test_environment_files_use_application_dotenv_semantics(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    (repository / ".env").write_text(
+        "JARVIS_AUTONOMOUS_WORKER_ENABLED=true # local\n"
+        "JARVIS_TEST_ROOT=resolved\n"
+        "JARVIS_TEST_PATH=${JARVIS_TEST_ROOT}/child\n"
+        'JARVIS_TEST_LITERAL="value # retained"\n',
+        encoding="utf-8",
+    )
+
+    values = load_environment(repository, {})
+
+    assert values["JARVIS_AUTONOMOUS_WORKER_ENABLED"] == "true"
+    assert values["JARVIS_TEST_PATH"] == "resolved/child"
+    assert values["JARVIS_TEST_LITERAL"] == "value # retained"
 
 
 def test_start_discovers_running_supervisor_after_runtime_home_change(
