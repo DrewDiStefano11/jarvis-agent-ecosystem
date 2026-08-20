@@ -40,10 +40,17 @@ def load_recorded_status(config: SupervisorConfig | SupervisorCoordination) -> d
             "currentGitSha": current_sha,
         }
     declared = state.get("supervisorState")
-    ownership = "not_running" if declared == "stopped" else state_ownership(state)
+    observed_ownership = state_ownership(state)
+    ownership = (
+        "not_running"
+        if declared == "stopped" and observed_ownership != "running"
+        else observed_ownership
+    )
     result = dict(state)
     result["currentGitSha"] = _git_sha(config.repository)
     result["ownership"] = ownership
+    if declared == "stopped" and ownership == "running":
+        result["supervisorState"] = "stopping"
     if ownership == "stale" and declared not in {"stopped", "failed"}:
         result["supervisorState"] = "stale"
     return result

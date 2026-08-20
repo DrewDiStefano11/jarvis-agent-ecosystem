@@ -27,7 +27,7 @@ from app.runtime_supervisor.health import HealthResult, probe_http
 from app.runtime_supervisor.io import atomic_write_json, ensure_runtime_home, read_json
 from app.runtime_supervisor.logging_utils import child_output_logger
 from app.runtime_supervisor.ownership import SingletonLock, process_identity, state_ownership
-from app.runtime_supervisor.status import load_status
+from app.runtime_supervisor.status import load_recorded_status, load_status
 from app.runtime_supervisor.supervisor import (
     RuntimeSupervisor,
     build_process_registry,
@@ -527,6 +527,33 @@ def test_state_ownership_rejects_pid_reuse(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr("app.runtime_supervisor.ownership.process_identity", lambda _pid: "new")
     assert state_ownership({"pid": 123, "processIdentity": "old"}) == "stale"
     assert state_ownership({"pid": 123, "processIdentity": "new"}) == "running"
+
+
+def test_stopped_state_remains_owned_until_supervisor_process_exits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(tmp_path)
+    ensure_runtime_home(config.coordination_home, config.repository)
+    atomic_write_json(
+        config.state_path,
+        {
+            "supervisorState": "stopped",
+            "pid": 123,
+            "processIdentity": "terminating-supervisor",
+            "instanceId": "terminating-instance",
+        },
+    )
+    identity = "terminating-supervisor"
+    monkeypatch.setattr("app.runtime_supervisor.ownership.process_identity", lambda _pid: identity)
+
+    terminating = load_recorded_status(config)
+    assert terminating["supervisorState"] == "stopping"
+    assert terminating["ownership"] == "running"
+
+    identity = None
+    stopped = load_recorded_status(config)
+    assert stopped["supervisorState"] == "stopped"
+    assert stopped["ownership"] == "not_running"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows process identity behavior")
