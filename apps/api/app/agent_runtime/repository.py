@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Sequence
 from copy import deepcopy
+from dataclasses import dataclass, field
 from threading import RLock
 from typing import Protocol
 
@@ -27,6 +28,13 @@ from app.models.agent_runtime import (
     RunId,
     RuntimeEventEnvelope,
 )
+
+
+@dataclass(frozen=True)
+class RuntimeExecutionFence:
+    task_id: str
+    worker_id: str
+    lease_token: str = field(repr=False)
 
 
 def validate_lineage_invariant(
@@ -127,6 +135,7 @@ class AgentRuntimeRepository(ExecutionLedgerAppender, Protocol):
         expected_sequence: int,
         create: bool = False,
         require_execution_enabled: bool = False,
+        execution_fence: RuntimeExecutionFence | None = None,
     ) -> ProcessedCommandRecord | None: ...
 
 
@@ -318,6 +327,7 @@ class InMemoryAgentRuntimeRepository(AgentRuntimeRepository):
         expected_sequence: int,
         create: bool = False,
         require_execution_enabled: bool = False,
+        execution_fence: RuntimeExecutionFence | None = None,
     ) -> ProcessedCommandRecord | None:
         run_id = snapshot.specification.run_id
         with self._lock:

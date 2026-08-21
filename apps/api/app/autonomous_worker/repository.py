@@ -317,6 +317,7 @@ class ModelExecutionRepository:
                 lease_token,
                 now,
             )
+            self._require_target_active(session, snapshot.specification.agent_id)
             existing = session.get(ModelExecutionRow, execution_id)
             if existing is not None:
                 return self._contract(existing)
@@ -537,18 +538,27 @@ class ModelExecutionRepository:
 
     def iter_recoverable_result_pages(
         self,
+        *,
+        skip_corrupt: bool = False,
     ) -> Iterator[list[ModelExecutionResult]]:
-        yield from self._iter_recoverable_pages(result_persisted=True)
+        yield from self._iter_recoverable_pages(
+            result_persisted=True,
+            skip_corrupt=skip_corrupt,
+        )
 
     def iter_recoverable_uncommitted_pages(
         self,
     ) -> Iterator[list[ModelExecutionResult]]:
-        yield from self._iter_recoverable_pages(result_persisted=False)
+        yield from self._iter_recoverable_pages(
+            result_persisted=False,
+            skip_corrupt=False,
+        )
 
     def _iter_recoverable_pages(
         self,
         *,
         result_persisted: bool,
+        skip_corrupt: bool,
     ) -> Iterator[list[ModelExecutionResult]]:
         cursor: tuple[datetime, str] | None = None
         page_size = 100
@@ -594,7 +604,17 @@ class ModelExecutionRepository:
                         ).limit(page_size)
                     )
                 )
-                contracts = [self._contract(row) for row in rows]
+                contracts: list[ModelExecutionResult] = []
+                for row in rows:
+                    if not skip_corrupt:
+                        contracts.append(self._contract(row))
+                        continue
+                    try:
+                        contracts.append(self._contract(row))
+                    except (AutonomousWorkerError, ValidationError):
+                        # Health remains degraded for corrupt results, but one bad
+                        # candidate must not starve later rows in this bounded page.
+                        continue
             if not rows:
                 return
             yield contracts
@@ -630,6 +650,7 @@ class ModelExecutionRepository:
                 or lease.expires_at.replace(tzinfo=UTC) <= now
             ):
                 raise AutonomousWorkerError("EXECUTION_LEASE_LOST")
+            self._require_target_active(session, row.target_agent_id)
             row.worker_id = worker_id
             row.task_attempt_number = task_attempt_number
             row.lease_token_fingerprint = sha256(lease_token.encode()).hexdigest()
@@ -889,6 +910,15 @@ class ModelExecutionRepository:
         now: datetime,
     ) -> None:
         cls._require_task_fence(session, row.task_id, worker_id, lease_token, now)
+        cls._require_target_active(session, row.target_agent_id)
+
+    @staticmethod
+    def _require_target_active(session: Session, agent_id: str) -> None:
+        target = session.scalar(
+            select(IdentityAgentRow).where(IdentityAgentRow.id == agent_id).with_for_update()
+        )
+        if target is None or target.lifecycle_state != "active" or not target.is_enabled:
+            raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
 
     def _emit(
         self,

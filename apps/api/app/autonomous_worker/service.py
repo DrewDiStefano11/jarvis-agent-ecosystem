@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from hashlib import sha256
 from typing import Any
@@ -10,6 +11,7 @@ from pydantic import ValidationError
 
 from app.agent_runtime.authorization import RuntimeActorContext
 from app.agent_runtime.errors import RuntimePermissionDeniedError
+from app.agent_runtime.repository import RuntimeExecutionFence
 from app.agent_runtime.service import AgentRuntimeService
 from app.autonomous_worker.errors import AutonomousWorkerError
 from app.autonomous_worker.repository import ModelExecutionRepository, canonical_json
@@ -83,6 +85,9 @@ class AutonomousWorkerService:
         self.task_leases = task_leases
         self.runtime = runtime
         self.router = router
+        self._checkpoint_execution_fence: ContextVar[RuntimeExecutionFence | None] = ContextVar(
+            "autonomous_checkpoint_execution_fence", default=None
+        )
 
     def validate_enabled(self) -> None:
         if not self.settings.autonomous_worker_enabled:
@@ -140,12 +145,14 @@ class AutonomousWorkerService:
                 lease_token=lease.leaseToken,
                 execution_request_hash=execution_request_hash,
             )
-            snapshot = self._checkpoint(
+            snapshot = self._checkpoint_with_fence(
                 snapshot,
                 actor,
                 execution,
                 attempt_id,
                 (f"recovered-{lease.attemptNumber}" if recovered_uncommitted else "prepared"),
+                worker_id,
+                lease.leaseToken,
             )
             try:
                 async with asyncio.timeout(
@@ -179,12 +186,14 @@ class AutonomousWorkerService:
                 finish_reason=result[1].finish_reason,
                 estimated_cost_usd=result[6],
             )
-            snapshot = self._checkpoint(
+            snapshot = self._checkpoint_with_fence(
                 self.runtime.read_run_authorized(snapshot.specification.run_id, actor),
                 actor,
                 execution,
                 attempt_id,
                 "result-persisted",
+                worker_id,
+                lease.leaseToken,
             )
             if execution.requiresHumanReview:
                 return self._pause_for_review(
@@ -446,6 +455,11 @@ class AutonomousWorkerService:
         ):
             raise AutonomousWorkerError("CONTEXT_ASSEMBLY_MISMATCH")
 
+        execution_fence = RuntimeExecutionFence(
+            task_id=snapshot.specification.task_id,
+            worker_id=worker_id,
+            lease_token=lease_token,
+        )
         if snapshot.state == AgentRunState.QUEUED:
             self._assert_live_policy(snapshot, actor, worker_id, lease_token)
             snapshot = self._handle(
@@ -453,6 +467,7 @@ class AutonomousWorkerService:
                 snapshot,
                 actor,
                 "claim",
+                execution_fence=execution_fence,
                 executor_reference=worker_id,
                 detail="Autonomous planning execution claimed",
             )
@@ -463,6 +478,7 @@ class AutonomousWorkerService:
                 snapshot,
                 actor,
                 "begin",
+                execution_fence=execution_fence,
                 attempt_id=attempt_id,
                 executor_reference=worker_id,
                 detail="Autonomous planning execution start requested",
@@ -496,6 +512,7 @@ class AutonomousWorkerService:
                 actor,
                 "start",
                 require_execution_enabled=True,
+                execution_fence=execution_fence,
                 attempt_id=attempt_id,
                 detail="Autonomous planning execution started",
             )
@@ -756,6 +773,8 @@ class AutonomousWorkerService:
             snapshot,
             actor,
             f"checkpoint-{name}",
+            require_execution_enabled=True,
+            execution_fence=self._checkpoint_execution_fence.get(),
             checkpoint_id=f"checkpoint-{execution.executionId[-32:]}-{name}",
             attempt_id=attempt_id,
             state_reference=f"model-execution:{execution.executionId}:{name}",
@@ -765,6 +784,27 @@ class AutonomousWorkerService:
                 "stage": name,
             },
         )
+
+    def _checkpoint_with_fence(
+        self,
+        snapshot: AgentRunSnapshot,
+        actor: RuntimeActorContext,
+        execution: ModelExecutionResult,
+        attempt_id: str,
+        name: str,
+        worker_id: str,
+        lease_token: str,
+    ) -> AgentRunSnapshot:
+        fence = RuntimeExecutionFence(
+            task_id=snapshot.specification.task_id,
+            worker_id=worker_id,
+            lease_token=lease_token,
+        )
+        token = self._checkpoint_execution_fence.set(fence)
+        try:
+            return self._checkpoint(snapshot, actor, execution, attempt_id, name)
+        finally:
+            self._checkpoint_execution_fence.reset(token)
 
     def _finalize(
         self,
@@ -1102,7 +1142,7 @@ class AutonomousWorkerService:
     async def _recover_finalization(
         self, worker_id: str, actor: RuntimeActorContext
     ) -> ModelExecutionResult | None:
-        for page in self.executions.iter_recoverable_result_pages():
+        for page in self.executions.iter_recoverable_result_pages(skip_corrupt=True):
             for execution in page:
                 try:
                     recovered = self._recover_finalization_candidate(
@@ -1290,6 +1330,7 @@ class AutonomousWorkerService:
         actor: RuntimeActorContext,
         suffix: str,
         require_execution_enabled: bool = False,
+        execution_fence: RuntimeExecutionFence | None = None,
         **fields: Any,
     ) -> AgentRunSnapshot:
         command_id = (
@@ -1307,6 +1348,7 @@ class AutonomousWorkerService:
             command,
             actor,
             require_execution_enabled=require_execution_enabled,
+            execution_fence=execution_fence,
         )
         if result.snapshot is None:
             raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
