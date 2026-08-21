@@ -17,9 +17,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.runtime_supervisor import api_child, cli
-from app.runtime_supervisor.autostart import status as autostart_status
-from app.runtime_supervisor.autostart import task_arguments, task_xml
+from app.runtime_supervisor import api_child, autostart, cli
+from app.runtime_supervisor.autostart import (
+    AutostartStatus,
+    task_arguments,
+    task_xml,
+)
+from app.runtime_supervisor.autostart import (
+    status as autostart_status,
+)
 from app.runtime_supervisor.backup import BackupCancelled, BackupError, create_backup, prune_backups
 from app.runtime_supervisor.cli import restart, start, stop
 from app.runtime_supervisor.config import (
@@ -1037,6 +1043,32 @@ def test_task_scheduler_query_timeout_becomes_bounded_status(
     assert result.supported is False
     assert result.installed is False
     assert result.detail == "Task Scheduler query failed"
+    assert result.query_failed is True
+
+
+def test_autostart_uninstall_rejects_failed_scheduler_query(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(tmp_path)
+    monkeypatch.setattr(
+        autostart,
+        "status",
+        lambda _config: AutostartStatus(
+            supported=False,
+            installed=False,
+            task_name=config.task_name,
+            detail="Task Scheduler query failed",
+            query_failed=True,
+        ),
+    )
+    monkeypatch.setattr(
+        autostart.subprocess,
+        "run",
+        lambda *_args, **_kwargs: pytest.fail("uninstall must not run after a failed query"),
+    )
+
+    with pytest.raises(RuntimeError, match="confirm Task Scheduler task state"):
+        autostart.uninstall(config)
 
 
 def test_doctor_is_read_only_and_reports_prerequisites(tmp_path: Path) -> None:

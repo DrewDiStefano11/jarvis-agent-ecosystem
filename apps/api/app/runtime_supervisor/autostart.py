@@ -19,6 +19,7 @@ class AutostartStatus:
     installed: bool
     task_name: str
     detail: str
+    query_failed: bool = False
 
 
 def _quoted_argument(value: str) -> str:
@@ -95,7 +96,13 @@ def status(config: SupervisorConfig | SupervisorCoordination) -> AutostartStatus
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        return AutostartStatus(False, False, config.task_name, "Task Scheduler query failed")
+        return AutostartStatus(
+            False,
+            False,
+            config.task_name,
+            "Task Scheduler query failed",
+            query_failed=True,
+        )
     if completed.returncode == 0:
         return AutostartStatus(True, True, config.task_name, "installed for current-user logon")
     return AutostartStatus(True, False, config.task_name, "not installed")
@@ -133,6 +140,8 @@ def install(config: SupervisorConfig) -> AutostartStatus:
 def uninstall(config: SupervisorConfig | SupervisorCoordination) -> AutostartStatus:
     executable = _schtasks()
     current = status(config)
+    if current.query_failed:
+        raise RuntimeError("could not confirm Task Scheduler task state before removal")
     if not current.supported or not current.installed:
         return current
     try:
@@ -148,4 +157,7 @@ def uninstall(config: SupervisorConfig | SupervisorCoordination) -> AutostartSta
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()
         raise RuntimeError(f"Task Scheduler removal failed: {detail}")
-    return status(config)
+    removed = status(config)
+    if removed.query_failed:
+        raise RuntimeError("could not verify Task Scheduler task removal")
+    return removed
