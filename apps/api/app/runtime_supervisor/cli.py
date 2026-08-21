@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import time
@@ -275,7 +276,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         }:
             return 1
         return 0
-    except (SupervisorConfigurationError, OSError, RuntimeError) as exc:
+    except (SupervisorConfigurationError, OSError, RuntimeError, sqlite3.Error) as exc:
         payload = {"error": exc.__class__.__name__, "detail": str(exc)}
         _emit(payload, as_json=args.json_output)
         return 2

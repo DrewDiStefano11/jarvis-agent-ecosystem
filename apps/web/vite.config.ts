@@ -5,10 +5,23 @@ import { loadEnv, type Plugin } from 'vite'
 export const buildEndpoint = (value: string | undefined, fallback: string): string =>
   value ?? fallback
 
+export const buildEndpoints = (env: Record<string, string | undefined>) => {
+  const host = env.API_HOST ?? '127.0.0.1'
+  const port = env.API_PORT ?? '8000'
+  const urlHost = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host
+  return {
+    apiBaseUrl: buildEndpoint(env.VITE_API_BASE_URL, `http://${urlHost}:${port}`),
+    webSocketUrl: buildEndpoint(env.VITE_WS_URL, `ws://${urlHost}:${port}/ws/events`)
+  }
+}
+
 const runtimeMetadata = (mode: string): Plugin => {
-  const env = loadEnv(mode, '.', 'VITE_')
-  const apiBaseUrl = buildEndpoint(env.VITE_API_BASE_URL, 'http://127.0.0.1:8000')
-  const webSocketUrl = buildEndpoint(env.VITE_WS_URL, 'ws://127.0.0.1:8000/ws/events')
+  const env = {
+    ...loadEnv(mode, '../..', ''),
+    ...loadEnv(mode, '../api', ''),
+    ...loadEnv(mode, '.', '')
+  }
+  const { apiBaseUrl, webSocketUrl } = buildEndpoints(env)
   return {
     name: 'jarvis-runtime-metadata',
     generateBundle() {

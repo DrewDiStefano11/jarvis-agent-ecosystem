@@ -1139,12 +1139,60 @@ def test_doctor_attributes_occupied_ports_to_each_managed_child(
         "app.runtime_supervisor.doctor.process_identity",
         lambda pid: "web-child" if pid == 222 else None,
     )
+    monkeypatch.setattr(
+        "app.runtime_supervisor.doctor.process_owns_port",
+        lambda pid, port: pid == 222 and port == config.web_port,
+    )
 
     checks = {item["name"]: item for item in run_doctor(config)["checks"]}
     assert checks["api_port"]["status"] == "fail"
     assert checks["api_port"]["detail"].endswith("in use")
     assert checks["web_port"]["status"] == "pass"
     assert checks["web_port"]["detail"].endswith("owned by running supervisor child web")
+
+
+def test_doctor_rejects_live_child_that_does_not_own_occupied_port(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(tmp_path)
+    monkeypatch.setattr("app.runtime_supervisor.doctor._port_available", lambda *_args: False)
+    monkeypatch.setattr(
+        "app.runtime_supervisor.doctor.load_status",
+        lambda _config: {
+            "ownership": "running",
+            "processes": {
+                "web": {
+                    "processState": "running",
+                    "pid": 222,
+                    "processIdentity": "web-child",
+                }
+            },
+        },
+    )
+    monkeypatch.setattr("app.runtime_supervisor.doctor.process_identity", lambda _pid: "web-child")
+    monkeypatch.setattr(
+        "app.runtime_supervisor.doctor.process_owns_port", lambda _pid, _port: False
+    )
+
+    checks = {item["name"]: item for item in run_doctor(config)["checks"]}
+    assert checks["web_port"]["status"] == "fail"
+    assert checks["web_port"]["detail"].endswith("in use")
+
+
+def test_manual_backup_returns_bounded_sqlite_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    config = make_config(tmp_path)
+    monkeypatch.setenv("JARVIS_SUPERVISOR_RUNTIME_HOME", str(config.runtime_home))
+    monkeypatch.setattr(
+        cli,
+        "create_backup",
+        lambda _config: (_ for _ in ()).throw(sqlite3.DatabaseError("corrupt database")),
+    )
+
+    assert cli.main(["--repository", str(config.repository), "--json", "backup"]) == 2
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {"error": "DatabaseError", "detail": "corrupt database"}
 
 
 def test_ordered_start_waits_for_api_before_web(tmp_path: Path) -> None:

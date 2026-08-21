@@ -15,6 +15,7 @@ from app.runtime_supervisor.health import probe_http
 from app.runtime_supervisor.io import read_json, verified_runtime_home
 from app.runtime_supervisor.ownership import process_identity, state_ownership
 from app.runtime_supervisor.status import load_status
+from app.runtime_supervisor.supervisor import process_owns_port
 
 
 def _check(name: str, status: str, detail: str) -> dict[str, str]:
@@ -170,6 +171,7 @@ def run_doctor(config: SupervisorConfig) -> dict[str, Any]:
                 and isinstance(pid, int)
                 and isinstance(identity, str)
                 and process_identity(pid) == identity
+                and process_owns_port(pid, port)
             )
         status = "pass" if available or child_owned else "fail"
         detail = (
