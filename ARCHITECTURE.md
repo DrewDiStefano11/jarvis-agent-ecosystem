@@ -31,3 +31,17 @@ The Phase 2B Context Assembler is an integrated deterministic service, not a run
 The repository persists assemblies in the same command transaction as their append-only audit, idempotent response, and outbox event. This makes recovery binary: no row exists before commit; after commit the assembly is complete and replayable. Context metrics are projections of persisted assemblies. See [docs/context-assembler.md](docs/context-assembler.md).
 
 These are planned seams, not active features. Real adapters must remain unavailable until their own threat models, approval policies, fixtures, and integration tests exist.
+
+## Runtime supervision
+
+The Windows-first runtime supervisor is infrastructure outside FastAPI. It owns explicit child
+process definitions for the stable loopback API, built local web UI, and the already opt-in autonomous
+worker. Existing HTTP health and system-status contracts remain authoritative; the supervisor does
+not create a second emergency-stop or application-health source of truth.
+
+A lifetime OS lock plus PID creation identity establishes singleton ownership. Windows Job Object
+membership provides orphan containment, while normal shutdown remains bounded and graceful. Logs,
+backup artifacts, ownership state, and known-good SHA metadata live in a marker-validated per-user
+runtime home outside the repository. SQLite backups use the online backup API and atomic publication.
+Task Scheduler can start the supervisor at current-user logon without a stored password. See
+[runtime supervisor](docs/runtime-supervisor.md).
