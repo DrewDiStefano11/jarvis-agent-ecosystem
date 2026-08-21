@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
 import pytest
@@ -306,6 +306,19 @@ def test_configuration_rejects_remote_frontend_endpoints(
 @pytest.mark.parametrize(
     ("name", "value"),
     [
+        ("WEB_ORIGIN", "http://["),
+        ("VITE_API_BASE_URL", "http://["),
+        ("VITE_WS_URL", "ws://["),
+    ],
+)
+def test_configuration_wraps_malformed_frontend_urls(tmp_path: Path, name: str, value: str) -> None:
+    with pytest.raises(SupervisorConfigurationError, match=name):
+        make_config(tmp_path, **{name: value})
+
+
+@pytest.mark.parametrize(
+    ("name", "value"),
+    [
         ("WEB_ORIGIN", "http://localhost:5173"),
         ("WEB_ORIGIN", "http://127.0.0.1:5174"),
         ("VITE_API_BASE_URL", "http://127.0.0.1:8001"),
@@ -550,6 +563,18 @@ def test_runtime_home_rejects_windows_remote_and_device_paths(
 ) -> None:
     with pytest.raises(SupervisorConfigurationError, match="must be local"):
         make_config(tmp_path, JARVIS_SUPERVISOR_RUNTIME_HOME=runtime_home)
+
+
+def test_runtime_home_rejects_mapped_windows_network_drive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "app.runtime_supervisor.config._windows_drive_type",
+        lambda path: 4 if PureWindowsPath(str(path)).drive == "Z:" else 3,
+    )
+
+    with pytest.raises(SupervisorConfigurationError, match="must be local"):
+        make_config(tmp_path, JARVIS_SUPERVISOR_RUNTIME_HOME=r"Z:\Jarvis")
 
 
 def test_runtime_home_refuses_nonempty_or_corrupt_unowned_directory(tmp_path: Path) -> None:

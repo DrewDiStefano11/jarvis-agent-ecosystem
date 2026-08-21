@@ -17,6 +17,7 @@ from app.core.config import Settings
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
+WINDOWS_DRIVE_REMOTE = 4
 
 
 class SupervisorConfigurationError(ValueError):
@@ -93,8 +94,13 @@ def _float(
 
 
 def _require_loopback_url(value: str, name: str, schemes: set[str]) -> str:
-    parsed = urlsplit(value)
-    normalized_host = parsed.hostname.rstrip(".").lower() if parsed.hostname else ""
+    try:
+        parsed = urlsplit(value)
+        normalized_host = parsed.hostname.rstrip(".").lower() if parsed.hostname else ""
+    except ValueError as exc:
+        raise SupervisorConfigurationError(
+            f"{name} must be a credential-free loopback URL"
+        ) from exc
     loopback = _is_loopback_host(normalized_host)
     if (
         parsed.scheme not in schemes
@@ -152,14 +158,38 @@ def _owned_frontend_url(
     return f"{scheme}://{_url_host(host)}:{port}{suffix}"
 
 
+def _windows_drive_type(path: str | Path) -> int | None:
+    anchor = str(PureWindowsPath(str(path)).anchor)
+    if os.name != "nt" or not anchor or anchor.startswith("\\\\"):
+        return None
+    try:
+        import ctypes
+
+        get_drive_type = ctypes.WinDLL("kernel32", use_last_error=True).GetDriveTypeW
+        get_drive_type.argtypes = [ctypes.c_wchar_p]
+        get_drive_type.restype = ctypes.c_uint
+        return int(get_drive_type(anchor))
+    except (AttributeError, OSError) as exc:
+        raise SupervisorConfigurationError(
+            "could not verify that supervisor storage paths are local"
+        ) from exc
+
+
+def _is_remote_windows_path(path: str | Path) -> bool:
+    anchor = str(PureWindowsPath(str(path)).anchor)
+    return anchor.startswith("\\\\") or _windows_drive_type(path) == WINDOWS_DRIVE_REMOTE
+
+
 def _coordination_home(repository: Path, values: dict[str, str]) -> Path:
     base = values.get("LOCALAPPDATA") or values.get("XDG_STATE_HOME")
     if not base:
         base = str(Path.home() / ".local" / "state")
-    if str(PureWindowsPath(base).anchor).startswith("\\\\"):
+    if _is_remote_windows_path(base):
         raise SupervisorConfigurationError("supervisor storage paths must be local")
     install_id = _repository_digest(repository)
     result = (Path(base) / "Jarvis" / "Supervisor" / install_id).resolve()
+    if _is_remote_windows_path(result):
+        raise SupervisorConfigurationError("supervisor storage paths must be local")
     anchor = Path(result.anchor).resolve()
     if result == anchor or result == repository or repository in result.parents:
         raise SupervisorConfigurationError(
@@ -177,12 +207,14 @@ def _safe_runtime_home(repository: Path, values: dict[str, str], coordination_ho
     configured = values.get("JARVIS_SUPERVISOR_RUNTIME_HOME", "").strip()
     if not configured:
         return coordination_home
-    if str(PureWindowsPath(configured).anchor).startswith("\\\\"):
+    if _is_remote_windows_path(configured):
         raise SupervisorConfigurationError("JARVIS_SUPERVISOR_RUNTIME_HOME must be local")
     configured_path = Path(configured).expanduser()
     if not configured_path.is_absolute():
         raise SupervisorConfigurationError("JARVIS_SUPERVISOR_RUNTIME_HOME must be absolute")
     result = configured_path.resolve()
+    if _is_remote_windows_path(result):
+        raise SupervisorConfigurationError("JARVIS_SUPERVISOR_RUNTIME_HOME must be local")
     anchor = Path(result.anchor).resolve()
     if result == anchor or result == repository or repository in result.parents:
         raise SupervisorConfigurationError(
