@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import App from '../src/App'
 import { AppStoreProvider } from '../src/state/AppStore'
 import type { Agent, Approval, Artifact, AuditEvent, Department, Notification, SystemStatus, Task } from '../src/types/contracts'
@@ -128,4 +128,85 @@ test('explicit task setup selects the provisioned identity without queueing infe
   endpointData['/api/tasks'] = tasks
   delete endpointData['/api/identity/agents']; delete endpointData['/api/local-planning/setup']; delete endpointData['/api/agent-runtime/runs']
  }
+})
+
+describe('planning worker identity', () => {
+ const worker = { enabled: true, modelExecutionMode: 'local_only', workerActorId: 'worker-a', status: 'healthy', reasonCode: null, activeExecutionCount: 0, queuedEligibleRuntimeCount: 0, completedExecutionCount: 0, failedExecutionCount: 0, reviewRequiredCount: 0, providerReady: true, lastWorkerHeartbeat: now, lastSuccessfulExecutionAt: null }
+ const originalCrypto = globalThis.crypto
+ beforeEach(() => {
+  endpointData['/api/tasks'] = tasks.map(task => ({ ...task, status: 'queued' }))
+  endpointData['/api/system/status'] = { ...system, autonomousWorker: worker }
+  endpointData['/api/identity/agents'] = ['worker-a', 'actor-b'].map(id => ({ id, display_name: id === 'worker-a' ? 'Configured worker' : 'Other operator', stable_key: id, lifecycle_state: 'active', is_enabled: true, operational_status: 'idle', agent_type: 'worker' }))
+  endpointData['/api/agent-runtime/runs'] = { items: [], next_offset: null, total_count: 0 }
+  endpointData['/api/model-executions'] = []
+  vi.stubGlobal('crypto', { randomUUID: () => 'planning-test', subtle: { digest: async () => new Uint8Array([1, 2]).buffer } })
+ })
+ afterEach(() => {
+  endpointData['/api/tasks'] = tasks
+  endpointData['/api/system/status'] = system
+  delete endpointData['/api/identity/agents']; delete endpointData['/api/agent-runtime/runs']; delete endpointData['/api/model-executions']
+  vi.stubGlobal('crypto', originalCrypto)
+ })
+ const openPlanning = async () => {
+  window.history.pushState({}, '', '/runtime'); renderApp()
+  await waitFor(() => expect(screen.getByLabelText('Act as local identity')).toHaveTextContent('Other operator'))
+  await userEvent.selectOptions(screen.getByLabelText('Act as local identity'), 'actor-b')
+  await userEvent.selectOptions(screen.getByLabelText('Target agent'), 'actor-b')
+  await userEvent.selectOptions(screen.getByLabelText('Task and history'), tasks[0]!.id)
+ }
+ const acceptPlanningCommands = (failQueue = false) => {
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+   const path = new URL(String(input)).pathname
+   if (init?.method === 'POST' && path === '/api/context/assemblies') return { ok: true, status: 200, json: async () => ({ data: { id: 'context-test', status: 'completed' } }) } as Response
+   if (init?.method === 'POST' && path === '/api/agent-runtime/commands') {
+    const body = JSON.parse(String(init.body))
+    if (failQueue && body.command_type === 'queue') return { ok: false, status: 503, json: async () => ({ error: { code: 'UNAVAILABLE', message: 'Queue response unavailable' } }) } as Response
+    return { ok: true, status: 200, json: async () => ({ data: { snapshot: { specification: { run_id: 'run-planning-test' }, version: 1, state: body.command_type === 'queue' ? 'queued' : 'created' } } }) } as Response
+   }
+   return original(input, init)
+  })
+ }
+ test('blocks another submitter, then queues as the explicitly selected worker without changing the target or grants', async () => {
+  acceptPlanningCommands()
+  await openPlanning()
+  expect(screen.getByText(/Select the configured worker identity to queue a plan/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Queue local plan' })).toBeDisabled()
+  await userEvent.click(screen.getByRole('button', { name: 'Queue local plan' }))
+  expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+  await userEvent.click(screen.getByRole('button', { name: 'Use configured worker identity' }))
+  expect(screen.getByLabelText('Act as local identity')).toHaveValue('worker-a')
+  expect(screen.getByLabelText('Target agent')).toHaveValue('actor-b')
+  await userEvent.click(screen.getByRole('button', { name: 'Queue local plan' }))
+  expect(await screen.findByText(/Queued run-planning-test/)).toBeInTheDocument()
+  const commands = vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url).endsWith('/api/agent-runtime/commands') && init?.method === 'POST')
+  expect(commands).toHaveLength(2)
+  for (const [, init] of commands) {
+   expect(init?.headers).toMatchObject({ 'X-Jarvis-Actor-Id': 'worker-a' })
+   expect(JSON.parse(String(init?.body))).toMatchObject({ actor_reference: 'worker-a' })
+  }
+  expect(JSON.parse(String(commands[0]![1]?.body)).specification.agent_id).toBe('actor-b')
+  expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('/api/local-planning/setup'))).toBe(false)
+ })
+ test('does not allow global readiness to enable submission when worker identity is unconfigured', async () => {
+  endpointData['/api/system/status'] = { ...system, autonomousWorker: { ...worker, workerActorId: null } }
+  await openPlanning()
+  expect(screen.getByText(/Configure JARVIS_AUTONOMOUS_WORKER_ACTOR_ID/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Queue local plan' })).toBeDisabled()
+  expect(screen.queryByRole('button', { name: 'Use configured worker identity' })).not.toBeInTheDocument()
+ })
+ test('blocks retrying an old submission when the configured worker changes', async () => {
+  acceptPlanningCommands(true)
+  await openPlanning()
+  await userEvent.click(screen.getByRole('button', { name: 'Use configured worker identity' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Queue local plan' }))
+  expect(await screen.findByText('Queue response unavailable')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Retry same submission' })).toBeEnabled()
+  endpointData['/api/system/status'] = { ...system, autonomousWorker: { ...worker, workerActorId: 'actor-b' } }
+  act(() => FakeWebSocket.instances[0]!.emit({ eventId: 'worker-change', schemaVersion: '1', eventType: 'noop', timestamp: now, sequenceNumber: 1, correlationId: 'worker-change', taskId: null, agentId: null, source: 'test', payload: {} }))
+  expect(await screen.findByText(/The configured worker identity changed/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Retry same submission' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Use configured worker identity' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Clear submission form' })).toBeEnabled()
+ })
 })

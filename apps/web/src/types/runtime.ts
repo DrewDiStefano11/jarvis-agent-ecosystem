@@ -33,6 +33,7 @@ export interface ModelExecution {
 }
 export interface AutonomousStatus {
   enabled: boolean; modelExecutionMode: string; status: string; reasonCode: string | null
+  workerActorId: string | null
   activeExecutionCount: number; queuedEligibleRuntimeCount: number; completedExecutionCount: number
   failedExecutionCount: number; reviewRequiredCount: number; providerReady: boolean
   lastWorkerHeartbeat: string | null; lastSuccessfulExecutionAt: string | null

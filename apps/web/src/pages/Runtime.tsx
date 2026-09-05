@@ -15,14 +15,28 @@ export function Runtime() {
   const worker = system?.autonomousWorker
   useEffect(() => { void loadIdentities().catch(error => setMessage(error instanceof Error ? error.message : 'Cannot load identities')) }, [loadIdentities])
   const active = identities.filter(identity => identity.lifecycle_state === 'active' && identity.is_enabled)
+  const workerActorId = worker?.workerActorId
+  const workerActor = active.find(identity => identity.id === workerActorId)
   const task = tasks.find(item => item.id === taskId)
+  const identityBlock = !workerActorId
+    ? 'Configure JARVIS_AUTONOMOUS_WORKER_ACTOR_ID and restart the local services before queueing a plan.'
+    : !workerActor
+      ? 'The configured worker identity is unavailable or inactive. Check its identity configuration before queueing a plan.'
+      : (pending?.actorId ?? actorId) !== workerActorId
+        ? pending
+          ? 'The configured worker identity changed. Inspect history and clear this submission before queueing with the current worker.'
+          : 'Select the configured worker identity to queue a plan. Other identities remain available for authorized history.'
+        : null
+  const canQueue = !busy && !identityBlock && Boolean(actorId && targetId && task)
+    && (Boolean(pending) || Boolean(task && ['queued', 'retrying'].includes(task.status)))
+    && Boolean(worker?.enabled && worker.providerReady) && !system?.emergencyStop
   const prepare = async () => {
     if (!task || busy) return
     setBusy(true)
     setMessage('')
     try {
       const result = await request<{ actorId: string; workerActorConfigured: boolean }>('/api/local-planning/setup', { method: 'POST', body: JSON.stringify({ taskId: task.id }) })
-      await loadIdentities()
+      await Promise.all([loadIdentities(), refresh()])
       selectActor(result.actorId)
       setTargetId(result.actorId)
       setMessage(result.workerActorConfigured ? 'Local planner prepared for this task. Queue the plan when ready.' : `Local planner prepared. Set JARVIS_AUTONOMOUS_WORKER_ACTOR_ID=${result.actorId} in the local worker configuration, then start the configured worker.`)
@@ -31,7 +45,7 @@ export function Runtime() {
     } finally { setBusy(false) }
   }
   const queue = async () => {
-    if (!task || !actorId || !targetId || busy) return
+    if (!task || !actorId || !targetId || !canQueue) return
     setBusy(true)
     const submission = pending ?? newPlanningSubmission(task, actorId, targetId)
     setPending(submission)
@@ -49,20 +63,23 @@ export function Runtime() {
     <header className="page-title"><div><p className="eyebrow">Local autonomous execution</p><h1>Planning workspace</h1><p>Queue a bounded model-assisted plan, follow its review, and inspect durable results.</p></div></header>
     <section className="panel"><h2>Worker readiness</h2><Status value={worker?.status ?? 'unknown'}/>
       <p>{worker?.enabled ? 'Local worker enabled' : 'Worker disabled — enable it using the local setup guide.'} · {worker?.providerReady ? 'Provider configured' : 'Provider not configured'}</p>
+      <p>Configured worker identity: {workerActor?.display_name ?? workerActorId ?? 'Not configured'}{workerActor && <> · <code>{workerActor.id}</code></>}</p>
       {worker?.reasonCode && <p role="status">{worker.reasonCode}</p>}
       <dl className="details-grid"><div><dt>Queued eligible</dt><dd>{worker?.queuedEligibleRuntimeCount ?? '—'}</dd></div><div><dt>Executing</dt><dd>{worker?.activeExecutionCount ?? '—'}</dd></div><div><dt>Completed</dt><dd>{worker?.completedExecutionCount ?? '—'}</dd></div><div><dt>Needs review</dt><dd>{worker?.reviewRequiredCount ?? '—'}</dd></div></dl>
       <p className="muted">Planning produces advice. It cannot run tools, modify files or take external actions. Provider readiness describes configuration; a successful inference is verified in execution history.</p>
     </section>
     <section className="panel"><h2>Queue a local plan</h2>
-      <p>Use an existing authorized identity, or explicitly prepare the local planner for the selected task. <Link to="/tasks">Create a task</Link> first.</p>
+      <p>Queue as the configured worker identity, with its existing task permissions, or explicitly prepare it for the selected task. The target agent can be a different active identity. <Link to="/tasks">Create a task</Link> first.</p>
       <div className="filters"><label>Act as local identity<select value={actorId} disabled={busy || Boolean(pending)} onChange={event => selectActor(event.target.value)}><option value="">Select identity</option>{active.map(identity => <option key={identity.id} value={identity.id}>{identity.display_name}</option>)}</select></label>
       <label>Target agent<select value={targetId} disabled={busy || Boolean(pending)} onChange={event => setTargetId(event.target.value)}><option value="">Select target</option>{active.map(identity => <option key={identity.id} value={identity.id}>{identity.display_name}</option>)}</select></label>
       <label>Task and history<select value={taskId} disabled={busy || Boolean(pending)} onChange={event => setTaskId(event.target.value)}><option value="">Select task</option>{tasks.map(item => <option key={item.id} value={item.id}>{item.title} · {item.status}</option>)}</select></label></div>
       {!active.length && <p>No active identities found. Select a task and prepare its local planner below.</p>}
+      {identityBlock && <p role="status">{identityBlock}</p>}
+      {workerActor && actorId !== workerActor.id && <p><button className="secondary" disabled={busy || Boolean(pending)} onClick={() => selectActor(workerActor.id)}>Use configured worker identity</button></p>}
       {task && <blockquote>{task.description}</blockquote>}
       <p><button className="secondary" disabled={busy || Boolean(pending) || !task || !['queued', 'retrying'].includes(task.status)} onClick={() => void prepare()}>Prepare local planner for this task</button></p>
       <p className="muted">This explicit setup grants runtime permissions for only this task. It preserves existing denials and never grants tools or enables a model.</p>
-      <button className="primary" disabled={busy || !actorId || !targetId || !task || (!pending && !['queued', 'retrying'].includes(task.status)) || !worker?.enabled || !worker.providerReady || Boolean(system?.emergencyStop)} onClick={() => void queue()}>{busy ? 'Submitting…' : pending ? 'Retry same submission' : 'Queue local plan'}</button>
+      <button className="primary" disabled={!canQueue} onClick={() => void queue()}>{busy ? 'Submitting…' : pending ? 'Retry same submission' : 'Queue local plan'}</button>
       {pending && !busy && <><p>Retry reuses the same context and command IDs. Inspect history before starting different work.</p><button className="secondary" onClick={() => { setPending(null); setMessage('Form cleared. Any already-created runtime remains in history; clearing the form does not cancel work.') }}>Clear submission form</button></>}
       {message && <p role="status">{message}</p>}
     </section>

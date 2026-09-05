@@ -1,5 +1,9 @@
 # Goal Mode transfer — 2026-09-05
 
+> Historical handoff. The subsequent authorized continuation is recorded in
+> [continuation.md](continuation.md); its merge authority supersedes this file's
+> old prohibition on merging. Preserve this record as provenance.
+
 ## Read this first
 
 The user explicitly requested a transfer/progress report. This is a handoff, **not a completion declaration**. Continue the original Goal Mode mission in this repository. Do not create another Hub, merge PRs, force-push shared review branches, drop commits, remove safeguards/tests, fabricate activity, or claim mock inference is a real model. User authorization covers normal engineering decisions, pushing the Goal Mode branch, and requesting fresh Codex reviews after exact-head CI is green (maximum five complete review loops). Zero review loops have been requested so far.

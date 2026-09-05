@@ -65,6 +65,7 @@ from app.models.domain import (
     SimulatorControl,
     SystemStatus,
     Task,
+    TypedApiResponse,
 )
 from app.repositories.sqlalchemy import IdempotencyResult, SqlAlchemyRepository
 from app.repositories.task_leases import TaskLeaseRepository
@@ -523,7 +524,7 @@ def create_app(
             database_reachable,
             schema_current,
             provider_ready,
-        )
+        ).model_copy(update={"workerActorId": settings.autonomous_worker_actor_id.strip() or None})
         runtime_degraded = runtime_persistence.get("status", "healthy") != "healthy"
         degraded = (
             repository._system.recovery_status == "required"
@@ -613,7 +614,7 @@ def create_app(
             **snapshot["lease_counts"],
         )
 
-    @app.get("/api/system/status", response_model=ApiResponse)
+    @app.get("/api/system/status", response_model=TypedApiResponse[SystemStatus])
     async def get_system_status() -> ApiResponse:
         return ApiResponse(data=system_status())
 

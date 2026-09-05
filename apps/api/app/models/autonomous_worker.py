@@ -97,6 +97,10 @@ class ModelExecutionResult(AutonomousWorkerContract):
 class AutonomousWorkerStatus(AutonomousWorkerContract):
     enabled: bool
     modelExecutionMode: Literal["disabled", "local_only"]
+    workerActorId: str | None = Field(
+        default=None,
+        description="Configured local worker identity; configuration does not establish task access.",
+    )
     activeExecutionCount: int = 0
     queuedEligibleRuntimeCount: int = 0
     completedExecutionCount: int = 0

@@ -82,10 +82,16 @@ The Office uses the real prototype artwork and shares Hub state.
    .\.venv\Scripts\python.exe -m app.autonomous_worker
    ```
 
-5. Open **Planning**, select the task, prepare its planner (or select an already-authorized actor and target),
+5. Open **Planning**, select the task, prepare its planner (or select the already-authorized configured worker identity and an active target),
    and choose **Queue local plan**. This explicitly submits the
    task text as operator-approved context. Context checks may require review
    before any execution is queued.
+   **Worker readiness** shows the identity used by the running worker. Queueing
+   requires that same identity in **Act as local identity**; other identities
+   remain available for reading authorized history. **Use configured worker
+   identity** changes only the selected actor, and the target may be different.
+   Selecting an actor grants no permissions: use explicit task setup when needed,
+   and resolve any existing denial through the normal authorization policy.
 6. Inspect runtime history and persisted model results on the same page. The
    worker validates and deterministically reviews the result. Bounded revisions
    may run; exhausted or unsafe work is visibly failed or paused for human review.
