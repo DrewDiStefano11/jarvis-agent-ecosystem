@@ -39,6 +39,8 @@ export function Office() {
   const entity = floor.entities.find(item => item.id === selected)
   const worker = system?.autonomousWorker
   const snapshot = office.snapshot
+  const workingCount = snapshot?.placements.filter(item => item.activity === 'working').length ?? 0
+  const waitingCount = snapshot?.placements.filter(item => item.activity === 'waiting').length ?? 0
   const placement = snapshot?.placements.find(item => item.identityId === identityId)
   const identity = runtime.identities.find(item => item.id === identityId)
   const destinations = snapshot?.catalog.stations.filter(station => !placement || (placement.motion?.stoppedAt ? station.id === placement.motion.destinationId : snapshot.catalog.routes.some(route => route.originId === placement.stationId && route.destinationId === station.id))) ?? []
@@ -64,7 +66,7 @@ export function Office() {
       <div className="office-caption"><span>Floor 1 · {Math.round(transform.scale * 100)}% · drag to pan, scroll or pinch to zoom</span><label><input type="checkbox" checked={candidate} onChange={event => { setCandidate(event.target.checked); setSelected(null); setError('') }}/> Inspect candidate geometry</label></div>
       {candidate && <section className="panel"><h2>Unverified floor registration</h2><p>The full candidate floor is not approved for live navigation. Measured registration and collision checks support only the six stations in the live office controls; other geometry remains under review.</p><div className="chips">{FLOOR1_CANDIDATE_LAYER_CONTROLS.map(control => <label key={control.category}><input type="checkbox" checked={layers.has(control.layer)} onChange={() => setLayers(previous => { const next = new Set(previous); if (next.has(control.layer)) next.delete(control.layer); else next.add(control.layer); return next })}/>{control.label}</label>)}</div><label>Inspect region<select value={selected ?? ''} onChange={event => setSelected(event.target.value || null)}><option value="">Select region</option>{floor.entities.filter(item => layers.has(item.sourceLayer)).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>{entity && <div><h3>{entity.name}</h3><p>{entity.type.replaceAll('_', ' ')} · {entity.accessState ? `Access: ${entity.accessState}` : 'Candidate position'}</p>{entity.seatPriority && <p>Seat priority: {entity.seatPriority === 'yellow' ? 'priority' : 'standard'}</p>}<button className="secondary" onClick={() => setFocus(value => value + 1)}>Focus selected region</button></div>}</section>}
       {error && <p role="alert">{error}</p>}
-    </section><aside className="panel office-workforce"><h2>Local workforce</h2><Status value={worker?.status ?? 'unknown'}/><p>{worker?.activeExecutionCount ?? 0} executing · {worker?.reviewRequiredCount ?? 0} need review</p>
+    </section><aside className="panel office-workforce"><h2>Local workforce</h2><Status value={worker?.status ?? 'unknown'}/><p>{snapshot ? `${workingCount} working · ${waitingCount} waiting on this floor` : 'Office activity unavailable.'}</p>
       <p className="muted">Assign a real identity to a verified desk. Moves follow the original office paths. Cross-room travel is unavailable; one move reserves the aisle until it stops or arrives.</p>
       {snapshot?.emergencyStop && <p role="alert">Emergency stop is active. Office moves remain stopped until you resume the system and explicitly continue a move.</p>}
       {office.error && <p role="alert">{office.error}</p>}

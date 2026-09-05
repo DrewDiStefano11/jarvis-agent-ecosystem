@@ -19,3 +19,8 @@ Phase 2B extends the same database and transaction model with `workers`, `task_l
 Lease acquisition, renewal, release, completion, failure, cancellation, and expiration each commit the task row/payload, attempt record, append-only audit, system sequence, and outbox envelope together. Routes contain no SQL. Lease tokens are treated as capabilities and are not stored in emitted payloads beyond a SHA-256 fingerprint. Short write transactions, WAL, and the existing busy timeout bound contention for concurrent local workers.
 
 Back up only while the API is stopped, or use a SQLite-aware backup tool. Never copy only a live `.db` file while WAL sidecars may contain committed pages. Do not store credentials in this database.
+
+The optional runtime supervisor provides the repository's supported online operational backup path.
+It uses SQLite's backup API against the configured database, validates a temporary copy before atomic
+publication, records hash/revision/SHA metadata, and applies bounded retention only inside its
+marker-validated runtime home. It does not restore or rewrite the live database.

@@ -1,9 +1,15 @@
-import { act, renderHook, waitFor } from '@testing-library/react'
+import { act, render, renderHook, screen, waitFor } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
 import { afterEach, expect, test, vi } from 'vitest'
 import { officePosition } from '../src/state/officeMotion'
 import { useOfficeState } from '../src/state/useOfficeState'
 import type { OfficePlacement, OfficeSnapshot } from '../src/types/office'
 import catalog from '../../api/app/office/catalog.json'
+import { Office } from '../src/pages/Office'
+import { useAppStore } from '../src/state/AppStore'
+
+vi.mock('../src/state/AppStore', () => ({ useAppStore: vi.fn() }))
+vi.mock('../src/office-reference/components/office/OfficeViewport', () => ({ OfficeViewport: () => null }))
 
 const now = '2026-09-05T12:00:00Z'
 const placement: OfficePlacement = { identityId: 'real-identity', displayName: 'Local planner', lifecycleState: 'active', enabled: true, stationId: 'POSITION_022', spriteId: 'agent-sheet-01', position: { x: 100, y: 100 }, motion: { originId: 'POSITION_022', destinationId: 'POSITION_028', points: [{ x: 100, y: 100 }, { x: 200, y: 100 }, { x: 200, y: 200 }], doorIds: [], startedAt: now, durationMs: 2000, stoppedAt: null }, movementState: 'moving', activity: 'working', version: 2, updatedAt: now }
@@ -70,4 +76,20 @@ test('rejected stale command refreshes authoritative placement and remains an ac
   expect(result.current.error).toMatch(/Office state changed/)
   await act(() => result.current.load())
   expect(result.current.error).toMatch(/Office state changed/)
+})
+
+test('floor activity counts follow canonical placements despite unrelated worker totals and update on refresh', () => {
+  const current = {
+    agents: [], tasks: [], selectAgent: vi.fn(), selectTask: vi.fn(), lastSync: null, connection: 'connected',
+    runtime: { identities: [], actorId: '', runs: [], loadIdentities: vi.fn().mockResolvedValue([]) },
+    system: { autonomousWorker: { status: 'healthy', activeExecutionCount: 9, reviewRequiredCount: 7 } },
+    office: { snapshot: { ...snapshot, placements: ['working', 'working', 'waiting', 'queued', 'idle', 'failed', 'completed'].map((activity, index) => ({ ...placement, identityId: `identity-${index}`, activity })) }, load: vi.fn().mockResolvedValue(undefined), busy: false, error: null, pending: null },
+  }
+  vi.mocked(useAppStore).mockImplementation(() => current as unknown as ReturnType<typeof useAppStore>)
+  const { rerender } = render(<MemoryRouter><Office/></MemoryRouter>)
+  expect(screen.getByText('2 working · 1 waiting on this floor')).toBeInTheDocument()
+  expect(screen.queryByText(/9 executing|7 need review/)).not.toBeInTheDocument()
+  current.office.snapshot = { ...snapshot, placements: [{ ...placement, activity: 'completed' }] }
+  rerender(<MemoryRouter><Office/></MemoryRouter>)
+  expect(screen.getByText('0 working · 0 waiting on this floor')).toBeInTheDocument()
 })

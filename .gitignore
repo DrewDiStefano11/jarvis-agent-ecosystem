@@ -15,6 +15,10 @@ node_modules/
 dist/
 coverage/
 .coverage
+runtime-supervisor/
+backups/
+*.pid
+*.partial
 apps/web/public/mockServiceWorker.js
 apps/web/vite.config.js
 apps/web/vite.config.d.ts

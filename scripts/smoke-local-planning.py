@@ -31,6 +31,8 @@ def free_port():
 
 def main():
     calls = []
+    office_mode = os.environ.get("JARVIS_SMOKE_OFFICE") == "true"
+    browser_mode = office_mode or os.environ.get("JARVIS_SMOKE_BROWSER") == "true"
     result = {
         "schemaVersion": "1.0",
         "summary": "Deterministic transport fixture completed.",
@@ -74,7 +76,7 @@ def main():
             calls.append(
                 json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             )
-            if os.environ.get("JARVIS_SMOKE_OFFICE") == "true":
+            if office_mode:
                 time.sleep(3)  # Make real fixture execution observable in the office.
             self.reply(
                 {
@@ -98,7 +100,6 @@ def main():
         with temporary as directory:
             temp = Path(directory)
             port = free_port()
-            browser_mode = os.environ.get("JARVIS_SMOKE_BROWSER") == "true"
             web_port = free_port()
             ui_url = f"http://127.0.0.1:{web_port}"
             env = {
@@ -263,7 +264,7 @@ for (const name of ['client', 'planning']) {
                             time.sleep(0.05)
                     runner = ROOT / (
                         "scripts/smoke-office.cjs"
-                        if os.environ.get("JARVIS_SMOKE_OFFICE") == "true"
+                        if office_mode
                         else "scripts/smoke-browser.cjs"
                     )
                 completed = subprocess.run(
@@ -295,7 +296,9 @@ for (const name of ['client', 'planning']) {
                         + logs.read()
                     )
                 print(completed.stdout.strip())
-                expected_calls = 2 if browser_mode else 1
+                # The planning browser checks an original and a corrected task;
+                # the office browser observes one actual worker execution.
+                expected_calls = 2 if browser_mode and not office_mode else 1
                 assert len(calls) == expected_calls, (
                     f"Expected {expected_calls} inference requests, got {len(calls)}"
                 )

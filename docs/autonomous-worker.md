@@ -119,6 +119,10 @@ The configured actor is authenticated through `IdentityService`; the established
 
 Emergency stop blocks acquisition, model calls, result commit, and terminal completion. Runtime completion rechecks and locks the durable stop state inside the same ledger transaction as each terminal transition, closing the gap between the worker precheck and commit. A response that arrives after stop activation is discarded. Cancellation similarly blocks commit and enters the existing runtime cancellation boundary. Lost ownership abandons the active runtime attempt on a bounded best-effort basis and never stores generated output.
 
+An operating-system shutdown signal interrupts an active `run_once` await instead of waiting for the
+model timeout. The process then executes its existing finalizer to stop the durable worker
+registration and dispose the database engine within the supervisor's graceful-shutdown window.
+
 A valid result with `requiresHumanReview=true`, or exhausted output repair, pauses the runtime and moves the fenced task to `under_review`. Recovery preserves this branch even if the process exits immediately after result persistence. The model cannot approve itself or clear this state.
 
 A validated result that does not require human review is then evaluated by the deterministic local review policy described in `docs/planning-review-orchestration.md`. The structured outcome — accepted, one bounded revision, or escalation — is durably recorded as a runtime checkpoint for that exact attempt and governs the terminal transition. Generated text remains stored explanation and never authorizes anything.

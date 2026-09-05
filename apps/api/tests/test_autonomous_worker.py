@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ from app.agent_runtime.errors import (
     RuntimeActorInactiveError,
     RuntimePermissionDeniedError,
 )
-from app.autonomous_worker.__main__ import _run_once_resilient
+from app.autonomous_worker.__main__ import _run_once_or_stop, _run_once_resilient
 from app.autonomous_worker.errors import AutonomousWorkerError
 from app.core.config import Settings
 from app.core.errors import DomainError
@@ -84,6 +85,64 @@ def test_worker_dependency_composition_skips_api_recovery(monkeypatch: pytest.Mo
 
     assert worker_main._create_worker_app() is sentinel
     assert received == {"recover_interrupted_workflow": False}
+
+
+def test_worker_installs_sigbreak_fallback_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    sigbreak = 21
+    installed: dict[int, object] = {}
+    callbacks: list[object] = []
+
+    class FakeLoop:
+        def add_signal_handler(self, _signal_name, _callback) -> None:
+            raise NotImplementedError
+
+        def call_soon_threadsafe(self, callback) -> None:
+            callbacks.append(callback)
+            callback()
+
+    class FakeStop:
+        is_set = False
+
+        def set(self) -> None:
+            self.is_set = True
+
+    stop = FakeStop()
+    monkeypatch.setattr(worker_main.signal, "SIGBREAK", sigbreak, raising=False)
+    monkeypatch.setattr(
+        worker_main.signal,
+        "signal",
+        lambda signal_name, handler: installed.__setitem__(signal_name, handler),
+    )
+
+    worker_main._install_stop_handlers(FakeLoop(), stop)
+
+    assert {worker_main.signal.SIGINT, worker_main.signal.SIGTERM, sigbreak} <= installed.keys()
+    installed[sigbreak](sigbreak, None)
+    assert callbacks == [stop.set]
+    assert stop.is_set is True
+
+
+@pytest.mark.asyncio
+async def test_worker_stop_cancels_active_run_once() -> None:
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    stop = asyncio.Event()
+
+    class Service:
+        async def run_once(self, _worker_id: str):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+    task = asyncio.create_task(_run_once_or_stop(Service(), "worker-id", stop))
+    await started.wait()
+    stop.set()
+
+    assert await asyncio.wait_for(task, timeout=1) == (None, True)
+    assert cancelled.is_set()
 
 
 class FakeProvider:
@@ -2607,7 +2666,10 @@ async def test_denied_result_recovery_does_not_starve_authorized_recovery(
                 .where(TaskLeaseRow.task_id == "task-demo")
                 .values(expires_at=ts(0))
             )
-        assert app.state.task_leases.recover_expired_leases() == 1
+        recovered = app.state.task_leases.recover_expired_leases()
+        # The app's recovery loop may win this race on a slow CI runner.
+        assert recovered in {0, 1}
+        assert app.state.task_leases.task_status("task-demo") == "retrying"
         denied_before = app.state.model_execution_repository.get_by_run(
             "run-aa-denied-result-recovery"
         )
@@ -2642,7 +2704,10 @@ async def test_denied_result_recovery_does_not_starve_authorized_recovery(
                 .where(TaskLeaseRow.task_id == "task-completed")
                 .values(expires_at=ts(0))
             )
-        assert app.state.task_leases.recover_expired_leases() == 1
+        recovered = app.state.task_leases.recover_expired_leases()
+        # The app's recovery loop may win this race on a slow CI runner.
+        assert recovered in {0, 1}
+        assert app.state.task_leases.task_status("task-completed") == "retrying"
         assert len(router.requests) == 2
         monkeypatch.setattr(service, "_checkpoint", original_checkpoint)
 
