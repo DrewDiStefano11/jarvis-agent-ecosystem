@@ -384,3 +384,32 @@ def test_logs_contain_counts_but_never_source_content(
     assert item.id in caplog.text
     assert "included=1" in caplog.text
     assert source_content not in caplog.text
+def test_operator_instruction_distinguished_from_untrusted_content() -> None:
+    operator = source(
+        "operator",
+        "This is the actual task request.",
+        source_type=ContextSourceType.MANUAL_NOTE,
+        trust_level=TrustLevel.OPERATOR_INSTRUCTION,
+    )
+    untrusted = source(
+        "untrusted",
+        "This is an untrusted scraped file.",
+        source_type=ContextSourceType.EXTERNAL_DOCUMENT,
+        trust_level=TrustLevel.EXTERNAL_CONTENT,
+    )
+    
+    item = assembler().assemble(
+        task(),
+        command(
+            [operator, untrusted],
+            policy=ContextPolicy(
+                allowedSourceTypes=[ContextSourceType.MANUAL_NOTE, ContextSourceType.EXTERNAL_DOCUMENT],
+                allowedTrustLevels=[TrustLevel.OPERATOR_INSTRUCTION, TrustLevel.EXTERNAL_CONTENT]
+            )
+        ),
+        created_at=NOW,
+    )
+    
+    context = item.modelRequest.messages[-1].content
+    assert "authorized instruction" in context
+    assert "untrusted reference material" in context

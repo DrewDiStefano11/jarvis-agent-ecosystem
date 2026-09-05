@@ -129,3 +129,25 @@ def configure_task_actor(app, task_id: str, actor_key: str) -> str:
             403,
         )
     return actor.id
+
+def check_task_actor_configured(app, task_id: str, actor_key: str) -> tuple[str | None, bool]:
+    try:
+        app.state.repository.get_task_durable(task_id)
+    except Exception:
+        return None, False
+        
+    service = app.state.identity_service
+    actor = _find_actor(service, actor_key)
+    if actor is None or actor.lifecycle_state != "active" or not actor.is_enabled:
+        return actor.id if actor else None, False
+        
+    required_keys = sorted(set(RUNTIME_PERMISSION_KEYS.values()))
+    
+    for key in required_keys:
+        try:
+            if not service.check_permission_resource_access(actor.id, key, "task", task_id).allowed:
+                return actor.id, False
+        except Exception:
+            return actor.id, False
+            
+    return actor.id, True
