@@ -1,12 +1,19 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import Session
 
+from app.db.models import (
+    AgentPermissionAssignmentRow,
+    IdentityAgentRow,
+    IdentityPermissionRow,
+)
 from app.db.session import create_database_engine
 from tests.test_persistence import database_url
 
@@ -52,7 +59,7 @@ def test_phase_2c_upgrade_downgrade_and_reupgrade(tmp_path: Path) -> None:
     command.upgrade(config, "head")
     with create_database_engine(database_url(path)).connect() as connection:
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260729_05"
+        assert connection.scalar(text("select version_num from alembic_version")) == "20260905_06"
 
 
 def test_phase_2c_downgrade_refuses_unrepresentable_rows_before_ddl(tmp_path: Path) -> None:
@@ -90,4 +97,57 @@ def test_phase_2c_downgrade_refuses_unrepresentable_rows_before_ddl(tmp_path: Pa
     assert "model_executions" in inspect(guarded).get_table_names()
     with guarded.connect() as connection:
         assert connection.scalar(text("select version_num from alembic_version")) == "20260729_05"
+    guarded.dispose()
+
+
+def test_open_assignment_upgrade_refuses_duplicate_history(tmp_path: Path) -> None:
+    path = tmp_path / "duplicate-open-assignments.db"
+    config = migration_config(path)
+    command.upgrade(config, "20260729_05")
+    engine = create_database_engine(database_url(path))
+    first_start = datetime.now(UTC) - timedelta(seconds=1)
+    with Session(engine) as session, session.begin():
+        session.add(
+            IdentityAgentRow(
+                id="agent-duplicate",
+                stable_key="agent.duplicate",
+                display_name="Duplicate assignment actor",
+                agent_type="worker",
+            )
+        )
+        session.add(
+            IdentityPermissionRow(
+                id="permission-duplicate",
+                stable_key="runtime.duplicate",
+                display_name="Duplicate assignment permission",
+                resource_type="task",
+                action="duplicate",
+            )
+        )
+        session.flush()
+        session.add_all(
+            [
+                AgentPermissionAssignmentRow(
+                    id=f"assignment-{index}",
+                    agent_id="agent-duplicate",
+                    permission_id="permission-duplicate",
+                    effect="allow",
+                    resource_type="task",
+                    resource_id="task-demo",
+                    starts_at=first_start + timedelta(microseconds=index),
+                )
+                for index in range(2)
+            ]
+        )
+    engine.dispose()
+
+    with pytest.raises(RuntimeError, match="repair the append-only assignment history"):
+        command.upgrade(config, "head")
+
+    guarded = create_engine(database_url(path))
+    with guarded.connect() as connection:
+        assert connection.scalar(text("select version_num from alembic_version")) == "20260729_05"
+    assert "uq_identity_agent_permissions_open_scoped" not in {
+        item["name"] for item in inspect(guarded).get_indexes("identity_agent_permissions")
+    }
     guarded.dispose()

@@ -31,9 +31,34 @@ dispatcher, and recovery state without exposing database paths.
 
 Context creation also accepts `Idempotency-Key`. Its typed request binds an existing task and project to a bounded policy and source set. A new durable assembly returns 201; identical canonical input already stored returns 200 without a duplicate audit or event. `completed` responses include the sanitized `modelRequest`; `review_required` responses withhold it and retain the manifest/report. Stable context errors include `CONTEXT_PROJECT_MISMATCH` (409), configured size/source/token policy errors (422), and the normal task/assembly not-found codes (404). OpenAPI defines the full context request, response, manifest, and model-request shapes.
 
+Context preparation reads current durable task input. Its commit writes only the
+assembly, audit, event, and keyed response, preserving unrelated task and agent
+updates made by a separate worker. The same transaction rechecks the task's
+project and request; changed input returns `CONTEXT_TASK_CHANGED` (409) without
+storing a stale assembly. API startup and shutdown similarly update only lifecycle
+columns, preserving worker results, event cursors, and emergency-stop state.
+
 Reset hashing uses only the stable client action, never event-session or workflow state. An in-progress claim is owned by the request that created it; duplicate in-progress or conflicting requests cannot abandon another request's claim.
 
 For every keyed mutation, the terminal idempotency response is written by the same unit of work as the domain rows, audit entry, checkpoint (when present), and transactional outbox event. A failed commit reloads cached domain state from the database and the owning request abandons only its uncompleted claim; a committed command is immediately replayable even if response delivery or outbox publication is interrupted.
+
+Task creation accepts optional `correctionOfTaskId`. It creates a fresh `queued`
+task containing the operator's corrected title, description/request, and priority,
+and inherits the existing source task's `projectId`. The source must exist and be
+`under_review`, `failed`, `cancelled`, or `completed`; other states return
+`TASK_CORRECTION_NOT_ALLOWED` (409). Unknown sources return `TASK_NOT_FOUND` (404).
+The transaction rechecks source eligibility and project; a concurrent project
+change returns `TASK_CORRECTION_SOURCE_CHANGED` (409). The source task, results,
+artifacts, runtime, review state, and permissions remain unchanged. Creation does
+not prepare or queue a model run; the operator does those separately for the new
+task. The durable correction link appears on the task, its `task.created` outbox
+event, and creation audit payload. It is separate from parent/child delegation.
+Only the new task is inserted, so creation cannot flush stale API task or agent
+state over newer worker data. A correction and its audit, event, and keyed retry
+response commit atomically. Replaying the same key returns the same task even
+after restart or a lost acknowledgement; changing the correction source or request
+under that key conflicts. Absent/null correction fields are omitted during
+serialization, preserving legacy creation hashes and response payloads.
 
 Pending idempotency claims carry a durable 30-second lease by default (`JARVIS_IDEMPOTENCY_LEASE_SECONDS`). Same-request retries cannot take an unexpired lease. After expiration, one requester atomically renews the existing claim; ownership is bound to the exact lease token so stale requests cannot abandon or complete a reclaimed claim. Completed responses remain durable and canonical-request conflicts remain unchanged.
 
@@ -46,3 +71,14 @@ Health additively reports context readiness/count. System status additively repo
 Phase 2B workers register a stable `instanceId`, then acquire an eligible task before processing it. Acquisition returns the compatible task plus a capability-bearing `leaseToken`; only the matching worker/token pair may renew, release, complete, or fail that attempt. Tokens are never placed in audit or event payloads—only a one-way fingerprint is recorded. A stale, expired, cancelled, or superseded token returns `TASK_LEASE_LOST` (409). Repeating a successful completion with the same attempt token is idempotent.
 
 Workers in `draining` state cannot acquire work and release their active leases. Cancellation atomically revokes an active lease before returning. Acquisition returns `data: null` for an empty or dependency-blocked queue. Lease duration defaults to `JARVIS_TASK_LEASE_SECONDS`; callers may request a bounded override. Health and system status add active worker, active lease, expired lease, and stale worker counts without changing existing fields.
+
+New autonomous runtime create/queue commands require the durable task to remain
+`queued` or `retrying` within the command transaction. Otherwise they return
+`AUTONOMOUS_TASK_NOT_READY` (409) without a run/event/audit/idempotency mutation.
+Already accepted command IDs remain replayable after task completion. General
+runtime commands without autonomous execution keep their existing behavior.
+
+Autonomous execution specifications accept optional `response_format: planning_review_json_v1`.
+It enables bounded planning JSON generation preferences; it adds no tools or remote access.
+Absent values are omitted during serialization so legacy persisted commands and checkpoints
+retain their hashes. New values participate in command identity and execution-request hashing.

@@ -230,6 +230,46 @@ class AgentPermissionAssignmentRow(Base):
             sqlite_where=resource_type.is_(None) & resource_id.is_(None),
             postgresql_where=resource_type.is_(None) & resource_id.is_(None),
         ),
+        Index(
+            "uq_identity_agent_permissions_open_global",
+            "agent_id",
+            "permission_id",
+            "effect",
+            unique=True,
+            sqlite_where=(
+                resource_type.is_(None)
+                & resource_id.is_(None)
+                & revoked_at.is_(None)
+                & expires_at.is_(None)
+            ),
+            postgresql_where=(
+                resource_type.is_(None)
+                & resource_id.is_(None)
+                & revoked_at.is_(None)
+                & expires_at.is_(None)
+            ),
+        ),
+        Index(
+            "uq_identity_agent_permissions_open_scoped",
+            "agent_id",
+            "permission_id",
+            "effect",
+            "resource_type",
+            "resource_id",
+            unique=True,
+            sqlite_where=(
+                resource_type.is_not(None)
+                & resource_id.is_not(None)
+                & revoked_at.is_(None)
+                & expires_at.is_(None)
+            ),
+            postgresql_where=(
+                resource_type.is_not(None)
+                & resource_id.is_not(None)
+                & revoked_at.is_(None)
+                & expires_at.is_(None)
+            ),
+        ),
     )
 
 

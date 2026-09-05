@@ -1009,6 +1009,7 @@ def test_expired_and_revoked_role_assignments_can_be_renewed(service, scope_type
     renewed = service.assign_role(actor.id, AssignRoleRequest(**base))
 
     assert len({expired.id, active.id, renewed.id}) == 3
+    assert renewed.starts_at != active.starts_at
     with service.sessions() as session:
         rows = list(session.scalars(select(AgentRoleAssignmentRow)))
         assert len(rows) == 3
@@ -1690,6 +1691,7 @@ def test_expired_and_revoked_permission_assignments_can_be_renewed(service):
         actor.id, AssignPermissionRequest(permission_id=permission.id, effect="allow")
     )
     assert renewed.id != active.id
+    assert renewed.starts_at != active.starts_at
     with service.sessions() as session:
         assert len(list(session.scalars(select(AgentPermissionAssignmentRow)))) == 3
 

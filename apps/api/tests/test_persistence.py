@@ -110,6 +110,15 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
         "effect",
         "starts_at",
     ]
+    assert permission_indexes["uq_identity_agent_permissions_open_global"]["unique"] == 1
+    assert permission_indexes["uq_identity_agent_permissions_open_scoped"]["unique"] == 1
+    assert permission_indexes["uq_identity_agent_permissions_open_scoped"]["column_names"] == [
+        "agent_id",
+        "permission_id",
+        "effect",
+        "resource_type",
+        "resource_id",
+    ]
     role_indexes = {item["name"]: item for item in inspector.get_indexes("identity_agent_roles")}
     assert role_indexes["uq_identity_agent_roles_global"]["unique"] == 1
     assert role_indexes["uq_identity_agent_roles_global"]["column_names"] == [
@@ -141,7 +150,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
         item["name"] for item in inspector.get_check_constraints("identity_agent_permissions")
     }
     with engine.connect() as connection:
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260729_05"
+        assert connection.scalar(text("select version_num from alembic_version")) == "20260905_06"
     engine.dispose()
     command.downgrade(config, "20260723_02")
     lease_engine = create_engine(database_url(path))
@@ -186,7 +195,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     command.current(config)
     with create_database_engine(database_url(path)).connect() as connection:
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260729_05"
+        assert connection.scalar(text("select version_num from alembic_version")) == "20260905_06"
     for revision in (root / "migrations" / "versions").glob("*.py"):
         source = revision.read_text(encoding="utf-8")
         assert "Base.metadata" not in source
@@ -380,11 +389,11 @@ def test_concurrent_duplicate_submission_creates_one_task(tmp_path: Path) -> Non
     release_publish = threading.Event()
     original_enqueue = first_app.state.repository.enqueue_event
 
-    def delayed_enqueue(envelope, idempotency=None) -> None:
+    def delayed_enqueue(envelope, idempotency=None, **kwargs) -> None:
         entered_publish.set()
         released = release_publish.wait(5)
         assert released
-        original_enqueue(envelope, idempotency)
+        original_enqueue(envelope, idempotency, **kwargs)
 
     first_app.state.repository.enqueue_event = delayed_enqueue
     with (
@@ -453,10 +462,10 @@ def test_orphaned_idempotency_claim_lease_is_reclaimed_once_after_restart(
     release_command = threading.Event()
     original_enqueue = reclaiming_app.state.repository.enqueue_event
 
-    def delayed_enqueue(envelope, idempotency=None) -> None:
+    def delayed_enqueue(envelope, idempotency=None, **kwargs) -> None:
         entered_command.set()
         assert release_command.wait(5)
-        original_enqueue(envelope, idempotency)
+        original_enqueue(envelope, idempotency, **kwargs)
 
     reclaiming_app.state.repository.enqueue_event = delayed_enqueue
     with (

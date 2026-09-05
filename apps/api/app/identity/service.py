@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy import and_, or_, select
@@ -59,6 +59,13 @@ def effective_interval(data) -> tuple[datetime, datetime | None]:
             422,
         )
     return starts_at, expires_at
+
+
+def _distinct_generated_start(session, model, starts_at: datetime, *criteria) -> datetime:
+    """Avoid timestamp-key collisions on clocks with coarse resolution."""
+    while session.scalar(select(model.id).where(*criteria, model.starts_at == starts_at)):
+        starts_at += timedelta(microseconds=1)
+    return starts_at
 
 
 def is_duplicate_agent_stable_key(exc: IntegrityError) -> bool:
@@ -288,6 +295,18 @@ class IdentityService:
                 )
             self._validate_attribution(uow.session, data.assigned_by)
             starts_at, expires_at = effective_interval(data)
+            if data.starts_at is None:
+                starts_at = _distinct_generated_start(
+                    uow.session,
+                    AgentRoleAssignmentRow,
+                    starts_at,
+                    AgentRoleAssignmentRow.agent_id == agent_id,
+                    AgentRoleAssignmentRow.role_id == data.role_id,
+                    AgentRoleAssignmentRow.scope_type == data.scope_type,
+                    AgentRoleAssignmentRow.scope_id.is_(None)
+                    if data.scope_id is None
+                    else AgentRoleAssignmentRow.scope_id == data.scope_id,
+                )
             infinity = datetime.max.replace(tzinfo=UTC)
             duplicate = uow.session.scalar(
                 select(AgentRoleAssignmentRow.id).where(
@@ -380,6 +399,21 @@ class IdentityService:
                 )
             self._validate_attribution(uow.session, data.assigned_by)
             starts_at, expires_at = effective_interval(data)
+            if data.starts_at is None:
+                starts_at = _distinct_generated_start(
+                    uow.session,
+                    AgentPermissionAssignmentRow,
+                    starts_at,
+                    AgentPermissionAssignmentRow.agent_id == agent_id,
+                    AgentPermissionAssignmentRow.permission_id == data.permission_id,
+                    AgentPermissionAssignmentRow.effect == data.effect,
+                    AgentPermissionAssignmentRow.resource_type.is_(None)
+                    if data.resource_type is None
+                    else AgentPermissionAssignmentRow.resource_type == data.resource_type,
+                    AgentPermissionAssignmentRow.resource_id.is_(None)
+                    if data.resource_id is None
+                    else AgentPermissionAssignmentRow.resource_id == data.resource_id,
+                )
             infinity = datetime.max.replace(tzinfo=UTC)
             duplicate = uow.session.scalar(
                 select(AgentPermissionAssignmentRow.id).where(

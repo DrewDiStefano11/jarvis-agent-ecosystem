@@ -26,6 +26,7 @@ from app.agent_runtime.sqlalchemy_repository import SqlAlchemyAgentRuntimeReposi
 from app.autonomous_worker.repository import ModelExecutionRepository
 from app.autonomous_worker.router import router as autonomous_worker_router
 from app.autonomous_worker.service import AutonomousWorkerService
+from app.autonomous_worker.setup_router import router as local_planning_setup_router
 from app.context import ContextAssembler
 from app.core.config import Settings
 from app.core.errors import DomainError
@@ -64,13 +65,15 @@ from app.models.domain import (
     SimulatorControl,
     SystemStatus,
     Task,
+    TypedApiResponse,
 )
 from app.repositories.sqlalchemy import IdempotencyResult, SqlAlchemyRepository
 from app.repositories.task_leases import TaskLeaseRepository
 from app.services.events import EventBroker
+from app.services.task_creation import prepare_task_creation
 from app.simulator.engine import SimulatorEngine
 
-DATABASE_REVISION = "20260729_05"
+DATABASE_REVISION = "20260905_06"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
@@ -125,9 +128,7 @@ async def _lifespan(app: FastAPI):
                 await broker.dispatch_pending()
 
     try:
-        repository._system.last_successful_startup = datetime.now(UTC)
-        repository._system.startup_was_clean = False
-        repository.persist()
+        repository.record_process_lifecycle(starting=True)
         await broker.dispatch_pending()
         await broker.start_dispatcher(settings.outbox_poll_interval_ms)
         database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
@@ -156,9 +157,7 @@ async def _lifespan(app: FastAPI):
                 pass
         await broker.stop_dispatcher()
         if startup_completed:
-            repository._system.last_clean_shutdown = datetime.now(UTC)
-            repository._system.startup_was_clean = True
-            repository.persist()
+            repository.record_process_lifecycle(starting=False)
         app.state.engine.dispose()
 
 
@@ -250,6 +249,7 @@ def create_app(
     )
     app.include_router(agent_runtime_router)
     app.include_router(autonomous_worker_router)
+    app.include_router(local_planning_setup_router)
     app.include_router(identity_router)
     app.state.lease_recovery_task = None
     app.state.restored_workflow_state = restored_workflow_state
@@ -521,7 +521,7 @@ def create_app(
             database_reachable,
             schema_current,
             provider_ready,
-        )
+        ).model_copy(update={"workerActorId": settings.autonomous_worker_actor_id.strip() or None})
         runtime_degraded = runtime_persistence.get("status", "healthy") != "healthy"
         degraded = (
             repository._system.recovery_status == "required"
@@ -611,7 +611,7 @@ def create_app(
             **snapshot["lease_counts"],
         )
 
-    @app.get("/api/system/status", response_model=ApiResponse)
+    @app.get("/api/system/status", response_model=TypedApiResponse[SystemStatus])
     async def get_system_status() -> ApiResponse:
         return ApiResponse(data=system_status())
 
@@ -724,24 +724,28 @@ def create_app(
         payload = body.model_dump(mode="json")
         if replay := replay_idempotent(request, idempotency_key, "task.create", payload):
             return ApiResponse(data=Task.model_validate(replay))
-        now = datetime.now(UTC)
-        item = Task(
-            id=f"task-{uuid4().hex[:10]}",
-            title=body.title,
-            description=body.description,
-            request=body.description,
-            createdBy="local-user",
-            assignedManagerId="jarvis",
-            priority=body.priority,
-            createdAt=now,
-            updatedAt=now,
+        source = (
+            repository.get_task_durable(body.correctionOfTaskId)
+            if body.correctionOfTaskId is not None
+            else None
         )
-        repository.tasks[item.id] = item
+        item = prepare_task_creation(body, source)
+        audit: dict[str, object] = {"summary": f"Created task: {item.title}"}
+        if source is not None:
+            audit = {
+                "summary": f"Created correction of {source.id}: {item.title}",
+                "new": "queued",
+                "payload": {
+                    "correctionOfTaskId": source.id,
+                    "projectId": source.projectId,
+                },
+            }
         await broker.emit(
             "task.created",
             {"task": item.model_dump(mode="json")},
             item.id,
-            audit={"summary": f"Created task: {item.title}"},
+            audit=audit,
+            created_task=item,
             idempotency=idempotency_result(
                 request, idempotency_key, "task.create", payload, item, 201, item.id
             ),
@@ -865,8 +869,7 @@ def create_app(
         if replay is not None:
             return ApiResponse(data=ContextAssembly.model_validate(replay))
 
-        task = repository.require(repository.tasks, body.taskId, "task")
-        assert isinstance(task, Task)
+        task = repository.get_task_durable(body.taskId)
         item = context_assembler.assemble(task, body)
         existing = repository.context_assemblies.get(item.id)
         if existing is not None:
@@ -887,7 +890,6 @@ def create_app(
                 content=response.model_dump(mode="json"),
             )
 
-        repository.context_assemblies[item.id] = item
         event_payload = ContextAssemblyEventPayload(
             assemblyId=item.id,
             status=item.status,
@@ -901,6 +903,7 @@ def create_app(
         await broker.emit(
             "context.assembly.created",
             event_payload,
+            created_context=(item, task),
             task_id=item.taskId,
             correlation_id=item.id,
             source="context-assembler",
