@@ -283,7 +283,7 @@ export function OfficeViewport({
             <div className="viewport-controls" aria-label="Viewport controls">
                 <button type="button" onClick={() => zoomBy(DEFAULT_VIEWPORT_OPTIONS.zoomStep)} aria-label="Zoom in">Zoom In</button>
                 <button type="button" onClick={() => zoomBy(1 / DEFAULT_VIEWPORT_OPTIONS.zoomStep)} aria-label="Zoom out">Zoom Out</button>
-                <button type="button" onClick={fit}>Fit Office</button>
+                <button type="button" onClick={fit}>Fit office</button>
             </div>
             <div
                 ref={viewportRef}

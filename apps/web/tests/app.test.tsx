@@ -207,7 +207,7 @@ describe('planning worker identity', () => {
   const original = vi.mocked(fetch).getMockImplementation()!
   vi.mocked(fetch).mockImplementation(async (input, init) => {
    const pathStr = String(input)
-   const path = pathStr.replace(/^https?:\/\/[^\/]+/, '').split('?')[0]
+   const path = pathStr.replace(/^https?:\/\/[^/]+/, '').split('?')[0]
    if (path === '/api/context/assemblies' && init?.method === 'POST') return { ok: true, status: 200, json: async () => ({ data: { id: 'context-test', status: 'completed' } }) } as Response
    if (init?.method === 'POST' && path === '/api/agent-runtime/commands') {
     const body = JSON.parse(String(init.body))
