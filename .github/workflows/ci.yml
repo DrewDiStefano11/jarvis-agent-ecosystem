@@ -6,7 +6,9 @@ concurrency:
 jobs:
   backend:
     runs-on: windows-latest
-    timeout-minutes: 30
+    # Run 33981104161 exhausted 30 minutes while the full Windows suite was still passing.
+    # Preserve every check and allow the existing suite to finish.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
