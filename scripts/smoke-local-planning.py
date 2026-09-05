@@ -6,6 +6,10 @@ Uses an isolated database and loopback ports; never calls an external model.
 
 from __future__ import annotations
 
+import sys
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 import json
 import os
 import socket
