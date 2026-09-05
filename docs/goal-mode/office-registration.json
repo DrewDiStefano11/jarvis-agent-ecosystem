@@ -1,0 +1,632 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "7c5cd21cdce503f2e9ac94700c95b7faad8e1bfd",
+  "productionApproved": false,
+  "reviewStatus": "image-registration-measurement-only",
+  "method": "Numpy FFT normalized grayscale cross-correlation of 96x96 embedded-pixel physical feature crops resampled uniformly to 128x128 production pixels; independent local 160x160 translation search; parabolic subpixel peak refinement. Candidate transform locates search region only. No source image mutated.",
+  "coordinateConvention": "Top-left image origin; pixel-edge coordinates. Markup anchors are centers of extracted embedded crops. Production anchors are centers of independently matched crop footprints.",
+  "sourceHashes": {
+    "roomsPdfSha256": "9f18013711ca674df7001582e32582771dc05b22df91c6b72ea5a302814c0a12",
+    "embeddedOriginalJpegSha256": "9513850ce99814aee3b10bd1c64670e10b72e9ebd03b66960bff420e14558dea",
+    "productionPngSha256": "aa0ff821d5530e8ee1be3c1de733d0bff4bb74767a0ba27e48a141abf784d026"
+  },
+  "dimensions": {
+    "embedded": [
+      6144,
+      4096
+    ],
+    "production": [
+      8192,
+      5460
+    ]
+  },
+  "candidate": {
+    "scale": 1.3333333333333333,
+    "offsetX": 0,
+    "offsetY": -0.6666666666666666,
+    "rotationDegrees": 0,
+    "maximumResidualErrorPixels": 1.1831826925748048,
+    "rmsResidualPixels": 0.617820777050763
+  },
+  "fittedUniform": {
+    "scale": 1.3332171236291437,
+    "offsetX": 0.2680181580662975,
+    "offsetY": -0.5202158851634522,
+    "maximumResidualErrorPixels": 1.0439178149847146,
+    "rmsResidualPixels": 0.5496338550740005
+  },
+  "coverage": {
+    "count": 15,
+    "quadrants": [
+      "left-lower",
+      "left-upper",
+      "right-lower",
+      "right-upper"
+    ],
+    "embeddedHorizontalSpan": 5672.0,
+    "embeddedVerticalSpan": 3628.0,
+    "horizontalCoverage": 0.9231770833333334,
+    "verticalCoverage": 0.8857421875
+  },
+  "landmarks": [
+    {
+      "id": "NW_STAIR",
+      "label": "Northwest stair landing center",
+      "markup": {
+        "x": 784,
+        "y": 640
+      },
+      "source": {
+        "x": 1045.4538850737986,
+        "y": 852.8291016532958
+      },
+      "candidateExpected": {
+        "x": 1045.3333333333333,
+        "y": 852.6666666666666
+      },
+      "residualErrorPixels": 0.20228160324266978,
+      "residualVectorPixels": [
+        0.12055174046531647,
+        0.1624349866291368
+      ],
+      "ncc": 0.9545162809578106,
+      "nextPeakOutside8px": 0.9209985207376558,
+      "templateEmbeddedBox": [
+        736,
+        592,
+        832,
+        688
+      ],
+      "searchProductionBox": [
+        901,
+        708,
+        1189,
+        996
+      ],
+      "fitResidualPixels": 0.10649351409282487
+    },
+    {
+      "id": "NW_LIBRARY",
+      "label": "Northwest library upper shelves",
+      "markup": {
+        "x": 1456,
+        "y": 320
+      },
+      "source": {
+        "x": 1940.9385642068112,
+        "y": 426.3960271949302
+      },
+      "candidateExpected": {
+        "x": 1941.3333333333333,
+        "y": 425.99999999999994
+      },
+      "residualErrorPixels": 0.5591781490538769,
+      "residualVectorPixels": [
+        -0.3947691265220783,
+        0.39602719493024097
+      ],
+      "ncc": 0.8485202965885554,
+      "nextPeakOutside8px": 0.43789397204704317,
+      "templateEmbeddedBox": [
+        1408,
+        272,
+        1504,
+        368
+      ],
+      "searchProductionBox": [
+        1797,
+        281,
+        2085,
+        569
+      ],
+      "fitResidualPixels": 0.5708418440811363
+    },
+    {
+      "id": "N_WEST_DOOR",
+      "label": "North central west door light",
+      "markup": {
+        "x": 2112,
+        "y": 188
+      },
+      "source": {
+        "x": 2816.076665873539,
+        "y": 250.58541421759233
+      },
+      "candidateExpected": {
+        "x": 2816.0,
+        "y": 250.0
+      },
+      "residualErrorPixels": 0.5904129591436025,
+      "residualVectorPixels": [
+        0.0766658735387864,
+        0.58541421759233
+      ],
+      "ncc": 0.9188437643082865,
+      "nextPeakOutside8px": 0.6335830401432997,
+      "templateEmbeddedBox": [
+        2064,
+        140,
+        2160,
+        236
+      ],
+      "searchProductionBox": [
+        2672,
+        106,
+        2960,
+        394
+      ],
+      "fitResidualPixels": 0.4639736823525166
+    },
+    {
+      "id": "N_CONSOLE",
+      "label": "North room central console",
+      "markup": {
+        "x": 3120,
+        "y": 256
+      },
+      "source": {
+        "x": 4159.626081837372,
+        "y": 341.78921131685456
+      },
+      "candidateExpected": {
+        "x": 4160.0,
+        "y": 340.66666666666663
+      },
+      "residualErrorPixels": 1.1831826925748048,
+      "residualVectorPixels": [
+        -0.3739181626278878,
+        1.1225446501879333
+      ],
+      "ncc": 0.9260640522844003,
+      "nextPeakOutside8px": 0.6013581454423742,
+      "templateEmbeddedBox": [
+        3072,
+        208,
+        3168,
+        304
+      ],
+      "searchProductionBox": [
+        4016,
+        196,
+        4304,
+        484
+      ],
+      "fitResidualPixels": 1.0439178149847146
+    },
+    {
+      "id": "NE_SCREEN",
+      "label": "Northeast world map screen",
+      "markup": {
+        "x": 4712,
+        "y": 448
+      },
+      "source": {
+        "x": 6282.316574993342,
+        "y": 597.2250794945497
+      },
+      "candidateExpected": {
+        "x": 6282.666666666666,
+        "y": 596.6666666666666
+      },
+      "residualErrorPixels": 0.6590819873695645,
+      "residualVectorPixels": [
+        -0.3500916733237318,
+        0.5584128278831031
+      ],
+      "ncc": 0.9496042709580557,
+      "nextPeakOutside8px": 0.6572106299636187,
+      "templateEmbeddedBox": [
+        4664,
+        400,
+        4760,
+        496
+      ],
+      "searchProductionBox": [
+        6138,
+        452,
+        6426,
+        740
+      ],
+      "fitResidualPixels": 0.4693534981198633
+    },
+    {
+      "id": "NE_STAIR",
+      "label": "Northeast stair landing",
+      "markup": {
+        "x": 5336,
+        "y": 720
+      },
+      "source": {
+        "x": 7114.391185895403,
+        "y": 959.6906006648722
+      },
+      "candidateExpected": {
+        "x": 7114.666666666666,
+        "y": 959.3333333333334
+      },
+      "residualErrorPixels": 0.45114255121899466,
+      "residualVectorPixels": [
+        -0.27548077126266435,
+        0.35726733153887835
+      ],
+      "ncc": 0.9392495850115777,
+      "nextPeakOutside8px": 0.7893112023476834,
+      "templateEmbeddedBox": [
+        5288,
+        672,
+        5384,
+        768
+      ],
+      "searchProductionBox": [
+        6970,
+        815,
+        7258,
+        1103
+      ],
+      "fitResidualPixels": 0.30428582730033427
+    },
+    {
+      "id": "W_TUBE",
+      "label": "West purple tube center",
+      "markup": {
+        "x": 1536,
+        "y": 1632
+      },
+      "source": {
+        "x": 2047.9057784942688,
+        "y": 2175.2829328595835
+      },
+      "candidateExpected": {
+        "x": 2048.0,
+        "y": 2175.3333333333335
+      },
+      "residualErrorPixels": 0.10685457358705788,
+      "residualVectorPixels": [
+        -0.09422150573118415,
+        -0.05040047374995993
+      ],
+      "ncc": 0.9211143222232684,
+      "nextPeakOutside8px": 0.4821831956514263,
+      "templateEmbeddedBox": [
+        1488,
+        1584,
+        1584,
+        1680
+      ],
+      "searchProductionBox": [
+        1904,
+        2031,
+        2192,
+        2319
+      ],
+      "fitResidualPixels": 0.18388245502000472
+    },
+    {
+      "id": "E_BOARD",
+      "label": "East orange wall display",
+      "markup": {
+        "x": 5632,
+        "y": 1440
+      },
+      "source": {
+        "x": 7509.230965751777,
+        "y": 1919.1059545296675
+      },
+      "candidateExpected": {
+        "x": 7509.333333333333,
+        "y": 1919.3333333333333
+      },
+      "residualErrorPixels": 0.24935966416012825,
+      "residualVectorPixels": [
+        -0.10236758155588177,
+        -0.22737880366571517
+      ],
+      "ncc": 0.8828882022618583,
+      "nextPeakOutside8px": 0.4918344872779689,
+      "templateEmbeddedBox": [
+        5584,
+        1392,
+        5680,
+        1488
+      ],
+      "searchProductionBox": [
+        7365,
+        1775,
+        7653,
+        2063
+      ],
+      "fitResidualPixels": 0.35121802293327203
+    },
+    {
+      "id": "W_POD",
+      "label": "Far west pod blue screen",
+      "markup": {
+        "x": 272,
+        "y": 2080
+      },
+      "source": {
+        "x": 362.33990535104186,
+        "y": 2772.090917745573
+      },
+      "candidateExpected": {
+        "x": 362.66666666666663,
+        "y": 2772.6666666666665
+      },
+      "residualErrorPixels": 0.662011916455721,
+      "residualVectorPixels": [
+        -0.32676131562476485,
+        -0.575748921093691
+      ],
+      "ncc": 0.9376195947134481,
+      "nextPeakOutside8px": 0.6772404487960771,
+      "templateEmbeddedBox": [
+        224,
+        2032,
+        320,
+        2128
+      ],
+      "searchProductionBox": [
+        218,
+        2628,
+        506,
+        2916
+      ],
+      "fitResidualPixels": 0.7402873420903039
+    },
+    {
+      "id": "E_POD",
+      "label": "Far east pod blue screen",
+      "markup": {
+        "x": 5944,
+        "y": 2080
+      },
+      "source": {
+        "x": 7925.322369151465,
+        "y": 2772.1194503832944
+      },
+      "candidateExpected": {
+        "x": 7925.333333333333,
+        "y": 2772.6666666666665
+      },
+      "residualErrorPixels": 0.5473261130912904,
+      "residualVectorPixels": [
+        -0.010964181868075684,
+        -0.5472162833721086
+      ],
+      "ncc": 0.9333110804173284,
+      "nextPeakOutside8px": 0.6320678664865172,
+      "templateEmbeddedBox": [
+        5896,
+        2032,
+        5992,
+        2128
+      ],
+      "searchProductionBox": [
+        7781,
+        2628,
+        8069,
+        2916
+      ],
+      "fitResidualPixels": 0.6114021595100506
+    },
+    {
+      "id": "SW_CONSOLE",
+      "label": "Southwest isolated terminal",
+      "markup": {
+        "x": 440,
+        "y": 2984
+      },
+      "source": {
+        "x": 586.9040176305982,
+        "y": 3977.2536255519676
+      },
+      "candidateExpected": {
+        "x": 586.6666666666666,
+        "y": 3978.0
+      },
+      "residualErrorPixels": 0.7832051434681087,
+      "residualVectorPixels": [
+        0.23735096393158983,
+        -0.746374448032384
+      ],
+      "ncc": 0.9640564290154712,
+      "nextPeakOutside8px": 0.7917612528014198,
+      "templateEmbeddedBox": [
+        392,
+        2936,
+        488,
+        3032
+      ],
+      "searchProductionBox": [
+        442,
+        3834,
+        730,
+        4122
+      ],
+      "fitResidualPixels": 0.5464388328806473
+    },
+    {
+      "id": "SE_CONSOLE",
+      "label": "Southeast isolated terminal",
+      "markup": {
+        "x": 5808,
+        "y": 2984
+      },
+      "source": {
+        "x": 7744.19190901606,
+        "y": 3977.3386468402527
+      },
+      "candidateExpected": {
+        "x": 7744.0,
+        "y": 3978.0
+      },
+      "residualErrorPixels": 0.6886342079455404,
+      "residualVectorPixels": [
+        0.19190901605998079,
+        -0.6613531597472502
+      ],
+      "ncc": 0.9566625654169408,
+      "nextPeakOutside8px": 0.7283151210221214,
+      "templateEmbeddedBox": [
+        5760,
+        2936,
+        5856,
+        3032
+      ],
+      "searchProductionBox": [
+        7600,
+        3834,
+        7888,
+        4122
+      ],
+      "fitResidualPixels": 0.7557499954807213
+    },
+    {
+      "id": "S_CONSOLE",
+      "label": "South central office console",
+      "markup": {
+        "x": 3132,
+        "y": 3356
+      },
+      "source": {
+        "x": 4176.111460408936,
+        "y": 4473.974166190997
+      },
+      "candidateExpected": {
+        "x": 4176.0,
+        "y": 4473.999999999999
+      },
+      "residualErrorPixels": 0.11441507089452367,
+      "residualVectorPixels": [
+        0.11146040893618192,
+        -0.025833809002506314
+      ],
+      "ncc": 0.9579279528846958,
+      "nextPeakOutside8px": 0.7638670404492142,
+      "templateEmbeddedBox": [
+        3084,
+        3308,
+        3180,
+        3404
+      ],
+      "searchProductionBox": [
+        4032,
+        4329,
+        4320,
+        4617
+      ],
+      "fitResidualPixels": 0.30069792071880297
+    },
+    {
+      "id": "S_ENTRY",
+      "label": "Southern entry stair",
+      "markup": {
+        "x": 3132,
+        "y": 3816
+      },
+      "source": {
+        "x": 4175.953445870224,
+        "y": 5086.3096818439
+      },
+      "candidateExpected": {
+        "x": 4176.0,
+        "y": 5087.333333333333
+      },
+      "residualErrorPixels": 1.0247095485150848,
+      "residualVectorPixels": [
+        -0.04655412977626838,
+        -1.0236514894331776
+      ],
+      "ncc": 0.9270694370083586,
+      "nextPeakOutside8px": 0.71317243016532,
+      "templateEmbeddedBox": [
+        3084,
+        3768,
+        3180,
+        3864
+      ],
+      "searchProductionBox": [
+        4032,
+        4943,
+        4320,
+        5231
+      ],
+      "fitResidualPixels": 0.7283230614608479
+    },
+    {
+      "id": "CENTER_TUBE",
+      "label": "Central cyan tube",
+      "markup": {
+        "x": 3132,
+        "y": 1632
+      },
+      "source": {
+        "x": 4175.848133505732,
+        "y": 2175.3499815450555
+      },
+      "candidateExpected": {
+        "x": 4176.0,
+        "y": 2175.3333333333335
+      },
+      "residualErrorPixels": 0.15277629081348107,
+      "residualVectorPixels": [
+        -0.15186649426777876,
+        0.016648211721985717
+      ],
+      "ncc": 0.9464550792507255,
+      "nextPeakOutside8px": 0.6346731187781626,
+      "templateEmbeddedBox": [
+        3084,
+        1584,
+        3180,
+        1680
+      ],
+      "searchProductionBox": [
+        4032,
+        2031,
+        4320,
+        2319
+      ],
+      "fitResidualPixels": 0.08190729737939993
+    }
+  ],
+  "limitations": [
+    "Correlation establishes image feature registration, not correctness of authored room/door/collider geometry.",
+    "Patch matches must be visually reviewed and source hashes retained.",
+    "Fitted transform is diagnostic; existing candidate geometry already stores transformed production coordinates and must not be transformed twice.",
+    "No approval artifact, production flag, candidate source, or navigation policy was changed."
+  ],
+  "visuallyVerifiedLandmarkIds": [
+    "NW_STAIR",
+    "NW_LIBRARY",
+    "N_WEST_DOOR",
+    "N_CONSOLE",
+    "NE_SCREEN",
+    "NE_STAIR",
+    "W_TUBE",
+    "E_BOARD",
+    "W_POD",
+    "E_POD",
+    "SW_CONSOLE",
+    "SE_CONSOLE",
+    "S_CONSOLE",
+    "S_ENTRY",
+    "CENTER_TUBE"
+  ],
+  "recommendedReviewLandmarkIds": [
+    "NW_LIBRARY",
+    "N_WEST_DOOR",
+    "NE_SCREEN",
+    "W_POD",
+    "E_POD",
+    "SW_CONSOLE",
+    "SE_CONSOLE",
+    "S_ENTRY"
+  ],
+  "reviewNotes": [
+    "All 15 paired enlarged crops visually compared after extraction from original embedded DCT stream.",
+    "NW_STAIR is repetitive with a smaller correlation peak separation; recommended eight-landmark subset excludes it.",
+    "Image coordinate match uncertainty is roughly one source pixel; subpixel values preserve measured fit and are not a claim of physical survey precision.",
+    "No local rigid deformation was needed. Nominal transform retained because its maximum measured residual is below 1.19px and candidate documents already contain that transform."
+  ]
+}

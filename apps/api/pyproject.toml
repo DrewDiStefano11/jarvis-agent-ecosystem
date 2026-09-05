@@ -24,6 +24,9 @@ asyncio_mode = "auto"
 include = ["app*"]
 exclude = ["migrations*"]
 
+[tool.setuptools.package-data]
+"app.office" = ["catalog.json"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

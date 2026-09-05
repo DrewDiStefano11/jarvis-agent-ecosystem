@@ -169,6 +169,12 @@ class SqlAlchemyRepository:
     def emergency_stop(self) -> bool:
         return self._system.emergency_stop
 
+    def refresh_event_cursor(self) -> None:
+        """Observe external outbox commits without replacing staged domain state."""
+        event_session_id, sequence_number = self.current_event_cursor()
+        self._system.event_session_id = event_session_id
+        self._system.current_sequence_number = sequence_number
+
     @emergency_stop.setter
     def emergency_stop(self, value: bool) -> None:
         self._system.emergency_stop = value
@@ -229,6 +235,23 @@ class SqlAlchemyRepository:
             if row is None:
                 raise DomainError("TASK_NOT_FOUND", "The task was not found.", 404)
             return Task.model_validate(row.payload)
+
+    def record_process_lifecycle(self, *, starting: bool) -> None:
+        """Record API lifecycle without flushing cached worker-owned state."""
+
+        now = datetime.now(UTC)
+        values = {
+            "updated_at": now,
+            "startup_was_clean": not starting,
+            "last_successful_startup" if starting else "last_clean_shutdown": now,
+        }
+        with UnitOfWork(self.session_factory) as uow:
+            assert uow.session is not None
+            uow.session.execute(
+                update(SystemStateRow).where(SystemStateRow.id == 1).values(**values)
+            )
+        for key, value in values.items():
+            setattr(self._system, key, value)
 
     def persist(self) -> None:
         try:

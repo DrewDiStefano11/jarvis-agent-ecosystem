@@ -38,7 +38,7 @@ const { chromium } = require(path.join(process.env.SMOKE_WEB, 'node_modules/play
     assert.equal((await persisted.json()).data.status, 'completed')
     await nav.getByRole('link', { name: 'Office', exact: true }).click()
     await page.getByRole('heading', { name: 'Operations floor', exact: true }).waitFor()
-    await page.getByText('worker identity · enabled', { exact: true }).waitFor()
+    await page.getByLabel('Office identity').locator('option', { hasText: 'Local planner' }).waitFor({ state: 'attached' })
     await page.waitForFunction(() => {
       const image = document.querySelector('.office-background')
       return image?.complete && image.naturalWidth === 8192 && image.naturalHeight === 5460
