@@ -165,6 +165,19 @@ class OpenAICompatibleProvider(ProviderBase):
             payload["temperature"] = request.temperature
         if request.max_output_tokens is not None:
             payload["max_tokens"] = request.max_output_tokens
+        if (
+            request.output_schema is not None
+            and ModelCapability.STRUCTURED_OUTPUT in self.capabilities
+        ):
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": request.output_schema.name,
+                    "schema": request.output_schema.json_schema,
+                },
+            }
+        # Compatible servers have no shared switch for disabling reasoning.
+        # This preference never authorizes extra requests or a larger token budget.
         client, owned = self._client_or_new()
         started = perf_counter()
         translated_error: ModelProviderError | None = None

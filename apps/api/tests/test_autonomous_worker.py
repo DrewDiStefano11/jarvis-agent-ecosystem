@@ -159,6 +159,7 @@ def create_assembly_and_runtime(
     task_id: str = "task-demo",
     assembly_content: str = "Approved planning facts.",
     target_agent_id: str | None = None,
+    response_format: str | None = None,
 ) -> str:
     assembly_response = client.post(
         "/api/context/assemblies",
@@ -174,6 +175,7 @@ def create_assembly_and_runtime(
         run_id=run_id,
         task_id=task_id,
         target_agent_id=target_agent_id,
+        response_format=response_format,
     )
     return assembly["id"]
 
@@ -186,6 +188,7 @@ def queue_autonomous_runtime(
     run_id: str,
     task_id: str,
     target_agent_id: str | None = None,
+    response_format: str | None = None,
 ) -> None:
     specification = make_spec(
         run_id=run_id,
@@ -196,6 +199,7 @@ def queue_autonomous_runtime(
             "autonomous_execution": AutonomousExecutionSpecification(
                 execution_type=AutonomousExecutionType.PLANNING_REVIEW,
                 context_assembly_id=assembly_id,
+                response_format=response_format,
                 provider_preference="local-fake",
                 model_name="fixture-model",
                 maximum_provider_requests=2,
@@ -236,6 +240,7 @@ def worker_fixture(
     router: FakeRouter,
     run_id: str = "run-autonomous-1",
     assembly_content: str = "Approved planning facts.",
+    response_format: str | None = None,
 ):
     app = create_app(delay_ms=1, database_url=database_url(tmp_path / f"{run_id}.db"))
     client = TestClient(app)
@@ -249,6 +254,7 @@ def worker_fixture(
         actor_id,
         run_id=run_id,
         assembly_content=assembly_content,
+        response_format=response_format,
     )
     worker = app.state.task_leases.register_worker(
         "phase-2c-test-worker",
@@ -1026,12 +1032,16 @@ def test_worker_health_counts_backlog_and_requires_fresh_live_worker(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_invalid_output_uses_one_bounded_repair_call(tmp_path: Path) -> None:
+@pytest.mark.parametrize("response_format", [None, "planning_review_json_v1"])
+async def test_invalid_output_uses_one_bounded_repair_call(
+    tmp_path: Path, response_format: str | None
+) -> None:
     router = FakeRouter(["not-json", json.dumps(VALID_RESULT)])
     app, client, _, worker = worker_fixture(
         tmp_path,
         router=router,
         run_id="run-autonomous-repair",
+        response_format=response_format,
     )
     try:
         result = await app.state.autonomous_worker_service.run_once(worker.id)
@@ -1039,6 +1049,14 @@ async def test_invalid_output_uses_one_bounded_repair_call(tmp_path: Path) -> No
         assert result.stage == "completed"
         assert result.requestCount == 2
         assert len(router.requests) == 2
+        for request in router.requests:
+            assert request.prefer_no_reasoning is (response_format is not None)
+            if response_format is not None:
+                assert set(request.output_schema.json_schema["properties"]) == set(
+                    PlanningReviewResult.model_fields
+                )
+            else:
+                assert request.output_schema is None
         repair_text = router.requests[1].messages[-1].content
         assert "Invalid generated output:\nnot-json" in repair_text
         assert "Approved planning facts" not in repair_text
@@ -1518,8 +1536,9 @@ async def test_prepared_execution_recovery_cancels_superseded_completed_task(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("response_format", [None, "planning_review_json_v1"])
 async def test_crash_after_runtime_start_with_prepared_execution_recovers_without_stranding(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, response_format: str | None
 ) -> None:
     router = FakeRouter([json.dumps(VALID_RESULT)])
     test_only_secret = "test-only-secret-must-not-persist"
@@ -1528,6 +1547,7 @@ async def test_crash_after_runtime_start_with_prepared_execution_recovers_withou
         router=router,
         run_id="run-start-before-checkpoint-recovery",
         assembly_content=f"Approved planning facts: {test_only_secret}",
+        response_format=response_format,
     )
     service = app.state.autonomous_worker_service
     original_handle = service._handle
@@ -1609,6 +1629,9 @@ async def test_crash_after_runtime_start_with_prepared_execution_recovers_withou
         assert runtime.attempt_count == 1
         assert runtime.active_attempt_id is None
         assert len(router.requests) == 1  # Within the documented pre-result allowance of two.
+        assert router.requests[0].prefer_no_reasoning is (response_format is not None)
+        assert (router.requests[0].output_schema is not None) is (response_format is not None)
+        assert recovered.executionRequestHash == prepared.executionRequestHash
 
         with app.state.model_execution_repository.sessions() as session:
             rows = list(

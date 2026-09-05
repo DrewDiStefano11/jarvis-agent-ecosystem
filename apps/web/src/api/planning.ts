@@ -8,11 +8,12 @@ export interface PlanningSubmission {
 }
 export const newPlanningSubmission = (task: Task, actorId: string, targetId: string): PlanningSubmission => ({
   id: crypto.randomUUID(), timestamp: new Date().toISOString(), task: structuredClone(task), actorId, targetId,
+  responseFormat: 'planning_review_json_v1',
 })
 
 /** Repeating the same submission resumes its durable commands without creating new work. */
 export async function submitPlanning(submission: PlanningSubmission): Promise<RuntimeRun> {
-  const { id, timestamp, task, actorId, targetId } = submission
+  const { id, timestamp, task, actorId, targetId, responseFormat } = submission
   const content = task.description
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content))
   const contentHash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('')
@@ -37,6 +38,7 @@ export async function submitPlanning(submission: PlanningSubmission): Promise<Ru
         requested_operation: 'Local planning review', created_at: timestamp, idempotency_key: `planning-${id}`,
         maximum_permitted_attempts: 3, autonomous_execution: { execution_type: 'planning_review',
           context_assembly_id: assembly.id, maximum_provider_requests: 2, maximum_repair_calls: 1,
+          ...(responseFormat ? { response_format: responseFormat } : {}),
           maximum_output_tokens: 2048, maximum_execution_seconds: 300 } },
     }),
   })

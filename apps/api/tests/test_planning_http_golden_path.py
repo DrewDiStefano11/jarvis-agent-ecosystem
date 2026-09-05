@@ -12,14 +12,15 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.model_providers.factory import build_model_router
+from app.models.autonomous_worker import PlanningReviewResult
 from tests.test_autonomous_worker import VALID_RESULT, FakeRouter, worker_fixture
 from tests.test_persistence import database_url
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider_failure", [False, True])
+@pytest.mark.parametrize("provider_failure", [None, "unavailable", "empty-content"])
 async def test_http_provider_execution_is_durable_and_failure_is_visible(
-    tmp_path: Path, provider_failure: bool
+    tmp_path: Path, provider_failure: str | None
 ) -> None:
     requests = []
 
@@ -44,13 +45,19 @@ async def test_http_provider_execution_is_durable_and_failure_is_visible(
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             requests.append(body)
-            if provider_failure:
+            if provider_failure == "unavailable":
                 self.reply({"error": "fixture unavailable"}, 503)
             else:
                 self.reply(
                     {
                         "model": "fixture-model",
-                        "message": {"role": "assistant", "content": json.dumps(VALID_RESULT)},
+                        "message": {
+                            "role": "assistant",
+                            "content": ""
+                            if provider_failure == "empty-content"
+                            else json.dumps(VALID_RESULT),
+                        },
+                        "diagnostic": "fixture-private-diagnostic",
                         "done": True,
                         "done_reason": "stop",
                         "prompt_eval_count": 20,
@@ -62,7 +69,12 @@ async def test_http_provider_execution_is_durable_and_failure_is_visible(
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     run_id = "run-http-failure" if provider_failure else "run-http-success"
-    app, client, actor, worker = worker_fixture(tmp_path, router=FakeRouter([]), run_id=run_id)
+    app, client, actor, worker = worker_fixture(
+        tmp_path,
+        router=FakeRouter([]),
+        run_id=run_id,
+        response_format="planning_review_json_v1",
+    )
     try:
         settings = app.state.settings
         settings.model_ollama_enabled = True
@@ -75,6 +87,11 @@ async def test_http_provider_execution_is_durable_and_failure_is_visible(
         result = await app.state.autonomous_worker_service.run_once(worker.id)
         assert result is not None
         assert requests and all(item["model"] == "fixture-model" for item in requests)
+        assert all(
+            set(item["format"]["properties"]) == set(PlanningReviewResult.model_fields)
+            for item in requests
+        )
+        assert all(item["think"] is False for item in requests)
         assert len(requests) <= 2
         headers = {"X-Jarvis-Actor-Id": actor}
         response = client.get(
@@ -91,6 +108,12 @@ async def test_http_provider_execution_is_durable_and_failure_is_visible(
                 == "paused"
             )
             assert stored["failureCode"]
+            assert stored["failureCode"] == (
+                "model_output_invalid"
+                if provider_failure == "empty-content"
+                else "no_local_provider_available"
+            )
+            assert "fixture-private-diagnostic" not in json.dumps(stored)
             assert stored["result"] is None
             assert client.get("/api/health").status_code == 200
         else:

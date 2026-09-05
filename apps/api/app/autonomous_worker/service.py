@@ -40,9 +40,11 @@ from app.model_providers.contracts import (
     ModelExecutionRequest,
     ModelExecutionResponse,
     ModelMessage,
+    ModelOutputSchema,
 )
 from app.model_providers.errors import (
     BudgetExceededError,
+    MalformedProviderResponseError,
     ModelProviderError,
     ProviderExecutionDisabledError,
     RequestTimeoutError,
@@ -158,7 +160,9 @@ class AutonomousWorkerService:
             assembly = self.executions.load_context_assembly(request.context_assembly_id)
             self._validate_assembly(snapshot, assembly)
             revision_findings = self._revision_findings(snapshot.specification.run_id, cycle, actor)
-            messages, execution_request_hash = self._execution_messages(assembly, revision_findings)
+            messages, execution_request_hash = self._execution_messages(
+                assembly, revision_findings, request.response_format
+            )
             recovered_uncommitted = execution is not None
             snapshot, execution = self._claim_prepare_and_start(
                 snapshot,
@@ -746,6 +750,7 @@ class AutonomousWorkerService:
             task_id=snapshot.specification.task_id,
             correlation_id=snapshot.specification.correlation_id or snapshot.specification.run_id,
             required_capability=ModelCapability.CHAT,
+            **self._output_options(request.response_format),
         )
         response = await self._provider_call(
             snapshot,
@@ -799,6 +804,7 @@ class AutonomousWorkerService:
                 correlation_id=snapshot.specification.correlation_id
                 or snapshot.specification.run_id,
                 required_capability=ModelCapability.CHAT,
+                **self._output_options(request.response_format),
             )
             response = await self._provider_call(
                 snapshot,
@@ -884,6 +890,8 @@ class AutonomousWorkerService:
             raise AutonomousWorkerError("MODEL_EXECUTION_DISABLED", status_code=503) from exc
         except UnknownProviderError as exc:
             raise AutonomousWorkerError("NO_LOCAL_PROVIDER_AVAILABLE", status_code=503) from exc
+        except MalformedProviderResponseError as exc:
+            raise AutonomousWorkerError("MODEL_OUTPUT_INVALID") from exc
         except ModelProviderError as exc:
             raise AutonomousWorkerError("NO_LOCAL_PROVIDER_AVAILABLE", status_code=503) from exc
         finally:
@@ -1882,9 +1890,40 @@ class AutonomousWorkerService:
         return suffix if cycle == 0 else f"{suffix}-r{cycle}"
 
     @staticmethod
+    def _output_options(response_format: str | None) -> dict[str, Any]:
+        if response_format is None:
+            return {}
+
+        def generation_schema(value: Any) -> Any:
+            if isinstance(value, dict):
+                # Expanding large length/count bounds can exceed local decoder
+                # grammar limits. The complete Pydantic validator still enforces
+                # those bounds before persistence; token/request caps also remain.
+                result = {
+                    key: generation_schema(item)
+                    for key, item in value.items()
+                    if key not in {"maxLength", "maxItems"}
+                }
+                if result.get("type") == "object" and "properties" in result:
+                    result["required"] = list(result["properties"])
+                return result
+            if isinstance(value, list):
+                return [generation_schema(item) for item in value]
+            return value
+
+        return {
+            "output_schema": ModelOutputSchema(
+                name=response_format,
+                json_schema=generation_schema(PlanningReviewResult.model_json_schema()),
+            ),
+            "prefer_no_reasoning": True,
+        }
+
+    @staticmethod
     def _execution_messages(
         assembly: ContextAssembly,
         revision_findings: tuple[str, ...] = (),
+        response_format: str | None = None,
     ) -> tuple[list[ModelMessage], str]:
         assert assembly.modelRequest is not None
         messages: list[ModelMessage] = []
@@ -1913,16 +1952,19 @@ class AutonomousWorkerService:
                     content=revision_directive(revision_findings),
                 )
             )
-        digest = sha256(
-            canonical_json(
-                {
-                    "assemblyRequestHash": assembly.requestHash,
-                    "messages": [message.model_dump(mode="json") for message in messages],
-                    "executionType": "planning_review",
-                    "outputSchemaVersion": "1.0",
-                }
-            ).encode()
-        ).hexdigest()
+        payload = {
+            "assemblyRequestHash": assembly.requestHash,
+            "messages": [message.model_dump(mode="json") for message in messages],
+            "executionType": "planning_review",
+            "outputSchemaVersion": "1.0",
+        }
+        if response_format is not None:
+            options = AutonomousWorkerService._output_options(response_format)
+            payload["outputOptions"] = {
+                "output_schema": options["output_schema"].model_dump(mode="json"),
+                "prefer_no_reasoning": options["prefer_no_reasoning"],
+            }
+        digest = sha256(canonical_json(payload).encode()).hexdigest()
         return messages, digest
 
     @staticmethod

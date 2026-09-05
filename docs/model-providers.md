@@ -50,8 +50,19 @@ transports and never require a live provider.
 
 Requests may select a model, temperature, maximum output tokens, timeout, task/correlation IDs,
 required capability, and bounded metadata. Streaming is rejected. The capability vocabulary also
-contains future `tool_calling`, `structured_output`, and `vision` values, but built-in adapters
-reject configuration claiming those values because their string-only contracts do not map them.
+contains future `tool_calling` and `vision` values, but built-in adapters reject configuration
+claiming those values because their string-only contracts do not map them. `structured_output`
+can be explicitly declared for a compatible local server supporting JSON-schema response
+formatting; default compatible capabilities remain unchanged.
+
+Requests may carry a bounded, application-supplied `output_schema` and a
+`prefer_no_reasoning` preference. Ollama maps these to `format` and `think: false`.
+Compatible adapters send `response_format` only when configured with `structured_output`;
+they omit the nonportable reasoning preference. These are generation aids, not permission or
+validation bypasses. Final output still passes canonical Pydantic validation and deterministic
+review, with existing token, time and request limits. See the
+[Ollama chat contract](https://docs.ollama.com/api/chat) and
+[thinking behavior](https://docs.ollama.com/capabilities/thinking).
 
 `ModelExecutionResponse` contains generated text, provider and model names, normalized token
 usage and quality, latency, finish reason, identifiers, optional exact-price cost estimate, and
@@ -246,7 +257,7 @@ developer-specific configuration must not be committed.
 
 ## Deferred work
 
-Remote-provider threat modeling, streaming, tools, provider-native structured output, vision,
+Remote-provider threat modeling, streaming, tools, vision,
 persistent accounting beyond one durable execution result, production telemetry, general
 autonomous scheduling, memory, office controls, and external gateway operations remain outside
 this phase. See `docs/autonomous-worker.md` for the one real local execution path.

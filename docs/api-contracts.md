@@ -77,3 +77,8 @@ New autonomous runtime create/queue commands require the durable task to remain
 `AUTONOMOUS_TASK_NOT_READY` (409) without a run/event/audit/idempotency mutation.
 Already accepted command IDs remain replayable after task completion. General
 runtime commands without autonomous execution keep their existing behavior.
+
+Autonomous execution specifications accept optional `response_format: planning_review_json_v1`.
+It enables bounded planning JSON generation preferences; it adds no tools or remote access.
+Absent values are omitted during serialization so legacy persisted commands and checkpoints
+retain their hashes. New values participate in command identity and execution-request hashing.

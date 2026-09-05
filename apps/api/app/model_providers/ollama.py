@@ -118,6 +118,10 @@ class OllamaProvider(ProviderBase):
             payload["options"] = options
         if self.keep_alive is not None:
             payload["keep_alive"] = self.keep_alive
+        if request.output_schema is not None:
+            payload["format"] = request.output_schema.json_schema
+        if request.prefer_no_reasoning:
+            payload["think"] = False
         client, owned = self._client_or_new()
         started = perf_counter()
         translated_error: ModelProviderError | None = None
