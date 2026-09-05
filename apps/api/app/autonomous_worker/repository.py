@@ -33,6 +33,7 @@ from app.models.autonomous_worker import (
     ModelExecutionResult,
     ModelExecutionStage,
     PlanningReviewResult,
+    WorkspacePlanResult,
 )
 from app.models.context import ContextAssembly
 from app.models.domain import EventEnvelope
@@ -144,7 +145,10 @@ class ModelExecutionRepository:
             for row in rows:
                 snapshot = AgentRunSnapshot.model_validate_json(row.snapshot_json)
                 request = snapshot.specification.autonomous_execution
-                if request is None or request.execution_type.value != "planning_review":
+                if request is None or request.execution_type.value not in {
+                    "planning_review",
+                    "workspace_plan",
+                }:
                     continue
                 snapshots.append(snapshot)
             if snapshots:
@@ -254,7 +258,10 @@ class ModelExecutionRepository:
             for row in rows:
                 snapshot = AgentRunSnapshot.model_validate_json(row.snapshot_json)
                 request = snapshot.specification.autonomous_execution
-                if request is None or request.execution_type.value != "planning_review":
+                if request is None or request.execution_type.value not in {
+                    "planning_review",
+                    "workspace_plan",
+                }:
                     continue
                 snapshots.append(snapshot)
             if snapshots:
@@ -1087,7 +1094,10 @@ class ModelExecutionRepository:
             if row.result_hash is None or actual_hash != row.result_hash:
                 raise AutonomousWorkerError("MODEL_RESULT_CORRUPT")
             try:
-                result = PlanningReviewResult.model_validate(row.result_json)
+                result_type = (
+                    WorkspacePlanResult if "steps" in row.result_json else PlanningReviewResult
+                )
+                result = result_type.model_validate(row.result_json)
             except ValidationError as exc:
                 raise AutonomousWorkerError("MODEL_RESULT_CORRUPT") from exc
             if row.requires_human_review != result.requiresHumanReview:

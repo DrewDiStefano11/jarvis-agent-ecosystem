@@ -10,3 +10,4 @@ body{min-width:0}
 .runtime-result { padding: 1rem 0; border-bottom: 1px solid var(--border, #34404e); overflow-wrap: anywhere; }
 
 .content a,.drawer a{color:var(--accent);text-underline-offset:3px}.secondary{padding:9px 13px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2);color:var(--text)}.secondary:hover:not(:disabled){border-color:var(--accent)}
+.task-create-form{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:16px;align-items:start}.task-create-form>h2,.task-create-form>p,.task-create-form>.task-description{grid-column:1 / -1}.task-create-form>label{display:grid;gap:8px;min-width:0}.task-create-form>button{justify-self:start}.task-create-form textarea{min-height:140px;resize:vertical}.task-create-form input,.task-create-form textarea,.task-create-form select{width:100%;min-width:0}@media(max-width:600px){.task-create-form{grid-template-columns:minmax(0,1fr)}}

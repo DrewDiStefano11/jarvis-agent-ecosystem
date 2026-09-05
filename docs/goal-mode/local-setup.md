@@ -82,10 +82,16 @@ The Office uses the real prototype artwork and shares Hub state.
    .\.venv\Scripts\python.exe -m app.autonomous_worker
    ```
 
-5. Open **Planning**, select the task, prepare its planner (or select an already-authorized actor and target),
+5. Open **Planning**, select the task, prepare its planner (or select the already-authorized configured worker identity and an active target),
    and choose **Queue local plan**. This explicitly submits the
    task text as operator-approved context. Context checks may require review
    before any execution is queued.
+   **Worker readiness** shows the identity used by the running worker. Queueing
+   requires that same identity in **Act as local identity**; other identities
+   remain available for reading authorized history. **Use configured worker
+   identity** changes only the selected actor, and the target may be different.
+   Selecting an actor grants no permissions: use explicit task setup when needed,
+   and resolve any existing denial through the normal authorization policy.
 6. Inspect runtime history and persisted model results on the same page. The
    worker validates and deterministically reviews the result. Bounded revisions
    may run; exhausted or unsafe work is visibly failed or paused for human review.
@@ -95,8 +101,40 @@ The Office uses the real prototype artwork and shares Hub state.
 Provider readiness means configured, not proven inference. The execution result
 records the provider, model, request count, failure code and actual returned output.
 Retrying a partially acknowledged planning submission reuses its command/context
-IDs while that submission remains in the form. Clearing the form does not cancel
-existing work. After reloading the page, inspect history before submitting again.
+IDs. Before network submission, the browser saves versioned retry IDs, identity
+and task references, the captured output format, and an input fingerprint. Task
+text and model output are not saved in browser storage. After reloading, choose
+**Recover submission**, inspect history, then **Retry same submission** if needed.
+Recovery itself sends no create/queue commands. If the task input changed, replay
+is refused rather than sending different input under an existing command ID.
+Queueing or retrying also requires the current task to remain queued or retrying.
+If it has completed, failed, been cancelled or paused for review, inspect the
+original outcome in history and clear the form instead of queueing further work.
+
+Acknowledged queueing removes its saved retry record. **Clear submission form**
+or **Forget saved retry ID** removes only that browser record; neither cancels
+existing work. If browser storage is blocked, a visible warning asks you to keep
+the current form open and inspect durable history after reload. Retry IDs are
+scoped to the configured API origin, and each concurrent submission has its own
+record so one tab does not overwrite another tab's retry state.
+
+## Correcting a reviewed or finished request
+
+In Planning, select a task that needs human review, failed, was cancelled, or
+completed, then choose **Revise task input**. Edit its title, request and priority
+using the review findings. **Create corrected task** creates new queued work with
+a durable link to the source and its project; it preserves the source input,
+result, review and runtime history. Task details link in both directions.
+
+Choose **Open planning for this task**, explicitly prepare its local planner, and
+queue its plan. A correction never approves or resumes the original run. Active
+tasks must finish or be cancelled before they can be used as correction sources.
+
+If task creation loses its acknowledgement, **Retry creation** uses the same
+request and idempotency key. After a reload, inspect the task list first; submitting
+identical fields reuses the saved key. The browser stores only an input fingerprint
+and retry key, so edited request text is not restored after a reload. A changed
+request is separate work. Successful acknowledgement clears the saved creation key.
 
 ## Validation
 
@@ -125,7 +163,10 @@ reference. It does not establish real model quality or browser rendering.
 
 The CI `runtime-browser` job additionally installs Chromium and runs the browser
 path against actual API and worker processes. It uploads desktop/mobile office
-screenshots and planning completion evidence. To run that path locally after
+screenshots and planning completion evidence. The browser path also loses and
+recovers planning and correction-creation acknowledgements across reloads, executes
+the explicitly queued correction, and verifies one inference per task with the
+original result preserved. To run that path locally after
 `pnpm exec playwright install chromium` in `apps/web`, set
 `JARVIS_SMOKE_BROWSER=true` and `SMOKE_ARTIFACT_DIR` to an output directory, then
 run the same smoke script. Inference remains the explicitly labeled fixture.

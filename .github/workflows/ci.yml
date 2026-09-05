@@ -90,6 +90,8 @@ jobs:
       - run: ruff check scripts
       - run: pnpm --dir apps/web install --frozen-lockfile
       - run: pnpm --dir apps/web office:assets
+      - name: Original office collision and registration evidence
+        run: node scripts/build-office-network.cjs
       - run: pnpm exec playwright install --with-deps chromium
         working-directory: apps/web
       - name: Real process and frontend submission contract
@@ -99,6 +101,12 @@ jobs:
         env:
           JARVIS_SMOKE_BROWSER: 'true'
           SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/jarvis-browser
+      - name: Persisted live office and runtime activity
+        run: python scripts/smoke-local-planning.py
+        env:
+          JARVIS_SMOKE_BROWSER: 'true'
+          JARVIS_SMOKE_OFFICE: 'true'
+          SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/jarvis-browser/live-office
       - uses: actions/upload-artifact@v4
         if: always()
         with:

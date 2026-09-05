@@ -1,10 +1,11 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import App from '../src/App'
 import { AppStoreProvider } from '../src/state/AppStore'
 import type { Agent, Approval, Artifact, AuditEvent, Department, Notification, SystemStatus, Task } from '../src/types/contracts'
+import officeCatalog from '../../api/app/office/catalog.json'
 
 const now='2026-01-15T14:00:00Z'
 const agents:Agent[]=['jarvis','atlas','scout','archive','sentinel'].map((id,index)=>({id,schemaVersion:'1.0',name:id[0]!.toUpperCase()+id.slice(1),role:index===0?'Executive Manager':'Specialist',description:'Simulated agent',goals:['Be transparent'],departmentId:index===0?'executive':'research',managerId:index===0?null:'jarvis',status:'idle',currentTaskId:null,queuedTaskIds:[],progress:0,statusMessage:'Available',capabilities:['simulation'],allowedTools:['fixture'],deniedTools:['shell'],approvalPolicy:{},memoryAccess:{},performance:{completionRate:.9,accuracyScore:.9,averageCompletionTime:10,failedTaskCount:0,userCorrectionCount:0,reviewerScore:.9,reliabilityScore:.95},resourceProfile:{},office:{zone:index===0?'Executive':'Research',deskId:`D-${index}`,spriteIdentifier:id,displayPosition:{x:1,y:1},currentAnimationState:'idle',currentDestination:null,isInMeeting:false},createdAt:now,updatedAt:now,version:'1',deploymentStatus:'simulated',isTemporary:false}))
@@ -16,10 +17,12 @@ const notifications:Notification[]=[{id:'n1',title:'Hello',message:'Simulation',
 const artifacts:Artifact[]=[]
 const system:SystemStatus={status:'healthy',environment:'test',apiSchemaVersion:'1.0',seedDataVersion:'2.0',emergencyStop:false,simulator:{state:'running',currentStep:4,totalSteps:25,accelerated:true},resources:[{name:'CPU',value:'fixture 18%',label:'Simulated'}],lastSynchronizedAt:now,storageBackend:'sqlite',databaseHealthy:true,databaseRevision:'20260724_03',schemaCurrent:true,eventSessionId:'session-test',outboxPendingCount:0,outboxExhaustedCount:0,recoveryRequired:false,activeWorkflowRunId:'run-test',lastCheckpointId:'checkpoint-test',lastStartupAt:now,lastCleanShutdown:null,activeWorkerCount:0,activeLeaseCount:0,expiredLeaseCount:0,staleWorkerCount:0,contextAssembler:{state:'ready',totalAssemblies:2,completedAssemblies:1,reviewRequiredAssemblies:1,includedSources:3,excludedSources:1,redactions:2,injectionFindings:1,lastAssemblyAt:now}}
 const endpointData:Record<string,unknown>={'/api/departments':departments,'/api/agents':agents,'/api/tasks':tasks,'/api/approvals':approvals,'/api/artifacts':artifacts,'/api/audit-events':auditEvents,'/api/notifications':notifications,'/api/system/status':system}
+endpointData['/api/office'] = { serverTime: now, catalog: officeCatalog, placements: [], placementVersions: {}, emergencyStop: false }
 
 class FakeWebSocket {static instances:FakeWebSocket[]=[];static CONNECTING=0;static OPEN=1;readyState=1;sent:string[]=[];onopen:(()=>void)|null=null;onmessage:((event:{data:string})=>void)|null=null;onerror:(()=>void)|null=null;onclose:(()=>void)|null=null;constructor(public url:string){FakeWebSocket.instances.push(this);queueMicrotask(()=>this.onopen?.())}close(){}send(value:string){this.sent.push(value)}emit(event:unknown){this.onmessage?.({data:JSON.stringify(event)})}emitRaw(value:string){this.onmessage?.({data:value})}}
 
 function renderApp(){return render(<BrowserRouter><AppStoreProvider><App/></AppStoreProvider></BrowserRouter>)}
+beforeEach(() => localStorage.clear())
 beforeEach(()=>{window.history.pushState({},'', '/');FakeWebSocket.instances=[];vi.stubGlobal('WebSocket',FakeWebSocket);vi.stubGlobal('fetch',vi.fn(async(input:string|URL|Request,init?:RequestInit)=>{const path=new URL(typeof input==='string'?input:input instanceof URL?input.href:input.url).pathname;const data=endpointData[path]??(init?.method==='POST'?{}:[]);return {ok:true,status:200,json:async()=>({data,meta:{schemaVersion:'1.0'}})} as Response}))})
 
 describe('Jarvis interface',()=>{
@@ -89,6 +92,52 @@ describe('Local planning integration', () => {
 })
 
 describe('operator control failures', () => {
+ test('operator correction preserves its source and recovers one created task after an uncertain acknowledgement', async () => {
+  const source = { ...tasks[0]!, status: 'under_review', result: 'Original reviewed result' }
+  const corrected = { ...tasks[0]!, id: 'task-corrected', title: 'Corrected request', description: 'Use the clarified acceptance requirements.', status: 'queued', correctionOfTaskId: source.id }
+  endpointData['/api/tasks'] = [source]
+  window.history.pushState({}, '', `/tasks?correct=${source.id}`)
+  const original = vi.mocked(fetch).getMockImplementation()!
+  const creations: RequestInit[] = []
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+   if (String(input).endsWith('/api/tasks') && init?.method === 'POST') {
+    creations.push(init)
+    endpointData['/api/tasks'] = [source, corrected]
+    if (creations.length === 1) throw new TypeError('Acknowledgement interrupted')
+    return { ok: true, status: 201, json: async () => ({ data: corrected }) } as Response
+   }
+   return original(input, init)
+  })
+  try {
+   renderApp()
+   await screen.findByRole('heading', { name: 'Correct task input' })
+   await userEvent.clear(screen.getByLabelText('Title'))
+   await userEvent.type(screen.getByLabelText('Title'), corrected.title)
+   await userEvent.clear(screen.getByLabelText('Description'))
+   await userEvent.type(screen.getByLabelText('Description'), corrected.description)
+   await userEvent.click(screen.getByRole('button', { name: 'Create corrected task' }))
+   expect(await screen.findByRole('alert')).toHaveTextContent('Acknowledgement interrupted')
+   expect(screen.getByLabelText('Description')).toBeDisabled()
+   await userEvent.click(screen.getByRole('button', { name: 'Retry creation' }))
+   const planning = await screen.findByRole('link', { name: 'Open planning for this task' })
+   expect(creations).toHaveLength(2)
+   expect(creations[0]).toEqual(creations[1])
+   expect(JSON.parse(creations[0]!.body as string)).toEqual({ title: corrected.title, description: corrected.description, priority: source.priority, correctionOfTaskId: source.id })
+   expect(source.status).toBe('under_review')
+   expect(source.result).toBe('Original reviewed result')
+   await userEvent.click(planning)
+   expect(await screen.findByLabelText('Task and history')).toHaveValue(corrected.id)
+   expect(vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(2)
+  } finally { endpointData['/api/tasks'] = tasks }
+ })
+
+ test('an active task cannot open the correction form', async () => {
+  window.history.pushState({}, '', `/tasks?correct=${tasks[0]!.id}`)
+  renderApp()
+  expect(await screen.findByRole('alert')).toHaveTextContent('This task is still active')
+  expect(screen.queryByRole('button', { name: 'Create corrected task' })).not.toBeInTheDocument()
+ })
+
  test('failed emergency stop remains visible and releases its control', async () => {
   renderApp(); await screen.findByText('Good evening, operator.')
   const original = vi.mocked(fetch).getMockImplementation()!
@@ -128,4 +177,140 @@ test('explicit task setup selects the provisioned identity without queueing infe
   endpointData['/api/tasks'] = tasks
   delete endpointData['/api/identity/agents']; delete endpointData['/api/local-planning/setup']; delete endpointData['/api/agent-runtime/runs']
  }
+})
+
+describe('planning worker identity', () => {
+ const worker = { enabled: true, modelExecutionMode: 'local_only', workerActorId: 'worker-a', status: 'healthy', reasonCode: null, activeExecutionCount: 0, queuedEligibleRuntimeCount: 0, completedExecutionCount: 0, failedExecutionCount: 0, reviewRequiredCount: 0, providerReady: true, lastWorkerHeartbeat: now, lastSuccessfulExecutionAt: null }
+ const originalCrypto = globalThis.crypto
+ beforeEach(() => {
+  endpointData['/api/tasks'] = tasks.map(task => ({ ...task, status: 'queued' }))
+  endpointData['/api/system/status'] = { ...system, autonomousWorker: worker }
+  endpointData['/api/identity/agents'] = ['worker-a', 'actor-b'].map(id => ({ id, display_name: id === 'worker-a' ? 'Configured worker' : 'Other operator', stable_key: id, lifecycle_state: 'active', is_enabled: true, operational_status: 'idle', agent_type: 'worker' }))
+  endpointData['/api/agent-runtime/runs'] = { items: [], next_offset: null, total_count: 0 }
+  endpointData['/api/model-executions'] = []
+  vi.stubGlobal('crypto', { randomUUID: () => 'planning-test', subtle: { digest: async () => new Uint8Array([1, 2]).buffer } })
+ })
+ afterEach(() => {
+  endpointData['/api/tasks'] = tasks
+  endpointData['/api/system/status'] = system
+  delete endpointData['/api/identity/agents']; delete endpointData['/api/agent-runtime/runs']; delete endpointData['/api/model-executions']
+  vi.stubGlobal('crypto', originalCrypto)
+ })
+ const openPlanning = async () => {
+  window.history.pushState({}, '', '/runtime'); renderApp()
+  await waitFor(() => expect(screen.getByLabelText('Act as local identity')).toHaveTextContent('Other operator'))
+  await userEvent.selectOptions(screen.getByLabelText('Act as local identity'), 'actor-b')
+  await userEvent.selectOptions(screen.getByLabelText('Target agent'), 'actor-b')
+  await userEvent.selectOptions(screen.getByLabelText('Task and history'), tasks[0]!.id)
+ }
+ const acceptPlanningCommands = (failQueue = false) => {
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+   const path = new URL(String(input)).pathname
+   if (init?.method === 'POST' && path === '/api/context/assemblies') return { ok: true, status: 200, json: async () => ({ data: { id: 'context-test', status: 'completed' } }) } as Response
+   if (init?.method === 'POST' && path === '/api/agent-runtime/commands') {
+    const body = JSON.parse(String(init.body))
+    if (failQueue && body.command_type === 'queue') return { ok: false, status: 503, json: async () => ({ error: { code: 'UNAVAILABLE', message: 'Queue response unavailable' } }) } as Response
+    return { ok: true, status: 200, json: async () => ({ data: { snapshot: { specification: { run_id: 'run-planning-test' }, version: 1, state: body.command_type === 'queue' ? 'queued' : 'created' } } }) } as Response
+   }
+   return original(input, init)
+  })
+ }
+ test('blocks another submitter, then queues as the explicitly selected worker without changing the target or grants', async () => {
+  acceptPlanningCommands()
+  await openPlanning()
+  expect(screen.getByText(/Select the configured worker identity to queue a plan/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Queue local plan' })).toBeDisabled()
+  await userEvent.click(screen.getByRole('button', { name: 'Queue local plan' }))
+  expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+  await userEvent.click(screen.getByRole('button', { name: 'Use configured worker identity' }))
+  expect(screen.getByLabelText('Act as local identity')).toHaveValue('worker-a')
+  expect(screen.getByLabelText('Target agent')).toHaveValue('actor-b')
+  await userEvent.click(screen.getByRole('button', { name: 'Queue local plan' }))
+  expect(await screen.findByText(/Queued run-planning-test/)).toBeInTheDocument()
+  const commands = vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url).endsWith('/api/agent-runtime/commands') && init?.method === 'POST')
+  expect(commands).toHaveLength(2)
+  for (const [, init] of commands) {
+   expect(init?.headers).toMatchObject({ 'X-Jarvis-Actor-Id': 'worker-a' })
+   expect(JSON.parse(String(init?.body))).toMatchObject({ actor_reference: 'worker-a' })
+  }
+  expect(JSON.parse(String(commands[0]![1]?.body)).specification.agent_id).toBe('actor-b')
+  expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('/api/local-planning/setup'))).toBe(false)
+ })
+ test('does not allow global readiness to enable submission when worker identity is unconfigured', async () => {
+  endpointData['/api/system/status'] = { ...system, autonomousWorker: { ...worker, workerActorId: null } }
+  await openPlanning()
+  expect(screen.getByText(/Configure JARVIS_AUTONOMOUS_WORKER_ACTOR_ID/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Queue local plan' })).toBeDisabled()
+  expect(screen.queryByRole('button', { name: 'Use configured worker identity' })).not.toBeInTheDocument()
+ })
+ test('blocks retrying an old submission when the configured worker changes', async () => {
+  acceptPlanningCommands(true)
+  await openPlanning()
+  await userEvent.click(screen.getByRole('button', { name: 'Use configured worker identity' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Queue local plan' }))
+  expect(await screen.findByText('Queue response unavailable')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Retry same submission' })).toBeEnabled()
+  endpointData['/api/system/status'] = { ...system, autonomousWorker: { ...worker, workerActorId: 'actor-b' } }
+  act(() => FakeWebSocket.instances[0]!.emit({ eventId: 'worker-change', schemaVersion: '1', eventType: 'noop', timestamp: now, sequenceNumber: 1, correlationId: 'worker-change', taskId: null, agentId: null, source: 'test', payload: {} }))
+  expect(await screen.findByText(/The configured worker identity changed/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Retry same submission' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Use configured worker identity' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Clear submission form' })).toBeEnabled()
+ })
+ test.each(['completed', 'failed', 'cancelled', 'under_review'])('blocks a pending submission when authoritative task becomes %s', async terminalStatus => {
+  acceptPlanningCommands(true)
+  await openPlanning()
+  await userEvent.click(screen.getByRole('button', { name: 'Use configured worker identity' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Queue local plan' }))
+  await screen.findByText('Queue response unavailable')
+  const originalCommands = vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === 'POST').length
+  endpointData['/api/tasks'] = tasks.map(task => ({ ...task, status: terminalStatus }))
+  act(() => FakeWebSocket.instances[0]!.emit({ eventId: 'task-terminal', schemaVersion: '1', eventType: 'task.changed', timestamp: now, sequenceNumber: 1, correlationId: 'task-terminal', taskId: tasks[0]!.id, agentId: null, source: 'test', payload: {} }))
+  await screen.findByText(new RegExp('This task is now ' + terminalStatus))
+  expect(screen.getByRole('button', { name: 'Retry same submission' })).toBeDisabled()
+  await userEvent.click(screen.getByRole('button', { name: 'Retry same submission' }))
+  expect(vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(originalCommands)
+  expect(screen.getByRole('button', { name: 'Clear submission form' })).toBeEnabled()
+ })
+})
+
+describe('Live office controls', () => {
+ test('released identity assignment uses canonical version and visible original station selection', async () => {
+  endpointData['/api/identity/agents'] = [{ id: 'office-real', display_name: 'Office planner', agent_type: 'worker', lifecycle_state: 'active', is_enabled: true }]
+  endpointData['/api/office'] = { serverTime: now, catalog: officeCatalog, placements: [], placementVersions: { 'office-real': 11 }, emergencyStop: false }
+  try {
+   window.history.pushState({}, '', '/office'); renderApp()
+   await waitFor(() => expect(screen.getByLabelText('Office identity')).toHaveTextContent('Office planner'))
+   await userEvent.selectOptions(screen.getByLabelText('Office identity'), 'office-real')
+   await userEvent.selectOptions(screen.getByLabelText('Assign desk'), 'POSITION_030')
+   await userEvent.selectOptions(screen.getByLabelText('Original sprite'), 'agent-sheet-06')
+   await userEvent.click(screen.getByRole('button', { name: 'Assign identity' }))
+   await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url).endsWith('/api/office/identities/office-real/commands') && init?.method === 'POST')).toBe(true))
+   const sent = vi.mocked(fetch).mock.calls.find(([url, init]) => String(url).endsWith('/api/office/identities/office-real/commands') && init?.method === 'POST')!
+   expect(JSON.parse(String(sent[1]!.body))).toEqual({ commandId: expect.stringMatching(/^office-/), action: 'assign', expectedVersion: 11, stationId: 'POSITION_030', spriteId: 'agent-sheet-06' })
+   // A receipt alone does not invent a placement: only the fetched snapshot can.
+   expect(screen.queryByTestId('office-agent-office-real')).not.toBeInTheDocument()
+  } finally {
+   delete endpointData['/api/identity/agents']
+   endpointData['/api/office'] = { serverTime: now, catalog: officeCatalog, placements: [], placementVersions: {}, emergencyStop: false }
+  }
+ })
+ test('inactive identity remains inspectable but cannot be assigned and emergency stop stays visible', async () => {
+  endpointData['/api/identity/agents'] = [{ id: 'office-inactive', display_name: 'Suspended planner', agent_type: 'worker', lifecycle_state: 'suspended', is_enabled: false }]
+  endpointData['/api/office'] = { serverTime: now, catalog: officeCatalog, placements: [], placementVersions: {}, emergencyStop: true }
+  try {
+   window.history.pushState({}, '', '/office'); renderApp()
+   await waitFor(() => expect(screen.getByLabelText('Office identity')).toHaveTextContent('Suspended planner'))
+   await userEvent.selectOptions(screen.getByLabelText('Office identity'), 'office-inactive')
+   expect(screen.getByRole('button', { name: 'Assign identity' })).toBeDisabled()
+   expect(screen.getByRole('button', { name: 'Inspect destination' })).toBeEnabled()
+   expect(screen.getByText(/Activate this identity/)).toBeInTheDocument()
+   expect(screen.getByText(/Emergency stop is active. Office moves/)).toBeInTheDocument()
+   expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+  } finally {
+   delete endpointData['/api/identity/agents']
+   endpointData['/api/office'] = { serverTime: now, catalog: officeCatalog, placements: [], placementVersions: {}, emergencyStop: false }
+  }
+ })
 })

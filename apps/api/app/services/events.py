@@ -7,7 +7,8 @@ from uuid import uuid4
 
 from fastapi import WebSocket
 
-from app.models.domain import EventEnvelope
+from app.models.context import ContextAssembly
+from app.models.domain import EventEnvelope, Task
 from app.repositories.sqlalchemy import IdempotencyResult, SqlAlchemyRepository
 
 
@@ -79,6 +80,8 @@ class EventBroker:
         source: str = "simulator",
         audit: dict[str, object] | None = None,
         idempotency: IdempotencyResult | None = None,
+        created_task: Task | None = None,
+        created_context: tuple[ContextAssembly, Task] | None = None,
     ) -> EventEnvelope:
         if not self.repository:
             self.sequence += 1
@@ -99,7 +102,16 @@ class EventBroker:
             if audit:
                 envelope["_audit"] = audit
             try:
-                committed = self.repository.enqueue_event(envelope, idempotency)
+                if created_task is not None:
+                    committed = self.repository.enqueue_event(
+                        envelope, idempotency, created_task=created_task
+                    )
+                elif created_context is not None:
+                    committed = self.repository.enqueue_event(
+                        envelope, idempotency, created_context=created_context
+                    )
+                else:
+                    committed = self.repository.enqueue_event(envelope, idempotency)
                 if committed is not None:
                     envelope = committed
                 event = EventEnvelope.model_validate(envelope)

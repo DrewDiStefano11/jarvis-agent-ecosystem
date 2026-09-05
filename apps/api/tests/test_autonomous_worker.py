@@ -365,6 +365,10 @@ async def test_unleaseable_oldest_run_does_not_starve_later_work(tmp_path: Path)
                 ),
             )
         configure_worker(app, actor_id, router)
+        # Admit the run while eligible, then model a task becoming terminal
+        # before the worker scans. New terminal-task admission is rejected.
+        app.state.repository.tasks["task-completed"].status = "queued"
+        app.state.repository.persist()
         create_assembly_and_runtime(
             client,
             app,
@@ -379,6 +383,8 @@ async def test_unleaseable_oldest_run_does_not_starve_later_work(tmp_path: Path)
             run_id="run-z-eligible",
             task_id="task-demo",
         )
+        app.state.repository.tasks["task-completed"].status = "completed"
+        app.state.repository.persist()
         worker = app.state.task_leases.register_worker(
             "skip-worker",
             "skip-worker",
@@ -2289,6 +2295,8 @@ async def test_autonomous_scan_continues_past_100_unleaseable_runs(
                 ),
             )
         configure_worker(app, actor_id, router)
+        app.state.repository.tasks["task-completed"].status = "queued"
+        app.state.repository.persist()
         assembly_id = create_assembly_and_runtime(
             client,
             app,
@@ -2311,6 +2319,8 @@ async def test_autonomous_scan_continues_past_100_unleaseable_runs(
             run_id="run-zz-eligible-after-page",
             task_id="task-demo",
         )
+        app.state.repository.tasks["task-completed"].status = "completed"
+        app.state.repository.persist()
         worker = app.state.task_leases.register_worker(
             "page-skip-worker",
             "page-skip-worker",

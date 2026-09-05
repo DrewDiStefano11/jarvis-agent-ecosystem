@@ -1,4 +1,4 @@
-import { PointerEvent as ReactPointerEvent, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { PointerEvent as ReactPointerEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { OFFICE_ASSETS } from '../../office/assets';
 import { constrainTransform, fitTransform, screenToOffice, zoomAtScreenPoint } from '../../office/coordinates';
 import { DEFAULT_VIEWPORT_OPTIONS, OFFICE_SOURCE_HEIGHT, OFFICE_SOURCE_WIDTH } from '../../office/constants';
@@ -18,6 +18,7 @@ import { OfficeLayer, OfficeOverlayDocument, Point, ViewTransform, ViewportSize 
 import { OverlayRenderer } from './OverlayRenderer';
 
 type Props = Readonly<{
+    children?: ReactNode;
     active: boolean;
     presentation?: 'inspection' | 'simulation';
     document: OfficeOverlayDocument;
@@ -37,6 +38,7 @@ type Props = Readonly<{
 }>;
 
 export function OfficeViewport({
+    children,
     active,
     presentation = 'inspection',
     document,
@@ -341,6 +343,7 @@ export function OfficeViewport({
                         onHover={onHover}
                         onSelect={onSelect}
                     />
+                    {children}
                 </div>
                 {backgroundState === 'loading' && <div className="asset-status" role="status">Loading 8K office image…</div>}
                 {backgroundState === 'error' && (

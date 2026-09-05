@@ -75,8 +75,10 @@ from app.models.agent_runtime import (
 from app.models.autonomous_worker import (
     ModelExecutionResult,
     PlanningReviewResult,
+    WorkspacePlanResult,
 )
 from app.models.context import ContextAssembly
+from app.models.tool_execution import ToolExecutionResult
 from app.repositories.task_leases import TaskLeaseRepository
 
 PRE_EXECUTION_REVIEW_CODES = frozenset(
@@ -109,6 +111,7 @@ class AutonomousWorkerService:
         self.task_leases = task_leases
         self.runtime = runtime
         self.router = router
+        self.tool_executor = None
         self._checkpoint_execution_fence: ContextVar[RuntimeExecutionFence | None] = ContextVar(
             "autonomous_checkpoint_execution_fence", default=None
         )
@@ -124,9 +127,13 @@ class AutonomousWorkerService:
         if not providers:
             raise AutonomousWorkerError("NO_LOCAL_PROVIDER_AVAILABLE", status_code=503)
 
-    async def run_once(self, worker_id: str) -> ModelExecutionResult | None:
+    async def run_once(self, worker_id: str) -> ModelExecutionResult | ToolExecutionResult | None:
         self.validate_enabled()
         actor = self.runtime.authenticate_actor(self.settings.autonomous_worker_actor_id)
+        if self.tool_executor is not None:
+            tool_result = await self.tool_executor.run_once(worker_id, actor)
+            if tool_result is not None:
+                return tool_result
         try:
             if self._recover_pre_execution_pause(worker_id, actor):
                 return None
@@ -763,7 +770,7 @@ class AutonomousWorkerService:
         )
         provider_requests += 1
         responses.append(response)
-        parsed, errors = self._parse_result(response.content)
+        parsed, errors = self._parse_result(response.content, request.response_format)
         if parsed is None:
             self.executions.record_validation_failed(
                 execution.executionId,
@@ -782,7 +789,9 @@ class AutonomousWorkerService:
                 messages=[
                     ModelMessage(
                         role=MessageRole.SYSTEM,
-                        content=PlanningReviewResult.model_json_schema_instruction(),
+                        content=self._result_type(
+                            request.response_format
+                        ).model_json_schema_instruction(),
                     ),
                     ModelMessage(
                         role=MessageRole.USER,
@@ -817,7 +826,7 @@ class AutonomousWorkerService:
             )
             provider_requests += 1
             responses.append(response)
-            parsed, _ = self._parse_result(response.content)
+            parsed, _ = self._parse_result(response.content, request.response_format)
             if parsed is None:
                 raise AutonomousWorkerError("MODEL_OUTPUT_REPAIR_EXHAUSTED")
         return (
@@ -1890,6 +1899,14 @@ class AutonomousWorkerService:
         return suffix if cycle == 0 else f"{suffix}-r{cycle}"
 
     @staticmethod
+    def _result_type(response_format: str | None):
+        return (
+            WorkspacePlanResult
+            if response_format == "workspace_plan_json_v1"
+            else PlanningReviewResult
+        )
+
+    @staticmethod
     def _output_options(response_format: str | None) -> dict[str, Any]:
         if response_format is None:
             return {}
@@ -1914,7 +1931,9 @@ class AutonomousWorkerService:
         return {
             "output_schema": ModelOutputSchema(
                 name=response_format,
-                json_schema=generation_schema(PlanningReviewResult.model_json_schema()),
+                json_schema=generation_schema(
+                    AutonomousWorkerService._result_type(response_format).model_json_schema()
+                ),
             ),
             "prefer_no_reasoning": True,
         }
@@ -1942,20 +1961,29 @@ class AutonomousWorkerService:
         messages.append(
             ModelMessage(
                 role=MessageRole.SYSTEM,
-                content=PlanningReviewResult.model_json_schema_instruction(),
+                content=AutonomousWorkerService._result_type(
+                    response_format
+                ).model_json_schema_instruction(),
             )
         )
         if revision_findings:
             messages.append(
                 ModelMessage(
                     role=MessageRole.SYSTEM,
-                    content=revision_directive(revision_findings),
+                    content=(
+                        "Resolve these deterministic structural findings: "
+                        + ", ".join(revision_findings)
+                        if response_format == "workspace_plan_json_v1"
+                        else revision_directive(revision_findings)
+                    ),
                 )
             )
         payload = {
             "assemblyRequestHash": assembly.requestHash,
             "messages": [message.model_dump(mode="json") for message in messages],
-            "executionType": "planning_review",
+            "executionType": "workspace_plan"
+            if response_format == "workspace_plan_json_v1"
+            else "planning_review",
             "outputSchemaVersion": "1.0",
         }
         if response_format is not None:
@@ -1983,12 +2011,14 @@ class AutonomousWorkerService:
             raise AutonomousWorkerError("CONTEXT_ASSEMBLY_UNAVAILABLE")
 
     @staticmethod
-    def _parse_result(content: str) -> tuple[PlanningReviewResult | None, list[str]]:
+    def _parse_result(
+        content: str, response_format: str | None = None
+    ) -> tuple[PlanningReviewResult | None, list[str]]:
         try:
             payload = json.loads(content)
             if not isinstance(payload, dict):
                 return None, ["root: expected a JSON object"]
-            return PlanningReviewResult.model_validate(payload), []
+            return AutonomousWorkerService._result_type(response_format).model_validate(payload), []
         except json.JSONDecodeError:
             return None, ["root: invalid JSON"]
         except ValidationError as exc:

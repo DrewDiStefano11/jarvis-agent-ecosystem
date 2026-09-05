@@ -27,3 +27,16 @@
 .viewport-controls button:hover,.office-workforce button:hover { border-color:var(--accent) }
 .office-workforce button .status { display:block;margin-top:5px }
 @media(max-width:600px) { .office-viewport { height:auto;min-height:240px;aspect-ratio:8192/5460 }.viewport-controls { gap:6px;flex-wrap:wrap }.viewport-controls button { padding:8px 10px } }
+.live-office-layer,.live-office-routes { position:absolute;inset:0;width:8192px;height:5460px;pointer-events:none }
+.live-office-routes polyline { fill:none;stroke-width:13;stroke-dasharray:25 15;opacity:.8 }
+.live-office-station { position:absolute;transform:translate(-50%,10px);pointer-events:auto;width:260px;padding:7px 10px;border:5px solid #7dcdb8;border-radius:18px;background:#12262b;color:white;font-size:34px;line-height:1.2 }
+.live-office-agent { position:absolute;transform:translate(-50%,-94%);pointer-events:auto;width:181px;height:181px;padding:0;border:0;background:transparent;color:white;z-index:3;overflow:visible }
+.live-office-sprite { display:block;image-rendering:pixelated;transform-origin:center bottom;background-repeat:no-repeat }
+.live-office-name { position:absolute;bottom:100%;left:50%;transform:translateX(-50%);min-width:250px;padding:8px 14px;background:#101c2eef;border:4px solid #6de5be;border-radius:18px;white-space:nowrap;font-size:38px;line-height:1.3 }
+.live-office-name small { display:block;font-size:28px;color:#d3dce8 }
+.live-office-agent.selected .live-office-name { border-color:white;box-shadow:0 0 0 10px #38bdf855 }
+.live-office-agent.inactive { opacity:.65 }
+.live-office-agent:focus-visible,.live-office-station:focus-visible { outline:12px solid white }
+.office-workforce label { display:block;margin:12px 0 }
+.office-workforce select { display:block;width:100%;margin-top:5px }
+.office-workforce button:disabled { opacity:.45;cursor:not-allowed }

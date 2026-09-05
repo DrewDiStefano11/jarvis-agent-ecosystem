@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from hashlib import sha256
 from threading import RLock
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text, update
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -48,6 +48,7 @@ from app.models.agent_runtime import (
     AgentRunQueryResult,
     AgentRunSnapshot,
     AgentRunState,
+    AgentRuntimeEventType,
     ProcessedCommandRecord,
     RuntimeCommandResult,
     RuntimeEventEnvelope,
@@ -214,8 +215,18 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
         execution_fence: RuntimeExecutionFence | None = None,
     ):
         run_id = snapshot.specification.run_id
+        events = tuple(events)
+        autonomous_admission = snapshot.specification.autonomous_execution is not None and any(
+            event.event_type
+            in {AgentRuntimeEventType.RUN_CREATED, AgentRuntimeEventType.RUN_QUEUED}
+            for event in events
+        )
         try:
             with self._commit_lock, self.sessions.begin() as s:
+                if autonomous_admission and s.bind.dialect.name == "sqlite":
+                    # SQLite ignores FOR UPDATE. Acquire its write fence before
+                    # reading either the replay record or the authoritative task.
+                    s.execute(text("BEGIN IMMEDIATE"))
                 replay = self._replay_processed_command(s, run_id, processed_command)
                 if replay is not None:
                     return replay
@@ -246,6 +257,26 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                         )
                 if execution_fence is not None:
                     self._require_execution_fence(s, snapshot, execution_fence)
+                if autonomous_admission:
+                    # The worker only claims queued/retrying tasks. Hold the
+                    # durable task lock through this command commit so a stale
+                    # client cannot admit new work for a task already completed
+                    # or otherwise unclaimable. Exact accepted retries returned
+                    # above remain valid after the task subsequently changes.
+                    eligible = s.execute(
+                        update(TaskRow)
+                        .where(
+                            TaskRow.id == snapshot.specification.task_id,
+                            TaskRow.status.in_(("queued", "retrying")),
+                        )
+                        .values(status=TaskRow.status)
+                    )
+                    if eligible.rowcount != 1:
+                        raise DomainError(
+                            "AUTONOMOUS_TASK_NOT_READY",
+                            "Autonomous planning requires a queued or retrying task. Refresh the task before creating or queueing a run.",
+                            409,
+                        )
                 old = []
                 previous_state: str | None = None
                 if create:
