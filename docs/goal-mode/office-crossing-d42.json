@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "1.0",
+  "sourceCommit": "7c5cd21cdce503f2e9ac94700c95b7faad8e1bfd",
+  "sourceGeometryHash": "dc90bf1a083a7dc375429ecddd2790a2328403ab2846dd4183b09892daf6c2ac",
+  "scope": "One reversible Security desk to Main Connecting Walkway connection through general-access D42. Full-floor candidate approval remains false.",
+  "door": {
+    "id": "D42",
+    "originalPanelCenter": {"x": 3103.4337777777773, "y": 1611.1226666666666},
+    "thresholdPoint": {"x": 3133.395555555556, "y": 1705.2853333333333},
+    "sourceSegment": "walk-segment:walk-paths-067:path:02:052",
+    "evidence": "The registered source pen stroke passes through the physical doorway floor below the elevated panel center. This exact authored vertex lies at the doorway foot; existing 96px aperture and 34px footprint remain unchanged."
+  },
+  "bridge": {
+    "id": "reviewed-D42-stroke-join",
+    "a": {"x": 3040.664888888889, "y": 1404.590222222222},
+    "b": {"x": 3033.1448888888885, "y": 1395.6000000000001},
+    "sourceSegmentA": "walk-segment:walk-paths-067:path:02:001",
+    "sourceSegmentB": "walk-segment:walk-paths-066:path:01:093",
+    "length": 11.720686652450887,
+    "evidence": "One 11.72px discontinuity between authored pen strokes on the same unobstructed Security floor. No global snapping tolerance is applied."
+  },
+  "waypoint": {
+    "id": "WALKWAY_D42",
+    "label": "West walkway by Security",
+    "roomId": "ROOM_MAIN_CONNECTING_WALKWAY",
+    "roomName": "Main Connecting Walkway",
+    "point": {"x": 3308.3306666666667, "y": 1714.2026666666668},
+    "sourceSegment": "walk-segment:walk-paths-001:path:01:262"
+  }
+}
