@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from app.model_providers.security import redact_secrets
 
@@ -46,6 +46,7 @@ BUILTIN_ADAPTER_CAPABILITIES = frozenset(
         ModelCapability.CODE_GENERATION,
         ModelCapability.CODE_EDITING,
         ModelCapability.REASONING,
+        ModelCapability.STRUCTURED_OUTPUT,
     }
 )
 
@@ -80,6 +81,22 @@ class ModelMessage(ProviderContract):
         return self
 
 
+class ModelOutputSchema(ProviderContract):
+    """Application-supplied output guidance; validation remains authoritative."""
+
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    json_schema: dict[str, JsonValue]
+
+    @field_validator("json_schema")
+    @classmethod
+    def validate_schema(cls, value: dict[str, JsonValue]) -> dict[str, JsonValue]:
+        if value.get("type") != "object":
+            raise ValueError("output schema must describe a JSON object")
+        if len(json.dumps(value, allow_nan=False).encode()) > 65_536:
+            raise ValueError("output schema exceeds the serialized-size limit")
+        return value
+
+
 class ModelExecutionRequest(ProviderContract):
     messages: list[ModelMessage] = Field(default_factory=list, max_length=256)
     prompt: str | None = Field(default=None, min_length=1, max_length=1_000_000)
@@ -92,6 +109,8 @@ class ModelExecutionRequest(ProviderContract):
     required_capability: ModelCapability | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
     streaming: bool = False
+    output_schema: ModelOutputSchema | None = None
+    prefer_no_reasoning: bool = Field(default=False, strict=True)
 
     @field_validator("task_id", "correlation_id")
     @classmethod

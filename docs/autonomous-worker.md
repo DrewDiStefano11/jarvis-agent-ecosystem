@@ -56,6 +56,23 @@ Unknown fields fail validation. Every string, list, nested record, priority, sch
 
 ## Local-only model gate
 
+New Planning submissions capture `response_format: planning_review_json_v1` in the immutable
+autonomous execution specification. This opts into a JSON generation schema and a preference
+to disable provider reasoning where supported, preserving the limited output allowance for the
+answer. The generation schema requires all result fields but omits large string/list maximums
+that can exceed Ollama's grammar expansion limits. The complete result validator still enforces
+every original maximum before any result is committed.
+
+Legacy requests omit this field and retain their original serialization, command hashes,
+execution hashes, and provider behavior through repair and prepared-execution recovery. Opted-in
+execution hashes additionally bind the actual generation schema and reasoning preference.
+The UI captures the format when a submission is created and replays that captured value; it
+does not silently upgrade an older partially acknowledged request.
+
+An empty or malformed successful provider response pauses with `model_output_invalid`.
+Unreachable or ineligible providers retain `no_local_provider_available`. Neither exposes
+raw provider response bodies or diagnostics.
+
 `JARVIS_MODEL_EXECUTION_MODE` has two values:
 
 - `disabled` (default): execution and provider network health/model-list traffic fail closed.

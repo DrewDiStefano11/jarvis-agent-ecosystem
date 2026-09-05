@@ -8,7 +8,15 @@ from enum import StrEnum
 from hashlib import sha256
 from typing import Annotated, Any, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 
 from app.models.constraints import MAX_CORRELATION_ID_LENGTH as _MAX_CORRELATION_ID_LENGTH
 
@@ -499,12 +507,20 @@ class AutonomousExecutionSpecification(RuntimeContract):
     execution_type: AutonomousExecutionType
     context_assembly_id: OpaqueReference
     output_schema_version: Literal["1.0"] = "1.0"
+    response_format: Literal["planning_review_json_v1"] | None = None
     provider_preference: OpaqueReference | None = None
     model_name: str | None = Field(default=None, min_length=1, max_length=200)
     maximum_provider_requests: int = Field(default=2, ge=1, le=2)
     maximum_repair_calls: int = Field(default=1, ge=0, le=1)
     maximum_output_tokens: int = Field(default=2048, ge=128, le=16_384)
     maximum_execution_seconds: int = Field(default=300, ge=1, le=3600)
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_serialization(self, handler):
+        value = handler(self)
+        if self.response_format is None:
+            value.pop("response_format", None)
+        return value
 
     @field_validator("model_name")
     @classmethod
