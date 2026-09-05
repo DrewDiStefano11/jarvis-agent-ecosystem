@@ -1,0 +1,24 @@
+.hub-office-layout { display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;align-items:start }
+.hub-office-scene { min-width:0 }
+.office-viewport-shell { border:1px solid var(--border,#303947);border-radius:12px;overflow:hidden;background:#030507 }
+.viewport-controls { display:flex;gap:8px;padding:10px;background:#121925 }
+.office-viewport { position:relative;height:clamp(340px,65vh,860px);overflow:hidden;touch-action:none;cursor:grab }
+.office-viewport:active { cursor:grabbing }
+.office-surface { position:absolute;top:0;left:0;width:8192px;height:5460px;transform-origin:0 0;will-change:transform }
+.office-background { position:absolute;inset:0;width:8192px;height:5460px;max-width:none;image-rendering:pixelated;user-select:none;pointer-events:none }
+.office-background-fallback { position:absolute;inset:0;background:#080d15 }
+.office-overlay { position:absolute;inset:0;overflow:visible;pointer-events:none }
+.office-entity--interactive { cursor:pointer;pointer-events:auto }
+.office-entity:focus { outline:none;filter:drop-shadow(0 0 14px #fff) }
+.office-overlay-label { fill:white;font-size:44px;paint-order:stroke;stroke:#000;stroke-width:8px;pointer-events:none }
+.asset-status { position:absolute;inset:auto 16px 16px;padding:12px;background:#111d2e;border-radius:8px;overflow-wrap:anywhere }
+.asset-status--error { color:#ffa6a6 }
+.office-caption { display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:12px;font-size:12px;color:#acb9cb }
+.office-caption label,.hub-office-scene .chips label { display:flex;gap:6px;align-items:center }
+.office-workforce { max-height:85vh;overflow:auto }
+.office-workforce button { display:block;width:100%;text-align:left;margin:8px 0 }
+.office-workforce-agent small { display:block }
+.office-workforce details { margin-top:20px }
+.hub-office-scene select { max-width:100% }
+@media(max-width:1100px) { .hub-office-layout { grid-template-columns:1fr }.office-workforce { max-height:none } }
+@media(prefers-reduced-motion:reduce) { .office-surface { will-change:auto } }

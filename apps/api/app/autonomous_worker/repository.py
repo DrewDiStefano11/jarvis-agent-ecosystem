@@ -169,7 +169,19 @@ class ModelExecutionRepository:
             {
                 AgentRunState.CLAIMED,
                 AgentRunState.STARTING,
-            }
+            },
+            filters=(
+                ~exists().where(
+                    and_(
+                        ModelExecutionRow.runtime_run_id == AgentRuntimeRunRow.run_id,
+                        or_(
+                            ModelExecutionRow.stage.in_(ACTIVE_EXECUTION_STAGES),
+                            ModelExecutionRow.runtime_attempt_id
+                            == AgentRuntimeRunRow.active_attempt_id,
+                        ),
+                    )
+                ),
+            ),
         )
 
     def iter_revision_cycle_pages(self) -> Iterator[list[AgentRunSnapshot]]:

@@ -1,0 +1,11 @@
+{
+  "repository": "DrewDiStefano11/jarvis-office-prototype",
+  "commit": "7c5cd21cdce503f2e9ac94700c95b7faad8e1bfd",
+  "assets": [
+    {
+      "source": "public/assets/office/office-8192x5460.png",
+      "destination": "public/assets/office/office-8192x5460.png",
+      "sha256": "aa0ff821d5530e8ee1be3c1de733d0bff4bb74767a0ba27e48a141abf784d026"
+    }
+  ]
+}

@@ -606,3 +606,76 @@ async def test_concurrent_review_handling_creates_one_durable_effect(
         assert len(execution_rows(app, run_id)) == 1
     finally:
         client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["unblock", "begin_attempt"])
+async def test_revision_preparation_recovers_with_historical_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    run_id = f"run-revision-crash-{boundary}"
+    router = FakeRouter([json.dumps(INCOMPLETE_RESULT), json.dumps(VALID_RESULT)])
+    app, client, _, worker = worker_fixture(tmp_path, router=router, run_id=run_id)
+    service = app.state.autonomous_worker_service
+    original = service._handle
+    try:
+        first = await service.run_once(worker.id)
+        assert first is not None and first.failureCode == "review_revision_requested"
+
+        def crash_after_transition(command_type, *args, **kwargs):
+            snapshot = original(command_type, *args, **kwargs)
+            if command_type.model_fields["command_type"].default == boundary:
+                raise RuntimeError("revision boundary crash")
+            return snapshot
+
+        monkeypatch.setattr(service, "_handle", crash_after_transition)
+        with pytest.raises(RuntimeError, match="revision boundary crash"):
+            await service.run_once(worker.id)
+        assert len(execution_rows(app, run_id)) == 1
+        assert len(router.requests) == 1
+        monkeypatch.setattr(service, "_handle", original)
+        expire_lease(app)
+        recovered = await service.run_once(worker.id)
+        assert recovered is not None and recovered.stage == "completed"
+        assert len(router.requests) == 2
+        attempts = app.state.agent_runtime_service.repository.load_attempt_history(run_id)
+        assert len(attempts) == 2
+        assert (
+            attempts[1].resumed_from_checkpoint_id == review_records(app, run_id)[0].checkpoint_id
+        )
+        assert len(execution_rows(app, run_id)) == 2
+        assert await service.run_once(worker.id) is None
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_revision_exhaustion_survives_task_failure_commit_crash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_id = "run-exhaustion-crash"
+    router = FakeRouter([json.dumps(INCOMPLETE_RESULT)] * 3)
+    app, client, _, worker = worker_fixture(tmp_path, router=router, run_id=run_id)
+    service = app.state.autonomous_worker_service
+    original = app.state.task_leases.fail_task
+    try:
+        await service.run_once(worker.id)
+        await service.run_once(worker.id)
+
+        def crash_after_failure(*args, **kwargs):
+            task = original(*args, **kwargs)
+            assert task.status == "failed"
+            raise RuntimeError("task failure committed")
+
+        monkeypatch.setattr(app.state.task_leases, "fail_task", crash_after_failure)
+        with pytest.raises(RuntimeError, match="task failure committed"):
+            await service.run_once(worker.id)
+        monkeypatch.setattr(app.state.task_leases, "fail_task", original)
+        await service.run_once(worker.id)
+        rows = execution_rows(app, run_id)
+        assert rows[-1].failure_code == "review_revision_exhausted"
+        assert app.state.agent_runtime_service.repository.load_run(run_id).state == "failed"
+        assert len(router.requests) == 3
+        assert await service.run_once(worker.id) is None
+    finally:
+        client.__exit__(None, None, None)

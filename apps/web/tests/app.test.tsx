@@ -53,3 +53,56 @@ describe('WebSocket session cursors',()=>{
  test('legacy session and reconnect cursor reset are bounded',async()=>{renderApp();await screen.findByText('Good evening, operator.');let socket=FakeWebSocket.instances[0]!;const before=vi.mocked(fetch).mock.calls.length;act(()=>{socket.emit(event('legacy-2',2,null));socket.emit(event('legacy-dup',2,null))});await waitFor(()=>expect(vi.mocked(fetch).mock.calls.length).toBe(before+8));act(()=>socket.onclose?.());await waitFor(()=>expect(FakeWebSocket.instances.length).toBeGreaterThan(1),{timeout:3000});socket=FakeWebSocket.instances[1]!;const afterReconnect=vi.mocked(fetch).mock.calls.length;act(()=>socket.emit(event('runtime-high',20,'runtime-reconnected','agent_runtime')));await waitFor(()=>expect(vi.mocked(fetch).mock.calls.length).toBe(afterReconnect+8))})
  test('many runtime sessions do not break simulator sequence tracking',async()=>{renderApp();await screen.findByText('Good evening, operator.');const socket=FakeWebSocket.instances[0]!;const before=vi.mocked(fetch).mock.calls.length;const snapshotPayload={snapshot:{departments,agents,tasks,approvals,artifacts,auditEvents,notifications,emergencyStop:false},system};act(()=>{socket.emit(event('sim-1',1,'simulator'));for(let index=0;index<101;index+=1)socket.emit({...event(`runtime-${index}`,1,`runtime-${index}`,'agent_runtime'),eventType:'system.snapshot',payload:snapshotPayload});socket.emit(event('sim-2',2,'simulator'))});await waitFor(()=>expect(vi.mocked(fetch).mock.calls.length).toBe(before+16))})
 })
+
+describe('Local planning integration', () => {
+ test('readiness and authorized durable results appear in the planning workspace', async () => {
+  const identity = { id: 'actor-real', display_name: 'Local planner', stable_key: 'local-planner', lifecycle_state: 'active', operational_status: 'idle', is_enabled: true, agent_type: 'worker' }
+  endpointData['/api/identity/agents'] = [identity]
+  endpointData['/api/agent-runtime/runs'] = { items: [], next_offset: null, total_count: 0 }
+  endpointData['/api/model-executions'] = [{ executionId: 'execution-real', runtimeRunId: 'run-real', runtimeAttemptId: 'attempt-real', taskId: tasks[0]!.id, targetAgentId: identity.id, workerId: 'worker-real', stage: 'completed', provider: 'ollama', model: 'configured-local', requestCount: 1, failureCode: null, result: { summary: 'Persisted planning output', analysis: 'A real stored result is visible.', recommendations: [], risks: [], assumptions: [], missingInformation: [], requiresHumanReview: false } }]
+  window.history.pushState({}, '', '/runtime')
+  renderApp()
+  await screen.findByRole('heading', { name: 'Planning workspace' })
+  expect(screen.getByRole('button', { name: 'Queue local plan' })).toBeDisabled()
+  await waitFor(() => expect(screen.getByLabelText('Act as local identity')).toHaveTextContent('Local planner'))
+  await userEvent.selectOptions(screen.getByLabelText('Act as local identity'), 'actor-real')
+  await userEvent.selectOptions(screen.getByLabelText('Task and history'), tasks[0]!.id)
+  expect(await screen.findByText('Persisted planning output')).toBeInTheDocument()
+  expect(vi.mocked(fetch).mock.calls.some(([, init]) => (init?.headers as Record<string, string>)?.['X-Jarvis-Actor-Id'] === 'actor-real')).toBe(true)
+  await userEvent.selectOptions(screen.getByLabelText('Act as local identity'), '')
+  expect(screen.queryByText('Persisted planning output')).not.toBeInTheDocument()
+  delete endpointData['/api/identity/agents']; delete endpointData['/api/agent-runtime/runs']; delete endpointData['/api/model-executions']
+ })
+ test('task creation failure remains visible and retains the form', async () => {
+  window.history.pushState({}, '', '/tasks'); renderApp()
+  await screen.findByRole('button', { name: '+ New task' })
+  await userEvent.click(screen.getByRole('button', { name: '+ New task' }))
+  await userEvent.type(screen.getByLabelText('Title'), 'Plan next milestone')
+  await userEvent.type(screen.getByLabelText('Description'), 'Produce a bounded plan for the next milestone.')
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (input, init) => init?.method === 'POST' ? ({ ok: false, status: 503, json: async () => ({ error: { code: 'UNAVAILABLE', message: 'Backend temporarily unavailable' } }) } as Response) : original(input, init))
+  await userEvent.click(screen.getByRole('button', { name: 'Create task' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Backend temporarily unavailable')
+  expect(screen.getByLabelText('Title')).toHaveValue('Plan next milestone')
+ })
+})
+
+describe('operator control failures', () => {
+ test('failed emergency stop remains visible and releases its control', async () => {
+  renderApp(); await screen.findByText('Good evening, operator.')
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (input, init) => init?.method === 'POST' ? ({ ok: false, status: 503, json: async () => ({ error: { code: 'UNAVAILABLE', message: 'Stop was not accepted' } }) } as Response) : original(input, init))
+  await userEvent.click(screen.getByRole('button', { name: 'Emergency stop' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Stop was not accepted')
+  expect(screen.getByRole('button', { name: 'Emergency stop' })).toBeEnabled()
+ })
+ test('task cancellation reaches the authoritative endpoint and reports failure', async () => {
+  window.history.pushState({}, '', '/tasks'); renderApp()
+  await userEvent.click(await screen.findByRole('button', { name: 'Open Caribbean recommendation' }))
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (input, init) => init?.method === 'POST' ? ({ ok: false, status: 409, json: async () => ({ error: { code: 'CONFLICT', message: 'Task already completed' } }) } as Response) : original(input, init))
+  await userEvent.click(screen.getByRole('button', { name: 'Cancel task' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Task already completed')
+  expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url).endsWith('/api/tasks/task-parent/cancel') && init?.method === 'POST')).toBe(true)
+ })
+})

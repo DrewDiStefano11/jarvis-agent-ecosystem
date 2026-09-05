@@ -1,0 +1,72 @@
+/* Local browser golden path. Invoked by smoke-local-planning.py, never production. */
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+const { execFileSync } = require('node:child_process')
+const { chromium } = require(path.join(process.env.SMOKE_WEB, 'node_modules/playwright'))
+
+;(async () => {
+  const browser = await chromium.launch({ headless: true })
+  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } })
+  const errors = []
+  const failures = []
+  page.on('pageerror', error => errors.push(error.message))
+  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()) })
+  page.on('response', response => { if (response.status() >= 400) failures.push(`${response.status()} ${response.url()}`) })
+  const output = process.env.SMOKE_ARTIFACT_DIR
+  fs.mkdirSync(output, { recursive: true })
+  try {
+    await page.goto(process.env.SMOKE_UI)
+    await page.getByRole('heading', { name: 'Good evening, operator.' }).waitFor()
+    const nav = page.getByRole('navigation', { name: 'Primary', exact: true })
+    await nav.getByRole('link', { name: 'Tasks', exact: true }).click()
+    await page.getByRole('button', { name: '+ New task' }).click()
+    await page.getByLabel('Title', { exact: true }).fill('Browser golden path')
+    await page.getByLabel('Description', { exact: true }).fill('Create a bounded plan to verify the local Hub.')
+    const created = page.waitForResponse(response => response.url().endsWith('/api/tasks') && response.request().method() === 'POST')
+    await page.getByRole('button', { name: 'Create task', exact: true }).click()
+    const task = (await (await created).json()).data
+    assert.ok(task.id)
+    execFileSync(process.env.SMOKE_PYTHON, ['-m', 'app.autonomous_worker.setup', '--task-id', task.id], { cwd: process.env.SMOKE_API, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] })
+    await nav.getByRole('link', { name: 'Planning', exact: true }).click()
+    await page.getByLabel('Act as local identity').selectOption(process.env.SMOKE_ACTOR)
+    await page.getByLabel('Target agent').selectOption(process.env.SMOKE_ACTOR)
+    await page.getByLabel('Task and history').selectOption(task.id)
+    await page.getByRole('button', { name: 'Queue local plan', exact: true }).click()
+    await page.getByRole('heading', { name: 'Deterministic transport fixture completed.', exact: true }).waitFor({ timeout: 30000 })
+    await page.screenshot({ path: path.join(output, 'planning-completed.png'), fullPage: true })
+    const persisted = await page.request.get(`${process.env.SMOKE_BASE}/api/tasks/${task.id}`)
+    assert.equal((await persisted.json()).data.status, 'completed')
+    await nav.getByRole('link', { name: 'Office', exact: true }).click()
+    await page.getByRole('heading', { name: 'Operations floor', exact: true }).waitFor()
+    await page.waitForFunction(() => {
+      const image = document.querySelector('.office-background')
+      return image?.complete && image.naturalWidth === 8192 && image.naturalHeight === 5460
+    })
+    assert.equal(await page.title(), 'Office · Jarvis')
+    const before = await page.locator('.office-surface').getAttribute('style')
+    await page.getByRole('button', { name: 'Zoom in', exact: true }).click()
+    assert.notEqual(await page.locator('.office-surface').getAttribute('style'), before)
+    await page.getByRole('button', { name: 'Fit office', exact: true }).click()
+    await page.screenshot({ path: path.join(output, 'office-desktop.png'), fullPage: true })
+    await page.getByLabel('Inspect candidate geometry').check()
+    await page.waitForFunction(() => document.querySelector('select')?.options.length > 1)
+    await page.getByLabel('Inspect region').selectOption({ index: 1 })
+    await page.getByRole('button', { name: 'Focus selected region', exact: true }).click()
+    await page.getByRole('heading', { name: 'Unverified floor registration', exact: true }).waitFor()
+    await page.getByLabel('Inspect candidate geometry').uncheck()
+    await page.setViewportSize({ width: 390, height: 844 })
+    await page.getByRole('button', { name: 'Fit office', exact: true }).click()
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'Mobile document overflows horizontally')
+    await page.screenshot({ path: path.join(output, 'office-mobile.png'), fullPage: true })
+    assert.deepEqual(errors, [], 'Browser console/page errors')
+    assert.deepEqual(failures, [], 'HTTP failures')
+    console.log('PASS: browser task submission, real worker fixture result, office camera/regions, desktop/mobile layout')
+  } catch (error) {
+    await page.screenshot({ path: path.join(output, 'failure.png'), fullPage: true }).catch(() => {})
+    console.error({ errors, failures })
+    throw error
+  } finally {
+    await browser.close()
+  }
+})().catch(error => { console.error(error); process.exitCode = 1 })

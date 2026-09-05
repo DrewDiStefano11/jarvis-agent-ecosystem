@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from app.agent_runtime.authorization import RuntimeActorContext
 from app.agent_runtime.errors import RuntimePermissionDeniedError
+from app.agent_runtime.recovery import derive_recovery_plan
 from app.agent_runtime.repository import RuntimeExecutionFence
 from app.agent_runtime.service import AgentRuntimeService
 from app.autonomous_worker.errors import AutonomousWorkerError
@@ -603,6 +604,17 @@ class AutonomousWorkerService:
             )
         if snapshot.state == AgentRunState.CLAIMED:
             self._assert_live_policy(snapshot, actor, worker_id, lease_token)
+            if cycle > 0 and resume_checkpoint_id is None:
+                # A crash after unblock loses only the in-memory plan. Re-derive
+                # its checkpoint from authorized durable history, as begin_attempt
+                # itself does, rather than inventing a fresh resume position.
+                plan = derive_recovery_plan(
+                    snapshot,
+                    list(self.runtime.attempts_authorized(snapshot.specification.run_id, actor)),
+                    list(self.runtime.checkpoints_authorized(snapshot.specification.run_id, actor)),
+                )
+                selected = plan.selected_checkpoint
+                resume_checkpoint_id = None if selected is None else selected.checkpoint_id
             snapshot = self._handle(
                 BeginAttemptCommand,
                 snapshot,
@@ -1738,8 +1750,14 @@ class AutonomousWorkerService:
     ) -> bool:
         if self.task_leases.task_status(execution.taskId) != "failed":
             return False
+        decision = self._durable_review_decision(execution, actor)
+        failure_code = (
+            REVISION_EXHAUSTED_FAILURE_CODE
+            if decision is not None and decision.outcome is PlanReviewOutcome.REVISION_REQUESTED
+            else "task_failed"
+        )
         self._fail_runtime_for_task(snapshot, actor)
-        self.executions.mark_failed(execution.executionId, "task_failed")
+        self.executions.mark_failed(execution.executionId, failure_code)
         return True
 
     def _fail_runtime_for_task(

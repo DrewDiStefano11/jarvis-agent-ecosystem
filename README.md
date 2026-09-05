@@ -21,6 +21,8 @@ Jarvis combines the local deterministic simulation and durable SQLite control pl
 
 The only real model execution is an explicitly enabled, loopback-only `planning_review` worker. It has no tools and cannot execute code, modify files, browse, call GitHub, use email/calendars/cloud services, send messages, spend money, spawn agents, approve work, or reach a remote model. Ordinary tasks and old runtime records remain non-autonomous. Telemetry, general agents, tools, files, reports, and temporary agents remain simulated. External database servers and production deployment are not included.
 
+The **Planning** workspace now submits authorized local plans and displays durable model results. The **Office** reuses the original prototype floor and camera, with opt-in candidate geometry inspection and shared workforce state. See the [integrated local setup guide](docs/goal-mode/local-setup.md) for task-scoped identity provisioning and the full request-to-result workflow.
+
 ## Architecture
 
 `apps/api` owns authoritative state and contracts. Route handlers use services, a
@@ -36,7 +38,7 @@ boundary exists yet.
 
 ## Fresh Windows setup
 
-Prerequisites: Git, Python 3.11+, Node.js 20+, and pnpm 9+ (`corepack enable`). From PowerShell:
+Prerequisites: Git, Python 3.12, Node.js 22, and pnpm 11 (`corepack enable`). From PowerShell:
 
 ```powershell
 git clone <private-repository-url> jarvis-agent-ecosystem
@@ -52,6 +54,7 @@ python -m alembic current
 
 Set-Location ..\web
 pnpm install --frozen-lockfile
+pnpm office:assets
 ```
 
 Copy `.env.example` and `apps/web/.env.example` to local `.env` files only when overriding defaults. Never commit them.
