@@ -89,8 +89,11 @@ def main():
     thread = threading.Thread(target=provider.serve_forever, daemon=True)
     thread.start()
     processes = []
+    temporary = tempfile.TemporaryDirectory(
+        prefix="jarvis-smoke-", ignore_cleanup_errors=True
+    )
     try:
-        with tempfile.TemporaryDirectory(prefix="jarvis-smoke-") as directory:
+        with temporary as directory:
             temp = Path(directory)
             port = free_port()
             browser_mode = os.environ.get("JARVIS_SMOKE_BROWSER") == "true"
@@ -135,7 +138,9 @@ def main():
                     "JARVIS_MODEL_PROVIDER_PRIORITY": "ollama",
                 }
             )
-            with (temp / "runtime.log").open("w+") as logs:
+            with (temp / "runtime.log").open(
+                "w+", encoding="utf-8", errors="replace"
+            ) as logs:
                 processes.append(
                     subprocess.Popen(
                         [
@@ -271,13 +276,17 @@ for (const name of ['client', 'planning']) {
                     },
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=60,
                     check=False,
                 )
                 if completed.returncode:
                     logs.seek(0)
                     raise RuntimeError(
-                        completed.stdout + completed.stderr + logs.read()
+                        (completed.stdout or "")
+                        + (completed.stderr or "")
+                        + logs.read()
                     )
                 print(completed.stdout.strip())
                 assert len(calls) == 1, (
@@ -302,6 +311,9 @@ for (const name of ['client', 'planning']) {
         provider.shutdown()
         provider.server_close()
         thread.join(timeout=5)
+        # The context may have deferred cleanup while child processes still held
+        # Windows file handles. Retry after every child has exited.
+        temporary.cleanup()
 
 
 if __name__ == "__main__":

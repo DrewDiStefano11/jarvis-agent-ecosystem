@@ -1,11 +1,15 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
+from app.agent_runtime.authorization import RUNTIME_PERMISSION_KEYS
 from app.autonomous_worker.provisioning import configure_task_actor
 from app.core.errors import DomainError
-from app.db.models import ResourceAccessPolicyRow
+from app.db.models import AgentPermissionAssignmentRow, ResourceAccessPolicyRow
 from app.identity.service import now
 from app.main import create_app
 from app.models.identity import CreatePermissionRequest
@@ -61,6 +65,52 @@ def test_incompatible_definition_is_preflighted_before_actor_or_grant_mutation(t
         assert [item.stable_key for item in service.list_definitions("permission", 0, 100)] == [
             "runtime.read"
         ]
+
+
+def test_concurrent_setup_converges_on_one_actor_and_definition_set(tmp_path: Path, monkeypatch):
+    app = create_app(database_url=database_url(tmp_path / "concurrent.db"))
+    with TestClient(app):
+        service = app.state.identity_service
+        definition_barrier = Barrier(2)
+        actor_barrier = Barrier(2)
+        create_definition = service.create_definition
+        create_agent = service.create_agent
+
+        def synchronized_definition(kind, data):
+            definition_barrier.wait(timeout=5)
+            return create_definition(kind, data)
+
+        def synchronized_agent(data):
+            actor_barrier.wait(timeout=5)
+            return create_agent(data)
+
+        monkeypatch.setattr(service, "create_definition", synchronized_definition)
+        monkeypatch.setattr(service, "create_agent", synchronized_agent)
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            actor_ids = list(
+                pool.map(
+                    lambda _: configure_task_actor(app, "task-demo", "local-planner"),
+                    range(2),
+                )
+            )
+
+        assert len(set(actor_ids)) == 1
+        assert len(service.list_agents(0, 100)) == 1
+        runtime_keys = set(RUNTIME_PERMISSION_KEYS.values())
+        assert {
+            item.stable_key
+            for item in service.list_definitions("permission", 0, 100)
+            if item.stable_key in runtime_keys
+        } == runtime_keys
+        with service.sessions() as session:
+            assignments = list(
+                session.scalars(
+                    select(AgentPermissionAssignmentRow).where(
+                        AgentPermissionAssignmentRow.agent_id == actor_ids[0]
+                    )
+                )
+            )
+        assert len(assignments) == len(runtime_keys)
 
 
 def test_setup_endpoint_reuses_configured_identity_without_enabling_execution(tmp_path: Path):

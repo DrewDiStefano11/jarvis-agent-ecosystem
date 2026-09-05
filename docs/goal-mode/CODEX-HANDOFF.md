@@ -152,6 +152,12 @@ Local continuation gates passed: backend Ruff and **751 tests**; frontend instal
 
 Review loop 2 inspected exact commit `db9a4bd69d593ae6d0cab5fe9e3c8cae81eed140` after workflow run **33944374456** passed all four jobs. Review **5119806943** found that candidate inspection loaded geometry without enabling the viewport's review rendering, leaving most unselected shapes invisible. The follow-up wires the explicit candidate state to `reviewMode`, adds a UI regression for the candidate viewport class, and captures `office-candidate-review.png` in the real browser smoke. Frontend typecheck, lint, **47 tests**, and build pass locally. Exact-head CI, visual inspection of the new candidate screenshot, and another review remain required.
 
+Workflow run **33945398040** then passed all four jobs at exact commit `0e3dca25506d68332da03b8100e9f8874bfd00bf`. Its browser artifact **9963170396** (3,055,403 bytes, SHA256 `6bf76995bf76554c93aecc217e9f1193b9ca9d1d2bf8d9d16db952eb6d30fcda`) was downloaded and visually inspected. The new candidate screenshot proves room overlays render over the canonical floor while the UI remains explicitly unverified; it does not approve registration.
+
+Review loop 3, review **5119884926**, found that concurrent UI/CLI setup could race while creating the same missing definitions or actor. The follow-up reloads and validates the winning definition/actor after stable duplicate-key errors and adds a barrier-driven two-thread regression proving both calls converge on one actor, one definition set, and one grant per runtime permission. The Windows smoke harness also now decodes UTF-8 output safely and retries temporary-directory cleanup after child shutdown. Local browser replay still cannot launch because the installed Playwright cache is build 1228 while Playwright 1.62.1 requires build 1234; exact CI browser validation remains authoritative and no browser binary installation is claimed.
+
+Local review-loop 3 gates passed: backend Ruff and **752 tests**, script Ruff and syntax checks, and the real API + separate worker + deterministic HTTP fixture smoke. The browser-mode failure path was also rerun and now reports the missing browser build without a secondary decode or cleanup failure.
+
 ## Browser and visual evidence
 
 The a964d028 Linux CI browser job actually ran the app and verified task creation, planning submission, completed output, Office floor load at 8192×5460, camera controls, candidate selection/focus, mobile width 390 with no horizontal document overflow, and no page/console errors or HTTP errors >=400.
