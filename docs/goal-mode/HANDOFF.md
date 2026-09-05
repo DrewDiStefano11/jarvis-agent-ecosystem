@@ -26,12 +26,12 @@ implementation must eventually reach main and be launched from that integrated s
 ## 2. Exact repository snapshot
 
 Repository: `DrewDiStefano11/jarvis-agent-ecosystem`.
-Snapshot fetched **2026-09-05 17:55 UTC**, before writing this handoff:
+Snapshot fetched **2026-09-05 17:15 UTC**, before writing this handoff:
 
 | Reference | Exact observed remote SHA / relationship |
 |---|---|
 | main | `96e32d2b204b04069b11fd91d0b3eef8e699221e` |
-| continuation | `astra/ultra-ai-hub-completion` at `0ff43f44199342ebd1fb2b24aac89a5ab2282381` |
+| continuation | `astra/ultra-ai-hub-completion` at `76921ea696d98d6e30f3a19d955f5ed8e2f581d3` |
 | #57, draft | continuation → main; integration vehicle, not yet merge-ready |
 | #56, ready | `astra/goal-complete-ai-hub` at `c428216aedccd1f09258addbf105ed73d2158b3e` → `arena/01a025b0-jarvis-agent-ecosystem` |
 | #55, draft | `arena/01a025b0-jarvis-agent-ecosystem` at `a7124c66fe302aee339efe7ea34e7a7d4bbc0a48` → main |
@@ -98,13 +98,19 @@ The #54 → #55 → #56 lineage has been preserved without deleting that worktre
 
 ## 5. Incomplete work — resume here, do not hide it
 
-1. Integrate the tool backend checkpoint. At this snapshot its merge is pending on
+### Completed since last handoff:
+
+- `5129b7c` and `6535b66`: integrated durable tool execution backend with workspace authorization.
+- `c00588e` and `76921ea`: formatting fixes and unicode console fixes for smoke testing.
+
+
+1. ~Integrate the tool backend checkpoint.~ DONE: It was integrated, and smoke tests have passed.
    `codex/ultra-tool-execution`, based on provider569 plus integrated149. It owns
    `models/tool_execution.py`, `app/tool_execution/{filesystem,repository,service,router}.py`,
    migration`20260905_08`, worker dispatch/result support, and focused tests. Source
    and recovery tests have passed; aggregate impacted tests are still running. It
    must be committed/pushed before this session ends even if final validation fails.
-2. Run the workspace acceptance harness against the combined backend/frontend, then
+2. ~Run the workspace acceptance harness against the combined backend/frontend~ DONE: Smoke script `smoke-workspace-tools.py` successfully completed., then
    the actual installed Ollama model. Its checkpoint has static checks only. Record
    actual failures; never label fixture output as real inference.
 3. Tools execute a fixed reviewed plan of at most8 steps. Reads return observations;
@@ -179,7 +185,7 @@ belongs in a checkpoint. Final transfer status must supersede this active snapsh
 
 ## 8. Validation ledger
 
-- Combined planning+office+workforce+supervisor tree committed as fc26: Ruff format
+- Combined tool execution backend integrated: Ruff format and lint passed; **1042 backend tests passed** (including tool execution). Ruff format
  135files and lint passed; **976 backend tests passed**,524.99s, Python3.12.10.
 - That frontend: typecheck, ESLint,88tests and production build passed; subsequent
   office count fix passed5focused tests/typecheck/lint.
