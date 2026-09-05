@@ -26,6 +26,7 @@ from app.agent_runtime.sqlalchemy_repository import SqlAlchemyAgentRuntimeReposi
 from app.autonomous_worker.repository import ModelExecutionRepository
 from app.autonomous_worker.router import router as autonomous_worker_router
 from app.autonomous_worker.service import AutonomousWorkerService
+from app.autonomous_worker.setup_router import router as local_planning_setup_router
 from app.context import ContextAssembler
 from app.core.config import Settings
 from app.core.errors import DomainError
@@ -250,6 +251,7 @@ def create_app(
     )
     app.include_router(agent_runtime_router)
     app.include_router(autonomous_worker_router)
+    app.include_router(local_planning_setup_router)
     app.include_router(identity_router)
     app.state.lease_recovery_task = None
     app.state.restored_workflow_state = restored_workflow_state

@@ -22,3 +22,8 @@
 .hub-office-scene select { max-width:100% }
 @media(max-width:1100px) { .hub-office-layout { grid-template-columns:1fr }.office-workforce { max-height:none } }
 @media(prefers-reduced-motion:reduce) { .office-surface { will-change:auto } }
+
+.viewport-controls button,.office-workforce button { padding:9px 13px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2);color:var(--text) }
+.viewport-controls button:hover,.office-workforce button:hover { border-color:var(--accent) }
+.office-workforce button .status { display:block;margin-top:5px }
+@media(max-width:600px) { .office-viewport { height:auto;min-height:240px;aspect-ratio:8192/5460 }.viewport-controls { gap:6px;flex-wrap:wrap }.viewport-controls button { padding:8px 10px } }

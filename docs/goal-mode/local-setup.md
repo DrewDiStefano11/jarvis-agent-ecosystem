@@ -44,15 +44,15 @@ The Office uses the real prototype artwork and shares Hub state.
 ## Enable actual local planning
 
 1. In **Tasks**, create a task. Open its details and copy its task ID.
-2. From `apps/api`, provision an identity for exactly that task:
+2. Open **Planning**, select the task, and click **Prepare local planner for this task**. This explicitly provisions task-scoped runtime permissions and selects the configured worker identity (or creates the initial local identity). The page displays the actor ID when initial configuration is still needed. The equivalent CLI remains available from `apps/api`:
 
    ```powershell
    .\.venv\Scripts\python.exe -m app.autonomous_worker.setup --task-id TASK_ID
    ```
 
-   The command returns `actorId`. Repeating it is safe. It grants only task-scoped
+   The command returns `actorId`. Repeating either setup action is safe. It grants only task-scoped
    runtime permissions, never tools or `runtime.admin`; existing denies and
-   suspended identities remain effective. Run it for each additional task you
+   suspended identities remain effective. Use the in-app action for each additional task you
    intend this identity to execute. It does not enable a model or start a worker.
 3. Create `apps/api/.env` from the root `.env.example`. The API, setup CLI and
    worker must use the same database URL and working directory. Configure an
@@ -82,8 +82,8 @@ The Office uses the real prototype artwork and shares Hub state.
    .\.venv\Scripts\python.exe -m app.autonomous_worker
    ```
 
-5. Open **Planning**, select the provisioned identity as both actor and target,
-   select the task, and choose **Queue local plan**. This explicitly submits the
+5. Open **Planning**, select the task, prepare its planner (or select an already-authorized actor and target),
+   and choose **Queue local plan**. This explicitly submits the
    task text as operator-approved context. Context checks may require review
    before any execution is queued.
 6. Inspect runtime history and persisted model results on the same page. The

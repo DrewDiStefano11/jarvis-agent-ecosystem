@@ -8,3 +8,5 @@ body{min-width:0}
 @media(max-width:760px){.emergency{min-height:44px}}
 
 .runtime-result { padding: 1rem 0; border-bottom: 1px solid var(--border, #34404e); overflow-wrap: anywhere; }
+
+.content a,.drawer a{color:var(--accent);text-underline-offset:3px}.secondary{padding:9px 13px;border:1px solid var(--line);border-radius:6px;background:var(--surface-2);color:var(--text)}.secondary:hover:not(:disabled){border-color:var(--accent)}

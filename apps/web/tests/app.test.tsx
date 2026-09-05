@@ -106,3 +106,25 @@ describe('operator control failures', () => {
   expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url).endsWith('/api/tasks/task-parent/cancel') && init?.method === 'POST')).toBe(true)
  })
 })
+
+test('explicit task setup selects the provisioned identity without queueing inference', async () => {
+ endpointData['/api/tasks'] = tasks.map(task => ({ ...task, status: 'queued' }))
+ endpointData['/api/identity/agents'] = [{ id: 'actor-prepared', display_name: 'Local planner', lifecycle_state: 'active', is_enabled: true }]
+ endpointData['/api/local-planning/setup'] = { actorId: 'actor-prepared', workerActorConfigured: true, executionEnabledBySetup: false }
+ endpointData['/api/agent-runtime/runs'] = { items: [], next_offset: null, total_count: 0 }
+ try {
+  window.history.pushState({}, '', '/runtime'); renderApp()
+  await screen.findByRole('heading', { name: 'Planning workspace' })
+  await userEvent.selectOptions(screen.getByLabelText('Task and history'), tasks[0]!.id)
+  await userEvent.click(screen.getByRole('button', { name: 'Prepare local planner for this task' }))
+  expect(await screen.findByText('Local planner prepared for this task. Queue the plan when ready.')).toBeInTheDocument()
+  expect(screen.getByLabelText('Act as local identity')).toHaveValue('actor-prepared')
+  expect(screen.getByLabelText('Target agent')).toHaveValue('actor-prepared')
+  expect(screen.getByRole('button', { name: 'Queue local plan' })).toBeDisabled()
+  expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url).endsWith('/api/local-planning/setup') && init?.body === JSON.stringify({ taskId: tasks[0]!.id }))).toBe(true)
+  expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url).endsWith('/api/agent-runtime/commands') && init?.method === 'POST')).toBe(false)
+ } finally {
+  endpointData['/api/tasks'] = tasks
+  delete endpointData['/api/identity/agents']; delete endpointData['/api/local-planning/setup']; delete endpointData['/api/agent-runtime/runs']
+ }
+})

@@ -2,7 +2,6 @@
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const path = require('node:path')
-const { execFileSync } = require('node:child_process')
 const { chromium } = require(path.join(process.env.SMOKE_WEB, 'node_modules/playwright'))
 
 ;(async () => {
@@ -27,11 +26,11 @@ const { chromium } = require(path.join(process.env.SMOKE_WEB, 'node_modules/play
     await page.getByRole('button', { name: 'Create task', exact: true }).click()
     const task = (await (await created).json()).data
     assert.ok(task.id)
-    execFileSync(process.env.SMOKE_PYTHON, ['-m', 'app.autonomous_worker.setup', '--task-id', task.id], { cwd: process.env.SMOKE_API, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] })
     await nav.getByRole('link', { name: 'Planning', exact: true }).click()
-    await page.getByLabel('Act as local identity').selectOption(process.env.SMOKE_ACTOR)
-    await page.getByLabel('Target agent').selectOption(process.env.SMOKE_ACTOR)
     await page.getByLabel('Task and history').selectOption(task.id)
+    await page.getByRole('button', { name: 'Prepare local planner for this task', exact: true }).click()
+    await page.getByText('Local planner prepared for this task. Queue the plan when ready.', { exact: true }).waitFor()
+    assert.equal(await page.getByLabel('Act as local identity').inputValue(), process.env.SMOKE_ACTOR)
     await page.getByRole('button', { name: 'Queue local plan', exact: true }).click()
     await page.getByRole('heading', { name: 'Deterministic transport fixture completed.', exact: true }).waitFor({ timeout: 30000 })
     await page.screenshot({ path: path.join(output, 'planning-completed.png'), fullPage: true })
@@ -39,6 +38,7 @@ const { chromium } = require(path.join(process.env.SMOKE_WEB, 'node_modules/play
     assert.equal((await persisted.json()).data.status, 'completed')
     await nav.getByRole('link', { name: 'Office', exact: true }).click()
     await page.getByRole('heading', { name: 'Operations floor', exact: true }).waitFor()
+    await page.getByText('worker identity · enabled', { exact: true }).waitFor()
     await page.waitForFunction(() => {
       const image = document.querySelector('.office-background')
       return image?.complete && image.naturalWidth === 8192 && image.naturalHeight === 5460
@@ -56,6 +56,7 @@ const { chromium } = require(path.join(process.env.SMOKE_WEB, 'node_modules/play
     await page.getByRole('heading', { name: 'Unverified floor registration', exact: true }).waitFor()
     await page.getByLabel('Inspect candidate geometry').uncheck()
     await page.setViewportSize({ width: 390, height: 844 })
+    await page.evaluate(() => window.scrollTo(0, 0))
     await page.getByRole('button', { name: 'Fit office', exact: true }).click()
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'Mobile document overflows horizontally')
     await page.screenshot({ path: path.join(output, 'office-mobile.png'), fullPage: true })

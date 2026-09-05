@@ -124,3 +124,28 @@ explicit fixtures, not model-execution telemetry.
 Highest-value next objective: verified office registration and durable worker desk/
 movement contracts, reusing the existing prototype routing and sprite system.
 GitHub exact-head CI/review outcomes will be recorded after publication.
+
+
+## Continued integration after initial publication
+
+Initial publication: draft PR #56, commit
+`a964d028d3cbc507577e22d2afcae312e692401e`. Its CI run `33940781604` passed the
+frontend, repository-integrity and real browser jobs. The backend job was still
+running when further improvements began. Browser screenshots were retrieved and
+visually inspected, overcoming the local browser-access limitation through CI.
+
+The next highest-value gap was repeated terminal provisioning for each new task.
+The Hub now has an explicit per-task **Prepare local planner** action backed by
+Pydantic request/response contracts and the same provisioning service as the CLI.
+It reuses the configured identity, preserves denials, refuses suspended identities,
+rejects non-loopback callers, and cannot enable a model or grant tools/admin.
+The browser golden path now uses this action rather than shell provisioning after
+task creation. CLI provisioning remains available for initial/headless setup.
+
+Visual inspection also corrected default browser button/link styling, mobile
+framing, and the misleading presentation of an identity's stale offline record
+beside a healthy worker. Identity enablement and actual worker health are now
+shown separately. Exact live desk placement is still intentionally unclaimed.
+
+CI now cancels superseded/duplicate runs for the same branch and bounds job time;
+every current-head validation gate remains enabled.

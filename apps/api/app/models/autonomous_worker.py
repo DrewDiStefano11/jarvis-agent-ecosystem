@@ -107,3 +107,14 @@ class AutonomousWorkerStatus(AutonomousWorkerContract):
     providerReady: bool = False
     status: Literal["healthy", "degraded", "disabled"] = "disabled"
     reasonCode: str | None = None
+
+
+class LocalPlanningSetupRequest(AutonomousWorkerContract):
+    taskId: str = Field(min_length=1, max_length=120)
+
+
+class LocalPlanningSetupResult(AutonomousWorkerContract):
+    taskId: str
+    actorId: str
+    workerActorConfigured: bool
+    executionEnabledBySetup: Literal[False] = False

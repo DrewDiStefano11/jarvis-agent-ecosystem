@@ -56,9 +56,9 @@ Nexus tube reference are not yet bound to live worker state.
 
 | Reference requirement | Implementation evidence | Runtime visual status |
 | --- | --- | --- |
-| Exact floor artwork and room arrangement | Original pinned bytes; no image editing | Browser verification blocked locally |
-| Consistent scale and camera | Original source dimensions, uniform transform, coordinate/gesture tests | CI browser smoke added |
-| Room/door/path selection | Original candidate entities and interaction renderer | CI interaction smoke added |
+| Exact floor artwork and room arrangement | Original pinned bytes; no image editing | Verified in CI desktop screenshot; original source itself reaches canvas edges |
+| Consistent scale and camera | Original source dimensions, uniform transform, coordinate/gesture tests | CI camera/desktop/mobile smoke passed on a964d02 |
+| Room/door/path selection | Original candidate entities and interaction renderer | CI region selection/focus smoke passed on a964d02 |
 | Live workforce truth | Shared identity/runtime/task state; unplaced identities and labeled simulation | UI contract tests pass |
 | Sprites, walking, door transitions | No invented placement or movement | Unfinished pending registration/bindings |
 
@@ -66,3 +66,11 @@ The cloud browser rejected localhost with `ERR_BLOCKED_BY_CLIENT`. Local Chromiu
 was absent and its download timed out. Do not interpret source reuse, tests, or a
 successful build as completed screenshot comparison. The new CI browser job saves
 actual desktop/mobile office images and planning completion evidence when it runs.
+
+The CI screenshots from `a964d028d3cbc507577e22d2afcae312e692401e` were retrieved
+and visually inspected. The original floor, central hub, departments and camera
+framing render correctly. This inspection found default browser control styling
+and a stale identity operational-status label beside healthy runtime telemetry.
+A follow-up corrects control/link contrast, labels identity enablement separately
+from worker health, reduces mobile dead space and resets scroll for mobile shots.
+The original source itself reaches the canvas edges; the viewport adds no crop.
