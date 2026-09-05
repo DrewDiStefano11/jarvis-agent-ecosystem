@@ -74,6 +74,8 @@ def main():
             calls.append(
                 json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             )
+            if os.environ.get("JARVIS_SMOKE_OFFICE") == "true":
+                time.sleep(3)  # Make real fixture execution observable in the office.
             self.reply(
                 {
                     "model": "fixture-model",
@@ -259,7 +261,11 @@ for (const name of ['client', 'planning']) {
                                 logs.seek(0)
                                 raise RuntimeError(logs.read())
                             time.sleep(0.05)
-                    runner = ROOT / "scripts/smoke-browser.cjs"
+                    runner = ROOT / (
+                        "scripts/smoke-office.cjs"
+                        if os.environ.get("JARVIS_SMOKE_OFFICE") == "true"
+                        else "scripts/smoke-browser.cjs"
+                    )
                 completed = subprocess.run(
                     ["node", str(runner)],
                     env={

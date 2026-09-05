@@ -38,7 +38,7 @@ def test_health_status_and_lists() -> None:
 
 def test_system_status_contract_advertises_current_database_revision() -> None:
     revision = SystemStatus.model_json_schema()["properties"]["databaseRevision"]
-    assert revision["default"] == "20260905_06"
+    assert revision["default"] == "20260905_07"
 
 
 @pytest.mark.parametrize("configured_actor", ["", "local-worker-actor"])

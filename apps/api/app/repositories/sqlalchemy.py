@@ -170,6 +170,12 @@ class SqlAlchemyRepository:
     def emergency_stop(self) -> bool:
         return self._system.emergency_stop
 
+    def refresh_event_cursor(self) -> None:
+        """Observe external outbox commits without replacing staged domain state."""
+        event_session_id, sequence_number = self.current_event_cursor()
+        self._system.event_session_id = event_session_id
+        self._system.current_sequence_number = sequence_number
+
     @emergency_stop.setter
     def emergency_stop(self, value: bool) -> None:
         self._system.emergency_stop = value

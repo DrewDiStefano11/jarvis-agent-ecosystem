@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import App from '../src/App'
 import { AppStoreProvider } from '../src/state/AppStore'
 import type { Agent, Approval, Artifact, AuditEvent, Department, Notification, SystemStatus, Task } from '../src/types/contracts'
+import officeCatalog from '../../api/app/office/catalog.json'
 
 const now='2026-01-15T14:00:00Z'
 const agents:Agent[]=['jarvis','atlas','scout','archive','sentinel'].map((id,index)=>({id,schemaVersion:'1.0',name:id[0]!.toUpperCase()+id.slice(1),role:index===0?'Executive Manager':'Specialist',description:'Simulated agent',goals:['Be transparent'],departmentId:index===0?'executive':'research',managerId:index===0?null:'jarvis',status:'idle',currentTaskId:null,queuedTaskIds:[],progress:0,statusMessage:'Available',capabilities:['simulation'],allowedTools:['fixture'],deniedTools:['shell'],approvalPolicy:{},memoryAccess:{},performance:{completionRate:.9,accuracyScore:.9,averageCompletionTime:10,failedTaskCount:0,userCorrectionCount:0,reviewerScore:.9,reliabilityScore:.95},resourceProfile:{},office:{zone:index===0?'Executive':'Research',deskId:`D-${index}`,spriteIdentifier:id,displayPosition:{x:1,y:1},currentAnimationState:'idle',currentDestination:null,isInMeeting:false},createdAt:now,updatedAt:now,version:'1',deploymentStatus:'simulated',isTemporary:false}))
@@ -16,6 +17,7 @@ const notifications:Notification[]=[{id:'n1',title:'Hello',message:'Simulation',
 const artifacts:Artifact[]=[]
 const system:SystemStatus={status:'healthy',environment:'test',apiSchemaVersion:'1.0',seedDataVersion:'2.0',emergencyStop:false,simulator:{state:'running',currentStep:4,totalSteps:25,accelerated:true},resources:[{name:'CPU',value:'fixture 18%',label:'Simulated'}],lastSynchronizedAt:now,storageBackend:'sqlite',databaseHealthy:true,databaseRevision:'20260724_03',schemaCurrent:true,eventSessionId:'session-test',outboxPendingCount:0,outboxExhaustedCount:0,recoveryRequired:false,activeWorkflowRunId:'run-test',lastCheckpointId:'checkpoint-test',lastStartupAt:now,lastCleanShutdown:null,activeWorkerCount:0,activeLeaseCount:0,expiredLeaseCount:0,staleWorkerCount:0,contextAssembler:{state:'ready',totalAssemblies:2,completedAssemblies:1,reviewRequiredAssemblies:1,includedSources:3,excludedSources:1,redactions:2,injectionFindings:1,lastAssemblyAt:now}}
 const endpointData:Record<string,unknown>={'/api/departments':departments,'/api/agents':agents,'/api/tasks':tasks,'/api/approvals':approvals,'/api/artifacts':artifacts,'/api/audit-events':auditEvents,'/api/notifications':notifications,'/api/system/status':system}
+endpointData['/api/office'] = { serverTime: now, catalog: officeCatalog, placements: [], placementVersions: {}, emergencyStop: false }
 
 class FakeWebSocket {static instances:FakeWebSocket[]=[];static CONNECTING=0;static OPEN=1;readyState=1;sent:string[]=[];onopen:(()=>void)|null=null;onmessage:((event:{data:string})=>void)|null=null;onerror:(()=>void)|null=null;onclose:(()=>void)|null=null;constructor(public url:string){FakeWebSocket.instances.push(this);queueMicrotask(()=>this.onopen?.())}close(){}send(value:string){this.sent.push(value)}emit(event:unknown){this.onmessage?.({data:JSON.stringify(event)})}emitRaw(value:string){this.onmessage?.({data:value})}}
 
@@ -270,5 +272,45 @@ describe('planning worker identity', () => {
   await userEvent.click(screen.getByRole('button', { name: 'Retry same submission' }))
   expect(vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(originalCommands)
   expect(screen.getByRole('button', { name: 'Clear submission form' })).toBeEnabled()
+ })
+})
+
+describe('Live office controls', () => {
+ test('released identity assignment uses canonical version and visible original station selection', async () => {
+  endpointData['/api/identity/agents'] = [{ id: 'office-real', display_name: 'Office planner', agent_type: 'worker', lifecycle_state: 'active', is_enabled: true }]
+  endpointData['/api/office'] = { serverTime: now, catalog: officeCatalog, placements: [], placementVersions: { 'office-real': 11 }, emergencyStop: false }
+  try {
+   window.history.pushState({}, '', '/office'); renderApp()
+   await waitFor(() => expect(screen.getByLabelText('Office identity')).toHaveTextContent('Office planner'))
+   await userEvent.selectOptions(screen.getByLabelText('Office identity'), 'office-real')
+   await userEvent.selectOptions(screen.getByLabelText('Assign desk'), 'POSITION_030')
+   await userEvent.selectOptions(screen.getByLabelText('Original sprite'), 'agent-sheet-06')
+   await userEvent.click(screen.getByRole('button', { name: 'Assign identity' }))
+   await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url).endsWith('/api/office/identities/office-real/commands') && init?.method === 'POST')).toBe(true))
+   const sent = vi.mocked(fetch).mock.calls.find(([url, init]) => String(url).endsWith('/api/office/identities/office-real/commands') && init?.method === 'POST')!
+   expect(JSON.parse(String(sent[1]!.body))).toEqual({ commandId: expect.stringMatching(/^office-/), action: 'assign', expectedVersion: 11, stationId: 'POSITION_030', spriteId: 'agent-sheet-06' })
+   // A receipt alone does not invent a placement: only the fetched snapshot can.
+   expect(screen.queryByTestId('office-agent-office-real')).not.toBeInTheDocument()
+  } finally {
+   delete endpointData['/api/identity/agents']
+   endpointData['/api/office'] = { serverTime: now, catalog: officeCatalog, placements: [], placementVersions: {}, emergencyStop: false }
+  }
+ })
+ test('inactive identity remains inspectable but cannot be assigned and emergency stop stays visible', async () => {
+  endpointData['/api/identity/agents'] = [{ id: 'office-inactive', display_name: 'Suspended planner', agent_type: 'worker', lifecycle_state: 'suspended', is_enabled: false }]
+  endpointData['/api/office'] = { serverTime: now, catalog: officeCatalog, placements: [], placementVersions: {}, emergencyStop: true }
+  try {
+   window.history.pushState({}, '', '/office'); renderApp()
+   await waitFor(() => expect(screen.getByLabelText('Office identity')).toHaveTextContent('Suspended planner'))
+   await userEvent.selectOptions(screen.getByLabelText('Office identity'), 'office-inactive')
+   expect(screen.getByRole('button', { name: 'Assign identity' })).toBeDisabled()
+   expect(screen.getByRole('button', { name: 'Inspect destination' })).toBeEnabled()
+   expect(screen.getByText(/Activate this identity/)).toBeInTheDocument()
+   expect(screen.getByText(/Emergency stop is active. Office moves/)).toBeInTheDocument()
+   expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+  } finally {
+   delete endpointData['/api/identity/agents']
+   endpointData['/api/office'] = { serverTime: now, catalog: officeCatalog, placements: [], placementVersions: {}, emergencyStop: false }
+  }
  })
 })
