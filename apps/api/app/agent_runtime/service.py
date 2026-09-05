@@ -36,7 +36,11 @@ from app.agent_runtime.errors import (
 )
 from app.agent_runtime.ledger import RuntimeAggregate, apply_event, replay_execution_ledger
 from app.agent_runtime.recovery import derive_recovery_plan
-from app.agent_runtime.repository import AgentRuntimeRepository, validate_lineage_invariant
+from app.agent_runtime.repository import (
+    AgentRuntimeRepository,
+    RuntimeExecutionFence,
+    validate_lineage_invariant,
+)
 from app.agent_runtime.transitions import TERMINAL_STATES
 from app.models.agent_runtime import (
     DEFAULT_LINEAGE_DEPTH_LIMIT,
@@ -147,6 +151,9 @@ class AgentRuntimeService:
         self._execution_enabled_required: ContextVar[bool] = ContextVar(
             "runtime_execution_enabled_required", default=False
         )
+        self._execution_fence: ContextVar[RuntimeExecutionFence | None] = ContextVar(
+            "runtime_execution_fence", default=None
+        )
         self.utc_clock = utc_clock
         self.run_id_factory = run_id_factory or prefixed_identifier_factory("run")
         self.attempt_id_factory = attempt_id_factory or prefixed_identifier_factory("attempt")
@@ -171,14 +178,17 @@ class AgentRuntimeService:
         actor: RuntimeActorContext,
         *,
         require_execution_enabled: bool = False,
+        execution_fence: RuntimeExecutionFence | None = None,
     ) -> RuntimeCommandResult:
         command = self._command_with_verified_actor(command, actor)
         context = self._authorize_command(command, actor)
         authorization_token = self._authorization_context.set(context)
         execution_token = self._execution_enabled_required.set(require_execution_enabled)
+        fence_token = self._execution_fence.set(execution_fence)
         try:
             return self.handle(command)
         finally:
+            self._execution_fence.reset(fence_token)
             self._execution_enabled_required.reset(execution_token)
             self._authorization_context.reset(authorization_token)
 
@@ -492,6 +502,8 @@ class AgentRuntimeService:
             expected_version=0,
             expected_sequence=0,
             create=True,
+            require_execution_enabled=self._execution_enabled_required.get(),
+            execution_fence=self._execution_fence.get(),
         )
         if existing_record is not None:
             return existing_record.result.model_copy(update={"idempotent_replay": True}, deep=True)
@@ -964,6 +976,8 @@ class AgentRuntimeService:
                     processed_command=record,
                     expected_version=snapshot.version,
                     expected_sequence=snapshot.event_sequence_number,
+                    require_execution_enabled=self._execution_enabled_required.get(),
+                    execution_fence=self._execution_fence.get(),
                 )
                 if existing_record is not None:
                     return existing_record.result.model_copy(
@@ -1138,6 +1152,8 @@ class AgentRuntimeService:
             processed_command=record,
             expected_version=aggregate.snapshot.version,
             expected_sequence=aggregate.snapshot.event_sequence_number,
+            require_execution_enabled=self._execution_enabled_required.get(),
+            execution_fence=self._execution_fence.get(),
         )
         if existing_record is not None:
             return existing_record.result.model_copy(update={"idempotent_replay": True}, deep=True)
@@ -1344,6 +1360,7 @@ class AgentRuntimeService:
             expected_version=aggregate.snapshot.version,
             expected_sequence=aggregate.snapshot.event_sequence_number,
             require_execution_enabled=self._execution_enabled_required.get(),
+            execution_fence=self._execution_fence.get(),
         )
         if existing_record is not None:
             return existing_record.result.model_copy(update={"idempotent_replay": True}, deep=True)

@@ -23,7 +23,11 @@ from app.agent_runtime.errors import (
     VersionConflictError,
 )
 from app.agent_runtime.ledger import replay_execution_ledger
-from app.agent_runtime.repository import AgentRuntimeRepository, validate_lineage_invariant
+from app.agent_runtime.repository import (
+    AgentRuntimeRepository,
+    RuntimeExecutionFence,
+    validate_lineage_invariant,
+)
 from app.agent_runtime.transitions import TERMINAL_STATES
 from app.core.errors import DomainError
 from app.db.models import (
@@ -35,6 +39,7 @@ from app.db.models import (
     AuditEventRow,
     OutboxEventRow,
     SystemStateRow,
+    TaskLeaseRow,
     TaskRow,
 )
 from app.models.agent_runtime import (
@@ -206,6 +211,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
         expected_sequence,
         create=False,
         require_execution_enabled=False,
+        execution_fence: RuntimeExecutionFence | None = None,
     ):
         run_id = snapshot.specification.run_id
         try:
@@ -228,7 +234,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 replay = self._replay_processed_command(s, run_id, processed_command, refresh=True)
                 if replay is not None:
                     return replay
-                if require_execution_enabled:
+                if require_execution_enabled or execution_fence is not None:
                     system_state = s.scalar(
                         select(SystemStateRow).where(SystemStateRow.id == 1).with_for_update()
                     )
@@ -238,6 +244,8 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                             "Emergency stop is active.",
                             423,
                         )
+                if execution_fence is not None:
+                    self._require_execution_fence(s, snapshot, execution_fence)
                 old = []
                 previous_state: str | None = None
                 if create:
@@ -415,6 +423,35 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 command_id=processed_command.command_id,
                 metadata={"constraint": "runtime_transaction"},
             ) from exc
+
+    @staticmethod
+    def _require_execution_fence(
+        session: Session,
+        snapshot: AgentRunSnapshot,
+        fence: RuntimeExecutionFence,
+    ) -> None:
+        if fence.task_id != snapshot.specification.task_id:
+            raise DomainError(
+                "TASK_LEASE_LOST",
+                "The runtime execution fence does not match the authoritative task.",
+                409,
+            )
+        lease = session.scalar(
+            select(TaskLeaseRow)
+            .where(
+                TaskLeaseRow.task_id == fence.task_id,
+                TaskLeaseRow.worker_id == fence.worker_id,
+                TaskLeaseRow.lease_token == fence.lease_token,
+                TaskLeaseRow.expires_at > datetime.now(UTC),
+            )
+            .with_for_update()
+        )
+        if lease is None:
+            raise DomainError(
+                "TASK_LEASE_LOST",
+                "The task lease expired, was released, or is owned by another worker.",
+                409,
+            )
 
     @staticmethod
     def _replay_processed_command(
