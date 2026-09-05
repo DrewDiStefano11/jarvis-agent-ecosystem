@@ -60,7 +60,9 @@ def stop(process: subprocess.Popen) -> None:
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         if result.returncode and process.poll() is None:
-            raise RuntimeError(f"Could not stop owned child {process.pid}: {result.stderr!r}")
+            raise RuntimeError(
+                f"Could not stop owned child {process.pid}: {result.stderr!r}"
+            )
     else:
         process.terminate()
     try:
