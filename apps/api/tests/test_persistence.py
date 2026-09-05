@@ -389,11 +389,11 @@ def test_concurrent_duplicate_submission_creates_one_task(tmp_path: Path) -> Non
     release_publish = threading.Event()
     original_enqueue = first_app.state.repository.enqueue_event
 
-    def delayed_enqueue(envelope, idempotency=None) -> None:
+    def delayed_enqueue(envelope, idempotency=None, **kwargs) -> None:
         entered_publish.set()
         released = release_publish.wait(5)
         assert released
-        original_enqueue(envelope, idempotency)
+        original_enqueue(envelope, idempotency, **kwargs)
 
     first_app.state.repository.enqueue_event = delayed_enqueue
     with (
@@ -462,10 +462,10 @@ def test_orphaned_idempotency_claim_lease_is_reclaimed_once_after_restart(
     release_command = threading.Event()
     original_enqueue = reclaiming_app.state.repository.enqueue_event
 
-    def delayed_enqueue(envelope, idempotency=None) -> None:
+    def delayed_enqueue(envelope, idempotency=None, **kwargs) -> None:
         entered_command.set()
         assert release_command.wait(5)
-        original_enqueue(envelope, idempotency)
+        original_enqueue(envelope, idempotency, **kwargs)
 
     reclaiming_app.state.repository.enqueue_event = delayed_enqueue
     with (

@@ -278,7 +278,7 @@ for (const name of ['client', 'planning']) {
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=60,
+                    timeout=180 if browser_mode else 60,
                     check=False,
                 )
                 if completed.returncode:
@@ -289,8 +289,9 @@ for (const name of ['client', 'planning']) {
                         + logs.read()
                     )
                 print(completed.stdout.strip())
-                assert len(calls) == 1, (
-                    f"Expected one inference request, got {len(calls)}"
+                expected_calls = 2 if browser_mode else 1
+                assert len(calls) == expected_calls, (
+                    f"Expected {expected_calls} inference requests, got {len(calls)}"
                 )
                 print(
                     "PASS: API + separate worker + frontend command replay + durable reviewed result"

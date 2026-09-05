@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Generic, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer
 
 from app.models.agent_runtime import (
     normalize_safe_metadata,
@@ -129,6 +129,7 @@ class Task(ContractModel):
     description: str
     request: str
     parentTaskId: str | None = None
+    correctionOfTaskId: str | None = None
     childTaskIds: list[str] = Field(default_factory=list)
     projectId: str | None = None
     createdBy: str
@@ -150,6 +151,13 @@ class Task(ContractModel):
     startedAt: datetime | None = None
     updatedAt: datetime
     completedAt: datetime | None = None
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_serialization(self, handler):
+        payload = handler(self)
+        if self.correctionOfTaskId is None:
+            payload.pop("correctionOfTaskId", None)
+        return payload
 
 
 class Approval(ContractModel):
@@ -375,6 +383,16 @@ class CreateTaskRequest(RequestContractModel):
     title: str = Field(min_length=3, max_length=160)
     description: str = Field(min_length=3, max_length=2000)
     priority: Literal["low", "medium", "high", "urgent"] = "medium"
+    correctionOfTaskId: str | None = Field(
+        default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$"
+    )
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_serialization(self, handler):
+        payload = handler(self)
+        if self.correctionOfTaskId is None:
+            payload.pop("correctionOfTaskId", None)
+        return payload
 
 
 class RegisterWorkerRequest(RequestContractModel):

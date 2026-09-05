@@ -70,6 +70,7 @@ from app.models.domain import (
 from app.repositories.sqlalchemy import IdempotencyResult, SqlAlchemyRepository
 from app.repositories.task_leases import TaskLeaseRepository
 from app.services.events import EventBroker
+from app.services.task_creation import prepare_task_creation
 from app.simulator.engine import SimulatorEngine
 
 DATABASE_REVISION = "20260905_06"
@@ -723,24 +724,28 @@ def create_app(
         payload = body.model_dump(mode="json")
         if replay := replay_idempotent(request, idempotency_key, "task.create", payload):
             return ApiResponse(data=Task.model_validate(replay))
-        now = datetime.now(UTC)
-        item = Task(
-            id=f"task-{uuid4().hex[:10]}",
-            title=body.title,
-            description=body.description,
-            request=body.description,
-            createdBy="local-user",
-            assignedManagerId="jarvis",
-            priority=body.priority,
-            createdAt=now,
-            updatedAt=now,
+        source = (
+            repository.get_task_durable(body.correctionOfTaskId)
+            if body.correctionOfTaskId is not None
+            else None
         )
-        repository.tasks[item.id] = item
+        item = prepare_task_creation(body, source)
+        audit: dict[str, object] = {"summary": f"Created task: {item.title}"}
+        if source is not None:
+            audit = {
+                "summary": f"Created correction of {source.id}: {item.title}",
+                "new": "queued",
+                "payload": {
+                    "correctionOfTaskId": source.id,
+                    "projectId": source.projectId,
+                },
+            }
         await broker.emit(
             "task.created",
             {"task": item.model_dump(mode="json")},
             item.id,
-            audit={"summary": f"Created task: {item.title}"},
+            audit=audit,
+            created_task=item,
             idempotency=idempotency_result(
                 request, idempotency_key, "task.create", payload, item, 201, item.id
             ),
@@ -864,8 +869,7 @@ def create_app(
         if replay is not None:
             return ApiResponse(data=ContextAssembly.model_validate(replay))
 
-        task = repository.require(repository.tasks, body.taskId, "task")
-        assert isinstance(task, Task)
+        task = repository.get_task_durable(body.taskId)
         item = context_assembler.assemble(task, body)
         existing = repository.context_assemblies.get(item.id)
         if existing is not None:
@@ -886,7 +890,6 @@ def create_app(
                 content=response.model_dump(mode="json"),
             )
 
-        repository.context_assemblies[item.id] = item
         event_payload = ContextAssemblyEventPayload(
             assemblyId=item.id,
             status=item.status,
@@ -900,6 +903,7 @@ def create_app(
         await broker.emit(
             "context.assembly.created",
             event_payload,
+            created_context=(item, task),
             task_id=item.taskId,
             correlation_id=item.id,
             source="context-assembler",

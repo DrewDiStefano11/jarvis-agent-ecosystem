@@ -4,6 +4,7 @@ import type { RuntimeRun } from '../types/runtime'
 
 export interface PlanningSubmission {
   id: string; timestamp: string; task: Task; actorId: string; targetId: string
+  responseFormat?: 'planning_review_json_v1'
 }
 export const newPlanningSubmission = (task: Task, actorId: string, targetId: string): PlanningSubmission => ({
   id: crypto.randomUUID(), timestamp: new Date().toISOString(), task: structuredClone(task), actorId, targetId,

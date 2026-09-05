@@ -20,6 +20,7 @@ const endpointData:Record<string,unknown>={'/api/departments':departments,'/api/
 class FakeWebSocket {static instances:FakeWebSocket[]=[];static CONNECTING=0;static OPEN=1;readyState=1;sent:string[]=[];onopen:(()=>void)|null=null;onmessage:((event:{data:string})=>void)|null=null;onerror:(()=>void)|null=null;onclose:(()=>void)|null=null;constructor(public url:string){FakeWebSocket.instances.push(this);queueMicrotask(()=>this.onopen?.())}close(){}send(value:string){this.sent.push(value)}emit(event:unknown){this.onmessage?.({data:JSON.stringify(event)})}emitRaw(value:string){this.onmessage?.({data:value})}}
 
 function renderApp(){return render(<BrowserRouter><AppStoreProvider><App/></AppStoreProvider></BrowserRouter>)}
+beforeEach(() => localStorage.clear())
 beforeEach(()=>{window.history.pushState({},'', '/');FakeWebSocket.instances=[];vi.stubGlobal('WebSocket',FakeWebSocket);vi.stubGlobal('fetch',vi.fn(async(input:string|URL|Request,init?:RequestInit)=>{const path=new URL(typeof input==='string'?input:input instanceof URL?input.href:input.url).pathname;const data=endpointData[path]??(init?.method==='POST'?{}:[]);return {ok:true,status:200,json:async()=>({data,meta:{schemaVersion:'1.0'}})} as Response}))})
 
 describe('Jarvis interface',()=>{
@@ -89,6 +90,52 @@ describe('Local planning integration', () => {
 })
 
 describe('operator control failures', () => {
+ test('operator correction preserves its source and recovers one created task after an uncertain acknowledgement', async () => {
+  const source = { ...tasks[0]!, status: 'under_review', result: 'Original reviewed result' }
+  const corrected = { ...tasks[0]!, id: 'task-corrected', title: 'Corrected request', description: 'Use the clarified acceptance requirements.', status: 'queued', correctionOfTaskId: source.id }
+  endpointData['/api/tasks'] = [source]
+  window.history.pushState({}, '', `/tasks?correct=${source.id}`)
+  const original = vi.mocked(fetch).getMockImplementation()!
+  const creations: RequestInit[] = []
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+   if (String(input).endsWith('/api/tasks') && init?.method === 'POST') {
+    creations.push(init)
+    endpointData['/api/tasks'] = [source, corrected]
+    if (creations.length === 1) throw new TypeError('Acknowledgement interrupted')
+    return { ok: true, status: 201, json: async () => ({ data: corrected }) } as Response
+   }
+   return original(input, init)
+  })
+  try {
+   renderApp()
+   await screen.findByRole('heading', { name: 'Correct task input' })
+   await userEvent.clear(screen.getByLabelText('Title'))
+   await userEvent.type(screen.getByLabelText('Title'), corrected.title)
+   await userEvent.clear(screen.getByLabelText('Description'))
+   await userEvent.type(screen.getByLabelText('Description'), corrected.description)
+   await userEvent.click(screen.getByRole('button', { name: 'Create corrected task' }))
+   expect(await screen.findByRole('alert')).toHaveTextContent('Acknowledgement interrupted')
+   expect(screen.getByLabelText('Description')).toBeDisabled()
+   await userEvent.click(screen.getByRole('button', { name: 'Retry creation' }))
+   const planning = await screen.findByRole('link', { name: 'Open planning for this task' })
+   expect(creations).toHaveLength(2)
+   expect(creations[0]).toEqual(creations[1])
+   expect(JSON.parse(creations[0]!.body as string)).toEqual({ title: corrected.title, description: corrected.description, priority: source.priority, correctionOfTaskId: source.id })
+   expect(source.status).toBe('under_review')
+   expect(source.result).toBe('Original reviewed result')
+   await userEvent.click(planning)
+   expect(await screen.findByLabelText('Task and history')).toHaveValue(corrected.id)
+   expect(vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(2)
+  } finally { endpointData['/api/tasks'] = tasks }
+ })
+
+ test('an active task cannot open the correction form', async () => {
+  window.history.pushState({}, '', `/tasks?correct=${tasks[0]!.id}`)
+  renderApp()
+  expect(await screen.findByRole('alert')).toHaveTextContent('This task is still active')
+  expect(screen.queryByRole('button', { name: 'Create corrected task' })).not.toBeInTheDocument()
+ })
+
  test('failed emergency stop remains visible and releases its control', async () => {
   renderApp(); await screen.findByText('Good evening, operator.')
   const original = vi.mocked(fetch).getMockImplementation()!

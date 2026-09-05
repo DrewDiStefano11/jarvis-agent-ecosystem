@@ -28,6 +28,7 @@
     "@testing-library/user-event": "latest",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "@types/node": "22.20.1",
     "eslint": "latest",
     "eslint-plugin-react-hooks": "latest",
     "eslint-plugin-react-refresh": "latest",

@@ -36,6 +36,7 @@ from app.db.models import (
 from app.models.context import ContextAssemblerStatus, ContextAssembly
 from app.models.domain import Agent, Approval, Artifact, AuditEvent, Department, Notification, Task
 from app.services.seed import build_seed
+from app.services.task_creation import validate_correction_source
 from app.services.unit_of_work import UnitOfWork
 
 SEED_VERSION = "2.0"
@@ -259,6 +260,53 @@ class SqlAlchemyRepository:
             self.reload()
             raise
 
+    @staticmethod
+    def _task_row(item: Task) -> TaskRow:
+        return TaskRow(
+            id=item.id,
+            title=item.title,
+            description=item.description,
+            original_request=item.request,
+            parent_task_id=item.parentTaskId,
+            project_id=item.projectId,
+            creator=item.createdBy,
+            assigned_manager_id=item.assignedManagerId,
+            priority=item.priority,
+            status=item.status,
+            progress=item.progress,
+            status_message=item.statusMessage,
+            result=item.result,
+            error=item.error,
+            retry_count=item.retryCount,
+            maximum_retries=item.maxRetries,
+            schema_version=item.schemaVersion,
+            payload=item.model_dump(mode="json"),
+            created_at=item.createdAt,
+            started_at=item.startedAt,
+            updated_at=item.updatedAt,
+            completed_at=item.completedAt,
+        )
+
+    @staticmethod
+    def _context_row(item: ContextAssembly) -> ContextAssemblyRow:
+        return ContextAssemblyRow(
+            id=item.id,
+            task_id=item.taskId,
+            project_id=item.projectId,
+            status=item.status,
+            input_hash=item.inputHash,
+            request_hash=item.requestHash,
+            policy_version=item.policyVersion,
+            included_source_count=item.report.includedSourceCount,
+            excluded_source_count=item.report.excludedSourceCount,
+            redaction_count=item.report.redactionCount,
+            injection_finding_count=item.report.injectionFindingCount,
+            conflict_count=item.report.conflictCount,
+            schema_version=item.schemaVersion,
+            payload=item.model_dump(mode="json"),
+            created_at=item.createdAt,
+        )
+
     def _persist_entities(self, session: Session) -> None:
         for item in self.departments.values():
             payload = item.model_dump(mode="json")
@@ -298,32 +346,7 @@ class SqlAlchemyRepository:
             )
             session.flush()
         for item in self.tasks.values():
-            session.merge(
-                TaskRow(
-                    id=item.id,
-                    title=item.title,
-                    description=item.description,
-                    original_request=item.request,
-                    parent_task_id=item.parentTaskId,
-                    project_id=item.projectId,
-                    creator=item.createdBy,
-                    assigned_manager_id=item.assignedManagerId,
-                    priority=item.priority,
-                    status=item.status,
-                    progress=item.progress,
-                    status_message=item.statusMessage,
-                    result=item.result,
-                    error=item.error,
-                    retry_count=item.retryCount,
-                    maximum_retries=item.maxRetries,
-                    schema_version=item.schemaVersion,
-                    payload=item.model_dump(mode="json"),
-                    created_at=item.createdAt,
-                    started_at=item.startedAt,
-                    updated_at=item.updatedAt,
-                    completed_at=item.completedAt,
-                )
-            )
+            session.merge(self._task_row(item))
             session.flush()
         for item in self.approvals.values():
             updated = item.reviewedAt or item.createdAt
@@ -371,25 +394,7 @@ class SqlAlchemyRepository:
                 )
             )
         for item in self.context_assemblies.values():
-            session.merge(
-                ContextAssemblyRow(
-                    id=item.id,
-                    task_id=item.taskId,
-                    project_id=item.projectId,
-                    status=item.status,
-                    input_hash=item.inputHash,
-                    request_hash=item.requestHash,
-                    policy_version=item.policyVersion,
-                    included_source_count=item.report.includedSourceCount,
-                    excluded_source_count=item.report.excludedSourceCount,
-                    redaction_count=item.report.redactionCount,
-                    injection_finding_count=item.report.injectionFindingCount,
-                    conflict_count=item.report.conflictCount,
-                    schema_version=item.schemaVersion,
-                    payload=item.model_dump(mode="json"),
-                    created_at=item.createdAt,
-                )
-            )
+            session.merge(self._context_row(item))
         for item in self.notifications.values():
             session.merge(
                 NotificationRow(
@@ -544,10 +549,14 @@ class SqlAlchemyRepository:
         self,
         envelope: dict[str, Any],
         idempotency: IdempotencyResult | None = None,
+        *,
+        created_task: Task | None = None,
+        created_context: tuple[ContextAssembly, Task] | None = None,
     ) -> dict[str, Any]:
         audit = envelope.pop("_audit", None)
-        pending_checkpoint = self._pending_checkpoint
-        pending_workflow_run = self._pending_workflow_run
+        persist_cache = created_task is None and created_context is None
+        pending_checkpoint = self._pending_checkpoint if persist_cache else None
+        pending_workflow_run = self._pending_workflow_run if persist_cache else None
         try:
             with UnitOfWork(self.session_factory) as uow:
                 assert uow.session is not None
@@ -588,10 +597,17 @@ class SqlAlchemyRepository:
                         event_session_id=event_session_id,
                         correlation_id=str(envelope["correlationId"]),
                     )
-                self._persist_entities(session)
+                if persist_cache:
+                    self._persist_entities(session)
+                    self._system.updated_at = datetime.now(UTC)
+                    session.merge(self._system)
+                elif created_task is not None:
+                    # The sequence update above serializes this write with worker
+                    # commits. Never flush the API's stale task/agent cache here.
+                    self._insert_created_task(session, created_task)
+                elif created_context is not None:
+                    self._persist_created_context(session, *created_context)
                 self._persist_audit(session)
-                self._system.updated_at = datetime.now(UTC)
-                session.merge(self._system)
                 if pending_workflow_run:
                     session.add(WorkflowRunRow(**pending_workflow_run))
                     session.flush()
@@ -621,7 +637,43 @@ class SqlAlchemyRepository:
             self._system.last_checkpoint_id = pending_checkpoint["id"]
             self._system.simulator_status = pending_checkpoint["status"]
             self._pending_checkpoint = None
+        if created_task is not None:
+            self.tasks[created_task.id] = created_task
+        if created_context is not None:
+            self.context_assemblies[created_context[0].id] = created_context[0]
         return envelope
+
+    def _persist_created_context(self, session: Session, item: ContextAssembly, task: Task) -> None:
+        row = session.get(TaskRow, task.id, with_for_update=True)
+        if row is None:
+            raise DomainError("TASK_NOT_FOUND", "The task was not found.", 404)
+        current = Task.model_validate(row.payload)
+        if (current.projectId, current.request) != (task.projectId, task.request):
+            raise DomainError(
+                "CONTEXT_TASK_CHANGED",
+                "The task input changed while preparing context. Try again.",
+                409,
+            )
+        session.merge(self._context_row(item))
+        session.flush()
+
+    def _insert_created_task(self, session: Session, item: Task) -> None:
+        if item.correctionOfTaskId is not None:
+            source_row = session.get(TaskRow, item.correctionOfTaskId, with_for_update=True)
+            if source_row is None:
+                raise DomainError(
+                    "TASK_NOT_FOUND", "The correction source task was not found.", 404
+                )
+            source = Task.model_validate(source_row.payload)
+            validate_correction_source(source)
+            if source.projectId != item.projectId:
+                raise DomainError(
+                    "TASK_CORRECTION_SOURCE_CHANGED",
+                    "The source project changed while preparing the correction. Try again.",
+                    409,
+                )
+        session.add(self._task_row(item))
+        session.flush()
 
     def pending_outbox(self) -> list[dict[str, Any]]:
         return [envelope for _, envelope in self.pending_outbox_records()]

@@ -4,6 +4,7 @@ import { Link } from 'react-router-dom'
 import { newPlanningSubmission, submitPlanning, type PlanningSubmission } from '../api/planning'
 import { useAppStore } from '../state/AppStore'
 import { Status } from '../components/Status'
+import { forgetPlanningSubmission, readPlanningRecovery, rememberPlanningSubmission, restorePlanningSubmission, type SavedPlanningSubmission } from '../state/planningRecovery'
 
 export function Runtime() {
   const { runtime, tasks, system, refresh, selectTask } = useAppStore()
@@ -12,8 +13,15 @@ export function Runtime() {
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
   const [pending, setPending] = useState<PlanningSubmission | null>(null)
+  const [recovery, setRecovery] = useState(readPlanningRecovery)
+  const [storageWarning, setStorageWarning] = useState('')
   const worker = system?.autonomousWorker
   useEffect(() => { void loadIdentities().catch(error => setMessage(error instanceof Error ? error.message : 'Cannot load identities')) }, [loadIdentities])
+  useEffect(() => {
+    const reload = () => setRecovery(readPlanningRecovery())
+    window.addEventListener('storage', reload)
+    return () => window.removeEventListener('storage', reload)
+  }, [])
   const active = identities.filter(identity => identity.lifecycle_state === 'active' && identity.is_enabled)
   const workerActorId = worker?.workerActorId
   const workerActor = active.find(identity => identity.id === workerActorId)
@@ -30,6 +38,28 @@ export function Runtime() {
   const canQueue = !busy && !identityBlock && Boolean(actorId && targetId && task)
     && Boolean(task && ['queued', 'retrying'].includes(task.status))
     && Boolean(worker?.enabled && worker.providerReady) && !system?.emergencyStop
+  const recover = async (saved: SavedPlanningSubmission) => {
+    if (busy || pending) return
+    const originalTask = tasks.find(item => item.id === saved.taskId)
+    if (!originalTask) { setMessage('The saved task is not available. Refresh the Hub or inspect its durable history before creating replacement work.'); return }
+    setBusy(true)
+    try {
+      const restored = await restorePlanningSubmission(saved, originalTask)
+      selectActor(restored.actorId)
+      setTargetId(restored.targetId)
+      setTaskId(originalTask.id)
+      setPending(restored)
+      setMessage('Saved submission recovered. Inspect its history, then retry with the original command IDs if needed. Recovery does not queue work automatically.')
+    } catch (error) { setMessage(error instanceof Error ? error.message : 'Cannot recover the saved submission') }
+    finally { setBusy(false) }
+  }
+  const forget = (id: string) => {
+    const warning = forgetPlanningSubmission(id)
+    setStorageWarning(warning)
+    setRecovery(readPlanningRecovery())
+    if (pending?.id === id) setPending(null)
+    setMessage(warning ? 'The form was cleared, but its saved retry ID remains in browser storage.' : 'Saved retry ID forgotten. Existing work remains in durable history; this does not cancel a task or run.')
+  }
   const prepare = async () => {
     if (!task || busy) return
     setBusy(true)
@@ -50,11 +80,15 @@ export function Runtime() {
     const submission = pending ?? newPlanningSubmission(task, actorId, targetId)
     setPending(submission)
     try {
+      setStorageWarning(await rememberPlanningSubmission(submission))
+      setRecovery(readPlanningRecovery())
       const run = await submitPlanning(submission)
       setMessage(`Queued ${run.specification.run_id}. The configured local worker will claim eligible work.`)
       setPending(null)
-      await refresh()
-      await refreshRuntime()
+      setStorageWarning(forgetPlanningSubmission(submission.id))
+      setRecovery(readPlanningRecovery())
+      try { await Promise.all([refresh(), refreshRuntime()]) }
+      catch { setMessage(`Queue acknowledged for ${run.specification.run_id}. Status refresh failed; refresh runtime history to inspect progress.`) }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Planning submission failed')
     } finally { setBusy(false) }
@@ -69,6 +103,8 @@ export function Runtime() {
       <p className="muted">Planning produces advice. It cannot run tools, modify files or take external actions. Provider readiness describes configuration; a successful inference is verified in execution history.</p>
     </section>
     <section className="panel"><h2>Queue a local plan</h2>
+      {(storageWarning || recovery.warning) && <p role="alert">{storageWarning || recovery.warning}</p>}
+      {recovery.items.some(item => item.id !== pending?.id) && <div className="callout"><h3>Unfinished submissions saved in this browser</h3><p>Only retry IDs and an input fingerprint are stored here. Task text and results stay in the Hub. Recovering a form never queues it automatically.</p>{recovery.items.filter(item => item.id !== pending?.id).map(saved => <article key={saved.id}><p>{tasks.find(item => item.id === saved.taskId)?.title ?? saved.taskId} · {new Date(saved.timestamp).toLocaleString()}</p><p>Run ID: <code>run-{saved.id}</code></p><button className="secondary" disabled={busy || Boolean(pending)} onClick={() => void recover(saved)}>Recover submission</button> <button className="secondary" disabled={busy} onClick={() => forget(saved.id)}>Forget saved retry ID</button></article>)}</div>}
       <p>Queue as the configured worker identity, with its existing task permissions, or explicitly prepare it for the selected task. The target agent can be a different active identity. <Link to="/tasks">Create a task</Link> first.</p>
       <div className="filters"><label>Act as local identity<select value={actorId} disabled={busy || Boolean(pending)} onChange={event => selectActor(event.target.value)}><option value="">Select identity</option>{active.map(identity => <option key={identity.id} value={identity.id}>{identity.display_name}</option>)}</select></label>
       <label>Target agent<select value={targetId} disabled={busy || Boolean(pending)} onChange={event => setTargetId(event.target.value)}><option value="">Select target</option>{active.map(identity => <option key={identity.id} value={identity.id}>{identity.display_name}</option>)}</select></label>
@@ -78,10 +114,11 @@ export function Runtime() {
       {pending && task && !['queued', 'retrying'].includes(task.status) && <p role="status">This task is now {task.status}. Its saved submission cannot queue further work. Inspect runtime history and clear the form after confirming the original outcome.</p>}
       {workerActor && actorId !== workerActor.id && <p><button className="secondary" disabled={busy || Boolean(pending)} onClick={() => selectActor(workerActor.id)}>Use configured worker identity</button></p>}
       {task && <blockquote>{task.description}</blockquote>}
+      {task && ['under_review', 'failed', 'cancelled', 'completed'].includes(task.status) && <p><Link to={`/tasks?correct=${encodeURIComponent(task.id)}`}>Revise task input</Link> to create a linked follow-up, then explicitly prepare and queue its plan. The original result stays in history.</p>}
       <p><button className="secondary" disabled={busy || Boolean(pending) || !task || !['queued', 'retrying'].includes(task.status)} onClick={() => void prepare()}>Prepare local planner for this task</button></p>
       <p className="muted">This explicit setup grants runtime permissions for only this task. It preserves existing denials and never grants tools or enables a model.</p>
       <button className="primary" disabled={!canQueue} onClick={() => void queue()}>{busy ? 'Submitting…' : pending ? 'Retry same submission' : 'Queue local plan'}</button>
-      {pending && !busy && <><p>Retry reuses the same context and command IDs. Inspect history before starting different work.</p><button className="secondary" onClick={() => { setPending(null); setMessage('Form cleared. Any already-created runtime remains in history; clearing the form does not cancel work.') }}>Clear submission form</button></>}
+      {pending && !busy && <><p>Retry reuses the same context and command IDs, including after recovering this form following a reload. Inspect history before starting different work.</p><button className="secondary" onClick={() => forget(pending.id)}>Clear submission form</button></>}
       {message && <p role="status">{message}</p>}
     </section>
     <section className="panel"><h2>Runtime history</h2><button className="secondary" disabled={!actorId || runtime.loading} onClick={() => void refreshRuntime()}>Refresh runtime</button>
