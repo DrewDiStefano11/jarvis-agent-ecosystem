@@ -38,7 +38,7 @@ def test_health_status_and_lists() -> None:
 
 def test_system_status_contract_advertises_current_database_revision() -> None:
     revision = SystemStatus.model_json_schema()["properties"]["databaseRevision"]
-    assert revision["default"] == "20260729_05"
+    assert revision["default"] == "20260905_06"
 
 
 def test_domain_event_sequence_refreshes_the_shared_committed_cursor() -> None:

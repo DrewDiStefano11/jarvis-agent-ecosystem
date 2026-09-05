@@ -79,7 +79,7 @@ External verification constraint: Windows supervisor native runtime requires Win
 - Frontend: **45 passed** across four files, typecheck, lint and production build
   passed. Fourteen original coordinate/gesture cases are preserved; candidate
   counts and approval boundary, control errors, and authorized result UI are tested.
-- Blank SQLite database migrated through all six revisions to `20260729_05`.
+- Blank SQLite database migrated through all seven revisions to `20260905_06`.
   Downgrade to `20260729_04`, upgrade back to head and final current check passed.
 - `scripts/smoke-local-planning.py` ran the actual API process and separate worker,
   submitted through the frontend's real planning function, replayed the submission,
@@ -149,3 +149,13 @@ shown separately. Exact live desk placement is still intentionally unclaimed.
 
 CI now cancels superseded/duplicate runs for the same branch and bounds job time;
 every current-head validation gate remains enabled.
+
+Exact-head workflow `33947089245` later exposed a remaining provisioning race:
+three task-scoped open grants could be inserted twice because their generated
+start times differed. Alembic revision `20260905_06` now makes active open-ended
+global and scoped grant convergence a database invariant, preserves finite
+intervals and revoked append-only history, and refuses legacy duplicates rather
+than silently rewriting authorization records.
+Local validation for this correction passed Ruff across all 106 Python files,
+**753 backend tests**, frontend typecheck, ESLint, **47 frontend tests**, the
+production build, and the real API + separate worker HTTP fixture smoke.

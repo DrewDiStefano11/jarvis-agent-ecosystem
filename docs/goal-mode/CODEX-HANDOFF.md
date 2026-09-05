@@ -158,11 +158,15 @@ Review loop 3, review **5119884926**, found that concurrent UI/CLI setup could r
 
 Local review-loop 3 gates passed: backend Ruff and **752 tests**, script Ruff and syntax checks, and the real API + separate worker + deterministic HTTP fixture smoke. The browser-mode failure path was also rerun and now reports the missing browser build without a secondary decode or cleanup failure.
 
+Workflow **33947089245** validated frontend, repository integrity, and the real browser job at exact commit `254a94e5f33f379611e663ca7bc7bd5a8500f683`, but its backend job found a remaining concurrency defect after **751 passes**: concurrent setup could insert duplicate open-ended scoped grants because their generated start times differed. Browser artifact **9963677973** (2,985,908 bytes, SHA256 `2d5aa3ad1e75d6a1cc43a98e03aa3020c7e290e425cfd779560d0f4517cc076a`) was downloaded and visually inspected; selected-region focus, candidate rendering, and the explicit unverified boundary are visible.
+
+The correction makes open-ended global and scoped permission-grant convergence a partial-unique-index database invariant in Alembic revision `20260905_06`. Finite intervals and revoked append-only history remain representable. Upgrade refuses any legacy duplicate open grants instead of silently rewriting authorization history. Local gates pass: Ruff across all 106 Python files, **753 backend tests**, frontend typecheck, ESLint, **47 frontend tests**, production build, browser-script syntax, and the real API + separate worker + deterministic HTTP fixture smoke. Exact-head CI and Codex review loop 4 remain required.
+
 ## Browser and visual evidence
 
 The a964d028 Linux CI browser job actually ran the app and verified task creation, planning submission, completed output, Office floor load at 8192×5460, camera controls, candidate selection/focus, mobile width 390 with no horizontal document overflow, and no page/console errors or HTTP errors >=400.
 
-Three screenshots were downloaded and visually inspected: `office-desktop.png`, `office-mobile.png`, `planning-completed.png`. Follow-up visual fixes have NOT yet been rechecked in a browser. Source floor comparison used a diagnostic thumbnail only; no source artwork was modified.
+The exact-head 254a94e browser artifact includes `office-desktop.png`, `office-mobile.png`, `planning-completed.png`, and `office-candidate-review.png`. The candidate view was visually inspected after the focus-wait fix and retains the unverified-registration warning. Source floor comparison used a diagnostic thumbnail only; no source artwork was modified.
 
 Artifact: `jarvis-browser-evidence`, ID **9961748299**, run33940781604, 1,948,627 bytes, archive SHA256 `1dd8d570a10859c5c0b172217a2e49b22ab8d23f609ac3e45640819e1f842c39`.
 

@@ -14,4 +14,6 @@ Revision `20260729_04` adds the durable agent-runtime SQL control plane. It wide
 
 Revision `20260729_05` adds one focused `model_executions` table for the Phase 2C staged protocol and validated planning/review result. A unique `(runtime_run_id, runtime_attempt_id)` constraint protects one committed result per runtime attempt; recovery, task, worker, context, and result lookup indexes are explicit. Downgrade to `20260729_04` is allowed only while the table is empty because committed execution results are not representable at the older revision.
 
+Revision `20260905_06` makes convergence of active, open-ended permission grants a database invariant. Separate partial unique indexes cover global and resource-scoped grants while preserving finite schedules and revoked append-only history. Upgrade refuses legacy duplicate open grants so an operator can repair the history explicitly instead of having a migration silently discard or rewrite authorization records.
+
 To intentionally start clean in development, stop the API, back up anything needed, and delete the database plus its `-wal` and `-shm` sidecars from `apps/api/data`; then run `python -m alembic upgrade head`. This destroys local durable state and should never be automated against an uncertain path. Do not edit SQLite tables manually.

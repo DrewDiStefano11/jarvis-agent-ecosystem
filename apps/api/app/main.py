@@ -71,7 +71,7 @@ from app.repositories.task_leases import TaskLeaseRepository
 from app.services.events import EventBroker
 from app.simulator.engine import SimulatorEngine
 
-DATABASE_REVISION = "20260729_05"
+DATABASE_REVISION = "20260905_06"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
