@@ -1,18 +1,18 @@
 import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, test, vi } from 'vitest'
-import { ToolExecutionPanel } from '../src/components/ToolExecutionPanel'
+import { ToolExecutionHistory, ToolExecutionPanel } from '../src/components/ToolExecutionPanel'
 import { toolAuthorizationBody } from '../src/state/useToolExecutionState'
 import type { ModelExecution } from '../src/types/runtime'
-import type { ToolScope } from '../src/types/toolExecution'
+import type { ToolExecution, ToolScope } from '../src/types/toolExecution'
 
 const store = vi.hoisted(() => ({
-  tools: { workspaces: [{ workspaceId: 'lab', displayName: 'Lab reports', ready: true, allowedTools: ['workspace.report'], readPrefixes: ['inputs'], writePrefixes: ['reports'] }], executions: [], artifact: null, error: null, loading: false, authorize: vi.fn(), refreshTools: vi.fn(), openArtifact: vi.fn() },
+  tools: { workspaces: [{ workspaceId: 'lab', displayName: 'Lab reports', ready: true, allowedTools: ['workspace.report'], readPrefixes: ['inputs'], writePrefixes: ['reports'] }], executions: [] as ToolExecution[], artifact: null, error: null, loading: false, authorize: vi.fn(), refreshTools: vi.fn(), openArtifact: vi.fn() },
   system: { emergencyStop: false }, refresh: vi.fn(), selectTask: vi.fn(),
 }))
 vi.mock('../src/state/AppStore', () => ({ useAppStore: () => store }))
-const execution = { executionId: 'model-result', resultHash: 'a'.repeat(64), result: { steps: [{ tool: 'workspace.report', path: 'reports/objective.md', content: '# Supplied facts\nA practical plan.' }] } } as ModelExecution
-beforeEach(() => { vi.clearAllMocks(); store.system.emergencyStop = false; store.tools.authorize.mockResolvedValue({ executionId: 'tools-one' }) })
+const execution = { executionId: 'model-result', stage: 'completed', resultHash: 'a'.repeat(64), result: { steps: [{ tool: 'workspace.report', path: 'reports/objective.md', content: '# Supplied facts\nA practical plan.' }] } } as ModelExecution
+beforeEach(() => { vi.clearAllMocks(); store.tools.executions = []; store.system.emergencyStop = false; store.tools.authorize.mockResolvedValue({ executionId: 'tools-one' }) })
 
 test('file execution requires explicit scope selection and acknowledgement of exact content', async () => {
   render(<ToolExecutionPanel execution={execution}/>)
@@ -49,4 +49,14 @@ test('ambiguous authorization retry stays stable across reloads and separates ac
   expect((await toolAuthorizationBody('different', 'source', 'a'.repeat(64), scope)).commandId).not.toBe(first.commandId)
   expect((await toolAuthorizationBody('actor', 'source', 'a'.repeat(64), { ...scope, workspaceId: 'another' })).commandId).not.toBe(first.commandId)
   expect(within(document.body).queryByText('# Supplied facts')).toBeNull()
+})
+
+test('execution task history exposes its artifacts without needing a model result on that task', async () => {
+  store.tools.executions = [{ executionId: 'tools-one', taskId: 'execution-task', stage: 'completed', steps: [], artifacts: [{ artifactId: 'report-one', relativePath: 'reports/report.md', byteCount: 40, contentHash: 'b'.repeat(64) }] } as unknown as ToolExecution]
+  render(<ToolExecutionHistory/>)
+  expect(screen.getByRole('heading', { name: 'Workspace execution history' })).toBeVisible()
+  await userEvent.click(screen.getByRole('button', { name: 'Read reports/report.md' }))
+  expect(store.tools.openArtifact).toHaveBeenCalledWith('report-one')
+  await userEvent.click(screen.getByRole('button', { name: 'Open execution task' }))
+  expect(store.selectTask).toHaveBeenCalledWith('execution-task')
 })

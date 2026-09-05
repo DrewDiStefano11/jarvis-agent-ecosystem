@@ -1,7 +1,7 @@
 import { request } from '../api/client'
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { ToolExecutionPanel } from '../components/ToolExecutionPanel'
+import { ToolExecutionHistory, ToolExecutionPanel } from '../components/ToolExecutionPanel'
 import { newPlanningSubmission, submitPlanning, type PlanningSubmission } from '../api/planning'
 import { useAppStore } from '../state/AppStore'
 import { Status } from '../components/Status'
@@ -10,7 +10,7 @@ import { forgetPlanningSubmission, readPlanningRecovery, rememberPlanningSubmiss
 export function Runtime() {
   const [searchParams] = useSearchParams()
   const [mode, setMode] = useState<'planning' | 'workspace'>(searchParams.get('mode') === 'workspace' ? 'workspace' : 'planning')
-  const { runtime, tasks, system, refresh, selectTask } = useAppStore()
+  const { runtime, tools, tasks, system, refresh, selectTask } = useAppStore()
   const { identities, loadIdentities, actorId, selectActor, taskId, setTaskId, runs, executions, refreshRuntime } = runtime
   const [targetId, setTargetId] = useState('')
   const [message, setMessage] = useState('')
@@ -142,5 +142,6 @@ export function Runtime() {
       </article>)}
       {taskId && actorId && !runtime.loading && !runtime.error && !executions.length && <p>No persisted model execution for this task yet.</p>}
     </section>
+    {actorId && taskId && (mode === 'workspace' || tools.executions.length > 0) && <ToolExecutionHistory/>}
   </>
 }
