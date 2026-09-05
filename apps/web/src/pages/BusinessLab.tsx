@@ -16,7 +16,7 @@ export function BusinessLab() {
     {creating && <TaskCreateForm projectId="business-lab" onCreated={(task, warning) => { runtime.setTaskId(task.id); setCreating(false); setMessage(`Objective saved. Open its workspace to prepare and queue a plan.${warning ? ` ${warning}` : ''}`) }}/>}
     {message && <p role="status">{message}</p>}
     <section className="panel"><h2>A bounded workflow</h2><p>Supply the facts and desired report in your objective. Open its workspace, prepare a local planner, and queue a workspace action plan. Inspect the proposed file contents, then explicitly authorize a configured workspace. Reading files returns observations; automatic research and adaptive follow-up from those reads are not implemented.</p><Link to="/agents">Manage workforce identities</Link></section>
-    <section className="task-list">{objectives.map(task => <article className="task-card" key={task.id}>
+    <section className="task-list">{objectives.map(task => <article className="panel" key={task.id}>
       <div className="task-top"><h2>{task.title}</h2><Status value={task.status}/></div><p>{task.description}</p><p>{task.statusMessage}</p><Progress value={task.progress}/>
       <p>Participating agents: {task.assignedAgentIds.map(id => runtime.identities.find(identity => identity.id === id)?.display_name ?? id).join(', ') || 'No agent assigned yet'}</p>
       <p><Link to="/runtime?mode=workspace" onClick={() => runtime.setTaskId(task.id)}>Open objective workspace</Link> · <button className="secondary" onClick={() => selectTask(task.id)}>Inspect task history</button></p>

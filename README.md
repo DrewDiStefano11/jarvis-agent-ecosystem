@@ -1,6 +1,8 @@
 # Jarvis Agent Ecosystem
 
-Jarvis combines the local deterministic simulation and durable SQLite control plane with fenced task leases, Context Assembly, identity/RBAC, the Agent Runtime ledger, and one narrow Phase 2C autonomous execution path. With explicit opt-in, a dedicated local worker can consume a queued `planning_review` runtime run, call an approved loopback model, validate a fixed result, and persist it durably. Tools and external side effects remain unavailable.
+Jarvis is a local AI Hub with durable planning, identity/RBAC, task leases, a runtime ledger, recovery and an office reflecting real workforce state. An explicitly enabled worker can call an approved loopback model and persist a reviewed plan. Separately authorized workspace plans can list/read bounded inputs and write files/reports inside marked local workspaces. The seeded demonstration remains available and distinct from actual autonomous work.
+
+For the current integration and transfer state, read [Next Codex handoff](docs/goal-mode/NEXT_CODEX_HANDOFF.md). The continuation is still undergoing final acceptance and PR integration; passing a checkpoint does not mean the whole mission is complete.
 
 ## What works in the current local phase
 
@@ -11,7 +13,7 @@ Jarvis combines the local deterministic simulation and durable SQLite control pl
 - deterministic departments, five permanent agents, tasks, approvals, artifacts, notifications, and audit fixtures
 - installable PWA metadata, offline shell, reconnection states, HTTP refresh fallback, and a 320px mobile layout
 - YAML agent manifests validated by Pydantic
-- SQLite persistence through typed SQLAlchemy models and Alembic head `20260905_06`
+- SQLite persistence through typed SQLAlchemy models and Alembic head `20260905_08`
 - transactional outbox, durable idempotency keys, workflow runs, per-step checkpoints, and safe restart recovery
 - deterministic context assembly with provenance checks, trust ordering, redaction, injection signals, bounded truncation, durable manifests, and review gating
 - registered worker lifecycle, atomic task acquisition, renewable fencing tokens, attempt history, cancellation revocation, and expired-lease recovery
@@ -19,9 +21,9 @@ Jarvis combines the local deterministic simulation and durable SQLite control pl
 
 ## Explicit non-capabilities
 
-The only real model execution is an explicitly enabled, loopback-only `planning_review` worker. It has no tools and cannot execute code, modify files, browse, call GitHub, use email/calendars/cloud services, send messages, spend money, spawn agents, approve work, or reach a remote model. Ordinary tasks and old runtime records remain non-autonomous. Telemetry, general agents, tools, files, reports, and temporary agents remain simulated. External database servers and production deployment are not included.
+Real execution is explicitly enabled and local-only. Workspace tools require separate approval of exact actions, file contents and scope; model text cannot authorize itself. Plans are fixed: read observations do not drive adaptive subsequent reasoning. Code/shell execution, browser research, Git/GitHub, email/calendar/cloud services, spending and autonomous team decomposition are not implemented. Demo agents and their metrics/artifacts remain simulated. This is a trusted loopback application, not a publicly authenticated service.
 
-The **Planning** workspace now submits authorized local plans and displays durable model results. The **Office** reuses the original prototype floor and camera, with opt-in candidate geometry inspection and shared workforce state. See the [integrated local setup guide](docs/goal-mode/local-setup.md) for task-scoped identity provisioning and the full request-to-result workflow.
+**Planning** submits local plans, exposes exact workspace action review and displays durable model/tool results. **Business Lab** groups objectives and history using the same tasks and workforce. **Office** reuses the original prototype floor, camera and sprites, with durable placements and a limited verified route catalog; candidate geometry outside that catalog remains unapproved. See the [local setup guide](docs/goal-mode/local-setup.md), [workspace guide](docs/goal-mode/workspace-tools.md) and [acceptance harness](docs/WORKSPACE_ACCEPTANCE.md).
 
 ## Architecture
 

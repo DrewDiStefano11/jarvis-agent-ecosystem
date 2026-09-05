@@ -53,12 +53,14 @@ def stop(process: subprocess.Popen) -> None:
         return
     if os.name == "nt":
         # Kill only this harness's live child tree, including venv redirectors.
-        subprocess.run(
+        result = subprocess.run(
             ["taskkill", "/PID", str(process.pid), "/T", "/F"],
-            check=True,
+            check=False,
             capture_output=True,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
+        if result.returncode and process.poll() is None:
+            raise RuntimeError(f"Could not stop owned child {process.pid}: {result.stderr!r}")
     else:
         process.terminate()
     try:

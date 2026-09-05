@@ -18,6 +18,8 @@ test('workspace proposals retain their explicit mode and never invoke tools whil
   await submitPlanning(submission)
   const calls = vi.mocked(request).mock.calls
   expect(calls).toHaveLength(3)
+  const context = JSON.parse(calls[0]![1]!.body as string)
+  expect(Object.values(context.toolAvailabilitySummary).every(value => Array.isArray(value) && value.every(item => typeof item === 'string'))).toBe(true)
   const command = JSON.parse(calls[1]![1]!.body as string)
   expect(command.specification.autonomous_execution.execution_type).toBe('workspace_plan')
   expect(command.specification.autonomous_execution.response_format).toBe('workspace_plan_json_v1')

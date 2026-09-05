@@ -4,7 +4,11 @@ import type { ToolArtifactContent, ToolExecution, ToolScope, WorkspaceInfo } fro
 
 /** The same approved plan and scope keep one command identity across reloads. */
 export async function toolAuthorizationBody(actorId: string, sourceExecutionId: string, expectedPlanHash: string, scope: ToolScope) {
-  const payload = { sourceExecutionId, expectedPlanHash, scope }
+  // Keep the original form's field order when replaying a server-returned scope.
+  const payload = { sourceExecutionId, expectedPlanHash, scope: {
+    workspaceId: scope.workspaceId, allowedTools: scope.allowedTools, readPrefixes: scope.readPrefixes,
+    writePrefixes: scope.writePrefixes, maximumBytes: scope.maximumBytes, maximumSteps: scope.maximumSteps,
+  } }
   const bytes = new TextEncoder().encode(JSON.stringify([actorId, payload]))
   const digest = await crypto.subtle.digest('SHA-256', bytes)
   const key = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('')

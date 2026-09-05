@@ -24,7 +24,7 @@ export async function submitPlanning(submission: PlanningSubmission): Promise<Ru
       taskId: task.id, projectId: task.projectId ?? 'jarvis-agent-ecosystem',
       allowedResultType: 'structured_output', completionCriteria: workspace ? 'Propose a fixed bounded workspace plan with exact file actions and useful report content, for explicit operator authorization.' : 'Produce a bounded local planning review with recommendations, risks and explicit assumptions.',
       toolAvailabilitySummary: workspace
-        ? { proposed_tools: ['workspace.list', 'workspace.read', 'workspace.write', 'workspace.report'], execution_requires_separate_operator_authorization: true, prohibited_tools: ['shell', 'browser', 'external_actions'] }
+        ? { proposed_tools: ['workspace.list', 'workspace.read', 'workspace.write', 'workspace.report'], required_authorization: ['explicit_operator_review'], prohibited_tools: ['shell', 'browser', 'external_actions'] } satisfies Record<string, string[]>
         : { prohibited_tools: ['shell', 'browser', 'filesystem', 'external_actions'] },
       policy: { maximumContextTokens: 8192, estimatedTokenBudget: 8192, reservedOutputTokens: 2048 },
       sources: [{ sourceId: `request-${id}`, sourceType: 'manual_note', trustLevel: 'operator_instruction',

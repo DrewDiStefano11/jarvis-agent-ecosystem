@@ -151,14 +151,27 @@ is explicitly deterministic test inference. It verifies idempotent resubmission,
 one provider request, deterministic review, task completion and the durable result
 reference. It does not establish real model quality or browser rendering.
 
+## Workspace actions and Business Lab
+
+Business Lab creates durable objectives using the same task/project, planning and
+workforce state. In Planning, select **Workspace actions and report** to propose up
+to eight fixed list/read/write/report steps. Planning does not execute these actions.
+After the plan completes review, inspect its exact paths, contents and overwrite
+hashes, select an operator-marked workspace, acknowledge the exact scope, then choose
+**Authorize workspace execution**. The linked execution task preserves the source
+plan and project; progress, observations and artifact content appear in **Workspace
+execution history**. See [workspace configuration](workspace-tools.md) for explicit
+enablement, marker and directory setup. New observations do not adapt later steps.
+
 ## Current boundaries
 
-- Only bounded `planning_review` executes real models; advice is not tool execution.
-- General coding/research tools, cloud escalation and Business Lab are not enabled.
-- The office's floor registration remains unverified. Candidate room/door/path
-  inspection is opt-in. No real identity has an invented desk or walking animation.
-- The reviewed Windows supervisor work remains in PR #53; this guide does not
-  replace it with another process supervisor.
+- Local models produce planning advice or a fixed workspace proposal. Tools require
+  separate explicit authorization; shell/code, browser research and cloud are unavailable.
+- Business Lab is a thin objective/history interface, not an adaptive research platform.
+- The office has measured registration and a limited verified station/route catalog.
+  Full candidate geometry remains unapproved; assignments and movement are durable.
+- The existing Windows supervisor is integrated on the continuation branch. Follow
+  [its guide](../runtime-supervisor.md) for start/stop/restart/backup and configuration.
 - Browser visual QA must run on a host with browser access to the local application.
 
 The CI `runtime-browser` job additionally installs Chromium and runs the browser

@@ -6,7 +6,9 @@ concurrency:
 jobs:
   backend:
     runs-on: windows-latest
-    timeout-minutes: 30
+    # The expanded SQLite/recovery suite exceeded30 minutes on the hosted Windows
+    # runner with735 passing tests and no failures. Keep every test enabled.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
