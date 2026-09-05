@@ -1,0 +1,18 @@
+.workforce a { color: var(--accent); }
+.identity-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.identity-card { min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); padding: 20px; }
+.identity-heading { display: flex; justify-content: space-between; gap: 12px; align-items: start; }
+.identity-heading h3 { margin: 0 0 6px; overflow-wrap: anywhere; }
+.identity-heading code, .identity-id { overflow-wrap: anywhere; }
+.identity-copy { white-space: pre-wrap; overflow-wrap: anywhere; }
+.identity-id { display: block; margin: 12px 0; font-size: .7rem; }
+.identity-form { display: grid; gap: 16px; border-block: 1px solid var(--line); padding: 20px 0; margin: 20px 0; }
+.identity-form h3 { margin: 0; }
+.identity-form label { display: grid; gap: 6px; color: var(--muted); font-size: .8rem; }
+.identity-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.identity-description { grid-column: 1 / -1; }
+.identity-form .actions button, .identity-card .actions button { min-height: 44px; }
+.workforce .status-active { color: var(--accent); }
+.workforce .status-suspended, .workforce .status-provisioned { color: var(--warning); }
+@media (max-width: 1000px) { .identity-grid { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { .identity-fields { grid-template-columns: 1fr; } .workforce .panel-heading { flex-wrap: wrap; } .identity-card { padding: 14px; } }

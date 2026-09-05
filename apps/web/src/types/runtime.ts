@@ -6,7 +6,11 @@ export interface RuntimeIdentity {
   operational_status: string
   is_enabled: boolean
   agent_type: string
+  description: string
+  version: number
 }
+export interface IdentityCapability { id: string; stable_key: string; display_name: string; description: string; is_enabled: boolean }
+export interface IdentityRegistration { stable_key: string; display_name: string; description: string; agent_type: string }
 export interface RuntimeRun {
   specification: { run_id: string; task_id: string; agent_id: string; requested_operation: string; autonomous_execution: { execution_type: string; context_assembly_id: string } | null }
   state: string
