@@ -1,3 +1,4 @@
+import type { ToolStep } from './toolExecution'
 export interface RuntimeIdentity {
   id: string
   display_name: string
@@ -28,11 +29,13 @@ export interface PlanningResult {
   assumptions: string[]
   missingInformation: string[]
   requiresHumanReview: boolean
+  steps?: ToolStep[]
 }
 export interface ModelExecution {
   executionId: string; runtimeRunId: string; runtimeAttemptId: string; taskId: string; targetAgentId: string
   workerId: string; stage: string; provider: string | null; model: string | null
   result: PlanningResult | null; failureCode: string | null; requestCount: number
+  resultHash?: string | null
   createdAt: string; completedAt: string | null
 }
 export interface AutonomousStatus {

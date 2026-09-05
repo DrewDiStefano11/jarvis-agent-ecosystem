@@ -24,6 +24,7 @@ test('changed input and a different correction source use distinct creation iden
   const attempt = await prepareTaskCreation(input)
   expect((await prepareTaskCreation({ ...input, description: 'Different revised input' })).key).not.toBe(attempt.key)
   expect((await prepareTaskCreation({ ...input, correctionOfTaskId: 'another-task' })).key).not.toBe(attempt.key)
+  expect((await prepareTaskCreation({ ...input, projectId: 'business-lab' })).key).not.toBe(attempt.key)
 })
 
 test('storage denial is visible, and malformed retry metadata cannot silently create duplicate work', async () => {

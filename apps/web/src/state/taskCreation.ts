@@ -6,13 +6,16 @@ export interface TaskCreateInput {
   description: string
   priority: Task['priority']
   correctionOfTaskId?: string
+  projectId?: string
 }
 export interface TaskCreationAttempt { input: TaskCreateInput; key: string; storageKey: string; warning: string }
 
 /** Keep only a request fingerprint and retry key in browser storage. */
 export async function prepareTaskCreation(input: TaskCreateInput): Promise<TaskCreationAttempt> {
   const frozen = structuredClone(input)
-  const serialized = JSON.stringify([input.title, input.description, input.priority, input.correctionOfTaskId ?? null])
+  const fields = [input.title, input.description, input.priority, input.correctionOfTaskId ?? null]
+  if (input.projectId !== undefined) fields.push(input.projectId)
+  const serialized = JSON.stringify(fields)
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(serialized))
   const hash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('')
   const origin = new URL(API_BASE, window.location.origin).origin

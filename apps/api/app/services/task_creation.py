@@ -23,6 +23,12 @@ def prepare_task_creation(body: CreateTaskRequest, source: Task | None = None) -
         if source is None or source.id != body.correctionOfTaskId:
             raise DomainError("TASK_NOT_FOUND", "The correction source task was not found.", 404)
         validate_correction_source(source)
+        if body.projectId is not None and body.projectId != source.projectId:
+            raise DomainError(
+                "TASK_CORRECTION_PROJECT_MISMATCH",
+                "A correction must retain its source task's project.",
+                409,
+            )
     now = datetime.now(UTC)
     return Task(
         id=f"task-{uuid4().hex[:10]}",
@@ -30,7 +36,7 @@ def prepare_task_creation(body: CreateTaskRequest, source: Task | None = None) -
         description=body.description,
         request=body.description,
         correctionOfTaskId=body.correctionOfTaskId,
-        projectId=source.projectId if source is not None else None,
+        projectId=source.projectId if source is not None else body.projectId,
         createdBy="local-user",
         assignedManagerId="jarvis",
         priority=body.priority,

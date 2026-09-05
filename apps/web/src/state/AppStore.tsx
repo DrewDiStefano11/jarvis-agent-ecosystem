@@ -11,6 +11,7 @@ import {
 import { post, request, WS_URL } from '../api/client'
 import { useRuntimeState } from './useRuntimeState'
 import { useOfficeState } from './useOfficeState'
+import { useToolExecutionState } from './useToolExecutionState'
 import type {
   Agent,
   Approval,
@@ -44,6 +45,7 @@ interface AppState {
 interface Store extends AppState {
   runtime: ReturnType<typeof useRuntimeState>
   office: ReturnType<typeof useOfficeState>
+  tools: ReturnType<typeof useToolExecutionState>
   refresh: () => Promise<void>
   action: <T>(path: string, body?: unknown) => Promise<T>
   selectAgent: (id: string | null) => void
@@ -115,6 +117,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState(initial)
   const runtime = useRuntimeState(state.lastSync)
   const office = useOfficeState(state.lastSync)
+  const tools = useToolExecutionState(runtime.actorId, runtime.taskId, state.lastSync)
   const [selectedAgentId, selectAgent] = useState<string | null>(null)
   const [selectedTaskId, selectTask] = useState<string | null>(null)
   const primarySequences = useRef(new Map<string, number>())
@@ -344,6 +347,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       ...state,
       runtime,
       office,
+      tools,
       refresh,
       action,
       selectAgent,
@@ -351,7 +355,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       selectedAgentId,
       selectedTaskId,
     }),
-    [state, runtime, office, refresh, action, selectedAgentId, selectedTaskId],
+    [state, runtime, office, tools, refresh, action, selectedAgentId, selectedTaskId],
   )
   return <Context.Provider value={value}>{children}</Context.Provider>
 }

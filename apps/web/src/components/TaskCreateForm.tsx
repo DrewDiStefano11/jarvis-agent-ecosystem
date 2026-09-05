@@ -3,7 +3,7 @@ import { useAppStore } from '../state/AppStore'
 import { acknowledgeTaskCreation, prepareTaskCreation, submitTaskCreation, type TaskCreationAttempt } from '../state/taskCreation'
 import type { Task } from '../types/contracts'
 
-export function TaskCreateForm({ source, onCreated }: { source?: Task; onCreated: (task: Task, warning: string) => void }) {
+export function TaskCreateForm({ source, projectId, onCreated }: { source?: Task; projectId?: string; onCreated: (task: Task, warning: string) => void }) {
   const { refresh } = useAppStore()
   const mounted = useRef(true)
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
@@ -21,6 +21,7 @@ export function TaskCreateForm({ source, onCreated }: { source?: Task; onCreated
     setError('')
     try {
       const attempt = pending ?? await prepareTaskCreation({ title, description, priority,
+        ...(projectId ? { projectId } : {}),
         ...(source ? { correctionOfTaskId: source.id } : {}) })
       setPending(attempt)
       setWarning(attempt.warning)
