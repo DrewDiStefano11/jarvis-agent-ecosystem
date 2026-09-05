@@ -54,6 +54,8 @@ const { chromium } = require(path.join(process.env.SMOKE_WEB, 'node_modules/play
     await page.getByLabel('Inspect region').selectOption({ index: 1 })
     await page.getByRole('button', { name: 'Focus selected region', exact: true }).click()
     await page.getByRole('heading', { name: 'Unverified floor registration', exact: true }).waitFor()
+    await page.locator('.office-viewport-shell--candidate').waitFor()
+    await page.screenshot({ path: path.join(output, 'office-candidate-review.png'), fullPage: true })
     await page.getByLabel('Inspect candidate geometry').uncheck()
     await page.setViewportSize({ width: 390, height: 844 })
     await page.evaluate(() => window.scrollTo(0, 0))

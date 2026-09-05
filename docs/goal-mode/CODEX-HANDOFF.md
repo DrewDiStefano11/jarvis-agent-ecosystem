@@ -150,6 +150,8 @@ Codex review loop 1 was requested on PR #56 at exact checkpoint and completed as
 
 Local continuation gates passed: backend Ruff and **751 tests**; frontend install policy, asset sync, typecheck, lint, **46 tests**, and production build; script Ruff, browser-script syntax, diff whitespace, and the real API + separate worker + deterministic HTTP fixture smoke.
 
+Review loop 2 inspected exact commit `db9a4bd69d593ae6d0cab5fe9e3c8cae81eed140` after workflow run **33944374456** passed all four jobs. Review **5119806943** found that candidate inspection loaded geometry without enabling the viewport's review rendering, leaving most unselected shapes invisible. The follow-up wires the explicit candidate state to `reviewMode`, adds a UI regression for the candidate viewport class, and captures `office-candidate-review.png` in the real browser smoke. Frontend typecheck, lint, **47 tests**, and build pass locally. Exact-head CI, visual inspection of the new candidate screenshot, and another review remain required.
+
 ## Browser and visual evidence
 
 The a964d028 Linux CI browser job actually ran the app and verified task creation, planning submission, completed output, Office floor load at 8192×5460, camera controls, candidate selection/focus, mobile width 390 with no horizontal document overflow, and no page/console errors or HTTP errors >=400.
