@@ -22,25 +22,30 @@ def configure_task_actor(app, task_id: str, actor_key: str) -> str:
     actor = next(
         (item for item in _pages(service.list_agents) if item.stable_key == actor_key), None
     )
-    if actor is None:
-        actor = service.create_agent(
-            CreateAgentRequest(
-                stable_key=actor_key, display_name="Local planning worker", agent_type="worker"
-            )
-        )
-        actor = service.transition(actor.id, "active")
-    if actor.lifecycle_state != "active" or not actor.is_enabled:
+    if actor is not None and (actor.lifecycle_state != "active" or not actor.is_enabled):
         raise DomainError("AGENT_INACTIVE", "Setup will not reactivate an inactive identity.", 409)
+    required_keys = sorted(set(RUNTIME_PERMISSION_KEYS.values()))
     definitions = {
         item.stable_key: item
         for item in _pages(
             lambda offset, limit: service.list_definitions("permission", offset, limit)
         )
     }
-    for key in sorted(set(RUNTIME_PERMISSION_KEYS.values())):
+    # Preflight every existing definition before creating an actor or granting
+    # anything. A late incompatible definition must not leave earlier grants.
+    for key in required_keys:
         permission = definitions.get(key)
-        if permission is None:
-            permission = service.create_definition(
+        if permission is not None and (
+            permission.resource_type != "task" or not permission.is_enabled
+        ):
+            raise DomainError(
+                "PERMISSION_SCOPE_MISMATCH",
+                "Existing runtime permission is incompatible or disabled.",
+                409,
+            )
+    for key in required_keys:
+        if key not in definitions:
+            definitions[key] = service.create_definition(
                 "permission",
                 CreatePermissionRequest(
                     stable_key=key,
@@ -49,12 +54,15 @@ def configure_task_actor(app, task_id: str, actor_key: str) -> str:
                     action=key.removeprefix("runtime."),
                 ),
             )
-        if permission.resource_type != "task" or not permission.is_enabled:
-            raise DomainError(
-                "PERMISSION_SCOPE_MISMATCH",
-                "Existing runtime permission is incompatible or disabled.",
-                409,
+    if actor is None:
+        actor = service.create_agent(
+            CreateAgentRequest(
+                stable_key=actor_key, display_name="Local planning worker", agent_type="worker"
             )
+        )
+        actor = service.transition(actor.id, "active")
+    for key in required_keys:
+        permission = definitions[key]
         try:
             service.assign_permission(
                 actor.id,
@@ -70,8 +78,8 @@ def configure_task_actor(app, task_id: str, actor_key: str) -> str:
             if error.code != "DUPLICATE_ASSIGNMENT":
                 raise
     if any(
-        not service.check_permission(actor.id, key, "task", task_id).allowed
-        for key in set(RUNTIME_PERMISSION_KEYS.values())
+        not service.check_permission_resource_access(actor.id, key, "task", task_id).allowed
+        for key in required_keys
     ):
         raise DomainError(
             "LOCAL_PLANNING_PERMISSION_DENIED",

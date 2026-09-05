@@ -142,6 +142,14 @@ The Windows backend job was unusually slow. Logs requested while it was running 
 
 After checkpoint CI is green, comment `@codex review` on PR #56 if supported. Address actionable findings with small fixes and appropriate regressions, push, await exact-head CI, request a new review. Maximum five complete loops. **Do not merge.**
 
+### Continuation log: checkpoint validation and review loop 1
+
+Workflow run **33941993004** completed successfully at exact checkpoint `c415b19050f22f4ce0b3156c300c73131c29326b`: backend, frontend, repository-integrity, and runtime-browser all passed. The exact-head browser artifact was downloaded and visually inspected (artifact **9962138836**, 1,994,664 bytes, archive SHA256 `58b47ac36d34f78ade0fbc3135988d825fad216a165cd2cb5a4e595463698b9a`). Desktop, 390 px mobile, and completed-planning evidence showed the follow-up control, link, danger-button, lifecycle/health, and fixture-disclosure fixes correctly. No horizontal mobile overflow or new visual defect was observed.
+
+Codex review loop 1 was requested on PR #56 at exact checkpoint and completed as review **5119639019**. It found two actionable P2 issues in local-planning provisioning: setup checked assignment-only authorization instead of resource-aware policy, and a late incompatible runtime permission definition could leave earlier setup mutations. The continuation preflights every existing required definition before actor/grant mutation, evaluates final authorization through `check_permission_resource_access`, and adds regressions for both denial paths. Windows clock-resolution failures in the pre-existing revoked role/permission renewal tests also revealed that consecutive generated `starts_at` values can collide; generated role and permission assignment starts are now advanced by one microsecond on an exact key collision, with renewal assertions made explicit. Exact-head CI and review loop 2 remain required after this continuation commit is pushed.
+
+Local continuation gates passed: backend Ruff and **751 tests**; frontend install policy, asset sync, typecheck, lint, **46 tests**, and production build; script Ruff, browser-script syntax, diff whitespace, and the real API + separate worker + deterministic HTTP fixture smoke.
+
 ## Browser and visual evidence
 
 The a964d028 Linux CI browser job actually ran the app and verified task creation, planning submission, completed output, Office floor load at 8192×5460, camera controls, candidate selection/focus, mobile width 390 with no horizontal document overflow, and no page/console errors or HTTP errors >=400.

@@ -5,7 +5,10 @@ from fastapi.testclient import TestClient
 
 from app.autonomous_worker.provisioning import configure_task_actor
 from app.core.errors import DomainError
+from app.db.models import ResourceAccessPolicyRow
+from app.identity.service import now
 from app.main import create_app
+from app.models.identity import CreatePermissionRequest
 from tests.test_persistence import database_url
 
 
@@ -35,6 +38,29 @@ def test_missing_task_does_not_create_an_identity(tmp_path: Path):
         with pytest.raises(DomainError):
             configure_task_actor(app, "missing-task", "local-planner")
         assert len(app.state.identity_service.list_agents(0, 100)) == before
+
+
+def test_incompatible_definition_is_preflighted_before_actor_or_grant_mutation(tmp_path: Path):
+    app = create_app(database_url=database_url(tmp_path / "preflight.db"))
+    with TestClient(app):
+        service = app.state.identity_service
+        service.create_definition(
+            "permission",
+            CreatePermissionRequest(
+                stable_key="runtime.read",
+                display_name="Incompatible runtime read",
+                resource_type="door",
+                action="read",
+            ),
+        )
+
+        with pytest.raises(DomainError, match="incompatible or disabled"):
+            configure_task_actor(app, "task-demo", "local-planner")
+
+        assert service.list_agents(0, 100) == []
+        assert [item.stable_key for item in service.list_definitions("permission", 0, 100)] == [
+            "runtime.read"
+        ]
 
 
 def test_setup_endpoint_reuses_configured_identity_without_enabling_execution(tmp_path: Path):
@@ -117,3 +143,34 @@ def test_setup_endpoint_preserves_existing_denial(tmp_path: Path):
         assert denied.status_code == 403
         assert denied.json()["error"]["code"] == "LOCAL_PLANNING_PERMISSION_DENIED"
         assert not service.check_permission(actor, "runtime.execute", "task", "task-demo").allowed
+
+
+def test_setup_endpoint_preserves_resource_policy_denial(tmp_path: Path):
+    app = create_app(database_url=database_url(tmp_path / "ui-resource-policy.db"))
+    with TestClient(app) as client:
+        actor = client.post("/api/local-planning/setup", json={"taskId": "task-demo"}).json()[
+            "data"
+        ]["actorId"]
+        service = app.state.identity_service
+        with service.sessions.begin() as session:
+            session.add(
+                ResourceAccessPolicyRow(
+                    id="policy-runtime-execute-deny",
+                    subject_type="agent",
+                    subject_id=actor,
+                    resource_type="task",
+                    resource_id="task-demo",
+                    action="execute",
+                    effect="deny",
+                    access_state="blocked",
+                    starts_at=now(),
+                    reason="Explicit operator restriction",
+                )
+            )
+
+        denied = client.post("/api/local-planning/setup", json={"taskId": "task-demo"})
+        assert denied.status_code == 403
+        assert denied.json()["error"]["code"] == "LOCAL_PLANNING_PERMISSION_DENIED"
+        assert not service.check_permission_resource_access(
+            actor, "runtime.execute", "task", "task-demo"
+        ).allowed
