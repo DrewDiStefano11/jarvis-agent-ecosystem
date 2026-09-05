@@ -38,7 +38,23 @@ def test_health_status_and_lists() -> None:
 
 def test_system_status_contract_advertises_current_database_revision() -> None:
     revision = SystemStatus.model_json_schema()["properties"]["databaseRevision"]
-    assert revision["default"] == "20260729_05"
+    assert revision["default"] == "20260905_08"
+
+
+@pytest.mark.parametrize("configured_actor", ["", "local-worker-actor"])
+def test_status_exposes_configured_worker_identity_across_health_states(
+    configured_actor: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("JARVIS_AUTONOMOUS_WORKER_ACTOR_ID", configured_actor)
+    app = create_app(delay_ms=1)
+    with TestClient(app) as api:
+        for health_state in [(True, True), (True, False), (False, False)]:
+            app.state.repository.health_probe = lambda _revision, state=health_state: state
+            for endpoint in ["/api/health", "/api/system/status"]:
+                worker = api.get(endpoint).json()["data"]["autonomousWorker"]
+                assert worker["workerActorId"] == (configured_actor or None)
+        schema = api.get("/openapi.json").json()["components"]["schemas"]
+        assert "workerActorId" in schema["AutonomousWorkerStatus"]["properties"]
 
 
 def test_domain_event_sequence_refreshes_the_shared_committed_cursor() -> None:

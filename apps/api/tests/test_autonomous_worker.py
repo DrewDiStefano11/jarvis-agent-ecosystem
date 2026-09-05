@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ from app.agent_runtime.errors import (
     RuntimeActorInactiveError,
     RuntimePermissionDeniedError,
 )
-from app.autonomous_worker.__main__ import _run_once_resilient
+from app.autonomous_worker.__main__ import _run_once_or_stop, _run_once_resilient
 from app.autonomous_worker.errors import AutonomousWorkerError
 from app.core.config import Settings
 from app.core.errors import DomainError
@@ -84,6 +85,64 @@ def test_worker_dependency_composition_skips_api_recovery(monkeypatch: pytest.Mo
 
     assert worker_main._create_worker_app() is sentinel
     assert received == {"recover_interrupted_workflow": False}
+
+
+def test_worker_installs_sigbreak_fallback_handler(monkeypatch: pytest.MonkeyPatch) -> None:
+    sigbreak = 21
+    installed: dict[int, object] = {}
+    callbacks: list[object] = []
+
+    class FakeLoop:
+        def add_signal_handler(self, _signal_name, _callback) -> None:
+            raise NotImplementedError
+
+        def call_soon_threadsafe(self, callback) -> None:
+            callbacks.append(callback)
+            callback()
+
+    class FakeStop:
+        is_set = False
+
+        def set(self) -> None:
+            self.is_set = True
+
+    stop = FakeStop()
+    monkeypatch.setattr(worker_main.signal, "SIGBREAK", sigbreak, raising=False)
+    monkeypatch.setattr(
+        worker_main.signal,
+        "signal",
+        lambda signal_name, handler: installed.__setitem__(signal_name, handler),
+    )
+
+    worker_main._install_stop_handlers(FakeLoop(), stop)
+
+    assert {worker_main.signal.SIGINT, worker_main.signal.SIGTERM, sigbreak} <= installed.keys()
+    installed[sigbreak](sigbreak, None)
+    assert callbacks == [stop.set]
+    assert stop.is_set is True
+
+
+@pytest.mark.asyncio
+async def test_worker_stop_cancels_active_run_once() -> None:
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+    stop = asyncio.Event()
+
+    class Service:
+        async def run_once(self, _worker_id: str):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+    task = asyncio.create_task(_run_once_or_stop(Service(), "worker-id", stop))
+    await started.wait()
+    stop.set()
+
+    assert await asyncio.wait_for(task, timeout=1) == (None, True)
+    assert cancelled.is_set()
 
 
 class FakeProvider:
@@ -159,6 +218,7 @@ def create_assembly_and_runtime(
     task_id: str = "task-demo",
     assembly_content: str = "Approved planning facts.",
     target_agent_id: str | None = None,
+    response_format: str | None = None,
 ) -> str:
     assembly_response = client.post(
         "/api/context/assemblies",
@@ -174,6 +234,7 @@ def create_assembly_and_runtime(
         run_id=run_id,
         task_id=task_id,
         target_agent_id=target_agent_id,
+        response_format=response_format,
     )
     return assembly["id"]
 
@@ -186,6 +247,7 @@ def queue_autonomous_runtime(
     run_id: str,
     task_id: str,
     target_agent_id: str | None = None,
+    response_format: str | None = None,
 ) -> None:
     specification = make_spec(
         run_id=run_id,
@@ -196,6 +258,7 @@ def queue_autonomous_runtime(
             "autonomous_execution": AutonomousExecutionSpecification(
                 execution_type=AutonomousExecutionType.PLANNING_REVIEW,
                 context_assembly_id=assembly_id,
+                response_format=response_format,
                 provider_preference="local-fake",
                 model_name="fixture-model",
                 maximum_provider_requests=2,
@@ -236,6 +299,7 @@ def worker_fixture(
     router: FakeRouter,
     run_id: str = "run-autonomous-1",
     assembly_content: str = "Approved planning facts.",
+    response_format: str | None = None,
 ):
     app = create_app(delay_ms=1, database_url=database_url(tmp_path / f"{run_id}.db"))
     client = TestClient(app)
@@ -249,6 +313,7 @@ def worker_fixture(
         actor_id,
         run_id=run_id,
         assembly_content=assembly_content,
+        response_format=response_format,
     )
     worker = app.state.task_leases.register_worker(
         "phase-2c-test-worker",
@@ -359,6 +424,10 @@ async def test_unleaseable_oldest_run_does_not_starve_later_work(tmp_path: Path)
                 ),
             )
         configure_worker(app, actor_id, router)
+        # Admit the run while eligible, then model a task becoming terminal
+        # before the worker scans. New terminal-task admission is rejected.
+        app.state.repository.tasks["task-completed"].status = "queued"
+        app.state.repository.persist()
         create_assembly_and_runtime(
             client,
             app,
@@ -373,6 +442,8 @@ async def test_unleaseable_oldest_run_does_not_starve_later_work(tmp_path: Path)
             run_id="run-z-eligible",
             task_id="task-demo",
         )
+        app.state.repository.tasks["task-completed"].status = "completed"
+        app.state.repository.persist()
         worker = app.state.task_leases.register_worker(
             "skip-worker",
             "skip-worker",
@@ -1020,12 +1091,16 @@ def test_worker_health_counts_backlog_and_requires_fresh_live_worker(tmp_path: P
 
 
 @pytest.mark.asyncio
-async def test_invalid_output_uses_one_bounded_repair_call(tmp_path: Path) -> None:
+@pytest.mark.parametrize("response_format", [None, "planning_review_json_v1"])
+async def test_invalid_output_uses_one_bounded_repair_call(
+    tmp_path: Path, response_format: str | None
+) -> None:
     router = FakeRouter(["not-json", json.dumps(VALID_RESULT)])
     app, client, _, worker = worker_fixture(
         tmp_path,
         router=router,
         run_id="run-autonomous-repair",
+        response_format=response_format,
     )
     try:
         result = await app.state.autonomous_worker_service.run_once(worker.id)
@@ -1033,6 +1108,14 @@ async def test_invalid_output_uses_one_bounded_repair_call(tmp_path: Path) -> No
         assert result.stage == "completed"
         assert result.requestCount == 2
         assert len(router.requests) == 2
+        for request in router.requests:
+            assert request.prefer_no_reasoning is (response_format is not None)
+            if response_format is not None:
+                assert set(request.output_schema.json_schema["properties"]) == set(
+                    PlanningReviewResult.model_fields
+                )
+            else:
+                assert request.output_schema is None
         repair_text = router.requests[1].messages[-1].content
         assert "Invalid generated output:\nnot-json" in repair_text
         assert "Approved planning facts" not in repair_text
@@ -1512,8 +1595,9 @@ async def test_prepared_execution_recovery_cancels_superseded_completed_task(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("response_format", [None, "planning_review_json_v1"])
 async def test_crash_after_runtime_start_with_prepared_execution_recovers_without_stranding(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, response_format: str | None
 ) -> None:
     router = FakeRouter([json.dumps(VALID_RESULT)])
     test_only_secret = "test-only-secret-must-not-persist"
@@ -1522,6 +1606,7 @@ async def test_crash_after_runtime_start_with_prepared_execution_recovers_withou
         router=router,
         run_id="run-start-before-checkpoint-recovery",
         assembly_content=f"Approved planning facts: {test_only_secret}",
+        response_format=response_format,
     )
     service = app.state.autonomous_worker_service
     original_handle = service._handle
@@ -1603,6 +1688,9 @@ async def test_crash_after_runtime_start_with_prepared_execution_recovers_withou
         assert runtime.attempt_count == 1
         assert runtime.active_attempt_id is None
         assert len(router.requests) == 1  # Within the documented pre-result allowance of two.
+        assert router.requests[0].prefer_no_reasoning is (response_format is not None)
+        assert (router.requests[0].output_schema is not None) is (response_format is not None)
+        assert recovered.executionRequestHash == prepared.executionRequestHash
 
         with app.state.model_execution_repository.sessions() as session:
             rows = list(
@@ -2266,6 +2354,8 @@ async def test_autonomous_scan_continues_past_100_unleaseable_runs(
                 ),
             )
         configure_worker(app, actor_id, router)
+        app.state.repository.tasks["task-completed"].status = "queued"
+        app.state.repository.persist()
         assembly_id = create_assembly_and_runtime(
             client,
             app,
@@ -2288,6 +2378,8 @@ async def test_autonomous_scan_continues_past_100_unleaseable_runs(
             run_id="run-zz-eligible-after-page",
             task_id="task-demo",
         )
+        app.state.repository.tasks["task-completed"].status = "completed"
+        app.state.repository.persist()
         worker = app.state.task_leases.register_worker(
             "page-skip-worker",
             "page-skip-worker",
@@ -2574,7 +2666,10 @@ async def test_denied_result_recovery_does_not_starve_authorized_recovery(
                 .where(TaskLeaseRow.task_id == "task-demo")
                 .values(expires_at=ts(0))
             )
-        assert app.state.task_leases.recover_expired_leases() == 1
+        recovered = app.state.task_leases.recover_expired_leases()
+        # The app's recovery loop may win this race on a slow CI runner.
+        assert recovered in {0, 1}
+        assert app.state.task_leases.task_status("task-demo") == "retrying"
         denied_before = app.state.model_execution_repository.get_by_run(
             "run-aa-denied-result-recovery"
         )
@@ -2609,7 +2704,10 @@ async def test_denied_result_recovery_does_not_starve_authorized_recovery(
                 .where(TaskLeaseRow.task_id == "task-completed")
                 .values(expires_at=ts(0))
             )
-        assert app.state.task_leases.recover_expired_leases() == 1
+        recovered = app.state.task_leases.recover_expired_leases()
+        # The app's recovery loop may win this race on a slow CI runner.
+        assert recovered in {0, 1}
+        assert app.state.task_leases.task_status("task-completed") == "retrying"
         assert len(router.requests) == 2
         monkeypatch.setattr(service, "_checkpoint", original_checkpoint)
 

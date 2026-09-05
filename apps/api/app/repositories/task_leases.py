@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -596,7 +596,15 @@ class TaskLeaseRepository:
             },
         )
 
-    def complete_task(self, task_id: str, worker_id: str, lease_token: str, result: str) -> Task:
+    def complete_task(
+        self,
+        task_id: str,
+        worker_id: str,
+        lease_token: str,
+        result: str,
+        *,
+        completion_guard: Callable[[Session], None] | None = None,
+    ) -> Task:
         now = datetime.now(UTC)
         with self._write() as session:
             try:
@@ -618,6 +626,8 @@ class TaskLeaseRepository:
             task = session.get(TaskRow, task_id)
             assert task is not None
             self._require_execution_enabled(session)
+            if completion_guard is not None:
+                completion_guard(session)
             payload = dict(task.payload)
             payload.update(
                 {

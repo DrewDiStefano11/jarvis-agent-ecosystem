@@ -6,6 +6,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.tool_execution import ToolStep
+
 
 class AutonomousWorkerContract(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
@@ -54,6 +56,32 @@ class PlanningReviewResult(AutonomousWorkerContract):
         )
 
 
+class WorkspacePlanResult(PlanningReviewResult):
+    """A fixed proposed tool plan; executing it always requires operator approval."""
+
+    steps: list[ToolStep] = Field(min_length=1, max_length=8)
+
+    @classmethod
+    def model_json_schema_instruction(cls) -> str:
+        return (
+            "Return only one JSON object with schemaVersion='1.0', summary, analysis, "
+            "recommendations [{title,description,priority}], risks [{title,description,severity,"
+            "mitigation}], assumptions[], missingInformation[], requiresHumanReview boolean, "
+            "and steps[]. Priorities/severities: low,medium,high,critical. "
+            "Propose 1-8 fixed steps with tool, path, content, expectedContentHash. "
+            "Tools: workspace.list and workspace.read within inputs/; workspace.write and "
+            "workspace.report within reports/. Paths must be relative, without traversal or "
+            "hidden files. Read/list content and expectedContentHash must be null. "
+            "Write/report requires complete text content and null expectedContentHash for a "
+            "new file. Prefer one useful Markdown report at reports/report.md based only on "
+            "the supplied objective and facts. Do not claim to have read files or researched "
+            "outside facts: observations from proposed reads will not be fed back into this "
+            "fixed plan. Steps are proposals and cannot grant permissions or execute themselves. "
+            "Never propose shell commands, code execution, network calls, or credentials. "
+            "The analysis is user-facing rationale, never hidden chain-of-thought."
+        )
+
+
 class ModelExecutionStage(StrEnum):
     PREPARED = "prepared"
     CALL_STARTED = "call_started"
@@ -80,7 +108,7 @@ class ModelExecutionResult(AutonomousWorkerContract):
     resultHash: str | None = None
     provider: str | None = None
     model: str | None = None
-    result: PlanningReviewResult | None = None
+    result: WorkspacePlanResult | PlanningReviewResult | None = None
     inputTokens: int | None = Field(default=None, ge=0)
     outputTokens: int | None = Field(default=None, ge=0)
     requestCount: int = Field(default=0, ge=0, le=2)
@@ -97,6 +125,10 @@ class ModelExecutionResult(AutonomousWorkerContract):
 class AutonomousWorkerStatus(AutonomousWorkerContract):
     enabled: bool
     modelExecutionMode: Literal["disabled", "local_only"]
+    workerActorId: str | None = Field(
+        default=None,
+        description="Configured local worker identity; configuration does not establish task access.",
+    )
     activeExecutionCount: int = 0
     queuedEligibleRuntimeCount: int = 0
     completedExecutionCount: int = 0
@@ -107,3 +139,14 @@ class AutonomousWorkerStatus(AutonomousWorkerContract):
     providerReady: bool = False
     status: Literal["healthy", "degraded", "disabled"] = "disabled"
     reasonCode: str | None = None
+
+
+class LocalPlanningSetupRequest(AutonomousWorkerContract):
+    taskId: str = Field(min_length=1, max_length=120)
+
+
+class LocalPlanningSetupResult(AutonomousWorkerContract):
+    taskId: str
+    actorId: str
+    workerActorConfigured: bool
+    executionEnabledBySetup: Literal[False] = False

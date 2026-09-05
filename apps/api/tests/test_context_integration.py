@@ -10,12 +10,100 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select, text
 
 from app.context.assembler import hash_content
-from app.db.models import AuditEventRow, ContextAssemblyRow, OutboxEventRow
+from app.db.models import (
+    AgentRow,
+    AuditEventRow,
+    ContextAssemblyRow,
+    IdempotencyRecordRow,
+    OutboxEventRow,
+    TaskRow,
+)
 from app.main import create_app
 
 
 def database_url(path: Path) -> str:
     return f"sqlite:///{path.as_posix()}"
+
+
+def test_context_commit_preserves_unrelated_worker_updates(tmp_path, monkeypatch):
+    url = database_url(tmp_path / "context-worker-race.db")
+    app = create_app(database_url=url)
+    repository = app.state.repository
+    original = repository.enqueue_event
+    worker_task = None
+    worker_agent = None
+
+    def worker_finishes_before_commit(envelope, idempotency=None, **kwargs):
+        nonlocal worker_task, worker_agent
+        with repository.session_factory() as session, session.begin():
+            task = session.get(TaskRow, "task-demo")
+            task.status = "completed"
+            task.result = "worker-result-reference"
+            task.payload = task.payload | {"status": "completed", "result": task.result}
+            worker_task = task.payload
+            agent = session.get(AgentRow, "jarvis")
+            agent.status = "completed"
+            agent.payload = agent.payload | {"status": "completed"}
+            worker_agent = agent.payload
+        return original(envelope, idempotency, **kwargs)
+
+    with TestClient(app) as client:
+        task = client.post(
+            "/api/tasks", json={"title": "Separate planning", "description": "Independent facts"}
+        ).json()["data"]
+        monkeypatch.setattr(repository, "enqueue_event", worker_finishes_before_commit)
+        body = context_body(task_id=task["id"])
+        response = client.post(
+            "/api/context/assemblies", json=body, headers={"Idempotency-Key": "race-context"}
+        )
+        assert response.status_code == 201
+        assert client.get("/api/tasks/task-demo").json()["data"] == worker_task
+        with repository.session_factory() as session:
+            assert session.get(AgentRow, "jarvis").payload == worker_agent
+        replay = client.post(
+            "/api/context/assemblies", json=body, headers={"Idempotency-Key": "race-context"}
+        )
+        assert replay.json() == response.json()
+    with TestClient(create_app(database_url=url)) as restarted:
+        assert restarted.get("/api/tasks/task-demo").json()["data"] == worker_task
+        assert restarted.get("/api/agents/jarvis").json()["data"] == worker_agent
+        assert (
+            restarted.get(f"/api/context/assemblies/{response.json()['data']['id']}").json()
+            == response.json()
+        )
+
+
+def test_context_reads_current_task_and_rechecks_bound_input_at_commit(tmp_path, monkeypatch):
+    app = create_app(database_url=database_url(tmp_path / "context-input-race.db"))
+    repository = app.state.repository
+    original = repository.enqueue_event
+
+    def change_request(envelope, idempotency=None, **kwargs):
+        with repository.session_factory() as session, session.begin():
+            task = session.get(TaskRow, "task-demo")
+            task.original_request = "Changed durable request"
+            task.payload = task.payload | {"request": task.original_request}
+        return original(envelope, idempotency, **kwargs)
+
+    with TestClient(app) as client:
+        with repository.session_factory() as session, session.begin():
+            task = session.get(TaskRow, "task-demo")
+            task.project_id = "changed-project"
+            task.payload = task.payload | {"projectId": task.project_id}
+        body = context_body()
+        assert client.post("/api/context/assemblies", json=body).status_code == 409
+        body["projectId"] = "changed-project"
+        body["sources"][0]["metadata"]["projectId"] = "changed-project"
+        monkeypatch.setattr(repository, "enqueue_event", change_request)
+        response = client.post(
+            "/api/context/assemblies", json=body, headers={"Idempotency-Key": "changed-input"}
+        )
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "CONTEXT_TASK_CHANGED"
+        with repository.session_factory() as session:
+            assert session.scalar(select(func.count()).select_from(ContextAssemblyRow)) == 0
+            assert session.scalar(select(func.count()).select_from(OutboxEventRow)) == 0
+            assert session.scalar(select(func.count()).select_from(IdempotencyRecordRow)) == 0
 
 
 def context_body(
@@ -215,22 +303,21 @@ def test_failed_context_commit_rolls_back_cache_audit_outbox_and_claim(
     url = database_url(tmp_path / "context-rollback.db")
     app = create_app(delay_ms=1, database_url=url)
     repository = app.state.repository
-    original_persist = repository._persist_entities
+    original_persist = repository._persist_created_context
 
-    def fail_context_persist(session) -> None:
-        original_persist(session)
-        if repository.context_assemblies:
-            raise RuntimeError("forced context persistence failure")
+    def fail_context_persist(session, item, task) -> None:
+        original_persist(session, item, task)
+        raise RuntimeError("forced context persistence failure")
 
     with TestClient(app) as api:
-        repository._persist_entities = fail_context_persist
+        repository._persist_created_context = fail_context_persist
         with pytest.raises(RuntimeError, match="forced context persistence failure"):
             api.post(
                 "/api/context/assemblies",
                 json=context_body(),
                 headers={"Idempotency-Key": "context-rollback"},
             )
-        repository._persist_entities = original_persist
+        repository._persist_created_context = original_persist
         assert repository.context_assemblies == {}
         assert api.get("/api/context/assemblies").json()["data"] == []
 
@@ -308,10 +395,10 @@ def test_concurrent_context_submission_has_one_owner_and_one_event(tmp_path: Pat
     release_commit = threading.Event()
     original_enqueue = first_app.state.repository.enqueue_event
 
-    def delayed_enqueue(envelope, idempotency=None) -> None:
+    def delayed_enqueue(envelope, idempotency=None, **kwargs) -> None:
         entered_commit.set()
         assert release_commit.wait(5)
-        original_enqueue(envelope, idempotency)
+        original_enqueue(envelope, idempotency, **kwargs)
 
     first_app.state.repository.enqueue_event = delayed_enqueue
     with (

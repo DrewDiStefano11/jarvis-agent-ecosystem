@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from hashlib import sha256
@@ -11,10 +12,25 @@ from pydantic import ValidationError
 
 from app.agent_runtime.authorization import RuntimeActorContext
 from app.agent_runtime.errors import RuntimePermissionDeniedError
+from app.agent_runtime.recovery import derive_recovery_plan
 from app.agent_runtime.repository import RuntimeExecutionFence
 from app.agent_runtime.service import AgentRuntimeService
 from app.autonomous_worker.errors import AutonomousWorkerError
-from app.autonomous_worker.repository import ModelExecutionRepository, canonical_json
+from app.autonomous_worker.plan_review import (
+    PLAN_REVIEW_POLICY_VERSION,
+    PlanReviewDecision,
+    PlanReviewOutcome,
+    PlanReviewRecordError,
+    decision_from_metadata,
+    evaluate_plan,
+    revision_directive,
+)
+from app.autonomous_worker.repository import (
+    REVISION_EXHAUSTED_FAILURE_CODE,
+    REVISION_REQUESTED_FAILURE_CODE,
+    ModelExecutionRepository,
+    canonical_json,
+)
 from app.core.config import Settings
 from app.core.errors import DomainError
 from app.model_providers.budget import TaskBudget
@@ -24,9 +40,11 @@ from app.model_providers.contracts import (
     ModelExecutionRequest,
     ModelExecutionResponse,
     ModelMessage,
+    ModelOutputSchema,
 )
 from app.model_providers.errors import (
     BudgetExceededError,
+    MalformedProviderResponseError,
     ModelProviderError,
     ProviderExecutionDisabledError,
     RequestTimeoutError,
@@ -46,15 +64,21 @@ from app.models.agent_runtime import (
     FailAttemptCommand,
     FailureClassification,
     RecordCheckpointCommand,
+    RecoveryStatus,
     RequestPauseCommand,
+    RequestRecoveryPlanCommand,
     RuntimeCommand,
+    RuntimeCommandResult,
     StartAttemptCommand,
+    UnblockAgentRunCommand,
 )
 from app.models.autonomous_worker import (
     ModelExecutionResult,
     PlanningReviewResult,
+    WorkspacePlanResult,
 )
 from app.models.context import ContextAssembly
+from app.models.tool_execution import ToolExecutionResult
 from app.repositories.task_leases import TaskLeaseRepository
 
 PRE_EXECUTION_REVIEW_CODES = frozenset(
@@ -66,6 +90,8 @@ PRE_EXECUTION_REVIEW_CODES = frozenset(
         "context_assembly_mismatch",
     }
 )
+
+_REVISION_ATTEMPT_SUFFIX = re.compile(r"-r(\d+)$")
 
 
 class AutonomousWorkerService:
@@ -85,6 +111,7 @@ class AutonomousWorkerService:
         self.task_leases = task_leases
         self.runtime = runtime
         self.router = router
+        self.tool_executor = None
         self._checkpoint_execution_fence: ContextVar[RuntimeExecutionFence | None] = ContextVar(
             "autonomous_checkpoint_execution_fence", default=None
         )
@@ -100,9 +127,13 @@ class AutonomousWorkerService:
         if not providers:
             raise AutonomousWorkerError("NO_LOCAL_PROVIDER_AVAILABLE", status_code=503)
 
-    async def run_once(self, worker_id: str) -> ModelExecutionResult | None:
+    async def run_once(self, worker_id: str) -> ModelExecutionResult | ToolExecutionResult | None:
         self.validate_enabled()
         actor = self.runtime.authenticate_actor(self.settings.autonomous_worker_actor_id)
+        if self.tool_executor is not None:
+            tool_result = await self.tool_executor.run_once(worker_id, actor)
+            if tool_result is not None:
+                return tool_result
         try:
             if self._recover_pre_execution_pause(worker_id, actor):
                 return None
@@ -122,17 +153,23 @@ class AutonomousWorkerService:
         request = snapshot.specification.autonomous_execution
         if request is None:
             raise AutonomousWorkerError("CONTEXT_ASSEMBLY_REQUIRED")
-        attempt_id = (
-            execution.runtimeAttemptId
-            if execution is not None
-            else self._attempt_id(snapshot.specification.run_id)
-        )
+        if execution is not None:
+            attempt_id = execution.runtimeAttemptId
+            cycle = self._attempt_cycle(attempt_id)
+        else:
+            # One durable execution row exists per deterministic runtime attempt,
+            # so the durable row count is the authoritative revision-cycle index.
+            cycle = self.executions.count_for_run(snapshot.specification.run_id)
+            attempt_id = self._attempt_id(snapshot.specification.run_id, cycle)
         try:
             if not self.executions.target_identity_active(snapshot.specification.agent_id):
                 raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
             assembly = self.executions.load_context_assembly(request.context_assembly_id)
             self._validate_assembly(snapshot, assembly)
-            messages, execution_request_hash = self._execution_messages(assembly)
+            revision_findings = self._revision_findings(snapshot.specification.run_id, cycle, actor)
+            messages, execution_request_hash = self._execution_messages(
+                assembly, revision_findings, request.response_format
+            )
             recovered_uncommitted = execution is not None
             snapshot, execution = self._claim_prepare_and_start(
                 snapshot,
@@ -144,13 +181,17 @@ class AutonomousWorkerService:
                 task_attempt_number=lease.attemptNumber,
                 lease_token=lease.leaseToken,
                 execution_request_hash=execution_request_hash,
+                cycle=cycle,
             )
             snapshot = self._checkpoint_with_fence(
                 snapshot,
                 actor,
                 execution,
                 attempt_id,
-                (f"recovered-{lease.attemptNumber}" if recovered_uncommitted else "prepared"),
+                self._scoped(
+                    (f"recovered-{lease.attemptNumber}" if recovered_uncommitted else "prepared"),
+                    cycle,
+                ),
                 worker_id,
                 lease.leaseToken,
             )
@@ -191,11 +232,27 @@ class AutonomousWorkerService:
                 actor,
                 execution,
                 attempt_id,
-                "result-persisted",
+                self._scoped("result-persisted", cycle),
                 worker_id,
                 lease.leaseToken,
             )
             if execution.requiresHumanReview:
+                return self._pause_for_review(
+                    snapshot, actor, execution, worker_id, lease.leaseToken
+                )
+            snapshot, decision = self._resolve_review(
+                snapshot, actor, execution, worker_id, lease.leaseToken
+            )
+            if decision.outcome is PlanReviewOutcome.REVISION_REQUESTED:
+                return self._advance_revision(
+                    snapshot,
+                    actor,
+                    execution,
+                    decision,
+                    worker_id=worker_id,
+                    lease_token=lease.leaseToken,
+                )
+            if decision.outcome is PlanReviewOutcome.ESCALATED:
                 return self._pause_for_review(
                     snapshot, actor, execution, worker_id, lease.leaseToken
                 )
@@ -331,6 +388,77 @@ class AutonomousWorkerService:
                 )
                 return snapshot, execution, lease
 
+        for page in self.executions.iter_revision_cycle_pages():
+            for candidate in page:
+                try:
+                    snapshot = self.runtime.read_run_authorized(
+                        candidate.specification.run_id, actor
+                    )
+                    if snapshot.state != AgentRunState.BLOCKED:
+                        continue
+                    if self.runtime.authorizer is not None:
+                        self.runtime.authorizer.authorize(actor, "start_attempt", snapshot=snapshot)
+                except RuntimePermissionDeniedError:
+                    continue
+                request = snapshot.specification.autonomous_execution
+                if request is None:
+                    continue
+                task_status = self.task_leases.task_status(snapshot.specification.task_id)
+                if task_status in {"cancelled", "failed", "completed"}:
+                    # Authoritative task outcomes win over a pending revision so a
+                    # blocked run is never stranded by an external decision.
+                    try:
+                        if task_status == "failed":
+                            self._authorize_recovery_action(snapshot, actor, "fail_run")
+                            self._fail_runtime_for_task(snapshot, actor)
+                        else:
+                            self._authorize_recovery_action(snapshot, actor, "confirm_cancellation")
+                            self._cancel_runtime(
+                                snapshot,
+                                actor,
+                                reason_code=(
+                                    "task_cancelled"
+                                    if task_status == "cancelled"
+                                    else "task_completed_elsewhere"
+                                ),
+                                detail=(
+                                    "Authoritative task cancellation observed"
+                                    if task_status == "cancelled"
+                                    else "Authoritative task completion superseded "
+                                    "autonomous execution"
+                                ),
+                            )
+                    except RuntimePermissionDeniedError:
+                        pass
+                    continue
+                if snapshot.attempt_count >= snapshot.specification.maximum_permitted_attempts:
+                    # The runtime attempt budget is exhausted; the terminal
+                    # transition belongs to the revision advance, never to a new
+                    # planning cycle.
+                    continue
+                try:
+                    self._revision_findings(
+                        snapshot.specification.run_id,
+                        self.executions.count_for_run(snapshot.specification.run_id),
+                        actor,
+                    )
+                except AutonomousWorkerError:
+                    # An unusable review lineage fails closed for this candidate
+                    # only; later valid candidates still progress.
+                    continue
+                acquired = self.task_leases.acquire_task(
+                    worker_id,
+                    min(
+                        self.settings.autonomous_worker_lease_seconds,
+                        request.maximum_execution_seconds,
+                    ),
+                    snapshot.specification.task_id,
+                )
+                if acquired is None:
+                    continue
+                _, lease = acquired
+                return snapshot, None, lease
+
         for page in self.executions.iter_queued_autonomous_run_pages():
             for snapshot in page:
                 try:
@@ -440,6 +568,7 @@ class AutonomousWorkerService:
         task_attempt_number: int,
         lease_token: str,
         execution_request_hash: str,
+        cycle: int = 0,
     ) -> tuple[AgentRunSnapshot, ModelExecutionResult]:
         """Durably prepare an attempt before it may become ``RUNNING``.
 
@@ -460,27 +589,52 @@ class AutonomousWorkerService:
             worker_id=worker_id,
             lease_token=lease_token,
         )
+        resume_checkpoint_id: str | None = None
+        if snapshot.state == AgentRunState.BLOCKED:
+            # Bounded review revisions reuse the repository's sanctioned recovery
+            # lane: the prior attempt is failed and blocked for recovery, so the
+            # next attempt must be planned, unblocked, and resumed from the exact
+            # checkpoint the plan selects.
+            self._assert_live_policy(snapshot, actor, worker_id, lease_token)
+            snapshot, resume_checkpoint_id = self._plan_revision_recovery(
+                snapshot,
+                actor,
+                cycle,
+                execution_fence,
+            )
         if snapshot.state == AgentRunState.QUEUED:
             self._assert_live_policy(snapshot, actor, worker_id, lease_token)
             snapshot = self._handle(
                 ClaimAgentRunCommand,
                 snapshot,
                 actor,
-                "claim",
+                self._scoped("claim", cycle),
                 execution_fence=execution_fence,
                 executor_reference=worker_id,
                 detail="Autonomous planning execution claimed",
             )
         if snapshot.state == AgentRunState.CLAIMED:
             self._assert_live_policy(snapshot, actor, worker_id, lease_token)
+            if cycle > 0 and resume_checkpoint_id is None:
+                # A crash after unblock loses only the in-memory plan. Re-derive
+                # its checkpoint from authorized durable history, as begin_attempt
+                # itself does, rather than inventing a fresh resume position.
+                plan = derive_recovery_plan(
+                    snapshot,
+                    list(self.runtime.attempts_authorized(snapshot.specification.run_id, actor)),
+                    list(self.runtime.checkpoints_authorized(snapshot.specification.run_id, actor)),
+                )
+                selected = plan.selected_checkpoint
+                resume_checkpoint_id = None if selected is None else selected.checkpoint_id
             snapshot = self._handle(
                 BeginAttemptCommand,
                 snapshot,
                 actor,
-                "begin",
+                self._scoped("begin", cycle),
                 execution_fence=execution_fence,
                 attempt_id=attempt_id,
                 executor_reference=worker_id,
+                resume_from_checkpoint_id=resume_checkpoint_id,
                 detail="Autonomous planning execution start requested",
             )
         if snapshot.state == AgentRunState.STARTING:
@@ -510,7 +664,7 @@ class AutonomousWorkerService:
                 StartAttemptCommand,
                 snapshot,
                 actor,
-                "start",
+                self._scoped("start", cycle),
                 require_execution_enabled=True,
                 execution_fence=execution_fence,
                 attempt_id=attempt_id,
@@ -522,6 +676,52 @@ class AutonomousWorkerService:
         # emergency stop, and the exact fresh lease before checkpoint or provider use.
         self._assert_live_policy(snapshot, actor, worker_id, lease_token)
         return snapshot, execution
+
+    def _plan_revision_recovery(
+        self,
+        snapshot: AgentRunSnapshot,
+        actor: RuntimeActorContext,
+        cycle: int,
+        execution_fence: RuntimeExecutionFence,
+    ) -> tuple[AgentRunSnapshot, str | None]:
+        """Plan and unblock exactly one bounded revision attempt.
+
+        The recovery plan is repository-derived; the worker never selects its own
+        resume position and never bypasses the attempt budget the plan enforces.
+        """
+
+        blocking_reason = snapshot.blocking_reason
+        if (
+            blocking_reason is None
+            or blocking_reason.code != "recovery_required"
+            or snapshot.recovery_status not in {RecoveryStatus.REQUIRED, RecoveryStatus.PLANNED}
+        ):
+            raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
+        if self.runtime.authorizer is not None:
+            self.runtime.authorizer.authorize(actor, "request_recovery_plan", snapshot=snapshot)
+            self.runtime.authorizer.authorize(actor, "unblock", snapshot=snapshot)
+        planned = self._handle_command(
+            RequestRecoveryPlanCommand,
+            snapshot,
+            actor,
+            self._scoped("revision-recovery-plan", cycle),
+            execution_fence=execution_fence,
+            detail="Bounded plan revision requires a recovery plan",
+        )
+        plan = planned.recovery_plan
+        if plan is None or not plan.recovery_allowed:
+            raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
+        assert planned.snapshot is not None
+        snapshot = self._handle(
+            UnblockAgentRunCommand,
+            planned.snapshot,
+            actor,
+            self._scoped("revision-unblock", cycle),
+            execution_fence=execution_fence,
+            detail="Resuming for one bounded plan revision",
+        )
+        selected = plan.selected_checkpoint
+        return snapshot, None if selected is None else selected.checkpoint_id
 
     async def _call_and_validate(
         self,
@@ -557,6 +757,7 @@ class AutonomousWorkerService:
             task_id=snapshot.specification.task_id,
             correlation_id=snapshot.specification.correlation_id or snapshot.specification.run_id,
             required_capability=ModelCapability.CHAT,
+            **self._output_options(request.response_format),
         )
         response = await self._provider_call(
             snapshot,
@@ -569,7 +770,7 @@ class AutonomousWorkerService:
         )
         provider_requests += 1
         responses.append(response)
-        parsed, errors = self._parse_result(response.content)
+        parsed, errors = self._parse_result(response.content, request.response_format)
         if parsed is None:
             self.executions.record_validation_failed(
                 execution.executionId,
@@ -588,7 +789,9 @@ class AutonomousWorkerService:
                 messages=[
                     ModelMessage(
                         role=MessageRole.SYSTEM,
-                        content=PlanningReviewResult.model_json_schema_instruction(),
+                        content=self._result_type(
+                            request.response_format
+                        ).model_json_schema_instruction(),
                     ),
                     ModelMessage(
                         role=MessageRole.USER,
@@ -610,6 +813,7 @@ class AutonomousWorkerService:
                 correlation_id=snapshot.specification.correlation_id
                 or snapshot.specification.run_id,
                 required_capability=ModelCapability.CHAT,
+                **self._output_options(request.response_format),
             )
             response = await self._provider_call(
                 snapshot,
@@ -622,7 +826,7 @@ class AutonomousWorkerService:
             )
             provider_requests += 1
             responses.append(response)
-            parsed, _ = self._parse_result(response.content)
+            parsed, _ = self._parse_result(response.content, request.response_format)
             if parsed is None:
                 raise AutonomousWorkerError("MODEL_OUTPUT_REPAIR_EXHAUSTED")
         return (
@@ -695,6 +899,8 @@ class AutonomousWorkerService:
             raise AutonomousWorkerError("MODEL_EXECUTION_DISABLED", status_code=503) from exc
         except UnknownProviderError as exc:
             raise AutonomousWorkerError("NO_LOCAL_PROVIDER_AVAILABLE", status_code=503) from exc
+        except MalformedProviderResponseError as exc:
+            raise AutonomousWorkerError("MODEL_OUTPUT_INVALID") from exc
         except ModelProviderError as exc:
             raise AutonomousWorkerError("NO_LOCAL_PROVIDER_AVAILABLE", status_code=503) from exc
         finally:
@@ -806,6 +1012,238 @@ class AutonomousWorkerService:
         finally:
             self._checkpoint_execution_fence.reset(token)
 
+    @staticmethod
+    def _review_checkpoint_id(execution: ModelExecutionResult, name: str) -> str:
+        return f"checkpoint-{execution.executionId[-32:]}-{name}"
+
+    @staticmethod
+    def _review_digest(
+        execution: ModelExecutionResult,
+        name: str,
+        decision: PlanReviewDecision,
+    ) -> str:
+        return (
+            "sha256:"
+            + sha256(
+                canonical_json(
+                    {
+                        "executionId": execution.executionId,
+                        "name": name,
+                        "requestHash": execution.requestHash,
+                        "resultHash": execution.resultHash,
+                        "outcome": decision.outcome.value,
+                        "reasonCode": decision.reason_code,
+                        "findings": list(decision.findings),
+                        "policyVersion": PLAN_REVIEW_POLICY_VERSION,
+                    }
+                ).encode()
+            ).hexdigest()
+        )
+
+    def _durable_review_decision(
+        self,
+        execution: ModelExecutionResult,
+        actor: RuntimeActorContext,
+    ) -> PlanReviewDecision | None:
+        """Return the repository-authoritative review decision for one exact attempt.
+
+        The record is bound to the exact runtime attempt that produced the plan,
+        never to the latest attempt, and a record that fails its integrity check
+        fails closed instead of being silently re-derived.
+        """
+
+        name = self._scoped("review", self._attempt_cycle(execution.runtimeAttemptId))
+        checkpoint_id = self._review_checkpoint_id(execution, name)
+        for checkpoint in self.runtime.checkpoints_authorized(execution.runtimeRunId, actor):
+            if checkpoint.checkpoint_id != checkpoint_id:
+                continue
+            if (
+                checkpoint.attempt_id != execution.runtimeAttemptId
+                or checkpoint.state_reference != f"model-execution:{execution.executionId}:{name}"
+            ):
+                raise AutonomousWorkerError("PLAN_REVIEW_RECORD_CORRUPT")
+            try:
+                decision = decision_from_metadata(checkpoint.metadata)
+            except PlanReviewRecordError as exc:
+                raise AutonomousWorkerError("PLAN_REVIEW_RECORD_CORRUPT") from exc
+            if checkpoint.integrity_digest != self._review_digest(execution, name, decision):
+                raise AutonomousWorkerError("PLAN_REVIEW_RECORD_CORRUPT")
+            return decision
+        return None
+
+    def _resolve_review(
+        self,
+        snapshot: AgentRunSnapshot,
+        actor: RuntimeActorContext,
+        execution: ModelExecutionResult,
+        worker_id: str,
+        lease_token: str,
+    ) -> tuple[AgentRunSnapshot, PlanReviewDecision]:
+        """Evaluate the persisted plan once and durably record the outcome.
+
+        A committed review record is authoritative: replay and recovery reuse it
+        instead of producing a second review for the same attempt.
+        """
+
+        existing = self._durable_review_decision(execution, actor)
+        if existing is not None:
+            return snapshot, existing
+        if execution.result is None:
+            raise AutonomousWorkerError("MODEL_RESULT_CORRUPT")
+        decision = evaluate_plan(execution.result)
+        # Stop, cancellation, lease loss, target lifecycle, and authorization are
+        # rechecked immediately before the durable review commit; the fence check
+        # locks the target row and the checkpoint command repeats the stop and
+        # lease checks inside its own transaction.
+        self._assert_live_policy(snapshot, actor, worker_id, lease_token)
+        self.executions.assert_advance_allowed(
+            execution.executionId,
+            worker_id=worker_id,
+            lease_token=lease_token,
+        )
+        snapshot = self._record_review_checkpoint(
+            self.runtime.read_run_authorized(snapshot.specification.run_id, actor),
+            actor,
+            execution,
+            decision,
+            worker_id,
+            lease_token,
+        )
+        return snapshot, decision
+
+    def _record_review_checkpoint(
+        self,
+        snapshot: AgentRunSnapshot,
+        actor: RuntimeActorContext,
+        execution: ModelExecutionResult,
+        decision: PlanReviewDecision,
+        worker_id: str,
+        lease_token: str,
+    ) -> AgentRunSnapshot:
+        name = self._scoped("review", self._attempt_cycle(execution.runtimeAttemptId))
+        fence = RuntimeExecutionFence(
+            task_id=snapshot.specification.task_id,
+            worker_id=worker_id,
+            lease_token=lease_token,
+        )
+        return self._handle(
+            RecordCheckpointCommand,
+            snapshot,
+            actor,
+            f"checkpoint-{name}",
+            require_execution_enabled=True,
+            execution_fence=fence,
+            checkpoint_id=self._review_checkpoint_id(execution, name),
+            attempt_id=execution.runtimeAttemptId,
+            state_reference=f"model-execution:{execution.executionId}:{name}",
+            integrity_digest=self._review_digest(execution, name, decision),
+            checkpoint_metadata={
+                "executionId": execution.executionId,
+                "stage": name,
+                **decision.as_metadata(),
+            },
+        )
+
+    def _advance_revision(
+        self,
+        snapshot: AgentRunSnapshot,
+        actor: RuntimeActorContext,
+        execution: ModelExecutionResult,
+        decision: PlanReviewDecision,
+        *,
+        worker_id: str,
+        lease_token: str | None,
+    ) -> ModelExecutionResult | None:
+        """Advance one reviewed attempt into a bounded retry or a terminal failure.
+
+        Every step is derived from durable repository state, so an interrupted
+        revision resumes at the exact step that has not committed yet.
+        """
+
+        cycle = self._attempt_cycle(execution.runtimeAttemptId)
+        current = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
+        specification = current.specification
+        task_status = self.task_leases.task_status(execution.taskId)
+        if task_status not in {"retrying", "failed"}:
+            # The runtime attempt budget and the task retry budget both bound the
+            # revision loop; exhaustion of either terminates it deterministically.
+            exhausted = current.attempt_count >= specification.maximum_permitted_attempts
+            if lease_token is None:
+                acquired = self.task_leases.acquire_task(
+                    worker_id,
+                    self.settings.autonomous_worker_lease_seconds,
+                    execution.taskId,
+                )
+                if acquired is None:
+                    return None
+                _, lease = acquired
+                lease_token = lease.leaseToken
+                current = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
+            self._assert_live_policy(current, actor, worker_id, lease_token)
+            self.executions.assert_advance_allowed(
+                execution.executionId,
+                worker_id=worker_id,
+                lease_token=lease_token,
+            )
+            task = self.task_leases.fail_task(
+                execution.taskId,
+                worker_id,
+                lease_token,
+                {
+                    "code": "PLANNING_REVIEW_REVISION_REQUESTED",
+                    "message": "Deterministic plan review requested one bounded revision.",
+                    "retryable": not exhausted,
+                    "reasonCode": decision.reason_code,
+                    "findings": list(decision.findings),
+                },
+                retryable=not exhausted,
+            )
+            task_status = task.status
+        if task_status == "failed":
+            self._authorize_recovery_action(current, actor, "fail_run")
+            self._fail_runtime_for_task(current, actor)
+            return self.executions.mark_failed(
+                execution.executionId,
+                REVISION_EXHAUSTED_FAILURE_CODE,
+            )
+        if current.state == AgentRunState.RUNNING:
+            self._authorize_recovery_action(current, actor, "fail_attempt")
+            current = self._handle(
+                FailAttemptCommand,
+                current,
+                actor,
+                self._scoped("review-revision-attempt", cycle),
+                require_execution_enabled=True,
+                attempt_id=execution.runtimeAttemptId,
+                failure_category=FailureClassification.VALIDATION,
+                failure_detail="Deterministic plan review requested one bounded revision",
+            )
+        if current.state != AgentRunState.BLOCKED:
+            raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
+        return self.executions.mark_failed(
+            execution.executionId,
+            REVISION_REQUESTED_FAILURE_CODE,
+        )
+
+    def _revision_findings(
+        self,
+        run_id: str,
+        cycle: int,
+        actor: RuntimeActorContext,
+    ) -> tuple[str, ...]:
+        """Return the durable findings that authorize this exact revision cycle."""
+
+        if cycle == 0:
+            return ()
+        previous_attempt_id = self._attempt_id(run_id, cycle - 1)
+        previous = self.executions.get(self.executions.execution_id(run_id, previous_attempt_id))
+        if previous is None or previous.runtimeAttemptId != previous_attempt_id:
+            raise AutonomousWorkerError("PLAN_REVIEW_RECORD_CORRUPT")
+        decision = self._durable_review_decision(previous, actor)
+        if decision is None or decision.outcome is not PlanReviewOutcome.REVISION_REQUESTED:
+            raise AutonomousWorkerError("PLAN_REVIEW_RECORD_CORRUPT")
+        return decision.findings
+
     def _finalize(
         self,
         snapshot: AgentRunSnapshot,
@@ -848,7 +1286,10 @@ class AutonomousWorkerService:
                 CompleteAttemptCommand,
                 snapshot,
                 actor,
-                "complete-attempt",
+                self._scoped(
+                    "complete-attempt",
+                    self._attempt_cycle(execution.runtimeAttemptId),
+                ),
                 require_execution_enabled=True,
                 attempt_id=execution.runtimeAttemptId,
                 detail="Validated planning result persisted",
@@ -874,13 +1315,14 @@ class AutonomousWorkerService:
         worker_id: str,
         lease_token: str,
     ) -> ModelExecutionResult:
+        cycle = self._attempt_cycle(execution.runtimeAttemptId)
         snapshot = self._confirm_review_pause(
             snapshot,
             actor,
             reason_code="model_result_review_required",
-            request_suffix="request-review",
+            request_suffix=self._scoped("request-review", cycle),
             request_detail="Validated result requires human review",
-            confirm_suffix="confirm-review",
+            confirm_suffix=self._scoped("confirm-review", cycle),
             confirm_detail="Execution paused for human review",
         )
         self.task_leases.pause_for_review(
@@ -910,13 +1352,14 @@ class AutonomousWorkerService:
             and current.pause_reason is not None
         ):
             failure_code = current.pause_reason.code
+        cycle = self._attempt_cycle(execution.runtimeAttemptId)
         current = self._confirm_review_pause(
             current,
             actor,
             reason_code=failure_code,
-            request_suffix="request-failure-review",
+            request_suffix=self._scoped("request-failure-review", cycle),
             request_detail="Autonomous execution requires operator review",
-            confirm_suffix="confirm-failure-review",
+            confirm_suffix=self._scoped("confirm-failure-review", cycle),
             confirm_detail="Execution paused for operator review",
         )
         self.task_leases.pause_for_review(
@@ -1184,6 +1627,22 @@ class AutonomousWorkerService:
             return None
         if self._reconcile_failed_recovery(snapshot, actor, execution):
             return None
+        review = (
+            None
+            if execution.requiresHumanReview
+            else self._durable_review_decision(execution, actor)
+        )
+        if review is not None and review.outcome is PlanReviewOutcome.REVISION_REQUESTED:
+            # The committed review record is authoritative: resume the bounded
+            # revision transition instead of reviewing or finalizing again.
+            return self._advance_revision(
+                snapshot,
+                actor,
+                execution,
+                review,
+                worker_id=worker_id,
+                lease_token=None,
+            )
         if execution.requiresHumanReview:
             if (
                 snapshot.state == AgentRunState.PAUSED
@@ -1206,6 +1665,34 @@ class AutonomousWorkerService:
             return None
         _, lease = acquired
         if execution.requiresHumanReview:
+            return self._pause_for_review(
+                snapshot,
+                actor,
+                execution,
+                worker_id,
+                lease.leaseToken,
+            )
+        snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
+        if review is None and snapshot.state == AgentRunState.RUNNING:
+            # The plan is durable but was never reviewed; review exactly once
+            # before any terminal transition can be derived from it.
+            snapshot, review = self._resolve_review(
+                snapshot,
+                actor,
+                execution,
+                worker_id,
+                lease.leaseToken,
+            )
+        if review is not None and review.outcome is PlanReviewOutcome.REVISION_REQUESTED:
+            return self._advance_revision(
+                snapshot,
+                actor,
+                execution,
+                review,
+                worker_id=worker_id,
+                lease_token=lease.leaseToken,
+            )
+        if review is not None and review.outcome is PlanReviewOutcome.ESCALATED:
             return self._pause_for_review(
                 snapshot,
                 actor,
@@ -1280,8 +1767,14 @@ class AutonomousWorkerService:
     ) -> bool:
         if self.task_leases.task_status(execution.taskId) != "failed":
             return False
+        decision = self._durable_review_decision(execution, actor)
+        failure_code = (
+            REVISION_EXHAUSTED_FAILURE_CODE
+            if decision is not None and decision.outcome is PlanReviewOutcome.REVISION_REQUESTED
+            else "task_failed"
+        )
         self._fail_runtime_for_task(snapshot, actor)
-        self.executions.mark_failed(execution.executionId, "task_failed")
+        self.executions.mark_failed(execution.executionId, failure_code)
         return True
 
     def _fail_runtime_for_task(
@@ -1300,7 +1793,10 @@ class AutonomousWorkerService:
                 FailAttemptCommand,
                 current,
                 actor,
-                "task-failed-attempt",
+                self._scoped(
+                    "task-failed-attempt",
+                    self._attempt_cycle(current.active_attempt_id),
+                ),
                 attempt_id=current.active_attempt_id,
                 failure_category=FailureClassification.EXECUTION,
                 failure_detail="The authoritative task failed after lease recovery",
@@ -1323,7 +1819,7 @@ class AutonomousWorkerService:
             raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
         return current
 
-    def _handle(
+    def _handle_command(
         self,
         command_type: type[RuntimeCommand],
         snapshot: AgentRunSnapshot,
@@ -1332,7 +1828,7 @@ class AutonomousWorkerService:
         require_execution_enabled: bool = False,
         execution_fence: RuntimeExecutionFence | None = None,
         **fields: Any,
-    ) -> AgentRunSnapshot:
+    ) -> RuntimeCommandResult:
         command_id = (
             f"aw-{sha256(snapshot.specification.run_id.encode()).hexdigest()[:24]}-{suffix}"
         )
@@ -1352,6 +1848,28 @@ class AutonomousWorkerService:
         )
         if result.snapshot is None:
             raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
+        return result
+
+    def _handle(
+        self,
+        command_type: type[RuntimeCommand],
+        snapshot: AgentRunSnapshot,
+        actor: RuntimeActorContext,
+        suffix: str,
+        require_execution_enabled: bool = False,
+        execution_fence: RuntimeExecutionFence | None = None,
+        **fields: Any,
+    ) -> AgentRunSnapshot:
+        result = self._handle_command(
+            command_type,
+            snapshot,
+            actor,
+            suffix,
+            require_execution_enabled=require_execution_enabled,
+            execution_fence=execution_fence,
+            **fields,
+        )
+        assert result.snapshot is not None
         return result.snapshot
 
     def _command_timestamp(self, run_id: str, command_id: str) -> datetime:
@@ -1361,12 +1879,70 @@ class AutonomousWorkerService:
         return datetime.now(UTC)
 
     @staticmethod
-    def _attempt_id(run_id: str) -> str:
-        return f"attempt-aw-{sha256(run_id.encode()).hexdigest()[:40]}"
+    def _attempt_id(run_id: str, cycle: int = 0) -> str:
+        base = f"attempt-aw-{sha256(run_id.encode()).hexdigest()[:40]}"
+        return base if cycle == 0 else f"{base}-r{cycle}"
+
+    @staticmethod
+    def _attempt_cycle(attempt_id: str) -> int:
+        match = _REVISION_ATTEMPT_SUFFIX.search(attempt_id)
+        return int(match.group(1)) if match else 0
+
+    @staticmethod
+    def _scoped(suffix: str, cycle: int) -> str:
+        """Scope a deterministic command/checkpoint name to its revision cycle.
+
+        Cycle zero keeps its established identifiers so in-flight executions and
+        their stored command results replay exactly as before.
+        """
+
+        return suffix if cycle == 0 else f"{suffix}-r{cycle}"
+
+    @staticmethod
+    def _result_type(response_format: str | None):
+        return (
+            WorkspacePlanResult
+            if response_format == "workspace_plan_json_v1"
+            else PlanningReviewResult
+        )
+
+    @staticmethod
+    def _output_options(response_format: str | None) -> dict[str, Any]:
+        if response_format is None:
+            return {}
+
+        def generation_schema(value: Any) -> Any:
+            if isinstance(value, dict):
+                # Expanding large length/count bounds can exceed local decoder
+                # grammar limits. The complete Pydantic validator still enforces
+                # those bounds before persistence; token/request caps also remain.
+                result = {
+                    key: generation_schema(item)
+                    for key, item in value.items()
+                    if key not in {"maxLength", "maxItems"}
+                }
+                if result.get("type") == "object" and "properties" in result:
+                    result["required"] = list(result["properties"])
+                return result
+            if isinstance(value, list):
+                return [generation_schema(item) for item in value]
+            return value
+
+        return {
+            "output_schema": ModelOutputSchema(
+                name=response_format,
+                json_schema=generation_schema(
+                    AutonomousWorkerService._result_type(response_format).model_json_schema()
+                ),
+            ),
+            "prefer_no_reasoning": True,
+        }
 
     @staticmethod
     def _execution_messages(
         assembly: ContextAssembly,
+        revision_findings: tuple[str, ...] = (),
+        response_format: str | None = None,
     ) -> tuple[list[ModelMessage], str]:
         assert assembly.modelRequest is not None
         messages: list[ModelMessage] = []
@@ -1385,19 +1961,38 @@ class AutonomousWorkerService:
         messages.append(
             ModelMessage(
                 role=MessageRole.SYSTEM,
-                content=PlanningReviewResult.model_json_schema_instruction(),
+                content=AutonomousWorkerService._result_type(
+                    response_format
+                ).model_json_schema_instruction(),
             )
         )
-        digest = sha256(
-            canonical_json(
-                {
-                    "assemblyRequestHash": assembly.requestHash,
-                    "messages": [message.model_dump(mode="json") for message in messages],
-                    "executionType": "planning_review",
-                    "outputSchemaVersion": "1.0",
-                }
-            ).encode()
-        ).hexdigest()
+        if revision_findings:
+            messages.append(
+                ModelMessage(
+                    role=MessageRole.SYSTEM,
+                    content=(
+                        "Resolve these deterministic structural findings: "
+                        + ", ".join(revision_findings)
+                        if response_format == "workspace_plan_json_v1"
+                        else revision_directive(revision_findings)
+                    ),
+                )
+            )
+        payload = {
+            "assemblyRequestHash": assembly.requestHash,
+            "messages": [message.model_dump(mode="json") for message in messages],
+            "executionType": "workspace_plan"
+            if response_format == "workspace_plan_json_v1"
+            else "planning_review",
+            "outputSchemaVersion": "1.0",
+        }
+        if response_format is not None:
+            options = AutonomousWorkerService._output_options(response_format)
+            payload["outputOptions"] = {
+                "output_schema": options["output_schema"].model_dump(mode="json"),
+                "prefer_no_reasoning": options["prefer_no_reasoning"],
+            }
+        digest = sha256(canonical_json(payload).encode()).hexdigest()
         return messages, digest
 
     @staticmethod
@@ -1416,12 +2011,14 @@ class AutonomousWorkerService:
             raise AutonomousWorkerError("CONTEXT_ASSEMBLY_UNAVAILABLE")
 
     @staticmethod
-    def _parse_result(content: str) -> tuple[PlanningReviewResult | None, list[str]]:
+    def _parse_result(
+        content: str, response_format: str | None = None
+    ) -> tuple[PlanningReviewResult | None, list[str]]:
         try:
             payload = json.loads(content)
             if not isinstance(payload, dict):
                 return None, ["root: expected a JSON object"]
-            return PlanningReviewResult.model_validate(payload), []
+            return AutonomousWorkerService._result_type(response_format).model_validate(payload), []
         except json.JSONDecodeError:
             return None, ["root: invalid JSON"]
         except ValidationError as exc:
@@ -1454,7 +2051,7 @@ class AutonomousWorkerService:
                     AbandonAttemptCommand,
                     current,
                     actor,
-                    "lease-lost",
+                    self._scoped("lease-lost", self._attempt_cycle(attempt_id)),
                     attempt_id=attempt_id,
                     detail="Execution ownership was lost",
                 )

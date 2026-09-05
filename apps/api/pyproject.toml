@@ -7,6 +7,8 @@ dependencies = [
   "httpx>=0.28,<1",
   "pydantic>=2.10,<3",
   "pydantic-settings>=2.7,<3",
+  "python-dotenv>=1,<2",
+  "psutil>=6,<8",
   "pyyaml>=6,<7",
   "sqlalchemy>=2.0,<3",
   "alembic>=1.14,<2",
@@ -23,6 +25,9 @@ asyncio_mode = "auto"
 [tool.setuptools.packages.find]
 include = ["app*"]
 exclude = ["migrations*"]
+
+[tool.setuptools.package-data]
+"app.office" = ["catalog.json"]
 
 [tool.ruff]
 line-length = 100

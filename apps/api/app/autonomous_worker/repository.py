@@ -33,6 +33,7 @@ from app.models.autonomous_worker import (
     ModelExecutionResult,
     ModelExecutionStage,
     PlanningReviewResult,
+    WorkspacePlanResult,
 )
 from app.models.context import ContextAssembly
 from app.models.domain import EventEnvelope
@@ -44,6 +45,11 @@ ACTIVE_EXECUTION_STAGES = {
     ModelExecutionStage.RESULT_PERSISTED.value,
     ModelExecutionStage.FINALIZATION_PENDING.value,
 }
+
+# Durable marker for an attempt whose persisted plan was reviewed and returned
+# for one bounded revision cycle.
+REVISION_REQUESTED_FAILURE_CODE = "review_revision_requested"
+REVISION_EXHAUSTED_FAILURE_CODE = "review_revision_exhausted"
 
 
 def canonical_json(value: object) -> str:
@@ -139,7 +145,10 @@ class ModelExecutionRepository:
             for row in rows:
                 snapshot = AgentRunSnapshot.model_validate_json(row.snapshot_json)
                 request = snapshot.specification.autonomous_execution
-                if request is None or request.execution_type.value != "planning_review":
+                if request is None or request.execution_type.value not in {
+                    "planning_review",
+                    "workspace_plan",
+                }:
                     continue
                 snapshots.append(snapshot)
             if snapshots:
@@ -164,20 +173,64 @@ class ModelExecutionRepository:
             {
                 AgentRunState.CLAIMED,
                 AgentRunState.STARTING,
-            }
+            },
+            filters=(
+                ~exists().where(
+                    and_(
+                        ModelExecutionRow.runtime_run_id == AgentRuntimeRunRow.run_id,
+                        or_(
+                            ModelExecutionRow.stage.in_(ACTIVE_EXECUTION_STAGES),
+                            ModelExecutionRow.runtime_attempt_id
+                            == AgentRuntimeRunRow.active_attempt_id,
+                        ),
+                    )
+                ),
+            ),
+        )
+
+    def iter_revision_cycle_pages(self) -> Iterator[list[AgentRunSnapshot]]:
+        """Yield runs owed exactly one bounded review-revision planning cycle.
+
+        A candidate is a blocked autonomous run whose durable execution history
+        contains a review-revision marker and no still-active execution row, so
+        the next deterministic attempt cannot duplicate live work.
+        """
+
+        yield from self._iter_runtime_recovery_pages(
+            {AgentRunState.BLOCKED},
+            filters=(
+                exists().where(
+                    and_(
+                        ModelExecutionRow.runtime_run_id == AgentRuntimeRunRow.run_id,
+                        ModelExecutionRow.failure_code == REVISION_REQUESTED_FAILURE_CODE,
+                    )
+                ),
+                ~exists().where(
+                    and_(
+                        ModelExecutionRow.runtime_run_id == AgentRuntimeRunRow.run_id,
+                        ModelExecutionRow.stage.in_(ACTIVE_EXECUTION_STAGES),
+                    )
+                ),
+            ),
         )
 
     def _iter_runtime_recovery_pages(
         self,
         states: set[AgentRunState],
+        *,
+        filters: tuple[Any, ...] | None = None,
     ) -> Iterator[list[AgentRunSnapshot]]:
         cursor: tuple[datetime, str] | None = None
         page_size = 100
+        if filters is None:
+            filters = (
+                ~exists().where(ModelExecutionRow.runtime_run_id == AgentRuntimeRunRow.run_id),
+            )
         while True:
             with self.sessions() as session:
                 query = select(AgentRuntimeRunRow).where(
                     AgentRuntimeRunRow.state.in_([state.value for state in states]),
-                    ~exists().where(ModelExecutionRow.runtime_run_id == AgentRuntimeRunRow.run_id),
+                    *filters,
                 )
                 if cursor is not None:
                     created_at, run_id = cursor
@@ -205,7 +258,10 @@ class ModelExecutionRepository:
             for row in rows:
                 snapshot = AgentRunSnapshot.model_validate_json(row.snapshot_json)
                 request = snapshot.specification.autonomous_execution
-                if request is None or request.execution_type.value != "planning_review":
+                if request is None or request.execution_type.value not in {
+                    "planning_review",
+                    "workspace_plan",
+                }:
                     continue
                 snapshots.append(snapshot)
             if snapshots:
@@ -365,6 +421,24 @@ class ModelExecutionRepository:
             row = session.get(ModelExecutionRow, execution_id)
             return None if row is None else self._contract(row)
 
+    def count_for_run(self, run_id: str) -> int:
+        """Return the number of durable planning attempts recorded for one run.
+
+        This is the authoritative revision-cycle index: exactly one execution row
+        exists per deterministic runtime attempt, so the count identifies the next
+        attempt without inspecting "latest" result content.
+        """
+
+        with self.sessions() as session:
+            return int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(ModelExecutionRow)
+                    .where(ModelExecutionRow.runtime_run_id == run_id)
+                )
+                or 0
+            )
+
     def list_for_task(self, task_id: str) -> list[ModelExecutionResult]:
         with self.sessions() as session:
             rows = session.scalars(
@@ -483,6 +557,21 @@ class ModelExecutionRepository:
             worker_id=worker_id,
             lease_token=lease_token,
         )
+
+    def assert_advance_allowed(
+        self, execution_id: str, *, worker_id: str, lease_token: str
+    ) -> None:
+        """Revalidate emergency stop, exact lease ownership, and target eligibility.
+
+        The target identity row is locked for the duration of the check so a
+        suspension racing a durable orchestration advance fails closed instead of
+        being observed as stale eligibility.
+        """
+
+        now = datetime.now(UTC)
+        with self._write() as session:
+            row = self._require_row(session, execution_id)
+            self._require_fence(session, row, worker_id, lease_token, now)
 
     def mark_completed(self, execution_id: str) -> ModelExecutionResult:
         now = datetime.now(UTC)
@@ -1005,7 +1094,10 @@ class ModelExecutionRepository:
             if row.result_hash is None or actual_hash != row.result_hash:
                 raise AutonomousWorkerError("MODEL_RESULT_CORRUPT")
             try:
-                result = PlanningReviewResult.model_validate(row.result_json)
+                result_type = (
+                    WorkspacePlanResult if "steps" in row.result_json else PlanningReviewResult
+                )
+                result = result_type.model_validate(row.result_json)
             except ValidationError as exc:
                 raise AutonomousWorkerError("MODEL_RESULT_CORRUPT") from exc
             if row.requires_human_review != result.requiresHumanReview:

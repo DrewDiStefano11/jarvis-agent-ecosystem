@@ -1,6 +1,8 @@
 # Jarvis Agent Ecosystem
 
-Jarvis combines the local deterministic simulation and durable SQLite control plane with fenced task leases, Context Assembly, identity/RBAC, the Agent Runtime ledger, and one narrow Phase 2C autonomous execution path. With explicit opt-in, a dedicated local worker can consume a queued `planning_review` runtime run, call an approved loopback model, validate a fixed result, and persist it durably. Tools and external side effects remain unavailable.
+Jarvis is a local AI Hub with durable planning, identity/RBAC, task leases, a runtime ledger, recovery and an office reflecting real workforce state. An explicitly enabled worker can call an approved loopback model and persist a reviewed plan. Separately authorized workspace plans can list/read bounded inputs and write files/reports inside marked local workspaces. The seeded demonstration remains available and distinct from actual autonomous work.
+
+For the current integration and transfer state, read [Next Codex handoff](docs/goal-mode/NEXT_CODEX_HANDOFF.md). The continuation is still undergoing final acceptance and PR integration; passing a checkpoint does not mean the whole mission is complete.
 
 ## What works in the current local phase
 
@@ -11,7 +13,7 @@ Jarvis combines the local deterministic simulation and durable SQLite control pl
 - deterministic departments, five permanent agents, tasks, approvals, artifacts, notifications, and audit fixtures
 - installable PWA metadata, offline shell, reconnection states, HTTP refresh fallback, and a 320px mobile layout
 - YAML agent manifests validated by Pydantic
-- SQLite persistence through typed SQLAlchemy models and Alembic head `20260729_05`
+- SQLite persistence through typed SQLAlchemy models and Alembic head `20260905_08`
 - transactional outbox, durable idempotency keys, workflow runs, per-step checkpoints, and safe restart recovery
 - deterministic context assembly with provenance checks, trust ordering, redaction, injection signals, bounded truncation, durable manifests, and review gating
 - registered worker lifecycle, atomic task acquisition, renewable fencing tokens, attempt history, cancellation revocation, and expired-lease recovery
@@ -19,7 +21,9 @@ Jarvis combines the local deterministic simulation and durable SQLite control pl
 
 ## Explicit non-capabilities
 
-The only real model execution is an explicitly enabled, loopback-only `planning_review` worker. It has no tools and cannot execute code, modify files, browse, call GitHub, use email/calendars/cloud services, send messages, spend money, spawn agents, approve work, or reach a remote model. Ordinary tasks and old runtime records remain non-autonomous. Telemetry, general agents, tools, files, reports, and temporary agents remain simulated. External database servers and production deployment are not included.
+Real execution is explicitly enabled and local-only. Workspace tools require separate approval of exact actions, file contents and scope; model text cannot authorize itself. Plans are fixed: read observations do not drive adaptive subsequent reasoning. Code/shell execution, browser research, Git/GitHub, email/calendar/cloud services, spending and autonomous team decomposition are not implemented. Demo agents and their metrics/artifacts remain simulated. This is a trusted loopback application, not a publicly authenticated service.
+
+**Planning** submits local plans, exposes exact workspace action review and displays durable model/tool results. **Business Lab** groups objectives and history using the same tasks and workforce. **Office** reuses the original prototype floor, camera and sprites, with durable placements and a limited verified route catalog; candidate geometry outside that catalog remains unapproved. See the [local setup guide](docs/goal-mode/local-setup.md), [workspace guide](docs/goal-mode/workspace-tools.md) and [acceptance harness](docs/WORKSPACE_ACCEPTANCE.md).
 
 ## Architecture
 
@@ -36,7 +40,7 @@ boundary exists yet.
 
 ## Fresh Windows setup
 
-Prerequisites: Git, Python 3.11+, Node.js 20+, and pnpm 9+ (`corepack enable`). From PowerShell:
+Prerequisites: Git, Python 3.12, Node.js 22, and pnpm 11 (`corepack enable`). From PowerShell:
 
 ```powershell
 git clone <private-repository-url> jarvis-agent-ecosystem
@@ -52,6 +56,7 @@ python -m alembic current
 
 Set-Location ..\web
 pnpm install --frozen-lockfile
+pnpm office:assets
 ```
 
 Copy `.env.example` and `apps/web/.env.example` to local `.env` files only when overriding defaults. Never commit them.
@@ -70,13 +75,31 @@ Set-Location apps/web
 pnpm dev
 ```
 
-Open `http://localhost:5173`. API docs are at `http://127.0.0.1:8000/docs`, OpenAPI at `/openapi.json`, health at `/api/health`, and WebSocket events at `ws://127.0.0.1:8000/ws/events`. Use **System → Start demo** to run the demonstration.
+Open `http://127.0.0.1:5173`. API docs are at `http://127.0.0.1:8000/docs`, OpenAPI at `/openapi.json`, health at `/api/health`, and WebSocket events at `ws://127.0.0.1:8000/ws/events`. Use **System → Start demo** to run the demonstration.
 
 The autonomous worker is a separate process and never starts with the API by default. After completing the explicit local-only setup in [docs/autonomous-worker.md](docs/autonomous-worker.md), run it from `apps/api`:
 
 ```powershell
 .\.venv\Scripts\python.exe -m app.autonomous_worker
 ```
+
+## 24/7 supervised local operation
+
+After the normal Windows setup and an explicit `pnpm build` in `apps/web`, Jarvis can run under the
+separate local runtime supervisor:
+
+```powershell
+.\scripts\jarvis.ps1 doctor
+.\scripts\jarvis.ps1 start
+.\scripts\jarvis.ps1 status
+```
+
+The supervisor keeps the loopback-only API and built web UI available, recovers owned child crashes
+with bounded backoff, and manages the autonomous worker only when its existing configuration already
+enables it. It provides graceful stop/restart, JSON status, rotating logs, consistent retained SQLite
+backups, disk warnings, and optional least-privilege Task Scheduler startup at current-user logon.
+It never opens LAN/public access, starts or kills Ollama, clears emergency stop, updates Git, or adds
+coding/provider capabilities. See [Windows-first runtime supervisor](docs/runtime-supervisor.md).
 
 ## Verification commands
 
@@ -103,10 +126,10 @@ Run `pnpm build` followed by `pnpm vite preview`, then use browser Application t
 
 ## Troubleshooting
 
-- CORS errors: keep the web origin at `http://localhost:5173` or set `WEB_ORIGIN` explicitly.
-- WebSocket remains offline: verify the API uses port 8000 and that
-  `VITE_WS_URL` uses `ws://127.0.0.1:8000/ws/events` unless intentionally
-  overridden.
+- CORS errors: keep `WEB_ORIGIN` aligned with the supervised web host and port
+  (`http://127.0.0.1:5173` by default).
+- WebSocket remains offline: keep `VITE_WS_URL` aligned with the supervised API host and port
+  (`ws://127.0.0.1:8000/ws/events` by default).
 - PowerShell blocks activation: run the virtual environment executables directly as shown in verification commands.
 - Stale fixture state: use **System → Reset demo**; reset cancels the active runner before reseeding.
 - Port in use: change both the server port and corresponding frontend environment URL.

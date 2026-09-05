@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import os
 import sys
 import tempfile
@@ -17,6 +18,7 @@ from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import SQLAlchemyError
 
 from app.agent_runtime.authorization import IdentityRuntimeAuthorizer
 from app.agent_runtime.errors import AgentRuntimeError
@@ -26,6 +28,7 @@ from app.agent_runtime.sqlalchemy_repository import SqlAlchemyAgentRuntimeReposi
 from app.autonomous_worker.repository import ModelExecutionRepository
 from app.autonomous_worker.router import router as autonomous_worker_router
 from app.autonomous_worker.service import AutonomousWorkerService
+from app.autonomous_worker.setup_router import router as local_planning_setup_router
 from app.context import ContextAssembler
 from app.core.config import Settings
 from app.core.errors import DomainError
@@ -64,13 +67,19 @@ from app.models.domain import (
     SimulatorControl,
     SystemStatus,
     Task,
+    TypedApiResponse,
 )
+from app.office.router import router as office_router
+from app.office.service import OfficeService
 from app.repositories.sqlalchemy import IdempotencyResult, SqlAlchemyRepository
 from app.repositories.task_leases import TaskLeaseRepository
 from app.services.events import EventBroker
+from app.services.task_creation import prepare_task_creation
 from app.simulator.engine import SimulatorEngine
+from app.tool_execution.router import router as tool_execution_router
+from app.tool_execution.service import ToolExecutionService
 
-DATABASE_REVISION = "20260729_05"
+DATABASE_REVISION = "20260905_08"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
@@ -112,6 +121,7 @@ async def _lifespan(app: FastAPI):
     task_leases = app.state.task_leases
     restored_workflow_state = app.state.restored_workflow_state
     lease_recovery_task = None
+    office_recovery_task = None
     startup_completed = False
 
     async def recover_expired_task_leases() -> None:
@@ -124,10 +134,25 @@ async def _lifespan(app: FastAPI):
             if recovered:
                 await broker.dispatch_pending()
 
+    async def reconcile_office() -> None:
+        while True:
+            await asyncio.sleep(0.5)
+            try:
+                database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
+                if not database_reachable or not schema_current:
+                    continue
+                if app.state.office_service.reconcile():
+                    repository.refresh_event_cursor()
+                    await broker.dispatch_pending()
+            except SQLAlchemyError:
+                # A transient lock or unavailable database must not permanently
+                # stop durable arrival/lifecycle recovery for this API process.
+                logging.getLogger(__name__).warning(
+                    "Office reconciliation will retry after a database error."
+                )
+
     try:
-        repository._system.last_successful_startup = datetime.now(UTC)
-        repository._system.startup_was_clean = False
-        repository.persist()
+        repository.record_process_lifecycle(starting=True)
         await broker.dispatch_pending()
         await broker.start_dispatcher(settings.outbox_poll_interval_ms)
         database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
@@ -135,12 +160,23 @@ async def _lifespan(app: FastAPI):
             task_leases.recover_expired_leases()
             await broker.dispatch_pending()
         lease_recovery_task = asyncio.create_task(recover_expired_task_leases())
+        if database_reachable and schema_current:
+            app.state.office_service.reconcile()
+            repository.refresh_event_cursor()
+        office_recovery_task = asyncio.create_task(reconcile_office())
         app.state.lease_recovery_task = lease_recovery_task
+        app.state.office_recovery_task = office_recovery_task
         if restored_workflow_state == "recovery_required" and settings.simulator_auto_resume:
             await simulator.resume()
         startup_completed = True
         yield
     finally:
+        if office_recovery_task:
+            office_recovery_task.cancel()
+            try:
+                await office_recovery_task
+            except asyncio.CancelledError:
+                pass
         if lease_recovery_task:
             lease_recovery_task.cancel()
             try:
@@ -156,9 +192,7 @@ async def _lifespan(app: FastAPI):
                 pass
         await broker.stop_dispatcher()
         if startup_completed:
-            repository._system.last_clean_shutdown = datetime.now(UTC)
-            repository._system.startup_was_clean = True
-            repository.persist()
+            repository.record_process_lifecycle(starting=False)
         app.state.engine.dispose()
 
 
@@ -229,6 +263,7 @@ def create_app(
     app.state.engine = engine
     app.state.task_leases = task_leases
     app.state.identity_service = IdentityService(session_factory)
+    app.state.office_service = OfficeService(session_factory)
     app.state.agent_runtime_repository = SqlAlchemyAgentRuntimeRepository(
         session_factory, outbox_max_attempts=repository.outbox_max_attempts
     )
@@ -248,10 +283,16 @@ def create_app(
         runtime=app.state.agent_runtime_service,
         router=app.state.model_router,
     )
+    app.state.tool_execution_service = ToolExecutionService(app)
+    app.state.autonomous_worker_service.tool_executor = app.state.tool_execution_service
+    app.include_router(tool_execution_router)
     app.include_router(agent_runtime_router)
     app.include_router(autonomous_worker_router)
+    app.include_router(local_planning_setup_router)
     app.include_router(identity_router)
+    app.include_router(office_router)
     app.state.lease_recovery_task = None
+    app.state.office_recovery_task = None
     app.state.restored_workflow_state = restored_workflow_state
     app.state.recovery_required = restored_workflow_state == "recovery_required"
 
@@ -296,7 +337,16 @@ def create_app(
                     }
                 },
             )
-        return await call_next(request)
+        response = await call_next(request)
+        if (
+            request.method in {"POST", "PATCH"}
+            and request.url.path.startswith("/api/identity/agents/")
+            and response.status_code < 400
+        ):
+            if app.state.office_service.reconcile():
+                repository.refresh_event_cursor()
+                await broker.dispatch_pending()
+        return response
 
     def idempotency_result(
         request: Request,
@@ -521,7 +571,7 @@ def create_app(
             database_reachable,
             schema_current,
             provider_ready,
-        )
+        ).model_copy(update={"workerActorId": settings.autonomous_worker_actor_id.strip() or None})
         runtime_degraded = runtime_persistence.get("status", "healthy") != "healthy"
         degraded = (
             repository._system.recovery_status == "required"
@@ -611,13 +661,16 @@ def create_app(
             **snapshot["lease_counts"],
         )
 
-    @app.get("/api/system/status", response_model=ApiResponse)
+    @app.get("/api/system/status", response_model=TypedApiResponse[SystemStatus])
     async def get_system_status() -> ApiResponse:
         return ApiResponse(data=system_status())
 
     @app.post("/api/system/emergency-stop", response_model=ApiResponse)
     async def emergency_stop() -> ApiResponse:
         await simulator.emergency_stop()
+        app.state.office_service.reconcile(stop_all=True)
+        repository.refresh_event_cursor()
+        await broker.dispatch_pending()
         return ApiResponse(data=system_status())
 
     @app.post("/api/system/resume", response_model=ApiResponse)
@@ -724,24 +777,28 @@ def create_app(
         payload = body.model_dump(mode="json")
         if replay := replay_idempotent(request, idempotency_key, "task.create", payload):
             return ApiResponse(data=Task.model_validate(replay))
-        now = datetime.now(UTC)
-        item = Task(
-            id=f"task-{uuid4().hex[:10]}",
-            title=body.title,
-            description=body.description,
-            request=body.description,
-            createdBy="local-user",
-            assignedManagerId="jarvis",
-            priority=body.priority,
-            createdAt=now,
-            updatedAt=now,
+        source = (
+            repository.get_task_durable(body.correctionOfTaskId)
+            if body.correctionOfTaskId is not None
+            else None
         )
-        repository.tasks[item.id] = item
+        item = prepare_task_creation(body, source)
+        audit: dict[str, object] = {"summary": f"Created task: {item.title}"}
+        if source is not None:
+            audit = {
+                "summary": f"Created correction of {source.id}: {item.title}",
+                "new": "queued",
+                "payload": {
+                    "correctionOfTaskId": source.id,
+                    "projectId": source.projectId,
+                },
+            }
         await broker.emit(
             "task.created",
             {"task": item.model_dump(mode="json")},
             item.id,
-            audit={"summary": f"Created task: {item.title}"},
+            audit=audit,
+            created_task=item,
             idempotency=idempotency_result(
                 request, idempotency_key, "task.create", payload, item, 201, item.id
             ),
@@ -865,8 +922,7 @@ def create_app(
         if replay is not None:
             return ApiResponse(data=ContextAssembly.model_validate(replay))
 
-        task = repository.require(repository.tasks, body.taskId, "task")
-        assert isinstance(task, Task)
+        task = repository.get_task_durable(body.taskId)
         item = context_assembler.assemble(task, body)
         existing = repository.context_assemblies.get(item.id)
         if existing is not None:
@@ -887,7 +943,6 @@ def create_app(
                 content=response.model_dump(mode="json"),
             )
 
-        repository.context_assemblies[item.id] = item
         event_payload = ContextAssemblyEventPayload(
             assemblyId=item.id,
             status=item.status,
@@ -901,6 +956,7 @@ def create_app(
         await broker.emit(
             "context.assembly.created",
             event_payload,
+            created_context=(item, task),
             task_id=item.taskId,
             correlation_id=item.id,
             source="context-assembler",

@@ -15,6 +15,13 @@ node_modules/
 dist/
 coverage/
 .coverage
+runtime-supervisor/
+backups/
+*.pid
+*.partial
 apps/web/public/mockServiceWorker.js
 apps/web/vite.config.js
 apps/web/vite.config.d.ts
+apps/web/public/assets/office/office-8192x5460.png
+apps/web/public/assets/office/sprites/generated/agent-sheet-01.png
+apps/web/public/assets/office/sprites/generated/agent-sheet-06.png

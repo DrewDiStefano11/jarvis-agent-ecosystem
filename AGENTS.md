@@ -11,8 +11,10 @@
 - Preserve compatible response envelopes, error codes, event schema versions, and sequence semantics.
 - Update contracts, tests, and docs together. Never add secrets or commit `.env`, virtual environments, dependencies, or builds.
 - Tests must use isolated temporary databases. Runtime databases and SQLite sidecars must never be committed.
-- Phase 2C permits only the disabled-by-default, explicitly queued local-only
-  `planning_review` worker documented in `docs/autonomous-worker.md`. Remote models,
-  provider fallback, agent tools, external side effects, and misleading capability
-  placeholders remain prohibited.
+- Local autonomous execution is disabled by default. Explicitly queued planning
+  may use loopback models; workspace tools additionally require operator approval
+  of the exact persisted plan hash and a bounded, marked workspace scope. Reuse
+  existing runtime/RBAC/leases/checkpoints/outbox and emergency stop. Never let model
+  text grant authority. Shell/code execution, cloud fallback, external integrations
+  and misleading capability placeholders remain unavailable.
 - Work on feature branches. Never merge directly into `main`, delete the feature branch, or push without approval.

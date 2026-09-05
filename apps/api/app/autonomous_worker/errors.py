@@ -18,6 +18,7 @@ ERROR_MESSAGES = {
     "MODEL_OUTPUT_REPAIR_EXHAUSTED": "The bounded model-output repair allowance is exhausted.",
     "MODEL_RESULT_CONFLICT": "A different result already exists for this runtime attempt.",
     "MODEL_RESULT_CORRUPT": "The persisted model result failed its integrity check.",
+    "PLAN_REVIEW_RECORD_CORRUPT": "The durable planning review record failed its integrity check.",
     "MODEL_RESULT_PERSISTENCE_FAILED": "The validated model result could not be persisted.",
     "EXECUTION_LEASE_LOST": "The worker no longer owns the current task lease.",
     "EXECUTION_CANCELLED": "The task or runtime execution was cancelled.",

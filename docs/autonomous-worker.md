@@ -56,6 +56,23 @@ Unknown fields fail validation. Every string, list, nested record, priority, sch
 
 ## Local-only model gate
 
+New Planning submissions capture `response_format: planning_review_json_v1` in the immutable
+autonomous execution specification. This opts into a JSON generation schema and a preference
+to disable provider reasoning where supported, preserving the limited output allowance for the
+answer. The generation schema requires all result fields but omits large string/list maximums
+that can exceed Ollama's grammar expansion limits. The complete result validator still enforces
+every original maximum before any result is committed.
+
+Legacy requests omit this field and retain their original serialization, command hashes,
+execution hashes, and provider behavior through repair and prepared-execution recovery. Opted-in
+execution hashes additionally bind the actual generation schema and reasoning preference.
+The UI captures the format when a submission is created and replays that captured value; it
+does not silently upgrade an older partially acknowledged request.
+
+An empty or malformed successful provider response pauses with `model_output_invalid`.
+Unreachable or ineligible providers retain `no_local_provider_available`. Neither exposes
+raw provider response bodies or diagnostics.
+
 `JARVIS_MODEL_EXECUTION_MODE` has two values:
 
 - `disabled` (default): execution and provider network health/model-list traffic fail closed.
@@ -102,7 +119,13 @@ The configured actor is authenticated through `IdentityService`; the established
 
 Emergency stop blocks acquisition, model calls, result commit, and terminal completion. Runtime completion rechecks and locks the durable stop state inside the same ledger transaction as each terminal transition, closing the gap between the worker precheck and commit. A response that arrives after stop activation is discarded. Cancellation similarly blocks commit and enters the existing runtime cancellation boundary. Lost ownership abandons the active runtime attempt on a bounded best-effort basis and never stores generated output.
 
+An operating-system shutdown signal interrupts an active `run_once` await instead of waiting for the
+model timeout. The process then executes its existing finalizer to stop the durable worker
+registration and dispose the database engine within the supervisor's graceful-shutdown window.
+
 A valid result with `requiresHumanReview=true`, or exhausted output repair, pauses the runtime and moves the fenced task to `under_review`. Recovery preserves this branch even if the process exits immediately after result persistence. The model cannot approve itself or clear this state.
+
+A validated result that does not require human review is then evaluated by the deterministic local review policy described in `docs/planning-review-orchestration.md`. The structured outcome — accepted, one bounded revision, or escalation — is durably recorded as a runtime checkpoint for that exact attempt and governs the terminal transition. Generated text remains stored explanation and never authorizes anything.
 
 ## Configuration and local command
 

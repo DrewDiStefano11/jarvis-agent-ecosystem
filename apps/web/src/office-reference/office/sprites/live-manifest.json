@@ -1,0 +1,485 @@
+{
+  "assets": [
+    {
+      "agentProfileCompatibility": [
+        "jarvis",
+        "atlas",
+        "scout",
+        "archive",
+        "sentinel"
+      ],
+      "anchor": {
+        "x": 0.5,
+        "y": 0.94
+      },
+      "approval": "approved",
+      "authoredDirections": [
+        "south",
+        "east",
+        "north",
+        "west"
+      ],
+      "availability": "available",
+      "blockingReason": null,
+      "classification": "agent",
+      "clips": [
+        {
+          "direction": "south",
+          "frames": [
+            0
+          ],
+          "framesPerSecond": 1,
+          "id": "agent-sheet-01:idle:south",
+          "loop": false,
+          "reducedMotionFallbackFrame": 0,
+          "repeatDelayMs": 0,
+          "state": "idle",
+          "staticFallbackFrame": 0,
+          "yoyo": false
+        },
+        {
+          "direction": "south",
+          "frames": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "framesPerSecond": 8,
+          "id": "agent-sheet-01:walking:south",
+          "loop": true,
+          "reducedMotionFallbackFrame": 0,
+          "repeatDelayMs": 0,
+          "state": "walking",
+          "staticFallbackFrame": 0,
+          "yoyo": false
+        },
+        {
+          "direction": "south",
+          "frames": [
+            0
+          ],
+          "framesPerSecond": 1,
+          "id": "agent-sheet-01:offline:south",
+          "loop": false,
+          "reducedMotionFallbackFrame": 0,
+          "repeatDelayMs": 0,
+          "state": "offline",
+          "staticFallbackFrame": 0,
+          "yoyo": false
+        },
+        {
+          "direction": "east",
+          "frames": [
+            12
+          ],
+          "framesPerSecond": 1,
+          "id": "agent-sheet-01:idle:east",
+          "loop": false,
+          "reducedMotionFallbackFrame": 12,
+          "repeatDelayMs": 0,
+          "state": "idle",
+          "staticFallbackFrame": 12,
+          "yoyo": false
+        },
+        {
+          "direction": "east",
+          "frames": [
+            12,
+            13,
+            14,
+            15,
+            16,
+            17
+          ],
+          "framesPerSecond": 8,
+          "id": "agent-sheet-01:walking:east",
+          "loop": true,
+          "reducedMotionFallbackFrame": 12,
+          "repeatDelayMs": 0,
+          "state": "walking",
+          "staticFallbackFrame": 12,
+          "yoyo": false
+        },
+        {
+          "direction": "east",
+          "frames": [
+            12
+          ],
+          "framesPerSecond": 1,
+          "id": "agent-sheet-01:offline:east",
+          "loop": false,
+          "reducedMotionFallbackFrame": 12,
+          "repeatDelayMs": 0,
+          "state": "offline",
+          "staticFallbackFrame": 12,
+          "yoyo": false
+        },
+        {
+          "direction": "north",
+          "frames": [
+            24
+          ],
+          "framesPerSecond": 1,
+          "id": "agent-sheet-01:idle:north",
+          "loop": false,
+          "reducedMotionFallbackFrame": 24,
+          "repeatDelayMs": 0,
+          "state": "idle",
+          "staticFallbackFrame": 24,
+          "yoyo": false
+        },
+        {
+          "direction": "north",
+          "frames": [
+            24,
+            25,
+            26,
+            27,
+            28,
+            29
+          ],
+          "framesPerSecond": 8,
+          "id": "agent-sheet-01:walking:north",
+          "loop": true,
+          "reducedMotionFallbackFrame": 24,
+          "repeatDelayMs": 0,
+          "state": "walking",
+          "staticFallbackFrame": 24,
+          "yoyo": false
+        },
+        {
+          "direction": "north",
+          "frames": [
+            24
+          ],
+          "framesPerSecond": 1,
+          "id": "agent-sheet-01:offline:north",
+          "loop": false,
+          "reducedMotionFallbackFrame": 24,
+          "repeatDelayMs": 0,
+          "state": "offline",
+          "staticFallbackFrame": 24,
+          "yoyo": false
+        },
+        {
+          "direction": "west",
+          "frames": [
+            36
+          ],
+          "framesPerSecond": 1,
+          "id": "agent-sheet-01:idle:west",
+          "loop": false,
+          "reducedMotionFallbackFrame": 36,
+          "repeatDelayMs": 0,
+          "state": "idle",
+          "staticFallbackFrame": 36,
+          "yoyo": false
+        },
+        {
+          "direction": "west",
+          "frames": [
+            36,
+            37,
+            38,
+            39,
+            40,
+            41
+          ],
+          "framesPerSecond": 8,
+          "id": "agent-sheet-01:walking:west",
+          "loop": true,
+          "reducedMotionFallbackFrame": 36,
+          "repeatDelayMs": 0,
+          "state": "walking",
+          "staticFallbackFrame": 36,
+          "yoyo": false
+        },
+        {
+          "direction": "west",
+          "frames": [
+            36
+          ],
+          "framesPerSecond": 1,
+          "id": "agent-sheet-01:offline:west",
+          "loop": false,
+          "reducedMotionFallbackFrame": 36,
+          "repeatDelayMs": 0,
+          "state": "offline",
+          "staticFallbackFrame": 36,
+          "yoyo": false
+        }
+      ],
+      "columns": 6,
+      "frameCount": 48,
+      "frameHeight": 181,
+      "frameIntegrity": {
+        "inspectedFrameCount": 24,
+        "maximumBottomAnchorDeviationPixels": 1,
+        "method": "per-cell alpha-bounds-v1"
+      },
+      "frameWidth": 181,
+      "generatedAssetUrl": "assets/office/sprites/generated/agent-sheet-01.png",
+      "generatedChecksum": "514b2e3b830792b40f43a58a8a0415bfe46b4bbd2377d24f8f44b63435efc12c",
+      "horizontalFlipDirections": [],
+      "id": "agent-sheet-01",
+      "pixelArt": true,
+      "rows": 8,
+      "runtimeCapability": "limited-cardinal-idle-walk",
+      "sourceAssetReference": "791eeb5a-09f5-4c81-b691-271f59b258d0.png",
+      "sourceChecksum": "514b2e3b830792b40f43a58a8a0415bfe46b4bbd2377d24f8f44b63435efc12c",
+      "visualScale": 1
+    },
+    {
+      "agentProfileCompatibility": [
+        "jarvis",
+        "atlas",
+        "scout",
+        "archive",
+        "sentinel"
+      ],
+      "anchor": {
+        "x": 0.5,
+        "y": 0.94
+      },
+      "approval": "approved",
+      "authoredDirections": [
+        "south",
+        "east",
+        "north",
+        "west"
+      ],
+      "availability": "available",
+      "blockingReason": null,
+      "classification": "agent",
+      "clips": [
+        {
+          "direction": "south",
+          "frames": [
+            0
+          ],
+          "framesPerSecond": 1,
+          "id": "agent-sheet-06:idle:south",
+          "loop": false,
+          "reducedMotionFallbackFrame": 0,
+          "repeatDelayMs": 0,
+          "state": "idle",
+          "staticFallbackFrame": 0,
+          "yoyo": false
+        },
+        {
+          "direction": "south",
+          "frames": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ],
+          "framesPerSecond": 8,
+          "id": "agent-sheet-06:walking:south",
+          "loop": true,
+          "reducedMotionFallbackFrame": 0,
+          "repeatDelayMs": 0,
+          "state": "walking",
+          "staticFallbackFrame": 0,
+          "yoyo": false
+        },
+        {
+          "direction": "south",
+          "frames": [
+            0
+          ],
+          "framesPerSecond": 1,
+          "id": "agent-sheet-06:offline:south",
+          "loop": false,
+          "reducedMotionFallbackFrame": 0,
+          "repeatDelayMs": 0,
+          "state": "offline",
+          "staticFallbackFrame": 0,
+          "yoyo": false
+        },
+        {
+          "direction": "east",
+          "frames": [
+            12
+          ],
+          "framesPerSecond": 1,
+          "id": "agent-sheet-06:idle:east",
+          "loop": false,
+          "reducedMotionFallbackFrame": 12,
+          "repeatDelayMs": 0,
+          "state": "idle",
+          "staticFallbackFrame": 12,
+          "yoyo": false
+        },
+        {
+          "direction": "east",
+          "frames": [
+            12,
+            13,
+            14,
+            15,
+            16,
+            17
+          ],
+          "framesPerSecond": 8,
+          "id": "agent-sheet-06:walking:east",
+          "loop": true,
+          "reducedMotionFallbackFrame": 12,
+          "repeatDelayMs": 0,
+          "state": "walking",
+          "staticFallbackFrame": 12,
+          "yoyo": false
+        },
+        {
+          "direction": "east",
+          "frames": [
+            12
+          ],
+          "framesPerSecond": 1,
+          "id": "agent-sheet-06:offline:east",
+          "loop": false,
+          "reducedMotionFallbackFrame": 12,
+          "repeatDelayMs": 0,
+          "state": "offline",
+          "staticFallbackFrame": 12,
+          "yoyo": false
+        },
+        {
+          "direction": "north",
+          "frames": [
+            24
+          ],
+          "framesPerSecond": 1,
+          "id": "agent-sheet-06:idle:north",
+          "loop": false,
+          "reducedMotionFallbackFrame": 24,
+          "repeatDelayMs": 0,
+          "state": "idle",
+          "staticFallbackFrame": 24,
+          "yoyo": false
+        },
+        {
+          "direction": "north",
+          "frames": [
+            24,
+            25,
+            26,
+            27,
+            28,
+            29
+          ],
+          "framesPerSecond": 8,
+          "id": "agent-sheet-06:walking:north",
+          "loop": true,
+          "reducedMotionFallbackFrame": 24,
+          "repeatDelayMs": 0,
+          "state": "walking",
+          "staticFallbackFrame": 24,
+          "yoyo": false
+        },
+        {
+          "direction": "north",
+          "frames": [
+            24
+          ],
+          "framesPerSecond": 1,
+          "id": "agent-sheet-06:offline:north",
+          "loop": false,
+          "reducedMotionFallbackFrame": 24,
+          "repeatDelayMs": 0,
+          "state": "offline",
+          "staticFallbackFrame": 24,
+          "yoyo": false
+        },
+        {
+          "direction": "west",
+          "frames": [
+            36
+          ],
+          "framesPerSecond": 1,
+          "id": "agent-sheet-06:idle:west",
+          "loop": false,
+          "reducedMotionFallbackFrame": 36,
+          "repeatDelayMs": 0,
+          "state": "idle",
+          "staticFallbackFrame": 36,
+          "yoyo": false
+        },
+        {
+          "direction": "west",
+          "frames": [
+            36,
+            37,
+            38,
+            39,
+            40,
+            41
+          ],
+          "framesPerSecond": 8,
+          "id": "agent-sheet-06:walking:west",
+          "loop": true,
+          "reducedMotionFallbackFrame": 36,
+          "repeatDelayMs": 0,
+          "state": "walking",
+          "staticFallbackFrame": 36,
+          "yoyo": false
+        },
+        {
+          "direction": "west",
+          "frames": [
+            36
+          ],
+          "framesPerSecond": 1,
+          "id": "agent-sheet-06:offline:west",
+          "loop": false,
+          "reducedMotionFallbackFrame": 36,
+          "repeatDelayMs": 0,
+          "state": "offline",
+          "staticFallbackFrame": 36,
+          "yoyo": false
+        }
+      ],
+      "columns": 6,
+      "frameCount": 48,
+      "frameHeight": 181,
+      "frameIntegrity": {
+        "inspectedFrameCount": 24,
+        "maximumBottomAnchorDeviationPixels": 11,
+        "method": "per-cell alpha-bounds-v1"
+      },
+      "frameWidth": 181,
+      "generatedAssetUrl": "assets/office/sprites/generated/agent-sheet-06.png",
+      "generatedChecksum": "7e87267ef85a4c1b8a65d109eeae32cf0d15b9b354e0d83379a74e80e22b4004",
+      "horizontalFlipDirections": [],
+      "id": "agent-sheet-06",
+      "pixelArt": true,
+      "rows": 8,
+      "runtimeCapability": "limited-cardinal-idle-walk",
+      "sourceAssetReference": "d85660f4-dd62-4dbc-baa6-7ccd75361bf0 (4).png",
+      "sourceChecksum": "7e87267ef85a4c1b8a65d109eeae32cf0d15b9b354e0d83379a74e80e22b4004",
+      "visualScale": 1
+    }
+  ],
+  "blockedAssets": [],
+  "fallbackGraph": {
+    "blocked": "idle",
+    "error": "idle",
+    "idle": null,
+    "offline": null,
+    "reviewing": "working",
+    "sitting": "working",
+    "talking": "idle",
+    "thinking": "idle",
+    "typing": "working",
+    "waiting": "idle",
+    "walking": "idle",
+    "working": "idle"
+  },
+  "generatedBy": "scripts/sprites/core.mjs",
+  "schemaVersion": 1
+}
