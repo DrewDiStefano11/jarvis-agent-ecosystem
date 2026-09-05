@@ -572,7 +572,7 @@ def test_migration_roundtrip_retains_identity_and_other_domain_data(office):
         assert session.get(IdentityAgentRow, actor) is not None
     migration.upgrade(config, "head")
     with app.state.engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260905_07"
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260905_08"
     assert "office_commands" in inspect(app.state.engine).get_table_names()
     assert repo.snapshot().placements == []
 

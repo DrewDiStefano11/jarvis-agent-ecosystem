@@ -82,3 +82,76 @@ Autonomous execution specifications accept optional `response_format: planning_r
 It enables bounded planning JSON generation preferences; it adds no tools or remote access.
 Absent values are omitted during serialization so legacy persisted commands and checkpoints
 retain their hashes. New values participate in command identity and execution-request hashing.
+
+## Explicit workspace tool execution (integration checkpoint)
+
+`GET /api/tool-workspaces` returns configured aliases and their allowed tools/read/write
+prefixes (`workspaceId`, `displayName`, `allowedTools`, `readPrefixes`, `writePrefixes`,
+`ready`, `reasonCode`). Host paths are never returned. This read-only capability list
+requires no runtime actor; all execution and result endpoints authenticate
+`X-Jarvis-Actor-Id` through the existing identity service.
+
+An autonomous runtime with `execution_type: workspace_plan` must capture
+`response_format: workspace_plan_json_v1`. Its result retains all planning/review fields
+and adds one to eight fixed `steps`: `{tool, path, content?, expectedContentHash?}`. Tools
+are `workspace.list`, `workspace.read`, `workspace.write`, and `workspace.report`.
+`ModelExecutionResult.resultHash` identifies the exact reviewed plan. Existing planning
+requests omit the new fields when absent, preserving their recorded request hashes.
+
+`POST /api/tool-executions/authorize` accepts:
+
+```json
+{
+  "commandId": "operator-authorization-1",
+  "sourceExecutionId": "exec-...",
+  "expectedPlanHash": "64 lowercase hexadecimal characters",
+  "scope": {
+    "workspaceId": "lab",
+    "allowedTools": ["workspace.list", "workspace.read", "workspace.report"],
+    "readPrefixes": ["inputs"],
+    "writePrefixes": ["reports"],
+    "maximumBytes": 65536,
+    "maximumSteps": 8
+  }
+}
+```
+
+The source must be a completed workspace plan, the actor must be the configured local
+worker identity and already hold source create/queue/execute access, and every proposed
+step must fit the explicit scope. The trusted local operator action provisions existing
+runtime permissions only for a new linked task; existing denials are preserved. It
+creates a durable authorization intent, task, audit record and outbox event atomically,
+then idempotently creates and queues the existing runtime. Interrupted setup can be
+replayed with the same actor and command ID; changed contents return
+`IDEMPOTENCY_KEY_CONFLICT`. The source task/runtime stay unchanged, and the new task
+inherits its source project.
+
+Responses include `executionId`, `sourceExecutionId`, `sourceTaskId`, `taskId`,
+`runtimeRunId`, `targetAgentId`, `workspaceId`, `planHash`, `scope`, `stage`, `steps`,
+`artifacts`, bounded `failureCode`, and timestamps. Stages are `preparing`, `queued`,
+`running`, `completed`, `failed`, or `paused`. Step records carry their index,
+tool/path, `pending|started|completed|failed` status, bounded observation, optional
+artifact ID and failure code.
+
+`GET /api/tool-executions?taskId=...` finds both source and execution task history.
+`GET /api/tool-executions/{executionId}` reads one durable projection.
+`GET /api/tool-artifacts/{artifactId}` returns the descriptor plus verified UTF-8 content.
+Artifact descriptors contain `artifactId`, `executionId`, `taskId`, `relativePath`,
+`contentHash`, `byteCount`, and `mediaType`. Downloads use the immutable stored content;
+they do not widen filesystem read scope or read arbitrary host paths. Source runtime
+read access and (once created) linked execution runtime read access are required for
+results and artifacts. Source-only readers do not inherit workspace observations.
+
+The existing autonomous worker dispatches authorized tool runs using task leases and
+runtime claim/attempt/checkpoint/completion commands. Each file operation is preceded
+by a durable started record. Bounded file execution, current policy/lease/emergency
+checks and the completed step/outbox commit share the SQLite write boundary. If a
+process stops after atomic replacement but before commit, recovery adopts only the
+already matching desired content hash. Completed observations and artifacts are not
+executed again. Task completion rechecks runtime state and permissions inside its own
+transaction. A filesystem failure pauses the task for operator review; correction
+means creating and authorizing a new reviewed plan.
+
+This slice executes the fixed steps the operator reviewed. List/read observations are
+stored and displayed, but are not fed to another model for synthesis. It exposes no
+shell, Python, cloud, network, or unrestricted absolute-path tool.

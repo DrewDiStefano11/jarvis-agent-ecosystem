@@ -164,6 +164,8 @@ class Settings(BaseSettings):
     model_default_maximum_cost_usd: float | None = Field(
         None, alias="JARVIS_MODEL_DEFAULT_MAXIMUM_COST_USD", gt=0, le=1_000_000
     )
+    tool_execution_enabled: bool = Field(False, alias="JARVIS_TOOL_EXECUTION_ENABLED")
+    tool_workspaces_json: str = Field("{}", alias="JARVIS_TOOL_WORKSPACES_JSON", max_length=20000)
     model_pricing_json: str = Field("{}", alias="JARVIS_MODEL_PRICING_JSON", max_length=100_000)
     web_origin: str = Field(
         "http://localhost:5173", alias="WEB_ORIGIN", min_length=1, max_length=2048

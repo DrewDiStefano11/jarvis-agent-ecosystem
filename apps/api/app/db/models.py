@@ -825,3 +825,31 @@ class ModelExecutionRow(Base):
         CheckConstraint("request_count >= 0 AND request_count <= 2"),
         Index("ix_model_executions_recovery", "stage", "updated_at"),
     )
+
+
+class ToolExecutionRow(Base):
+    __tablename__ = "tool_executions"
+    execution_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    source_execution_id: Mapped[str] = mapped_column(
+        ForeignKey("model_executions.execution_id"), index=True
+    )
+    source_task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), index=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), unique=True)
+    runtime_run_id: Mapped[str] = mapped_column(String(120), unique=True)
+    actor_id: Mapped[str] = mapped_column(ForeignKey("identity_agents.id"))
+    target_agent_id: Mapped[str] = mapped_column(ForeignKey("identity_agents.id"))
+    command_id: Mapped[str] = mapped_column(String(120))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    plan_hash: Mapped[str] = mapped_column(String(64))
+    plan_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    scope_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    steps_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
+    artifacts_json: Mapped[list[dict[str, Any]]] = mapped_column(JSON, default=list)
+    stage: Mapped[str] = mapped_column(String(20), index=True)
+    failure_code: Mapped[str | None] = mapped_column(String(80))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        UniqueConstraint("actor_id", "command_id", name="uq_tool_execution_actor_command"),
+    )

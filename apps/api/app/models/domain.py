@@ -242,7 +242,7 @@ class SystemStatus(ContractModel):
     lastSynchronizedAt: datetime
     storageBackend: str = "sqlite"
     databaseHealthy: bool = True
-    databaseRevision: str = "20260905_07"
+    databaseRevision: str = "20260905_08"
     schemaCurrent: bool = True
     eventSessionId: str
     outboxPendingCount: int = 0
