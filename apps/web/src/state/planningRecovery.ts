@@ -30,7 +30,7 @@ function parseSaved(value: string): SavedPlanningSubmission | null {
     || !identifier(record.targetId) || !identifier(record.taskId)
     || typeof record.timestamp !== 'string' || !Number.isFinite(Date.parse(record.timestamp))
     || typeof record.inputHash !== 'string' || !/^[a-f0-9]{64}$/.test(record.inputHash)
-    || (record.responseFormat !== undefined && record.responseFormat !== 'planning_review_json_v1')) return null
+    || (record.responseFormat !== undefined && record.responseFormat !== 'planning_review_json_v1' && record.responseFormat !== 'workspace_plan_json_v1')) return null
   return { version: 1, id: record.id, timestamp: record.timestamp, actorId: record.actorId,
     targetId: record.targetId, taskId: record.taskId, inputHash: record.inputHash,
     ...(record.responseFormat === undefined ? {} : { responseFormat: record.responseFormat }) }

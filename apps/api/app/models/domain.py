@@ -386,12 +386,14 @@ class CreateTaskRequest(RequestContractModel):
     correctionOfTaskId: str | None = Field(
         default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$"
     )
+    projectId: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 
     @model_serializer(mode="wrap")
     def preserve_legacy_serialization(self, handler):
         payload = handler(self)
-        if self.correctionOfTaskId is None:
-            payload.pop("correctionOfTaskId", None)
+        for field in ("correctionOfTaskId", "projectId"):
+            if getattr(self, field) is None:
+                payload.pop(field, None)
         return payload
 
 

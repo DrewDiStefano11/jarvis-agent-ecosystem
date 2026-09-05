@@ -1,12 +1,15 @@
 import { request } from '../api/client'
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
+import { ToolExecutionPanel } from '../components/ToolExecutionPanel'
 import { newPlanningSubmission, submitPlanning, type PlanningSubmission } from '../api/planning'
 import { useAppStore } from '../state/AppStore'
 import { Status } from '../components/Status'
 import { forgetPlanningSubmission, readPlanningRecovery, rememberPlanningSubmission, restorePlanningSubmission, type SavedPlanningSubmission } from '../state/planningRecovery'
 
 export function Runtime() {
+  const [searchParams] = useSearchParams()
+  const [mode, setMode] = useState<'planning' | 'workspace'>(searchParams.get('mode') === 'workspace' ? 'workspace' : 'planning')
   const { runtime, tasks, system, refresh, selectTask } = useAppStore()
   const { identities, loadIdentities, actorId, selectActor, taskId, setTaskId, runs, executions, refreshRuntime } = runtime
   const [targetId, setTargetId] = useState('')
@@ -49,6 +52,7 @@ export function Runtime() {
       setTargetId(restored.targetId)
       setTaskId(originalTask.id)
       setPending(restored)
+      setMode(restored.responseFormat === 'workspace_plan_json_v1' ? 'workspace' : 'planning')
       setMessage('Saved submission recovered. Inspect its history, then retry with the original command IDs if needed. Recovery does not queue work automatically.')
     } catch (error) { setMessage(error instanceof Error ? error.message : 'Cannot recover the saved submission') }
     finally { setBusy(false) }
@@ -77,7 +81,7 @@ export function Runtime() {
   const queue = async () => {
     if (!task || !actorId || !targetId || !canQueue) return
     setBusy(true)
-    const submission = pending ?? newPlanningSubmission(task, actorId, targetId)
+    const submission = pending ?? newPlanningSubmission(task, actorId, targetId, mode)
     setPending(submission)
     try {
       setStorageWarning(await rememberPlanningSubmission(submission))
@@ -100,12 +104,13 @@ export function Runtime() {
       <p>Configured worker identity: {workerActor?.display_name ?? workerActorId ?? 'Not configured'}{workerActor && <> · <code>{workerActor.id}</code></>}</p>
       {worker?.reasonCode && <p role="status">{worker.reasonCode}</p>}
       <dl className="details-grid"><div><dt>Queued eligible</dt><dd>{worker?.queuedEligibleRuntimeCount ?? '—'}</dd></div><div><dt>Executing</dt><dd>{worker?.activeExecutionCount ?? '—'}</dd></div><div><dt>Completed</dt><dd>{worker?.completedExecutionCount ?? '—'}</dd></div><div><dt>Needs review</dt><dd>{worker?.reviewRequiredCount ?? '—'}</dd></div></dl>
-      <p className="muted">Planning produces advice. It cannot run tools, modify files or take external actions. Provider readiness describes configuration; a successful inference is verified in execution history.</p>
+      <p className="muted">Planning produces a proposal. Workspace plans require separate authorization of exact actions and file contents before tools can run. Provider readiness describes configuration; successful inference appears in execution history.</p>
     </section>
     <section className="panel"><h2>Queue a local plan</h2>
       {(storageWarning || recovery.warning) && <p role="alert">{storageWarning || recovery.warning}</p>}
       {recovery.items.some(item => item.id !== pending?.id) && <div className="callout"><h3>Unfinished submissions saved in this browser</h3><p>Only retry IDs and an input fingerprint are stored here. Task text and results stay in the Hub. Recovering a form never queues it automatically.</p>{recovery.items.filter(item => item.id !== pending?.id).map(saved => <article key={saved.id}><p>{tasks.find(item => item.id === saved.taskId)?.title ?? saved.taskId} · {new Date(saved.timestamp).toLocaleString()}</p><p>Run ID: <code>run-{saved.id}</code></p><button className="secondary" disabled={busy || Boolean(pending)} onClick={() => void recover(saved)}>Recover submission</button> <button className="secondary" disabled={busy} onClick={() => forget(saved.id)}>Forget saved retry ID</button></article>)}</div>}
       <p>Queue as the configured worker identity, with its existing task permissions, or explicitly prepare it for the selected task. The target agent can be a different active identity. <Link to="/tasks">Create a task</Link> first.</p>
+      <label>Plan type<select value={mode} disabled={busy || Boolean(pending)} onChange={event => setMode(event.target.value as 'planning' | 'workspace')}><option value="planning">Planning advice</option><option value="workspace">Workspace actions and report</option></select></label>
       <div className="filters"><label>Act as local identity<select value={actorId} disabled={busy || Boolean(pending)} onChange={event => selectActor(event.target.value)}><option value="">Select identity</option>{active.map(identity => <option key={identity.id} value={identity.id}>{identity.display_name}</option>)}</select></label>
       <label>Target agent<select value={targetId} disabled={busy || Boolean(pending)} onChange={event => setTargetId(event.target.value)}><option value="">Select target</option>{active.map(identity => <option key={identity.id} value={identity.id}>{identity.display_name}</option>)}</select></label>
       <label>Task and history<select value={taskId} disabled={busy || Boolean(pending)} onChange={event => setTaskId(event.target.value)}><option value="">Select task</option>{tasks.map(item => <option key={item.id} value={item.id}>{item.title} · {item.status}</option>)}</select></label></div>
@@ -133,6 +138,7 @@ export function Runtime() {
         {execution.failureCode && <p role="status">{execution.failureCode}</p>}
         {execution.result && <><p style={{ whiteSpace: 'pre-wrap' }}>{execution.result.analysis}</p><h4>Recommendations</h4><ul>{execution.result.recommendations.map((item, index) => <li key={index}><strong>{item.title}</strong> ({item.priority}) — {item.description}</li>)}</ul><h4>Risks</h4><ul>{execution.result.risks.map((item, index) => <li key={index}><strong>{item.title}</strong> ({item.severity}) — {item.description}<p>Mitigation: {item.mitigation}</p></li>)}</ul>
           <h4>Assumptions</h4><ul>{execution.result.assumptions.map((item, index) => <li key={index}>{item}</li>)}</ul><h4>Missing information</h4><ul>{execution.result.missingInformation.map((item, index) => <li key={index}>{item}</li>)}</ul>{execution.result.requiresHumanReview && <p role="status">Human review required; the model cannot approve its own work.</p>}</>}
+        {execution.result?.steps && <ToolExecutionPanel key={`${actorId}:${execution.executionId}:${execution.resultHash}`} execution={execution}/>}
       </article>)}
       {taskId && actorId && !runtime.loading && !runtime.error && !executions.length && <p>No persisted model execution for this task yet.</p>}
     </section>
