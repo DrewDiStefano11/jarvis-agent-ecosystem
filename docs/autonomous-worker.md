@@ -108,6 +108,8 @@ registration and dispose the database engine within the supervisor's graceful-sh
 
 A valid result with `requiresHumanReview=true`, or exhausted output repair, pauses the runtime and moves the fenced task to `under_review`. Recovery preserves this branch even if the process exits immediately after result persistence. The model cannot approve itself or clear this state.
 
+A validated result that does not require human review is then evaluated by the deterministic local review policy described in `docs/planning-review-orchestration.md`. The structured outcome — accepted, one bounded revision, or escalation — is durably recorded as a runtime checkpoint for that exact attempt and governs the terminal transition. Generated text remains stored explanation and never authorizes anything.
+
 ## Configuration and local command
 
 Required worker settings are:

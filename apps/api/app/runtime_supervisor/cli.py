@@ -147,11 +147,11 @@ def _spawn_daemon(config: SupervisorConfig) -> int:
 
 
 def start(config: SupervisorConfig) -> dict[str, Any]:
-    validate_frontend_build(config)
     ensure_runtime_home(config.coordination_home, config.repository)
     current = load_status(config)
     if current.get("ownership") == "running":
         return {"result": "already_running", **current}
+    validate_frontend_build(config)
     if config.runtime_home != config.coordination_home:
         ensure_runtime_home(config.runtime_home, config.repository)
     launcher_pid = _spawn_daemon(config)
@@ -214,6 +214,7 @@ def _autostart_payload(value: autostart.AutostartStatus) -> dict[str, Any]:
         "installed": value.installed,
         "taskName": value.task_name,
         "detail": value.detail,
+        "queryFailed": value.query_failed,
         "trigger": "current-user logon",
         "storesPassword": False,
     }
@@ -253,7 +254,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             payload = _autostart_payload(value)
             _emit(payload, as_json=args.json_output)
-            return 0
+            return 1 if value.query_failed else 0
         config = SupervisorConfig.load(args.repository)
         if args.command == "daemon":
             return RuntimeSupervisor(config).run()

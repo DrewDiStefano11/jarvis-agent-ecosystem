@@ -26,6 +26,7 @@ from app.agent_runtime.sqlalchemy_repository import SqlAlchemyAgentRuntimeReposi
 from app.autonomous_worker.repository import ModelExecutionRepository
 from app.autonomous_worker.router import router as autonomous_worker_router
 from app.autonomous_worker.service import AutonomousWorkerService
+from app.autonomous_worker.setup_router import router as local_planning_setup_router
 from app.context import ContextAssembler
 from app.core.config import Settings
 from app.core.errors import DomainError
@@ -64,13 +65,14 @@ from app.models.domain import (
     SimulatorControl,
     SystemStatus,
     Task,
+    TypedApiResponse,
 )
 from app.repositories.sqlalchemy import IdempotencyResult, SqlAlchemyRepository
 from app.repositories.task_leases import TaskLeaseRepository
 from app.services.events import EventBroker
 from app.simulator.engine import SimulatorEngine
 
-DATABASE_REVISION = "20260729_05"
+DATABASE_REVISION = "20260905_06"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
@@ -250,6 +252,7 @@ def create_app(
     )
     app.include_router(agent_runtime_router)
     app.include_router(autonomous_worker_router)
+    app.include_router(local_planning_setup_router)
     app.include_router(identity_router)
     app.state.lease_recovery_task = None
     app.state.restored_workflow_state = restored_workflow_state
@@ -521,7 +524,7 @@ def create_app(
             database_reachable,
             schema_current,
             provider_ready,
-        )
+        ).model_copy(update={"workerActorId": settings.autonomous_worker_actor_id.strip() or None})
         runtime_degraded = runtime_persistence.get("status", "healthy") != "healthy"
         degraded = (
             repository._system.recovery_status == "required"
@@ -611,7 +614,7 @@ def create_app(
             **snapshot["lease_counts"],
         )
 
-    @app.get("/api/system/status", response_model=ApiResponse)
+    @app.get("/api/system/status", response_model=TypedApiResponse[SystemStatus])
     async def get_system_status() -> ApiResponse:
         return ApiResponse(data=system_status())
 

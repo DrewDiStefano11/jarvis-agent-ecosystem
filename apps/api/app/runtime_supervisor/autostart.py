@@ -134,7 +134,10 @@ def install(config: SupervisorConfig) -> AutostartStatus:
             raise RuntimeError(f"Task Scheduler registration failed: {detail}")
     finally:
         Path(xml_name).unlink(missing_ok=True)
-    return status(config)
+    installed = status(config)
+    if installed.query_failed or not installed.installed:
+        raise RuntimeError("could not verify Task Scheduler task installation")
+    return installed
 
 
 def uninstall(config: SupervisorConfig | SupervisorCoordination) -> AutostartStatus:

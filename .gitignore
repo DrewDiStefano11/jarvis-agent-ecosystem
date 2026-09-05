@@ -22,3 +22,4 @@ backups/
 apps/web/public/mockServiceWorker.js
 apps/web/vite.config.js
 apps/web/vite.config.d.ts
+apps/web/public/assets/office/office-8192x5460.png

@@ -257,6 +257,47 @@ def test_start_discovers_running_supervisor_after_runtime_home_change(
     assert not second.runtime_home.exists()
 
 
+@pytest.mark.parametrize("metadata_state", ["missing", "mismatched"])
+def test_start_preserves_running_supervisor_without_valid_replacement_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, metadata_state: str
+) -> None:
+    config = make_config(tmp_path)
+    metadata = config.web_directory / "dist" / "runtime-supervisor.json"
+    if metadata_state == "missing":
+        metadata.unlink()
+    else:
+        metadata.write_text(
+            json.dumps(
+                {
+                    "schemaVersion": 1,
+                    "apiBaseUrl": "http://127.0.0.1:9000",
+                    "webSocketUrl": "ws://127.0.0.1:9000/ws/events",
+                }
+            ),
+            encoding="utf-8",
+        )
+    ensure_runtime_home(config.coordination_home, config.repository)
+    atomic_write_json(
+        config.state_path,
+        {
+            "supervisorState": "running",
+            "pid": 123,
+            "processIdentity": "live-supervisor",
+            "instanceId": "stable-instance",
+        },
+    )
+    monkeypatch.setattr(
+        "app.runtime_supervisor.ownership.process_identity", lambda _pid: "live-supervisor"
+    )
+    monkeypatch.setattr(cli, "_spawn_daemon", lambda _: pytest.fail("must not spawn a duplicate"))
+
+    result = start(config)
+
+    assert result["result"] == "already_running"
+    assert result["instanceId"] == "stable-instance"
+    assert not config.runtime_home.exists()
+
+
 @pytest.mark.parametrize(
     ("name", "value"),
     [
@@ -423,9 +464,9 @@ def test_autostart_uninstall_ignores_invalid_runtime_settings(
     )
     captured: list[object] = []
 
-    def fake_uninstall(coordination: object) -> SimpleNamespace:
+    def fake_uninstall(coordination: object) -> AutostartStatus:
         captured.append(coordination)
-        return SimpleNamespace(
+        return AutostartStatus(
             supported=True,
             installed=False,
             task_name=coordination.task_name,  # type: ignore[attr-defined]
@@ -455,9 +496,9 @@ def test_status_commands_ignore_invalid_replacement_runtime_settings(
         runtime_status_calls.append(coordination)
         return {"supervisorState": "running", "ownership": "running"}
 
-    def fake_autostart_status(coordination: object) -> SimpleNamespace:
+    def fake_autostart_status(coordination: object) -> AutostartStatus:
         autostart_status_calls.append(coordination)
-        return SimpleNamespace(
+        return AutostartStatus(
             supported=True,
             installed=True,
             task_name=coordination.task_name,  # type: ignore[attr-defined]
@@ -654,6 +695,68 @@ def test_process_port_ownership_identifies_current_listener() -> None:
         listener.listen()
         port = int(listener.getsockname()[1])
         assert process_owns_port(os.getpid(), port) is True
+
+
+@pytest.mark.parametrize("boundary", ["unchanged", "parent_reused", "child_reused", "reparented"])
+def test_process_port_ownership_validates_launcher_child_identity(
+    monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    class Process:
+        def __init__(self, parent=None) -> None:
+            self.owner = parent
+            self.running = True
+
+        def children(self):
+            return [child]
+
+        def parent(self):
+            return self.owner
+
+        def is_running(self):
+            return self.running
+
+        def net_connections(self, *, kind):
+            assert kind == "tcp"
+            if self is parent:
+                return []
+            if boundary == "parent_reused":
+                parent.running = False
+            elif boundary == "child_reused":
+                self.running = False
+            elif boundary == "reparented":
+                self.owner = None
+            return [SimpleNamespace(status="LISTEN", laddr=SimpleNamespace(port=8123))]
+
+    parent = Process()
+    child = Process(parent)
+    monkeypatch.setattr("app.runtime_supervisor.supervisor.psutil.Process", lambda _: parent)
+
+    assert process_owns_port(123, 8123) is (boundary == "unchanged")
+
+
+@pytest.mark.parametrize("boundary", ["before_port_check", "during_port_check"])
+def test_managed_health_rejects_reused_launcher_pid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+) -> None:
+    identity = ["original"]
+
+    def port_owner(_pid: int, _port: int) -> bool:
+        identity[0] = "replacement"
+        return True
+
+    supervisor = RuntimeSupervisor(
+        make_config(tmp_path),
+        probe=lambda *_args, **_kwargs: HealthResult(True, "healthy"),
+        port_owner=port_owner,
+    )
+    managed = supervisor.processes["api"]
+    managed.process = FakeProcess([])
+    managed.process_identity = "original"
+    monkeypatch.setattr("app.runtime_supervisor.supervisor.process_identity", lambda _: identity[0])
+    if boundary == "before_port_check":
+        identity[0] = "replacement"
+
+    assert supervisor._probe_managed(managed).available is False
 
 
 def test_api_child_converts_sigbreak_to_graceful_uvicorn_exit(
@@ -1094,6 +1197,69 @@ def test_autostart_uninstall_rejects_failed_scheduler_query(
 
     with pytest.raises(RuntimeError, match="confirm Task Scheduler task state"):
         autostart.uninstall(config)
+
+
+@pytest.mark.parametrize("query_failed", [True, False])
+def test_autostart_install_rejects_unconfirmed_registration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, query_failed: bool
+) -> None:
+    config = make_config(tmp_path)
+    monkeypatch.setattr(autostart, "os", SimpleNamespace(name="nt", fdopen=os.fdopen))
+    monkeypatch.setattr(autostart, "_schtasks", lambda: "schtasks.exe")
+    monkeypatch.setattr(autostart, "_current_user_sid", lambda: "S-1-5-21-123")
+    registrations: list[list[str]] = []
+
+    def register(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        registrations.append(command)
+        return subprocess.CompletedProcess(command, 0, "created", "")
+
+    monkeypatch.setattr(autostart.subprocess, "run", register)
+    monkeypatch.setattr(
+        autostart,
+        "status",
+        lambda _: AutostartStatus(
+            supported=not query_failed,
+            installed=False,
+            task_name=config.task_name,
+            detail="Task Scheduler query failed" if query_failed else "not installed",
+            query_failed=query_failed,
+        ),
+    )
+    monkeypatch.setattr(cli.SupervisorConfig, "load", lambda _: config)
+
+    assert cli.main(["--repository", str(config.repository), "--json", "autostart", "install"]) == 2
+    assert len(registrations) == 1
+    assert registrations[0][1] == "/Create"
+
+
+@pytest.mark.parametrize("query_failed", [True, False])
+def test_autostart_status_reports_scheduler_query_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    query_failed: bool,
+) -> None:
+    config = make_config(tmp_path)
+    monkeypatch.setattr(
+        autostart,
+        "status",
+        lambda _: AutostartStatus(
+            supported=False,
+            installed=False,
+            task_name=config.task_name,
+            detail="Task Scheduler query failed"
+            if query_failed
+            else "Windows Task Scheduler unavailable",
+            query_failed=query_failed,
+        ),
+    )
+
+    exit_code = cli.main(["--repository", str(config.repository), "--json", "autostart", "status"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert exit_code == (1 if query_failed else 0)
+    assert payload["queryFailed"] is query_failed
+    assert payload["installed"] is False
 
 
 def test_doctor_is_read_only_and_reports_prerequisites(tmp_path: Path) -> None:

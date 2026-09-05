@@ -9,16 +9,18 @@
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b --pretty false",
     "lint": "eslint . && node --check public/sw.js",
-    "test": "vitest run"
+    "test": "vitest run",
+    "office:assets": "python ../../scripts/sync-office-assets.py",
+    "prebuild": "pnpm office:assets"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
-    "vite": "latest",
-    "typescript": "~5.9.3",
-    "typescript-eslint": "latest",
     "react": "latest",
     "react-dom": "latest",
-    "react-router-dom": "latest"
+    "react-router-dom": "latest",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "latest",
+    "vite": "latest"
   },
   "devDependencies": {
     "@eslint/js": "latest",
@@ -32,6 +34,8 @@
     "eslint-plugin-react-refresh": "latest",
     "globals": "latest",
     "jsdom": "latest",
-    "vitest": "latest"
+    "playwright": "1.62.1",
+    "vitest": "latest",
+    "@types/node": "22.20.1"
   }
 }

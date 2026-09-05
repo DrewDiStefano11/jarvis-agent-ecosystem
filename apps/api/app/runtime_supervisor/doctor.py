@@ -172,6 +172,7 @@ def run_doctor(config: SupervisorConfig) -> dict[str, Any]:
                 and isinstance(identity, str)
                 and process_identity(pid) == identity
                 and process_owns_port(pid, port)
+                and process_identity(pid) == identity
             )
         status = "pass" if available or child_owned else "fail"
         detail = (

@@ -83,15 +83,35 @@ SHUTDOWN_CONFIRMATION_OVERHEAD_SECONDS = 10
 
 def process_owns_port(pid: int, port: int) -> bool:
     try:
-        connections = psutil.Process(pid).net_connections(kind="tcp")
+        process = psutil.Process(pid)
+        # Windows virtual-environment launchers keep the interpreter in a direct
+        # child. psutil binds each Process to its PID and creation time; check
+        # that identity and the direct parent again after inspecting the socket.
+        candidates = [process, *process.children()]
     except (psutil.Error, OSError):
         return False
-    return any(
-        connection.status == psutil.CONN_LISTEN
-        and connection.laddr
-        and connection.laddr.port == port
-        for connection in connections
-    )
+    for candidate in candidates:
+        try:
+            if not process.is_running() or not candidate.is_running():
+                continue
+            if candidate != process and candidate.parent() != process:
+                continue
+            owns_port = any(
+                connection.status == psutil.CONN_LISTEN
+                and connection.laddr
+                and connection.laddr.port == port
+                for connection in candidate.net_connections(kind="tcp")
+            )
+            if (
+                owns_port
+                and process.is_running()
+                and candidate.is_running()
+                and (candidate == process or candidate.parent() == process)
+            ):
+                return True
+        except (psutil.Error, OSError):
+            continue
+    return False
 
 
 def _git_sha(repository: Path) -> str | None:
@@ -447,11 +467,13 @@ class RuntimeSupervisor:
         result = self.probe(url, expect_json=managed.definition.health_json, timeout=2)
         process = managed.process
         port = urlsplit(url).port
-        if (
-            result.available
-            and process is not None
-            and port is not None
-            and not self.port_owner(process.pid, port)
+        if result.available and (
+            process is None
+            or port is None
+            or managed.process_identity is None
+            or process_identity(process.pid) != managed.process_identity
+            or not self.port_owner(process.pid, port)
+            or process_identity(process.pid) != managed.process_identity
         ):
             result = HealthResult(False, "unavailable", "endpoint not owned by managed process")
         if managed.definition.name == "api":

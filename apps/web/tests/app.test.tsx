@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
-import { beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import App from '../src/App'
 import { AppStoreProvider } from '../src/state/AppStore'
 import type { Agent, Approval, Artifact, AuditEvent, Department, Notification, SystemStatus, Task } from '../src/types/contracts'
@@ -37,6 +37,7 @@ describe('Jarvis interface',()=>{
  test('mobile navigation exposes every destination including Office and System',async()=>{renderApp();const navigation=await screen.findByRole('navigation',{name:'Mobile primary'});expect(navigation).toBeInTheDocument();expect(navigation.querySelector('a[href="/office"]')).toBeInTheDocument();expect(navigation.querySelector('a[href="/system"]')).toBeInTheDocument()})
  test('offline browser state is announced',async()=>{renderApp();await screen.findByText('Good evening, operator.');act(()=>window.dispatchEvent(new Event('offline')));expect(screen.getAllByText('offline').length).toBeGreaterThan(0)})
  test('office uses shared agents and opens shared detail',async()=>{renderApp();window.history.pushState({},'','/office');await act(async()=>window.dispatchEvent(new PopStateEvent('popstate')));await userEvent.click(await screen.findByRole('button',{name:/Jarvis/}));expect(screen.getByRole('dialog',{name:'Jarvis'})).toBeInTheDocument()})
+ test('candidate inspection enables visible review rendering',async()=>{window.history.pushState({},'','/office');renderApp();await userEvent.click(await screen.findByLabelText('Inspect candidate geometry'));expect(document.querySelector('.office-viewport-shell')).toHaveClass('office-viewport-shell--candidate')})
  test('agent drawer traps focus, closes with Escape, and restores its trigger',async()=>{renderApp();await screen.findByText('Good evening, operator.');await userEvent.click(screen.getAllByRole('link',{name:'Agents'})[0]!);const trigger=screen.getByRole('button',{name:'Open Jarvis'});await userEvent.click(trigger);const close=screen.getByRole('button',{name:'Close agent details'});expect(close).toHaveFocus();await userEvent.keyboard('{Shift>}{Tab}{/Shift}');expect(document.activeElement).toBe(close);await userEvent.keyboard('{Escape}');expect(screen.queryByRole('dialog',{name:'Jarvis'})).not.toBeInTheDocument();expect(trigger).toHaveFocus()})
  test('duplicate websocket sequence is ignored',async()=>{renderApp();await screen.findByText('Good evening, operator.');const before=vi.mocked(fetch).mock.calls.length;const event={eventId:'e1',schemaVersion:'1',eventType:'noop',timestamp:now,sequenceNumber:2,correlationId:'c',taskId:null,agentId:null,source:'test',payload:{}};act(()=>{FakeWebSocket.instances[0]!.emit(event);FakeWebSocket.instances[0]!.emit(event)});await waitFor(()=>expect(vi.mocked(fetch).mock.calls.length).toBe(before+8))})
  test('out-of-order websocket event triggers HTTP resynchronization',async()=>{renderApp();await screen.findByText('Good evening, operator.');const before=vi.mocked(fetch).mock.calls.length;act(()=>FakeWebSocket.instances[0]!.emit({eventId:'e9',schemaVersion:'1',eventType:'noop',timestamp:now,sequenceNumber:9,correlationId:'c',taskId:null,agentId:null,source:'test',payload:{}}));await waitFor(()=>expect(vi.mocked(fetch).mock.calls.length).toBeGreaterThan(before))})
@@ -52,4 +53,160 @@ describe('WebSocket session cursors',()=>{
  test('session gaps resynchronize without pinning the stale cursor',async()=>{renderApp();await screen.findByText('Good evening, operator.');const socket=FakeWebSocket.instances[0]!;const before=vi.mocked(fetch).mock.calls.length;act(()=>{socket.emit(event('a-1',1,'runtime-a','agent_runtime'));socket.emit(event('b-1',1,'runtime-b','agent_runtime'));socket.emit(event('a-3',3,'runtime-a','agent_runtime'));socket.emit(event('b-2',2,'runtime-b','agent_runtime'));socket.emit(event('a-4',4,'runtime-a','agent_runtime'))});await waitFor(()=>expect(vi.mocked(fetch).mock.calls.length).toBe(before+40));expect(socket.sent).toContain('resync')})
  test('legacy session and reconnect cursor reset are bounded',async()=>{renderApp();await screen.findByText('Good evening, operator.');let socket=FakeWebSocket.instances[0]!;const before=vi.mocked(fetch).mock.calls.length;act(()=>{socket.emit(event('legacy-2',2,null));socket.emit(event('legacy-dup',2,null))});await waitFor(()=>expect(vi.mocked(fetch).mock.calls.length).toBe(before+8));act(()=>socket.onclose?.());await waitFor(()=>expect(FakeWebSocket.instances.length).toBeGreaterThan(1),{timeout:3000});socket=FakeWebSocket.instances[1]!;const afterReconnect=vi.mocked(fetch).mock.calls.length;act(()=>socket.emit(event('runtime-high',20,'runtime-reconnected','agent_runtime')));await waitFor(()=>expect(vi.mocked(fetch).mock.calls.length).toBe(afterReconnect+8))})
  test('many runtime sessions do not break simulator sequence tracking',async()=>{renderApp();await screen.findByText('Good evening, operator.');const socket=FakeWebSocket.instances[0]!;const before=vi.mocked(fetch).mock.calls.length;const snapshotPayload={snapshot:{departments,agents,tasks,approvals,artifacts,auditEvents,notifications,emergencyStop:false},system};act(()=>{socket.emit(event('sim-1',1,'simulator'));for(let index=0;index<101;index+=1)socket.emit({...event(`runtime-${index}`,1,`runtime-${index}`,'agent_runtime'),eventType:'system.snapshot',payload:snapshotPayload});socket.emit(event('sim-2',2,'simulator'))});await waitFor(()=>expect(vi.mocked(fetch).mock.calls.length).toBe(before+16))})
+})
+
+describe('Local planning integration', () => {
+ test('readiness and authorized durable results appear in the planning workspace', async () => {
+  const identity = { id: 'actor-real', display_name: 'Local planner', stable_key: 'local-planner', lifecycle_state: 'active', operational_status: 'idle', is_enabled: true, agent_type: 'worker' }
+  endpointData['/api/identity/agents'] = [identity]
+  endpointData['/api/agent-runtime/runs'] = { items: [], next_offset: null, total_count: 0 }
+  endpointData['/api/model-executions'] = [{ executionId: 'execution-real', runtimeRunId: 'run-real', runtimeAttemptId: 'attempt-real', taskId: tasks[0]!.id, targetAgentId: identity.id, workerId: 'worker-real', stage: 'completed', provider: 'ollama', model: 'configured-local', requestCount: 1, failureCode: null, result: { summary: 'Persisted planning output', analysis: 'A real stored result is visible.', recommendations: [], risks: [], assumptions: [], missingInformation: [], requiresHumanReview: false } }]
+  window.history.pushState({}, '', '/runtime')
+  renderApp()
+  await screen.findByRole('heading', { name: 'Planning workspace' })
+  expect(screen.getByRole('button', { name: 'Queue local plan' })).toBeDisabled()
+  await waitFor(() => expect(screen.getByLabelText('Act as local identity')).toHaveTextContent('Local planner'))
+  await userEvent.selectOptions(screen.getByLabelText('Act as local identity'), 'actor-real')
+  await userEvent.selectOptions(screen.getByLabelText('Task and history'), tasks[0]!.id)
+  expect(await screen.findByText('Persisted planning output')).toBeInTheDocument()
+  expect(vi.mocked(fetch).mock.calls.some(([, init]) => (init?.headers as Record<string, string>)?.['X-Jarvis-Actor-Id'] === 'actor-real')).toBe(true)
+  await userEvent.selectOptions(screen.getByLabelText('Act as local identity'), '')
+  expect(screen.queryByText('Persisted planning output')).not.toBeInTheDocument()
+  delete endpointData['/api/identity/agents']; delete endpointData['/api/agent-runtime/runs']; delete endpointData['/api/model-executions']
+ })
+ test('task creation failure remains visible and retains the form', async () => {
+  window.history.pushState({}, '', '/tasks'); renderApp()
+  await screen.findByRole('button', { name: '+ New task' })
+  await userEvent.click(screen.getByRole('button', { name: '+ New task' }))
+  await userEvent.type(screen.getByLabelText('Title'), 'Plan next milestone')
+  await userEvent.type(screen.getByLabelText('Description'), 'Produce a bounded plan for the next milestone.')
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (input, init) => init?.method === 'POST' ? ({ ok: false, status: 503, json: async () => ({ error: { code: 'UNAVAILABLE', message: 'Backend temporarily unavailable' } }) } as Response) : original(input, init))
+  await userEvent.click(screen.getByRole('button', { name: 'Create task' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Backend temporarily unavailable')
+  expect(screen.getByLabelText('Title')).toHaveValue('Plan next milestone')
+ })
+})
+
+describe('operator control failures', () => {
+ test('failed emergency stop remains visible and releases its control', async () => {
+  renderApp(); await screen.findByText('Good evening, operator.')
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (input, init) => init?.method === 'POST' ? ({ ok: false, status: 503, json: async () => ({ error: { code: 'UNAVAILABLE', message: 'Stop was not accepted' } }) } as Response) : original(input, init))
+  await userEvent.click(screen.getByRole('button', { name: 'Emergency stop' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Stop was not accepted')
+  expect(screen.getByRole('button', { name: 'Emergency stop' })).toBeEnabled()
+ })
+ test('task cancellation reaches the authoritative endpoint and reports failure', async () => {
+  window.history.pushState({}, '', '/tasks'); renderApp()
+  await userEvent.click(await screen.findByRole('button', { name: 'Open Caribbean recommendation' }))
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (input, init) => init?.method === 'POST' ? ({ ok: false, status: 409, json: async () => ({ error: { code: 'CONFLICT', message: 'Task already completed' } }) } as Response) : original(input, init))
+  await userEvent.click(screen.getByRole('button', { name: 'Cancel task' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('Task already completed')
+  expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url).endsWith('/api/tasks/task-parent/cancel') && init?.method === 'POST')).toBe(true)
+ })
+})
+
+test('explicit task setup selects the provisioned identity without queueing inference', async () => {
+ endpointData['/api/tasks'] = tasks.map(task => ({ ...task, status: 'queued' }))
+ endpointData['/api/identity/agents'] = [{ id: 'actor-prepared', display_name: 'Local planner', lifecycle_state: 'active', is_enabled: true }]
+ endpointData['/api/local-planning/setup'] = { actorId: 'actor-prepared', workerActorConfigured: true, executionEnabledBySetup: false }
+ endpointData['/api/agent-runtime/runs'] = { items: [], next_offset: null, total_count: 0 }
+ try {
+  window.history.pushState({}, '', '/runtime'); renderApp()
+  await screen.findByRole('heading', { name: 'Planning workspace' })
+  await userEvent.selectOptions(screen.getByLabelText('Task and history'), tasks[0]!.id)
+  await userEvent.click(screen.getByRole('button', { name: 'Prepare local planner for this task' }))
+  expect(await screen.findByText('Local planner prepared for this task. Queue the plan when ready.')).toBeInTheDocument()
+  expect(screen.getByLabelText('Act as local identity')).toHaveValue('actor-prepared')
+  expect(screen.getByLabelText('Target agent')).toHaveValue('actor-prepared')
+  expect(screen.getByRole('button', { name: 'Queue local plan' })).toBeDisabled()
+  expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url).endsWith('/api/local-planning/setup') && init?.body === JSON.stringify({ taskId: tasks[0]!.id }))).toBe(true)
+  expect(vi.mocked(fetch).mock.calls.some(([url, init]) => String(url).endsWith('/api/agent-runtime/commands') && init?.method === 'POST')).toBe(false)
+ } finally {
+  endpointData['/api/tasks'] = tasks
+  delete endpointData['/api/identity/agents']; delete endpointData['/api/local-planning/setup']; delete endpointData['/api/agent-runtime/runs']
+ }
+})
+
+describe('planning worker identity', () => {
+ const worker = { enabled: true, modelExecutionMode: 'local_only', workerActorId: 'worker-a', status: 'healthy', reasonCode: null, activeExecutionCount: 0, queuedEligibleRuntimeCount: 0, completedExecutionCount: 0, failedExecutionCount: 0, reviewRequiredCount: 0, providerReady: true, lastWorkerHeartbeat: now, lastSuccessfulExecutionAt: null }
+ const originalCrypto = globalThis.crypto
+ beforeEach(() => {
+  endpointData['/api/tasks'] = tasks.map(task => ({ ...task, status: 'queued' }))
+  endpointData['/api/system/status'] = { ...system, autonomousWorker: worker }
+  endpointData['/api/identity/agents'] = ['worker-a', 'actor-b'].map(id => ({ id, display_name: id === 'worker-a' ? 'Configured worker' : 'Other operator', stable_key: id, lifecycle_state: 'active', is_enabled: true, operational_status: 'idle', agent_type: 'worker' }))
+  endpointData['/api/agent-runtime/runs'] = { items: [], next_offset: null, total_count: 0 }
+  endpointData['/api/model-executions'] = []
+  vi.stubGlobal('crypto', { randomUUID: () => 'planning-test', subtle: { digest: async () => new Uint8Array([1, 2]).buffer } })
+ })
+ afterEach(() => {
+  endpointData['/api/tasks'] = tasks
+  endpointData['/api/system/status'] = system
+  delete endpointData['/api/identity/agents']; delete endpointData['/api/agent-runtime/runs']; delete endpointData['/api/model-executions']
+  vi.stubGlobal('crypto', originalCrypto)
+ })
+ const openPlanning = async () => {
+  window.history.pushState({}, '', '/runtime'); renderApp()
+  await waitFor(() => expect(screen.getByLabelText('Act as local identity')).toHaveTextContent('Other operator'))
+  await userEvent.selectOptions(screen.getByLabelText('Act as local identity'), 'actor-b')
+  await userEvent.selectOptions(screen.getByLabelText('Target agent'), 'actor-b')
+  await userEvent.selectOptions(screen.getByLabelText('Task and history'), tasks[0]!.id)
+ }
+ const acceptPlanningCommands = (failQueue = false) => {
+  const original = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+   const path = new URL(String(input)).pathname
+   if (init?.method === 'POST' && path === '/api/context/assemblies') return { ok: true, status: 200, json: async () => ({ data: { id: 'context-test', status: 'completed' } }) } as Response
+   if (init?.method === 'POST' && path === '/api/agent-runtime/commands') {
+    const body = JSON.parse(String(init.body))
+    if (failQueue && body.command_type === 'queue') return { ok: false, status: 503, json: async () => ({ error: { code: 'UNAVAILABLE', message: 'Queue response unavailable' } }) } as Response
+    return { ok: true, status: 200, json: async () => ({ data: { snapshot: { specification: { run_id: 'run-planning-test' }, version: 1, state: body.command_type === 'queue' ? 'queued' : 'created' } } }) } as Response
+   }
+   return original(input, init)
+  })
+ }
+ test('blocks another submitter, then queues as the explicitly selected worker without changing the target or grants', async () => {
+  acceptPlanningCommands()
+  await openPlanning()
+  expect(screen.getByText(/Select the configured worker identity to queue a plan/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Queue local plan' })).toBeDisabled()
+  await userEvent.click(screen.getByRole('button', { name: 'Queue local plan' }))
+  expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+  await userEvent.click(screen.getByRole('button', { name: 'Use configured worker identity' }))
+  expect(screen.getByLabelText('Act as local identity')).toHaveValue('worker-a')
+  expect(screen.getByLabelText('Target agent')).toHaveValue('actor-b')
+  await userEvent.click(screen.getByRole('button', { name: 'Queue local plan' }))
+  expect(await screen.findByText(/Queued run-planning-test/)).toBeInTheDocument()
+  const commands = vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url).endsWith('/api/agent-runtime/commands') && init?.method === 'POST')
+  expect(commands).toHaveLength(2)
+  for (const [, init] of commands) {
+   expect(init?.headers).toMatchObject({ 'X-Jarvis-Actor-Id': 'worker-a' })
+   expect(JSON.parse(String(init?.body))).toMatchObject({ actor_reference: 'worker-a' })
+  }
+  expect(JSON.parse(String(commands[0]![1]?.body)).specification.agent_id).toBe('actor-b')
+  expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('/api/local-planning/setup'))).toBe(false)
+ })
+ test('does not allow global readiness to enable submission when worker identity is unconfigured', async () => {
+  endpointData['/api/system/status'] = { ...system, autonomousWorker: { ...worker, workerActorId: null } }
+  await openPlanning()
+  expect(screen.getByText(/Configure JARVIS_AUTONOMOUS_WORKER_ACTOR_ID/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Queue local plan' })).toBeDisabled()
+  expect(screen.queryByRole('button', { name: 'Use configured worker identity' })).not.toBeInTheDocument()
+ })
+ test('blocks retrying an old submission when the configured worker changes', async () => {
+  acceptPlanningCommands(true)
+  await openPlanning()
+  await userEvent.click(screen.getByRole('button', { name: 'Use configured worker identity' }))
+  await userEvent.click(screen.getByRole('button', { name: 'Queue local plan' }))
+  expect(await screen.findByText('Queue response unavailable')).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Retry same submission' })).toBeEnabled()
+  endpointData['/api/system/status'] = { ...system, autonomousWorker: { ...worker, workerActorId: 'actor-b' } }
+  act(() => FakeWebSocket.instances[0]!.emit({ eventId: 'worker-change', schemaVersion: '1', eventType: 'noop', timestamp: now, sequenceNumber: 1, correlationId: 'worker-change', taskId: null, agentId: null, source: 'test', payload: {} }))
+  expect(await screen.findByText(/The configured worker identity changed/)).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Retry same submission' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Use configured worker identity' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: 'Clear submission form' })).toBeEnabled()
+ })
 })

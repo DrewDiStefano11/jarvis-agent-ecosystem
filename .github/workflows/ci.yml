@@ -1,8 +1,12 @@
 name: Phase 2A durable control-plane checks
 on: [push, pull_request]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
 jobs:
   backend:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -31,8 +35,11 @@ jobs:
         working-directory: apps/api
   frontend:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
       - uses: pnpm/action-setup@v4
         with: {version: '11'}
       - uses: actions/setup-node@v4
@@ -49,6 +56,7 @@ jobs:
         working-directory: apps/web
   repository-integrity:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Reject tracked runtime and generated artifacts
@@ -65,3 +73,35 @@ jobs:
             $forbidden | ForEach-Object { Write-Error "Forbidden tracked artifact: $_" }
             throw "Generated or sensitive runtime artifacts are tracked."
           }
+
+  runtime-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - uses: pnpm/action-setup@v4
+        with: {version: '11'}
+      - uses: actions/setup-node@v4
+        with: {node-version: '22', cache: pnpm, cache-dependency-path: apps/web/pnpm-lock.yaml}
+      - run: python -m pip install -e './apps/api[dev]'
+      - run: ruff format scripts --check
+      - run: ruff check scripts
+      - run: pnpm --dir apps/web install --frozen-lockfile
+      - run: pnpm --dir apps/web office:assets
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: apps/web
+      - name: Real process and frontend submission contract
+        run: python scripts/smoke-local-planning.py
+      - name: Browser golden path and office interaction checks
+        run: python scripts/smoke-local-planning.py
+        env:
+          JARVIS_SMOKE_BROWSER: 'true'
+          SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/jarvis-browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jarvis-browser-evidence
+          path: ${{ runner.temp }}/jarvis-browser
+          if-no-files-found: warn

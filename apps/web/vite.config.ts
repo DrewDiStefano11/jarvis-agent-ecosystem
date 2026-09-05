@@ -1,6 +1,7 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
 import { loadEnv, type Plugin } from 'vite'
+import { resolve } from 'node:path'
 
 export const buildEndpoint = (value: string | undefined, fallback: string): string =>
   value ?? fallback
@@ -15,13 +16,7 @@ export const buildEndpoints = (env: Record<string, string | undefined>) => {
   }
 }
 
-const runtimeMetadata = (mode: string): Plugin => {
-  const env = {
-    ...loadEnv(mode, '../..', ''),
-    ...loadEnv(mode, '../api', ''),
-    ...loadEnv(mode, '.', '')
-  }
-  const { apiBaseUrl, webSocketUrl } = buildEndpoints(env)
+const runtimeMetadata = ({ apiBaseUrl, webSocketUrl }: ReturnType<typeof buildEndpoints>): Plugin => {
   return {
     name: 'jarvis-runtime-metadata',
     generateBundle() {
@@ -34,9 +29,24 @@ const runtimeMetadata = (mode: string): Plugin => {
   }
 }
 
+export const runtimeBuildConfig = (mode: string, webDirectory = process.cwd()) => {
+  const endpoints = buildEndpoints({
+    ...loadEnv(mode, resolve(webDirectory, '../..'), ''),
+    ...loadEnv(mode, resolve(webDirectory, '../api'), ''),
+    ...loadEnv(mode, webDirectory, '')
+  })
+  return {
+    plugins: [react(), runtimeMetadata(endpoints)],
+    define: {
+      'import.meta.env.VITE_API_BASE_URL': JSON.stringify(endpoints.apiBaseUrl),
+      'import.meta.env.VITE_WS_URL': JSON.stringify(endpoints.webSocketUrl)
+    }
+  }
+}
+
 export default defineConfig(({ mode }) => {
   return {
-    plugins: [react(), runtimeMetadata(mode)],
+    ...runtimeBuildConfig(mode),
     server: { port: 5173 },
     test: { environment: 'jsdom', setupFiles: './tests/setup.ts', globals: true, css: true }
   }

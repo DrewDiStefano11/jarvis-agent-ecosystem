@@ -45,6 +45,11 @@ ACTIVE_EXECUTION_STAGES = {
     ModelExecutionStage.FINALIZATION_PENDING.value,
 }
 
+# Durable marker for an attempt whose persisted plan was reviewed and returned
+# for one bounded revision cycle.
+REVISION_REQUESTED_FAILURE_CODE = "review_revision_requested"
+REVISION_EXHAUSTED_FAILURE_CODE = "review_revision_exhausted"
+
 
 def canonical_json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
@@ -164,20 +169,64 @@ class ModelExecutionRepository:
             {
                 AgentRunState.CLAIMED,
                 AgentRunState.STARTING,
-            }
+            },
+            filters=(
+                ~exists().where(
+                    and_(
+                        ModelExecutionRow.runtime_run_id == AgentRuntimeRunRow.run_id,
+                        or_(
+                            ModelExecutionRow.stage.in_(ACTIVE_EXECUTION_STAGES),
+                            ModelExecutionRow.runtime_attempt_id
+                            == AgentRuntimeRunRow.active_attempt_id,
+                        ),
+                    )
+                ),
+            ),
+        )
+
+    def iter_revision_cycle_pages(self) -> Iterator[list[AgentRunSnapshot]]:
+        """Yield runs owed exactly one bounded review-revision planning cycle.
+
+        A candidate is a blocked autonomous run whose durable execution history
+        contains a review-revision marker and no still-active execution row, so
+        the next deterministic attempt cannot duplicate live work.
+        """
+
+        yield from self._iter_runtime_recovery_pages(
+            {AgentRunState.BLOCKED},
+            filters=(
+                exists().where(
+                    and_(
+                        ModelExecutionRow.runtime_run_id == AgentRuntimeRunRow.run_id,
+                        ModelExecutionRow.failure_code == REVISION_REQUESTED_FAILURE_CODE,
+                    )
+                ),
+                ~exists().where(
+                    and_(
+                        ModelExecutionRow.runtime_run_id == AgentRuntimeRunRow.run_id,
+                        ModelExecutionRow.stage.in_(ACTIVE_EXECUTION_STAGES),
+                    )
+                ),
+            ),
         )
 
     def _iter_runtime_recovery_pages(
         self,
         states: set[AgentRunState],
+        *,
+        filters: tuple[Any, ...] | None = None,
     ) -> Iterator[list[AgentRunSnapshot]]:
         cursor: tuple[datetime, str] | None = None
         page_size = 100
+        if filters is None:
+            filters = (
+                ~exists().where(ModelExecutionRow.runtime_run_id == AgentRuntimeRunRow.run_id),
+            )
         while True:
             with self.sessions() as session:
                 query = select(AgentRuntimeRunRow).where(
                     AgentRuntimeRunRow.state.in_([state.value for state in states]),
-                    ~exists().where(ModelExecutionRow.runtime_run_id == AgentRuntimeRunRow.run_id),
+                    *filters,
                 )
                 if cursor is not None:
                     created_at, run_id = cursor
@@ -317,6 +366,7 @@ class ModelExecutionRepository:
                 lease_token,
                 now,
             )
+            self._require_target_active(session, snapshot.specification.agent_id)
             existing = session.get(ModelExecutionRow, execution_id)
             if existing is not None:
                 return self._contract(existing)
@@ -363,6 +413,24 @@ class ModelExecutionRepository:
         with self.sessions() as session:
             row = session.get(ModelExecutionRow, execution_id)
             return None if row is None else self._contract(row)
+
+    def count_for_run(self, run_id: str) -> int:
+        """Return the number of durable planning attempts recorded for one run.
+
+        This is the authoritative revision-cycle index: exactly one execution row
+        exists per deterministic runtime attempt, so the count identifies the next
+        attempt without inspecting "latest" result content.
+        """
+
+        with self.sessions() as session:
+            return int(
+                session.scalar(
+                    select(func.count())
+                    .select_from(ModelExecutionRow)
+                    .where(ModelExecutionRow.runtime_run_id == run_id)
+                )
+                or 0
+            )
 
     def list_for_task(self, task_id: str) -> list[ModelExecutionResult]:
         with self.sessions() as session:
@@ -483,6 +551,21 @@ class ModelExecutionRepository:
             lease_token=lease_token,
         )
 
+    def assert_advance_allowed(
+        self, execution_id: str, *, worker_id: str, lease_token: str
+    ) -> None:
+        """Revalidate emergency stop, exact lease ownership, and target eligibility.
+
+        The target identity row is locked for the duration of the check so a
+        suspension racing a durable orchestration advance fails closed instead of
+        being observed as stale eligibility.
+        """
+
+        now = datetime.now(UTC)
+        with self._write() as session:
+            row = self._require_row(session, execution_id)
+            self._require_fence(session, row, worker_id, lease_token, now)
+
     def mark_completed(self, execution_id: str) -> ModelExecutionResult:
         now = datetime.now(UTC)
         with self._write() as session:
@@ -537,18 +620,27 @@ class ModelExecutionRepository:
 
     def iter_recoverable_result_pages(
         self,
+        *,
+        skip_corrupt: bool = False,
     ) -> Iterator[list[ModelExecutionResult]]:
-        yield from self._iter_recoverable_pages(result_persisted=True)
+        yield from self._iter_recoverable_pages(
+            result_persisted=True,
+            skip_corrupt=skip_corrupt,
+        )
 
     def iter_recoverable_uncommitted_pages(
         self,
     ) -> Iterator[list[ModelExecutionResult]]:
-        yield from self._iter_recoverable_pages(result_persisted=False)
+        yield from self._iter_recoverable_pages(
+            result_persisted=False,
+            skip_corrupt=False,
+        )
 
     def _iter_recoverable_pages(
         self,
         *,
         result_persisted: bool,
+        skip_corrupt: bool,
     ) -> Iterator[list[ModelExecutionResult]]:
         cursor: tuple[datetime, str] | None = None
         page_size = 100
@@ -594,7 +686,17 @@ class ModelExecutionRepository:
                         ).limit(page_size)
                     )
                 )
-                contracts = [self._contract(row) for row in rows]
+                contracts: list[ModelExecutionResult] = []
+                for row in rows:
+                    if not skip_corrupt:
+                        contracts.append(self._contract(row))
+                        continue
+                    try:
+                        contracts.append(self._contract(row))
+                    except (AutonomousWorkerError, ValidationError):
+                        # Health remains degraded for corrupt results, but one bad
+                        # candidate must not starve later rows in this bounded page.
+                        continue
             if not rows:
                 return
             yield contracts
@@ -630,6 +732,7 @@ class ModelExecutionRepository:
                 or lease.expires_at.replace(tzinfo=UTC) <= now
             ):
                 raise AutonomousWorkerError("EXECUTION_LEASE_LOST")
+            self._require_target_active(session, row.target_agent_id)
             row.worker_id = worker_id
             row.task_attempt_number = task_attempt_number
             row.lease_token_fingerprint = sha256(lease_token.encode()).hexdigest()
@@ -889,6 +992,15 @@ class ModelExecutionRepository:
         now: datetime,
     ) -> None:
         cls._require_task_fence(session, row.task_id, worker_id, lease_token, now)
+        cls._require_target_active(session, row.target_agent_id)
+
+    @staticmethod
+    def _require_target_active(session: Session, agent_id: str) -> None:
+        target = session.scalar(
+            select(IdentityAgentRow).where(IdentityAgentRow.id == agent_id).with_for_update()
+        )
+        if target is None or target.lifecycle_state != "active" or not target.is_enabled:
+            raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
 
     def _emit(
         self,

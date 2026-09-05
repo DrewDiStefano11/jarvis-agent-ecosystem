@@ -31,6 +31,11 @@ PID to be terminated. Lock, state, and stop-request files stay in a repository-k
 directory under local application data even when the configurable runtime home changes, so operator
 commands cannot lose or duplicate a running installation.
 
+Health probes verify that the listening socket belongs to the managed process or its live direct
+child, accommodating the Windows virtual-environment Python launcher. Parent and child creation
+identities and the direct lineage are checked again after socket inspection; a reused PID or
+unrelated healthy endpoint does not establish ownership.
+
 On Windows, the detached supervisor allocates a hidden console for process-group shutdown signals,
 and children enter a kill-on-close Job Object. Normal stop is still graceful: the supervisor signals
 worker, web, and API in reverse order, waits the configured grace period, and forces only a child it
@@ -50,8 +55,11 @@ Set-Location ..\..
 ```
 
 The build emits `dist/runtime-supervisor.json` with the API and WebSocket endpoints compiled into
-the browser bundle. Start refuses a missing or mismatched metadata file, so changing an API bind or
-Vite endpoint requires another `pnpm build` before the supervisor can launch the preview server.
+the browser bundle. Both use the same endpoint values loaded from repository, API, and web `.env`
+files, with process environment values taking precedence. A new start refuses a missing or mismatched
+metadata file, so changing an API bind or Vite endpoint requires another `pnpm build` before the
+supervisor can launch the preview server. Repeated start returns the already-running supervisor
+without validating a replacement build; restart validates that build before stopping the current one.
 
 The supervisor uses the repository virtual environment at
 `apps\api\.venv\Scripts\python.exe`, the installed Vite JavaScript entry point, and the system Node
@@ -199,6 +207,10 @@ singleton authority.
 This is a **user-logon** trigger. It does not start before login and does not claim machine-service
 availability. Installation normally needs no administrator rights. Organization policy can disable
 Task Scheduler registration; doctor/status report that condition without changing policy.
+
+Installation succeeds only after a follow-up query confirms the task exists. `autostart status`
+includes `queryFailed` in JSON output and exits nonzero when the scheduler query fails, so an
+unavailable scheduler remains distinguishable from a failed query.
 
 ## Configuration
 
