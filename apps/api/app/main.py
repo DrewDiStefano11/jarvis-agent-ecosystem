@@ -127,9 +127,7 @@ async def _lifespan(app: FastAPI):
                 await broker.dispatch_pending()
 
     try:
-        repository._system.last_successful_startup = datetime.now(UTC)
-        repository._system.startup_was_clean = False
-        repository.persist()
+        repository.record_process_lifecycle(starting=True)
         await broker.dispatch_pending()
         await broker.start_dispatcher(settings.outbox_poll_interval_ms)
         database_reachable, schema_current = repository.health_probe(DATABASE_REVISION)
@@ -158,9 +156,7 @@ async def _lifespan(app: FastAPI):
                 pass
         await broker.stop_dispatcher()
         if startup_completed:
-            repository._system.last_clean_shutdown = datetime.now(UTC)
-            repository._system.startup_was_clean = True
-            repository.persist()
+            repository.record_process_lifecycle(starting=False)
         app.state.engine.dispose()
 
 

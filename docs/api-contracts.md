@@ -46,3 +46,9 @@ Health additively reports context readiness/count. System status additively repo
 Phase 2B workers register a stable `instanceId`, then acquire an eligible task before processing it. Acquisition returns the compatible task plus a capability-bearing `leaseToken`; only the matching worker/token pair may renew, release, complete, or fail that attempt. Tokens are never placed in audit or event payloads—only a one-way fingerprint is recorded. A stale, expired, cancelled, or superseded token returns `TASK_LEASE_LOST` (409). Repeating a successful completion with the same attempt token is idempotent.
 
 Workers in `draining` state cannot acquire work and release their active leases. Cancellation atomically revokes an active lease before returning. Acquisition returns `data: null` for an empty or dependency-blocked queue. Lease duration defaults to `JARVIS_TASK_LEASE_SECONDS`; callers may request a bounded override. Health and system status add active worker, active lease, expired lease, and stale worker counts without changing existing fields.
+
+New autonomous runtime create/queue commands require the durable task to remain
+`queued` or `retrying` within the command transaction. Otherwise they return
+`AUTONOMOUS_TASK_NOT_READY` (409) without a run/event/audit/idempotency mutation.
+Already accepted command IDs remain replayable after task completion. General
+runtime commands without autonomous execution keep their existing behavior.

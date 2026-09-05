@@ -230,6 +230,23 @@ class SqlAlchemyRepository:
                 raise DomainError("TASK_NOT_FOUND", "The task was not found.", 404)
             return Task.model_validate(row.payload)
 
+    def record_process_lifecycle(self, *, starting: bool) -> None:
+        """Record API lifecycle without flushing cached worker-owned state."""
+
+        now = datetime.now(UTC)
+        values = {
+            "updated_at": now,
+            "startup_was_clean": not starting,
+            "last_successful_startup" if starting else "last_clean_shutdown": now,
+        }
+        with UnitOfWork(self.session_factory) as uow:
+            assert uow.session is not None
+            uow.session.execute(
+                update(SystemStateRow).where(SystemStateRow.id == 1).values(**values)
+            )
+        for key, value in values.items():
+            setattr(self._system, key, value)
+
     def persist(self) -> None:
         try:
             with UnitOfWork(self.session_factory) as uow:

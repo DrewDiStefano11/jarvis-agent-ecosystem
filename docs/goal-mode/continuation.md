@@ -63,3 +63,35 @@ its recovery corrections will arrive from #56 before #55 is integrated.
   integrated product, and record the final SHA, CI/review and clean-tree evidence.
 
 This is an execution checkpoint, not a completion claim.
+
+## Follow-up runtime safeguards
+
+The next review found that a pending form could bypass the current task's
+eligibility. Submission and retry now require the shared, current task to remain
+queued or retrying; its original command IDs stay intact while the form is held.
+Terminal or review-paused tasks direct the operator to history and form clearing.
+The durable command transaction also rejects new autonomous create/queue commands
+for unclaimable tasks while preserving replay of already accepted commands.
+
+Independent restart tests also reproduced an older lifecycle defect: API startup
+and shutdown flushed cached task and system state over separate-worker updates.
+Lifecycle bookkeeping now updates only its own system columns. Task results,
+project association, emergency-stop state and the event cursor survive both
+boundaries. These changes require fresh local validation, CI and review before
+the candidate merges.
+
+## Local database migration disclosure
+
+An additional baseline-check script imported `app.main` before selecting its
+temporary database. The module's default application initialization migrated the
+existing ignored `apps/api/data/jarvis.db` from `20260724_03` to `20260905_06`.
+This was an unintended QA side effect; it is separate from the isolated pytest
+and browser databases. No downgrade, restore or deletion was attempted.
+
+Read-only checks found SQLite integrity `ok`, no foreign-key violations, four
+demo tasks, five demo agents, and empty identity/runtime/model-execution/workflow
+tables. No workflow required recovery, and lifecycle timestamps remained from
+July. The applied upgrades add tables/indexes and widen an audit/outbox field;
+they contain no domain-data update, deletion or reseeding steps. No verified
+pre-import backup was found. Subsequent direct-import checks select an isolated
+database before importing the application.

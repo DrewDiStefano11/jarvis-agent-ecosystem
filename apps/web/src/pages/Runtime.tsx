@@ -28,7 +28,7 @@ export function Runtime() {
           : 'Select the configured worker identity to queue a plan. Other identities remain available for authorized history.'
         : null
   const canQueue = !busy && !identityBlock && Boolean(actorId && targetId && task)
-    && (Boolean(pending) || Boolean(task && ['queued', 'retrying'].includes(task.status)))
+    && Boolean(task && ['queued', 'retrying'].includes(task.status))
     && Boolean(worker?.enabled && worker.providerReady) && !system?.emergencyStop
   const prepare = async () => {
     if (!task || busy) return
@@ -75,6 +75,7 @@ export function Runtime() {
       <label>Task and history<select value={taskId} disabled={busy || Boolean(pending)} onChange={event => setTaskId(event.target.value)}><option value="">Select task</option>{tasks.map(item => <option key={item.id} value={item.id}>{item.title} · {item.status}</option>)}</select></label></div>
       {!active.length && <p>No active identities found. Select a task and prepare its local planner below.</p>}
       {identityBlock && <p role="status">{identityBlock}</p>}
+      {pending && task && !['queued', 'retrying'].includes(task.status) && <p role="status">This task is now {task.status}. Its saved submission cannot queue further work. Inspect runtime history and clear the form after confirming the original outcome.</p>}
       {workerActor && actorId !== workerActor.id && <p><button className="secondary" disabled={busy || Boolean(pending)} onClick={() => selectActor(workerActor.id)}>Use configured worker identity</button></p>}
       {task && <blockquote>{task.description}</blockquote>}
       <p><button className="secondary" disabled={busy || Boolean(pending) || !task || !['queued', 'retrying'].includes(task.status)} onClick={() => void prepare()}>Prepare local planner for this task</button></p>
