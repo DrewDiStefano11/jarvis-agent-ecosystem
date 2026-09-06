@@ -9,6 +9,8 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select, text
 
+from app.agent_runtime.authorization import RuntimeActorContext
+from app.agent_runtime.errors import RuntimeActorInactiveError, RuntimeActorNotFoundError
 from app.context.assembler import hash_content
 from app.db.models import (
     AgentRow,
@@ -176,7 +178,7 @@ def test_context_command_commits_record_audit_outbox_and_safe_event(tmp_path: Pa
             "totalAssemblies": 1,
             "completedAssemblies": 1,
             "reviewRequiredAssemblies": 0,
-            "includedSources": 1,
+            "includedSources": 6,
             "excludedSources": 0,
             "redactions": 1,
             "injectionFindings": 0,
@@ -476,13 +478,15 @@ def test_openapi_exposes_typed_context_contracts(tmp_path: Path) -> None:
 def test_client_cannot_forge_trusted_system_context_security_blocker(tmp_path, monkeypatch):
     url = database_url(tmp_path / "context-security.db")
     monkeypatch.setenv("JARVIS_AUTONOMOUS_WORKER_ENABLED", "false")
-    monkeypatch.setenv("JARVIS_WEB_ORIGIN", "http://localhost:5173")
+    monkeypatch.setenv("WEB_ORIGIN", "http://localhost:5173")
     app = create_app(database_url=url, delay_ms=1)
 
     with TestClient(app) as client:
-        task = client.post("/api/tasks", json={"title": "demo", "description": "demo"}).json()["data"]
+        task = client.post("/api/tasks", json={"title": "demo", "description": "demo"}).json()[
+            "data"
+        ]
         payload = context_body(task_id=task["id"])
-        
+
         # Attempt to forge TRUSTED_CONFIGURATION
         payload["sources"] = [
             {
@@ -499,7 +503,7 @@ def test_client_cannot_forge_trusted_system_context_security_blocker(tmp_path, m
                 },
             }
         ]
-        
+
         response = client.post("/api/context/assemblies", json=payload)
         assert response.status_code == 403
         assert "forge trusted system context sources" in response.json()["detail"]
@@ -520,7 +524,7 @@ def test_client_cannot_forge_trusted_system_context_security_blocker(tmp_path, m
                 },
             }
         ]
-        
+
         response = client.post("/api/context/assemblies", json=payload)
         assert response.status_code == 403
         assert "forge backend-owned source types" in response.json()["detail"]
@@ -529,29 +533,43 @@ def test_client_cannot_forge_trusted_system_context_security_blocker(tmp_path, m
 def test_context_assembly_permissions_integration_blocker(tmp_path, monkeypatch):
     url = database_url(tmp_path / "context-permissions.db")
     monkeypatch.setenv("JARVIS_AUTONOMOUS_WORKER_ENABLED", "false")
-    monkeypatch.setenv("JARVIS_WEB_ORIGIN", "http://localhost:5173")
+    monkeypatch.setenv("WEB_ORIGIN", "http://localhost:5173")
     app = create_app(database_url=url, delay_ms=1)
 
     with TestClient(app) as client:
-        task = client.post("/api/tasks", json={"title": "demo", "description": "demo"}).json()["data"]
-        
-        from app.agent_runtime.authorization import RuntimeActorContext
-        from app.agent_runtime.errors import RuntimeActorNotFoundError
+        task = client.post("/api/tasks", json={"title": "demo", "description": "demo"}).json()[
+            "data"
+        ]
+
         def mock_auth(x):
+            if x is None:
+                raise RuntimeActorNotFoundError()
             if x == "missing":
                 raise RuntimeActorNotFoundError()
+            if x == "suspended":
+                raise RuntimeActorInactiveError()
             return RuntimeActorContext(actor_id=x, stable_key=x)
-            
-        monkeypatch.setattr(
-            app.state.agent_runtime_service, 
-            "authenticate_actor", 
-            mock_auth
-        )
-        
+
+        monkeypatch.setattr(app.state.agent_runtime_service, "authenticate_actor", mock_auth)
+
         actor_id = "jarvis"
         payload = context_body(task_id=task["id"])
-        payload["policy"]["allowedSourceTypes"] = ["manual_note", "repository_file", "system_policy", "operator_instruction", "task_request", "external_document"]
-        payload["policy"]["allowedTrustLevels"] = ["operator_instruction", "trusted_configuration", "repository_content", "unknown", "system_policy", "task_request"]
+        payload["policy"]["allowedSourceTypes"] = [
+            "manual_note",
+            "repository_file",
+            "system_policy",
+            "operator_instruction",
+            "task_request",
+            "external_document",
+        ]
+        payload["policy"]["allowedTrustLevels"] = [
+            "operator_instruction",
+            "trusted_configuration",
+            "repository_content",
+            "unknown",
+            "system_policy",
+            "task_request",
+        ]
         payload["sources"] = [
             {
                 "sourceId": "legit-operator",
@@ -560,7 +578,11 @@ def test_context_assembly_permissions_integration_blocker(tmp_path, monkeypatch)
                 "title": "Operator note",
                 "content": "Legit",
                 "contentHash": hash_content("Legit"),
-                "metadata": {"approved": True, "truncationAllowed": False, "projectId": "jarvis-agent-ecosystem"},
+                "metadata": {
+                    "approved": True,
+                    "truncationAllowed": False,
+                    "projectId": "jarvis-agent-ecosystem",
+                },
             },
             {
                 "sourceId": "untrusted-web",
@@ -569,25 +591,49 @@ def test_context_assembly_permissions_integration_blocker(tmp_path, monkeypatch)
                 "title": "Web page",
                 "content": "Some text",
                 "contentHash": hash_content("Some text"),
-                "metadata": {"approved": False, "truncationAllowed": True, "projectId": "jarvis-agent-ecosystem"},
+                "metadata": {
+                    "approved": False,
+                    "truncationAllowed": True,
+                    "projectId": "jarvis-agent-ecosystem",
+                },
             },
         ]
 
-        # 1. Provide valid actor ID
+        # 1. Success - valid actor provides permission summary
         response = client.post(
             "/api/context/assemblies", json=payload, headers={"X-Jarvis-Actor-Id": actor_id}
         )
         assert response.status_code == 201
+        manifest = response.json()["data"]["manifest"]
+        source_types = {s["sourceType"] for s in manifest["includedSources"]}
 
-        data = response.json()["data"]
-        sources = data["manifest"]["includedSources"]
-        source_types = {s["sourceType"] for s in sources}
-        assert "system_policy" in source_types
-        assert "manual_note" in source_types
+        # Untrusted/unapproved gets filtered by assembler
         assert "external_document" not in source_types
+        # Valid actor successfully enriches context with permissions
+        assert "system_policy" in source_types
 
-        # 4. Invalid actor
+        # Check that actor ID is in the summary
+        permission_source = next(
+            (
+                s
+                for s in manifest["includedSources"]
+                if s["sourceId"] == "system-permission-summary"
+            ),
+            None,
+        )
+        assert permission_source is not None
+
+        # 2. Success - still works for legit operators without needing backend forgery
+        assert "manual_note" in source_types
+
+        # 3. Missing actor (404 Not Found)
         response_invalid = client.post(
             "/api/context/assemblies", json=payload, headers={"X-Jarvis-Actor-Id": "missing"}
         )
         assert response_invalid.status_code == 404
+
+        # 4. Suspended/inactive actor (403 Forbidden)
+        response_suspended = client.post(
+            "/api/context/assemblies", json=payload, headers={"X-Jarvis-Actor-Id": "suspended"}
+        )
+        assert response_suspended.status_code == 403

@@ -343,7 +343,6 @@ def test_runtime_actor_header_is_allowed_by_cors_preflight() -> None:
                 "Access-Control-Request-Headers": "X-Jarvis-Actor-Id, Content-Type, Idempotency-Key",
             },
         )
-        print(response.text)
         assert response.status_code == 200
         assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
         assert response.headers["access-control-allow-credentials"] == "true"

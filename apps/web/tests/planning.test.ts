@@ -37,3 +37,19 @@ test.each([true, false])('planning replays captured output format without upgrad
   const command = JSON.parse(calls[1]![1]!.body as string)
   expect(command.specification.autonomous_execution.response_format).toBe(current ? 'planning_review_json_v1' : undefined)
 })
+
+test('submitPlanning sends the selected planning actor ID in X-Jarvis-Actor-Id header for context assembly', async () => {
+  const submission = newPlanningSubmission(task, 'actor-12345', 'target-test')
+  await submitPlanning(submission)
+
+  const calls = vi.mocked(request).mock.calls
+  expect(calls).toHaveLength(3)
+
+  // First call is to /api/context/assemblies
+  const contextCall = calls[0]!
+  expect(contextCall[0]).toBe('/api/context/assemblies')
+  expect(contextCall[1]!.headers).toMatchObject({
+    'Idempotency-Key': `planning-context-${submission.id}`,
+    'X-Jarvis-Actor-Id': 'actor-12345'
+  })
+})

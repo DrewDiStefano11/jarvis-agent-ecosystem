@@ -18,7 +18,7 @@ export async function submitPlanning(submission: PlanningSubmission): Promise<{ 
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content))
   const contentHash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('')
   const assembly = await request<{ id: string; status: string; manifest: { includedSources: Array<{ sourceType: string }> } }>('/api/context/assemblies', {
-    method: 'POST', headers: { 'Idempotency-Key': `planning-context-${id}` },
+    method: 'POST', headers: { 'Idempotency-Key': `planning-context-${id}`, 'X-Jarvis-Actor-Id': actorId },
     body: JSON.stringify({
       taskId: task.id, projectId: task.projectId ?? 'jarvis-agent-ecosystem',
       allowedResultType: 'structured_output', completionCriteria: workspace ? 'Propose a fixed bounded workspace plan with exact file actions and useful report content, for explicit operator authorization.' : 'Produce a bounded local planning review with recommendations, risks and explicit assumptions.',
