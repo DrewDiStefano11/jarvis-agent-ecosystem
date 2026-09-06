@@ -167,7 +167,13 @@ class FakeRouter:
         self.requests.append(request)
         if self.callback is not None:
             self.callback()
-        content = self.contents.pop(0)
+            
+        if getattr(request, "output_schema", None) and getattr(request.output_schema, "name", None) == "required_capabilities":
+            import json
+            content = json.dumps({"required": [], "optional": [], "reasoning_summary": "mocked"})
+        else:
+            content = self.contents.pop(0)
+            
         return ModelExecutionResponse(
             content=content,
             provider="local-fake",

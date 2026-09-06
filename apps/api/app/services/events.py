@@ -82,6 +82,7 @@ class EventBroker:
         idempotency: IdempotencyResult | None = None,
         created_task: Task | None = None,
         created_context: tuple[ContextAssembly, Task] | None = None,
+        updated_task: Task | None = None,
     ) -> EventEnvelope:
         if not self.repository:
             self.sequence += 1
@@ -109,6 +110,10 @@ class EventBroker:
                 elif created_context is not None:
                     committed = self.repository.enqueue_event(
                         envelope, idempotency, created_context=created_context
+                    )
+                elif updated_task is not None:
+                    committed = self.repository.enqueue_event(
+                        envelope, idempotency, updated_task=updated_task
                     )
                 else:
                     committed = self.repository.enqueue_event(envelope, idempotency)
