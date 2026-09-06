@@ -206,13 +206,15 @@ describe('planning worker identity', () => {
  const acceptPlanningCommands = (failQueue = false) => {
   const original = vi.mocked(fetch).getMockImplementation()!
   vi.mocked(fetch).mockImplementation(async (input, init) => {
-   const path = new URL(String(input)).pathname
-   if (init?.method === 'POST' && path === '/api/context/assemblies') return { ok: true, status: 200, json: async () => ({ data: { id: 'context-test', status: 'completed' } }) } as Response
+   const pathStr = String(input)
+   const path = pathStr.replace(/^https?:\/\/[^/]+/, '').split('?')[0]
+   if (path === '/api/context/assemblies' && init?.method === 'POST') return { ok: true, status: 200, json: async () => ({ data: { id: 'context-test', status: 'completed' } }) } as Response
    if (init?.method === 'POST' && path === '/api/agent-runtime/commands') {
     const body = JSON.parse(String(init.body))
     if (failQueue && body.command_type === 'queue') return { ok: false, status: 503, json: async () => ({ error: { code: 'UNAVAILABLE', message: 'Queue response unavailable' } }) } as Response
     return { ok: true, status: 200, json: async () => ({ data: { snapshot: { specification: { run_id: 'run-planning-test' }, version: 1, state: body.command_type === 'queue' ? 'queued' : 'created' } } }) } as Response
    }
+   if (path === '/api/local-planning/setup') return { ok: true, status: 200, json: async () => ({ data: { workerActorConfigured: true, actorId: 'worker-a' } }) } as Response
    return original(input, init)
   })
  }
@@ -226,6 +228,7 @@ describe('planning worker identity', () => {
   await userEvent.click(screen.getByRole('button', { name: 'Use configured worker identity' }))
   expect(screen.getByLabelText('Act as local identity')).toHaveValue('worker-a')
   expect(screen.getByLabelText('Target agent')).toHaveValue('actor-b')
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Queue local plan' })).toBeEnabled())
   await userEvent.click(screen.getByRole('button', { name: 'Queue local plan' }))
   expect(await screen.findByText(/Queued run-planning-test/)).toBeInTheDocument()
   const commands = vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url).endsWith('/api/agent-runtime/commands') && init?.method === 'POST')
@@ -235,7 +238,7 @@ describe('planning worker identity', () => {
    expect(JSON.parse(String(init?.body))).toMatchObject({ actor_reference: 'worker-a' })
   }
   expect(JSON.parse(String(commands[0]![1]?.body)).specification.agent_id).toBe('actor-b')
-  expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).includes('/api/local-planning/setup'))).toBe(false)
+  expect(vi.mocked(fetch).mock.calls.some(([url, init]) => init?.method === 'POST' && String(url).includes('/api/local-planning/setup'))).toBe(false)
  })
  test('does not allow global readiness to enable submission when worker identity is unconfigured', async () => {
   endpointData['/api/system/status'] = { ...system, autonomousWorker: { ...worker, workerActorId: null } }
@@ -248,6 +251,7 @@ describe('planning worker identity', () => {
   acceptPlanningCommands(true)
   await openPlanning()
   await userEvent.click(screen.getByRole('button', { name: 'Use configured worker identity' }))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Queue local plan' })).toBeEnabled())
   await userEvent.click(screen.getByRole('button', { name: 'Queue local plan' }))
   expect(await screen.findByText('Queue response unavailable')).toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Retry same submission' })).toBeEnabled()
@@ -262,6 +266,7 @@ describe('planning worker identity', () => {
   acceptPlanningCommands(true)
   await openPlanning()
   await userEvent.click(screen.getByRole('button', { name: 'Use configured worker identity' }))
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Queue local plan' })).toBeEnabled())
   await userEvent.click(screen.getByRole('button', { name: 'Queue local plan' }))
   await screen.findByText('Queue response unavailable')
   const originalCommands = vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === 'POST').length

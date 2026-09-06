@@ -18,7 +18,18 @@ export function Runtime() {
   const [pending, setPending] = useState<PlanningSubmission | null>(null)
   const [recovery, setRecovery] = useState(readPlanningRecovery)
   const [storageWarning, setStorageWarning] = useState('')
+  const [taskPreparedState, setTaskPreparedState] = useState<{ id: string; prepared: boolean } | null>(null)
+  const taskPrepared = taskPreparedState?.id === taskId ? taskPreparedState.prepared : null
   const worker = system?.autonomousWorker
+  useEffect(() => {
+    let active = true
+    if (!taskId) return
+    request<{ actorId: string; workerActorConfigured: boolean }>(`/api/local-planning/setup?taskId=${encodeURIComponent(taskId)}`)
+      .then(res => { if (active) setTaskPreparedState({ id: taskId, prepared: res.workerActorConfigured }) })
+      .catch(() => { if (active) setTaskPreparedState({ id: taskId, prepared: false }) })
+    return () => { active = false }
+  }, [taskId])
+
   useEffect(() => { void loadIdentities().catch(error => setMessage(error instanceof Error ? error.message : 'Cannot load identities')) }, [loadIdentities])
   useEffect(() => {
     const reload = () => setRecovery(readPlanningRecovery())
@@ -33,7 +44,9 @@ export function Runtime() {
     ? 'Configure JARVIS_AUTONOMOUS_WORKER_ACTOR_ID and restart the local services before queueing a plan.'
     : !workerActor
       ? 'The configured worker identity is unavailable or inactive. Check its identity configuration before queueing a plan.'
-      : (pending?.actorId ?? actorId) !== workerActorId
+      : taskPrepared !== true
+        ? 'The planner is not prepared for this task. Prepare it before queueing.'
+        : (pending?.actorId ?? actorId) !== workerActorId
         ? pending
           ? 'The configured worker identity changed. Inspect history and clear this submission before queueing with the current worker.'
           : 'Select the configured worker identity to queue a plan. Other identities remain available for authorized history.'
@@ -73,6 +86,7 @@ export function Runtime() {
       await Promise.all([loadIdentities(), refresh()])
       selectActor(result.actorId)
       setTargetId(result.actorId)
+      setTaskPreparedState({ id: task.id, prepared: result.workerActorConfigured })
       setMessage(result.workerActorConfigured ? 'Local planner prepared for this task. Queue the plan when ready.' : `Local planner prepared. Set JARVIS_AUTONOMOUS_WORKER_ACTOR_ID=${result.actorId} in the local worker configuration, then start the configured worker.`)
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Local planner setup failed')
