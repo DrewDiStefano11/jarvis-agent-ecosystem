@@ -43,8 +43,9 @@ from app.models.identity import (
 @pytest.fixture
 def service(tmp_path: Path):
     url = f"sqlite:///{tmp_path / 'identity.db'}"
-    config = Config("alembic.ini")
-    config.set_main_option("script_location", "migrations")
+    base_dir = Path(__file__).resolve().parents[1]
+    config = Config(str(base_dir / "alembic.ini"))
+    config.set_main_option("script_location", str(base_dir / "migrations"))
     config.set_main_option("sqlalchemy.url", url)
     command.upgrade(config, "head")
     engine = create_database_engine(url)
