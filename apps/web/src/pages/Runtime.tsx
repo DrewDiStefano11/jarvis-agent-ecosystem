@@ -100,8 +100,8 @@ export function Runtime() {
     try {
       setStorageWarning(await rememberPlanningSubmission(submission))
       setRecovery(readPlanningRecovery())
-      const run = await submitPlanning(submission)
-      setMessage(`Queued ${run.specification.run_id}. The configured local worker will claim eligible work.`)
+      const { snapshot: run, contextCategories } = await submitPlanning(submission)
+      setMessage(`Queued ${run.specification.run_id}. The configured local worker will claim eligible work. Context categories supplied: ${contextCategories.join(', ')}.`)
       setPending(null)
       setStorageWarning(forgetPlanningSubmission(submission.id))
       setRecovery(readPlanningRecovery())

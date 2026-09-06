@@ -99,6 +99,9 @@ class ContextPolicy(ContextContract):
     estimatedTokenBudget: int = Field(default=8192, ge=256, le=65_536)
     allowedSourceTypes: list[ContextSourceType] = Field(
         default_factory=lambda: [
+            ContextSourceType.SYSTEM_POLICY,
+            ContextSourceType.OPERATOR_INSTRUCTION,
+            ContextSourceType.TASK_REQUEST,
             ContextSourceType.REPOSITORY_FILE,
             ContextSourceType.ARTIFACT,
             ContextSourceType.TOOL_RESULT,
@@ -112,6 +115,9 @@ class ContextPolicy(ContextContract):
     )
     allowedTrustLevels: list[TrustLevel] = Field(
         default_factory=lambda: [
+            TrustLevel.SYSTEM_POLICY,
+            TrustLevel.TRUSTED_CONFIGURATION,
+            TrustLevel.TASK_REQUEST,
             TrustLevel.OPERATOR_INSTRUCTION,
             TrustLevel.TRUSTED_VALIDATOR,
             TrustLevel.TRUSTED_TOOL_RESULT,
