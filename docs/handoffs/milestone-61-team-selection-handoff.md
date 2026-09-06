@@ -6,9 +6,11 @@ This milestone introduces automatic capability-aware team selection. The system 
 ## Exact Branch Information
 * **Base Branch:** `main`
 * **Final Base SHA:** `692eb6f030ceca035284f00811d5de1101b6d232` (or latest `main` post-rebase)
-* **Final Head SHA:** `d76d14df7e3a76a45185fab9e53970c6f9859491`
 * **Branch Name:** `codex/automatic-team-selection`
 * **PR URL:** PR #61
+
+* **Final Head SHA:**
+GitHub PR #61 is authoritative for the final exact head SHA. This handoff intentionally does not self-reference the SHA of the commit containing itself.
 
 ## Completed Architecture
 * **Capability Inference:** The `TeamSelectionService` makes a deterministic inference call to the model to output a `RequiredCapabilitiesResult` JSON payload, delineating explicitly required and optional capability keys alongside reasoning.
@@ -43,11 +45,9 @@ Missing capabilities block selection (persisted as `blocked_missing_capability`)
 Selection strictly acts as an assignment mechanism and **grants zero authority**. No permissions, roles, ranks, workspace paths, or tool executions are intrinsically granted by selection. Active identities remain securely bounded by existing Jarvis RBAC logic.
 
 ## Validation
-* **Ruff:** Formatted and linted cleanly across the backend.
-* **Backend Pytest:** Clean run resolving legacy context assertion bugs related to task mutation.
-* **Frontend:** Typecheck, lint, and build succeeded locally.
-* **Runtime/Browser:** The capabilities request in the local planning smoke test is intercepted and validated uniquely, distinguishing capability inference requests from core planning requests.
-* **Exact-head Actions:** Automatic CI checks have passed successfully.
+Local validation completed successfully, including full Ruff formatting, Ruff linting, Pytest backend execution, Frontend building, and integrated Runtime Smoke tests with deterministic capability inference mocking.
+
+Before merge, verify the latest exact-head GitHub Actions run on PR #61 has backend, frontend, runtime-browser, and repository-integrity all green.
 
 ## Remaining Limitations
 * Currently falls back gracefully when capabilities are missing, but does not autonomously pause/alert developers mid-workflow to adjust catalog agents (relies on user inspection of task status).
