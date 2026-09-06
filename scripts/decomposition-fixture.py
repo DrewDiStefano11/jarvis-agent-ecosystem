@@ -4,7 +4,12 @@ import argparse
 
 from app.db.models import IdentityAgentRow
 from app.main import create_app
-from app.models.catalog import ActivateRequest, RawDefinition, ReviewRequest, SourceSnapshot
+from app.models.catalog import (
+    ActivateRequest,
+    RawDefinition,
+    ReviewRequest,
+    SourceSnapshot,
+)
 
 
 def main():
