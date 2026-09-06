@@ -84,8 +84,17 @@ def main():
                 time.sleep(3)  # Make real fixture execution observable in the office.
 
             format_schema = payload.get("format", {})
-            if isinstance(format_schema, dict) and format_schema.get("title") == "RequiredCapabilitiesResult":
-                content = json.dumps({"required": [], "optional": [], "reasoning_summary": "Smoke fixture capabilities"})
+            if (
+                isinstance(format_schema, dict)
+                and format_schema.get("title") == "RequiredCapabilitiesResult"
+            ):
+                content = json.dumps(
+                    {
+                        "required": [],
+                        "optional": [],
+                        "reasoning_summary": "Smoke fixture capabilities",
+                    }
+                )
             else:
                 content = json.dumps(result)
 
@@ -311,16 +320,22 @@ for (const name of ['client', 'planning']) {
                 # The planning browser checks an original and a corrected task;
                 # the office browser observes one actual worker execution.
                 expected_tasks = 2 if browser_mode and not office_mode else 1
-                
+
                 team_calls = [
-                    c for c in calls
-                    if isinstance(c.get("format"), dict) and c.get("format").get("title") == "RequiredCapabilitiesResult"
+                    c
+                    for c in calls
+                    if isinstance(c.get("format"), dict)
+                    and c.get("format").get("title") == "RequiredCapabilitiesResult"
                 ]
                 plan_calls = [
-                    c for c in calls
-                    if not (isinstance(c.get("format"), dict) and c.get("format").get("title") == "RequiredCapabilitiesResult")
+                    c
+                    for c in calls
+                    if not (
+                        isinstance(c.get("format"), dict)
+                        and c.get("format").get("title") == "RequiredCapabilitiesResult"
+                    )
                 ]
-                
+
                 assert len(team_calls) == expected_tasks, (
                     f"Expected {expected_tasks} team capability requests, got {len(team_calls)}"
                 )

@@ -6,7 +6,6 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from app.catalog.taxonomy import map_tags, satisfies
-from app.repositories.protocols import Repository
 from app.identity.service import IdentityService
 from app.model_providers.budget import TaskBudget
 from app.model_providers.contracts import (
@@ -19,6 +18,7 @@ from app.model_providers.contracts import (
 from app.model_providers.router import ModelRouter, RoutingRequirements
 from app.models.domain import Task
 from app.models.team_selection import TeamSelectionRationale, TeamSelectionRecord
+from app.repositories.protocols import Repository
 from app.services.events import EventBroker
 
 logger = logging.getLogger(__name__)
@@ -148,7 +148,6 @@ class TeamSelectionService:
 
         while uncovered:
             best_candidate = None
-            best_score = -1
             best_uncovered_count = 0
             best_total_caps = 9999
 
