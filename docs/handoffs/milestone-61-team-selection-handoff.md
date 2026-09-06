@@ -6,7 +6,7 @@ This milestone introduces automatic capability-aware team selection. The system 
 ## Exact Branch Information
 * **Base Branch:** `main`
 * **Final Base SHA:** `692eb6f030ceca035284f00811d5de1101b6d232` (or latest `main` post-rebase)
-* **Final Head SHA:** `b23cbec3815c86d0dc7d6fd9874f673ea6b3371e`
+* **Final Head SHA:** `d76d14df7e3a76a45185fab9e53970c6f9859491`
 * **Branch Name:** `codex/automatic-team-selection`
 * **PR URL:** PR #61
 
