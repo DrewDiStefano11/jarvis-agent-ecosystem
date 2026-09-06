@@ -30,6 +30,7 @@ from app.autonomous_worker.router import router as autonomous_worker_router
 from app.autonomous_worker.service import AutonomousWorkerService
 from app.autonomous_worker.setup_router import router as local_planning_setup_router
 from app.context import ContextAssembler
+from app.context.enrichment import ContextEnricher
 from app.core.config import Settings
 from app.core.errors import DomainError
 from app.core.transitions import InvalidTransitionError, validate_transition
@@ -923,6 +924,16 @@ def create_app(
             return ApiResponse(data=ContextAssembly.model_validate(replay))
 
         task = repository.get_task_durable(body.taskId)
+
+        enricher = ContextEnricher(
+            identity_service=app.state.identity_service,
+            settings=settings,
+            repository=repository,
+            tool_registry=getattr(app.state, "tool_execution_service", None),
+        )
+        system_sources = enricher.enrich(body.taskId, actor_id=None)
+        body.sources.extend(system_sources)
+
         item = context_assembler.assemble(task, body)
         existing = repository.context_assemblies.get(item.id)
         if existing is not None:

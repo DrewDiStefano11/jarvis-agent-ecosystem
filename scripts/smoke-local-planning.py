@@ -212,10 +212,11 @@ for (const name of ['client', 'planning']) {
  const task = await request('/api/tasks',{method:'POST',body:JSON.stringify({title:'HTTP smoke planning',description:'Create a bounded plan for validating the local Hub.',priority:'medium'})});
  execFileSync(process.env.SMOKE_PYTHON,['-m','app.autonomous_worker.setup','--task-id',task.id],{cwd:process.env.SMOKE_API,env:process.env,stdio:['ignore','pipe','pipe']});
  const submission = newPlanningSubmission(task,process.env.SMOKE_ACTOR,process.env.SMOKE_ACTOR);
- const queued = await submitPlanning(submission);
+ const {snapshot:queued} = await submitPlanning(submission);
  // Lost acknowledgement / repeated click must replay the same durable commands.
- const replay = await submitPlanning(submission);
+ const {snapshot:replay} = await submitPlanning(submission);
  if(replay.specification.run_id!==queued.specification.run_id) throw Error('Submission replay created another run');
+ const run_id = queued.specification.run_id;
  const headers={'X-Jarvis-Actor-Id':process.env.SMOKE_ACTOR};
  const deadline=Date.now()+30000;
  let executions=[];

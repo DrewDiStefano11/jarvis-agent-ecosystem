@@ -208,7 +208,7 @@ describe('planning worker identity', () => {
   vi.mocked(fetch).mockImplementation(async (input, init) => {
    const pathStr = String(input)
    const path = pathStr.replace(/^https?:\/\/[^/]+/, '').split('?')[0]
-   if (path === '/api/context/assemblies' && init?.method === 'POST') return { ok: true, status: 200, json: async () => ({ data: { id: 'context-test', status: 'completed' } }) } as Response
+   if (path === '/api/context/assemblies' && init?.method === 'POST') return { ok: true, status: 200, json: async () => ({ data: { id: 'context-test', status: 'completed', manifest: { includedSources: [{ sourceType: 'operator_instruction' }] } } }) } as Response
    if (init?.method === 'POST' && path === '/api/agent-runtime/commands') {
     const body = JSON.parse(String(init.body))
     if (failQueue && body.command_type === 'queue') return { ok: false, status: 503, json: async () => ({ error: { code: 'UNAVAILABLE', message: 'Queue response unavailable' } }) } as Response

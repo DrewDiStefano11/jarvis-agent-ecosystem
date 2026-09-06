@@ -11,14 +11,13 @@ export const newPlanningSubmission = (task: Task, actorId: string, targetId: str
   responseFormat: mode === 'workspace' ? 'workspace_plan_json_v1' : 'planning_review_json_v1',
 })
 
-/** Repeating the same submission resumes its durable commands without creating new work. */
-export async function submitPlanning(submission: PlanningSubmission): Promise<RuntimeRun> {
+export async function submitPlanning(submission: PlanningSubmission): Promise<{ snapshot: RuntimeRun, contextCategories: string[] }> {
   const { id, timestamp, task, actorId, targetId, responseFormat } = submission
   const workspace = responseFormat === 'workspace_plan_json_v1'
   const content = task.description
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(content))
   const contentHash = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, '0')).join('')
-  const assembly = await request<{ id: string; status: string }>('/api/context/assemblies', {
+  const assembly = await request<{ id: string; status: string; manifest: { includedSources: Array<{ sourceType: string }> } }>('/api/context/assemblies', {
     method: 'POST', headers: { 'Idempotency-Key': `planning-context-${id}` },
     body: JSON.stringify({
       taskId: task.id, projectId: task.projectId ?? 'jarvis-agent-ecosystem',
@@ -50,5 +49,6 @@ export async function submitPlanning(submission: PlanningSubmission): Promise<Ru
       timestamp, actor_reference: actorId, run_id: created.snapshot.specification.run_id,
       expected_run_version: created.snapshot.version, detail: 'Operator explicitly queued local planning review' }),
   })
-  return queued.snapshot
+  const categories = Array.from(new Set(assembly.manifest.includedSources.map(s => s.sourceType)))
+  return { snapshot: queued.snapshot, contextCategories: categories }
 }

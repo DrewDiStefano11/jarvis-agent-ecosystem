@@ -344,6 +344,23 @@ def test_configuration_is_disabled_and_local_only_is_fail_closed() -> None:
         )
     with pytest.raises(ValidationError):
         Settings(_env_file=None, JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY=2)
+    # String "1" from .env must be accepted (the bug this fixes).
+    assert (
+        Settings(
+            _env_file=None, JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY="1"
+        ).autonomous_worker_max_concurrency
+        == 1
+    )
+    assert (
+        Settings(
+            _env_file=None, JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY=1
+        ).autonomous_worker_max_concurrency
+        == 1
+    )
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY="2")
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY=0)
 
 
 def test_fixed_planning_result_rejects_unknown_unbounded_and_executable_fields() -> None:

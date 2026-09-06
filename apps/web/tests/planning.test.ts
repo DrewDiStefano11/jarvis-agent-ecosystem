@@ -9,7 +9,7 @@ const task = { id: 'task-test', description: 'Plan the weekend.', projectId: nul
 beforeEach(() => {
   vi.mocked(request).mockReset()
   vi.mocked(request).mockImplementation(async path => path.includes('/context/')
-    ? { id: 'assembly-test', status: 'completed' }
+    ? { id: 'assembly-test', status: 'completed', manifest: { includedSources: [{ sourceType: 'operator_instruction' }] } }
     : { snapshot: { specification: { run_id: 'run-test' }, version: 1 } })
 })
 

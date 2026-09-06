@@ -17,10 +17,14 @@ from app.models.domain import SystemStatus
 from app.models.manifest import load_manifest
 
 
+from app.main import settings
+
 @pytest.fixture(autouse=True)
 def isolated_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     database = (tmp_path / "jarvis-test.db").as_posix()
     monkeypatch.setenv("JARVIS_DATABASE_URL", f"sqlite:///{database}")
+    monkeypatch.setattr(settings, "autonomous_worker_enabled", False)
+    monkeypatch.setattr(settings, "web_origin", "http://localhost:5173")
 
 
 def client() -> TestClient:
@@ -341,6 +345,7 @@ def test_runtime_actor_header_is_allowed_by_cors_preflight() -> None:
                 "Access-Control-Request-Headers": "X-Jarvis-Actor-Id, Content-Type, Idempotency-Key",
             },
         )
+        print(response.text)
         assert response.status_code == 200
         assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
         assert response.headers["access-control-allow-credentials"] == "true"
