@@ -1,0 +1,291 @@
+{
+  "source_repository": "wshobson/agents",
+  "source_commit": "a30778f8c4e6b0a87567941b7cca4f534bf642b6",
+  "agents": [
+    {
+      "entry_id": "catalog-ebf94e8085bd330240ab4ce24a6d033550acba7a",
+      "revision_id": "revision-84a3c02ce84a1d3ebfe37a9f12b1cc35b58458eb",
+      "role": "context-manager",
+      "capabilities": [
+        "management.coordination",
+        "operations.knowledge-management"
+      ],
+      "source_hash": "187aa5b7a139bc39ecd778f47df5a151f15a098a1684cbf67a95b76025368370",
+      "warnings": []
+    },
+    {
+      "entry_id": "catalog-51d00310ad3dec608119b8f6a3d3ce6c7ad78313",
+      "revision_id": "revision-d32c1712a5a95e8763cb56d85c8fc3e35b4d46fc",
+      "role": "team-lead",
+      "capabilities": [
+        "management.coordination",
+        "management.planning"
+      ],
+      "source_hash": "5cb0b5ed3ce356444315047c4434ece04efbda0c3cff90557fac2f619baf3d0b",
+      "warnings": [
+        "tool_requests_are_not_permissions"
+      ]
+    },
+    {
+      "entry_id": "catalog-8a20f79cf32692c31a00699a1203c43dae95479f",
+      "revision_id": "revision-c7b5fa1eef446bd39f5471c78a356dd1718b40e6",
+      "role": "backend-architect",
+      "capabilities": [
+        "software.architecture"
+      ],
+      "source_hash": "d2666aebee02459358d22f4ad4b3766c82fd11634d54d3619a247d7513cb1b11",
+      "warnings": [
+        "suspicious_instruction_text",
+        "tool_requests_are_not_permissions"
+      ]
+    },
+    {
+      "entry_id": "catalog-3fe6837de2c53e20306ccd60bcb0475763420d35",
+      "revision_id": "revision-b19eebd767e1b73fc0ce503ea938366053f4a746",
+      "role": "fastapi-pro",
+      "capabilities": [
+        "software.backend.api"
+      ],
+      "source_hash": "411612e65052d1cf07b29da7ae6fc452b36ccbdf6146aab4613d4611c837e383",
+      "warnings": [
+        "suspicious_instruction_text",
+        "tool_requests_are_not_permissions"
+      ]
+    },
+    {
+      "entry_id": "catalog-19dfa5cfa2ef4efe2b35699721459dd90491d589",
+      "revision_id": "revision-af6eedc808c1105c537c9e813e75b8e33abe2c65",
+      "role": "frontend-developer",
+      "capabilities": [
+        "software.frontend"
+      ],
+      "source_hash": "d97038a1952b36f31673281ae27bce2d1dc7643819150e3c772ec4b991ad42e2",
+      "warnings": [
+        "tool_requests_are_not_permissions"
+      ]
+    },
+    {
+      "entry_id": "catalog-a581d47e7ba3992dff064de514ab7083c14f441c",
+      "revision_id": "revision-52339f8c2a1d92492e201d4b8de85948d4e7ba25",
+      "role": "business-analyst",
+      "capabilities": [
+        "business.strategy",
+        "data.visualization",
+        "research.market"
+      ],
+      "source_hash": "cded4745dcfb236f018736ab669524a77f624f30dfd154ace823795b7df0bd69",
+      "warnings": []
+    },
+    {
+      "entry_id": "catalog-ae20683076c6e4bff3c4bac704a886958e7ead9e",
+      "revision_id": "revision-9408224d4e04e470bb52a406bb085713b889d489",
+      "role": "code-reviewer",
+      "capabilities": [
+        "software.code-review"
+      ],
+      "source_hash": "98f9f4f6bbe9ff4df71932daeec0f4c80b800cfbc1e7215d399c0fac7a0f29fb",
+      "warnings": [
+        "suspicious_instruction_text",
+        "tool_requests_are_not_permissions"
+      ]
+    },
+    {
+      "entry_id": "catalog-5973823075c32b4e41c8d5fab928626dbfa796a6",
+      "revision_id": "revision-813b836be49b482d2cddc6a6b21cfbae83726af7",
+      "role": "docs-architect",
+      "capabilities": [
+        "operations.documentation"
+      ],
+      "source_hash": "b4ae91c3de60b63b70f2ac03cffb9371310d01075eae788d2290797f9cecb508",
+      "warnings": []
+    },
+    {
+      "entry_id": "catalog-b6247437a56ac739c930cd159a049835bc63f33c",
+      "revision_id": "revision-9a6f5fff7092a2765e95903dd8bc0d44cbb63591",
+      "role": "tutorial-engineer",
+      "capabilities": [
+        "operations.documentation"
+      ],
+      "source_hash": "205ece631ab1972c5604e4b3641b0b363fcf0cf67da09bec6e9181b1b4ed8371",
+      "warnings": []
+    },
+    {
+      "entry_id": "catalog-fb7998da113e8bdde77c4cbe9c128dc07269b4db",
+      "revision_id": "revision-6cd97720d9fb49a4cc7cff99ab38fff57c172b1e",
+      "role": "content-marketer",
+      "capabilities": [
+        "content.writing"
+      ],
+      "source_hash": "097e05eed8d9ecb3c6d1ea342f6b43f5bcb48ed472e2a9c9a275528dbf82281b",
+      "warnings": []
+    },
+    {
+      "entry_id": "catalog-0931625c10ad8726e0efd6c011e596148b45a0cf",
+      "revision_id": "revision-2e4f38415c25e61915fb39b94a22a4a948efe72e",
+      "role": "search-specialist",
+      "capabilities": [
+        "research.general"
+      ],
+      "source_hash": "29a9d15badc2f2cdaf1ab38e8247df28c0df21a5cae333ecb60280126a4d5973",
+      "warnings": [
+        "tool_requests_are_not_permissions"
+      ]
+    },
+    {
+      "entry_id": "catalog-6cb92216b1b437ea880355e56c81727cbafc1849",
+      "revision_id": "revision-2d6b7860652c1df48ef28d3242b2cacc0303900d",
+      "role": "data-scientist",
+      "capabilities": [
+        "data.analysis",
+        "data.visualization"
+      ],
+      "source_hash": "c6a48912df048edb1cc523496fcd7aaf4c45f5782ea1b4b5dd11c4a1f92bdd3c",
+      "warnings": []
+    },
+    {
+      "entry_id": "catalog-ad35f5e441e2e63b78f12fe8b6b39659b8b6c57d",
+      "revision_id": "revision-324405d09abcd6972c7e6ea66320ccc1113f553e",
+      "role": "python-pro",
+      "capabilities": [
+        "software.python"
+      ],
+      "source_hash": "af977d083113c60275be05f89ee0e9aa58546b991a6658f55d4136664fac0ffd",
+      "warnings": [
+        "tool_requests_are_not_permissions"
+      ]
+    },
+    {
+      "entry_id": "catalog-0529657ee8e120aabe0ea653d48fb0ba67a5bbe0",
+      "revision_id": "revision-cdfda40eb2962ac02184d5dcef34bead7764277b",
+      "role": "quant-analyst",
+      "capabilities": [
+        "business.financial-analysis"
+      ],
+      "source_hash": "80679ddc682a7add71820cbbb55a0eafc98c6c07123a41495f6b3c2e052eaef0",
+      "warnings": []
+    },
+    {
+      "entry_id": "catalog-0646a0e865e69e0410c17b120bdbb975ca0019b0",
+      "revision_id": "revision-644b4408d556d10797c5bbe82596560c13099851",
+      "role": "risk-manager",
+      "capabilities": [
+        "business.risk"
+      ],
+      "source_hash": "70d5cd5ceacf9c18f16eab000c4d2ee6664a91f29ec3e569206f8d4b0723c735",
+      "warnings": []
+    },
+    {
+      "entry_id": "catalog-cc4ab0cc770ec952dfaa686c6c2559cb12d21df2",
+      "revision_id": "revision-14048aaab34063e00bc10102c01b68cedd8525f8",
+      "role": "test-automator",
+      "capabilities": [
+        "software.backend",
+        "software.testing"
+      ],
+      "source_hash": "2b250304fc3b035e9bfe531b7bb32ddd5039f122d83ddbba8ef1b200b350732d",
+      "warnings": [
+        "tool_requests_are_not_permissions"
+      ]
+    },
+    {
+      "entry_id": "catalog-2c017da49be3e174464c69b283affdbc0e62284a",
+      "revision_id": "revision-a0f64f179c23fefb69f7a62917aca6451a8a0b07",
+      "role": "security-auditor",
+      "capabilities": [
+        "software.backend",
+        "software.security"
+      ],
+      "source_hash": "89170ffdab9e9e86378bc4b31d10327868d1160ee7390f3ac4343c20935589c3",
+      "warnings": [
+        "suspicious_instruction_text"
+      ]
+    },
+    {
+      "entry_id": "catalog-4c781f7d8da79ba34ad3896863d3e162b20bcd50",
+      "revision_id": "revision-32beadc39de1070bedc2feb8a744df3d2a207760",
+      "role": "seo-content-auditor",
+      "capabilities": [
+        "content.editing"
+      ],
+      "source_hash": "5ada9f90530cd8ce7a072078053e9db6cdc7b7de2cbe616b305ca4964fb803c7",
+      "warnings": []
+    },
+    {
+      "entry_id": "catalog-d0518865f3935fc55d1f325431275b0c1e0f70a9",
+      "revision_id": "revision-cb5f7cac0a7e8e389478bf5cdc80a03c063fa98f",
+      "role": "seo-content-planner",
+      "capabilities": [
+        "business.marketing"
+      ],
+      "source_hash": "4c603806acf59ec8a947103c83b278b56a86603f573d1ce72c5b24e5fd1c51d5",
+      "warnings": []
+    },
+    {
+      "entry_id": "catalog-ed0029017bfb830e287dc41cf3d4539ac3bcb253",
+      "revision_id": "revision-3c2b2377c3cf8bbd7aa9f9e9de5eb6b104df4e4d",
+      "role": "seo-content-writer",
+      "capabilities": [
+        "content.strategy"
+      ],
+      "source_hash": "71c26fbd22577e417b10f9fdb4e30c3a6f3b9b62b33affa10b61b1759da70486",
+      "warnings": [
+        "tool_requests_are_not_permissions"
+      ]
+    },
+    {
+      "entry_id": "catalog-df7d59d5abe491b229cfd454888950cc2d5f3ae6",
+      "revision_id": "revision-4f1ef9b4557c27808d135fc48cb6373d2ec09379",
+      "role": "startup-analyst",
+      "capabilities": [
+        "business.opportunity-analysis",
+        "business.strategy",
+        "research.competitive",
+        "research.market"
+      ],
+      "source_hash": "b95fde2fa5786c5dc29c6eaa9ed04812abd9dd6f220111263c355206c5997ce0",
+      "warnings": [
+        "tool_requests_are_not_permissions"
+      ]
+    },
+    {
+      "entry_id": "catalog-a4044b105f69e540dc15f25a9ecba913f5c977c0",
+      "revision_id": "revision-86297216167d163f56cebaf3b61ecbdd819a5aac",
+      "role": "threat-modeling-expert",
+      "capabilities": [
+        "software.security"
+      ],
+      "source_hash": "bf1379296437632dbdeb4901e3bb3dffda172cd1903c4e40c9e86954ca06d076",
+      "warnings": []
+    }
+  ],
+  "coverage": {
+    "business.financial-analysis": 1,
+    "business.marketing": 1,
+    "business.opportunity-analysis": 1,
+    "business.risk": 1,
+    "business.strategy": 2,
+    "content.editing": 1,
+    "content.strategy": 1,
+    "content.writing": 1,
+    "data.analysis": 1,
+    "data.visualization": 2,
+    "management.coordination": 2,
+    "management.planning": 1,
+    "operations.documentation": 2,
+    "operations.knowledge-management": 1,
+    "research.competitive": 1,
+    "research.general": 1,
+    "research.market": 2,
+    "software.architecture": 1,
+    "software.backend": 2,
+    "software.backend.api": 1,
+    "software.code-review": 1,
+    "software.frontend": 1,
+    "software.python": 1,
+    "software.security": 2,
+    "software.testing": 1
+  },
+  "gaps": [],
+  "permissions_granted": 0,
+  "plan_hash": "31f013d4aae46c78cef93c8f9aabd395bf2e53a7570ef68fab97ba473e98c495"
+}

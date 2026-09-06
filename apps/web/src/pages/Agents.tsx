@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useAppStore } from '../state/AppStore'
 import { Progress, Status } from '../components/Status'
 import { IdentityWorkforce } from '../components/IdentityWorkforce'
+import { AgentCatalog } from '../components/AgentCatalog'
 
 export function Agents() {
   const { agents, departments, tasks, action, selectAgent } = useAppStore()
@@ -22,6 +23,7 @@ export function Agents() {
   return <>
     <header className="page-title"><div><p className="eyebrow">Local workforce</p><h1>Agents</h1><p>Register and manage identities for real runtime work, then assign authorized tasks in Planning.</p></div></header>
     <IdentityWorkforce />
+    <AgentCatalog />
     <section aria-labelledby="demonstration-agents">
       <div className="page-title"><div><p className="eyebrow">Five permanent operators</p><h2 id="demonstration-agents">Demonstration agents</h2><p>Seeded simulation roles and workload. These cards describe the demonstration, with separate registration above for runtime identities.</p></div><button className="secondary" disabled={busy} onClick={() => setShowForm(!showForm)}>Create temporary agent</button></div>
       {showForm && <form className="panel create-form" onSubmit={event => void create(event)} aria-label="Create demonstration agent"><label>Name<input name="name" required minLength={2} disabled={busy}/></label><label>Role<input name="role" required minLength={2} disabled={busy}/></label><label>Department<select name="department" disabled={busy}>{departments.map(department => <option value={department.id} key={department.id}>{department.name}</option>)}</select></label><button className="primary" disabled={busy}>{busy ? 'Creating…' : 'Create restricted simulation'}</button>{error && <p role="alert">{error}</p>}</form>}

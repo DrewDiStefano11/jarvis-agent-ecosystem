@@ -59,7 +59,7 @@ def test_phase_2c_upgrade_downgrade_and_reupgrade(tmp_path: Path) -> None:
     command.upgrade(config, "head")
     with create_database_engine(database_url(path)).connect() as connection:
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260905_08"
+        assert connection.scalar(text("select version_num from alembic_version")) == "20260906_09"
 
 
 def test_phase_2c_downgrade_refuses_unrepresentable_rows_before_ddl(tmp_path: Path) -> None:

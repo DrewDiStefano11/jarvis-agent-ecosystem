@@ -26,6 +26,58 @@ def now_utc() -> datetime:
     return datetime.now(UTC)
 
 
+class CatalogSourceRow(Base):
+    __tablename__ = "catalog_sources"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(80))
+    repository: Mapped[str] = mapped_column(String(200))
+    commit: Mapped[str] = mapped_column(String(40))
+    license: Mapped[str] = mapped_column(String(100))
+    license_text: Mapped[str] = mapped_column(Text)
+    snapshot_hash: Mapped[str] = mapped_column(String(64))
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    imported_count: Mapped[int] = mapped_column(Integer)
+    __table_args__ = (UniqueConstraint("provider", "commit"),)
+
+
+class CatalogEntryRow(Base):
+    __tablename__ = "catalog_entries"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    stable_key: Mapped[str] = mapped_column(String(160), unique=True)
+    kind: Mapped[str] = mapped_column(String(20), index=True)
+    current_revision_id: Mapped[str | None] = mapped_column(String(80))
+    duplicate_of: Mapped[str | None] = mapped_column(ForeignKey("catalog_entries.id"))
+    duplicate_key: Mapped[str] = mapped_column(String(64), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    __table_args__ = (CheckConstraint("kind IN ('agent','skill','discovery')"),)
+
+
+class CatalogRevisionRow(Base):
+    __tablename__ = "catalog_revisions"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    entry_id: Mapped[str] = mapped_column(ForeignKey("catalog_entries.id"), index=True)
+    source_id: Mapped[str] = mapped_column(ForeignKey("catalog_sources.id"))
+    source_path: Mapped[str] = mapped_column(String(500))
+    source_hash: Mapped[str] = mapped_column(String(64))
+    parser_version: Mapped[str] = mapped_column(String(80))
+    normalized: Mapped[dict[str, Any]] = mapped_column(JSON)
+    original_definition: Mapped[str] = mapped_column(Text)
+    review_status: Mapped[str] = mapped_column(String(30), default="unreviewed")
+    imported_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+    __table_args__ = (
+        UniqueConstraint("entry_id", "source_id", "parser_version"),
+        CheckConstraint("review_status IN ('unreviewed','approved','rejected')"),
+    )
+
+
+class CatalogActivationRow(Base):
+    __tablename__ = "catalog_activations"
+    entry_id: Mapped[str] = mapped_column(ForeignKey("catalog_entries.id"), primary_key=True)
+    revision_id: Mapped[str] = mapped_column(ForeignKey("catalog_revisions.id"))
+    identity_id: Mapped[str] = mapped_column(ForeignKey("identity_agents.id"), unique=True)
+    activated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now_utc)
+
+
 class DepartmentRow(Base):
     __tablename__ = "departments"
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
