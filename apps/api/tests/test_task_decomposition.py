@@ -421,3 +421,48 @@ def test_assignment_stable_balancing_and_optional_coverage(app):
     assert not issues
     assert [n.assignedAgentId for n in first] == [n.assignedAgentId for n in second]
     assert len({n.assignedAgentId for n in first}) == 2
+
+
+def test_operator_protected_blocks_redecomposition(app):
+    task_id, assembly_id, router = setup(app)
+    first = asyncio.run(service(app).prepare(task_id, assembly_id))
+
+    with app.state.repository.session_factory() as session, session.begin():
+        row = session.get(TaskDecompositionRow, first.id)
+        from sqlalchemy.orm.attributes import flag_modified
+        payload = row.payload.copy()
+        payload["operatorProtected"] = True
+        row.payload = payload
+        flag_modified(row, "payload")
+
+    with app.state.repository.session_factory() as session, session.begin():
+        row = session.get(TaskRow, task_id)
+        payload = row.payload.copy()
+        payload["request"] = "something new"
+        row.payload = payload
+        flag_modified(row, "payload")
+        
+    from app.core.errors import DomainError
+    with pytest.raises(DomainError, match="Operator"):
+        asyncio.run(service(app).prepare(task_id, assembly_id))
+
+
+def test_decomposition_inference_is_strictly_bounded(app):
+    task_id, assembly_id, router = setup(app)
+    # The taxonomy contains 100+ capabilities, but the request should only include selected agent metadata
+    result = asyncio.run(service(app).prepare(task_id, assembly_id))
+
+    req = router.decomposition_requests[0]
+    user_msg = next(m.content for m in req.messages if m.role == "user")
+
+    # Assert it does NOT include prompt instructions of the agents
+    assert "You are Scout" not in user_msg
+    # Assert it includes the taxonomy
+    assert "software.architecture" in user_msg
+
+    parsed = json.loads(user_msg)
+    # Assert only selected agents are in the specialists list (no dormant agents or unselected agents)
+    assert len(parsed["specialists"]) == len(
+        app.state.repository.get_task_durable(task_id).teamSelection.selectedAgentIds
+    )
+    assert "prompt" not in parsed["specialists"][0]
