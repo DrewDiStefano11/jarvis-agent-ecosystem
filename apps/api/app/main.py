@@ -81,6 +81,7 @@ from app.repositories.task_leases import TaskLeaseRepository
 from app.services.events import EventBroker
 from app.services.task_creation import prepare_task_creation
 from app.simulator.engine import SimulatorEngine
+from app.team_selection.router import router as team_selection_router
 from app.tool_execution.router import router as tool_execution_router
 from app.tool_execution.service import ToolExecutionService
 
@@ -298,6 +299,7 @@ def create_app(
     app.include_router(identity_router)
     app.include_router(catalog_router)
     app.include_router(office_router)
+    app.include_router(team_selection_router)
     app.state.lease_recovery_task = None
     app.state.office_recovery_task = None
     app.state.restored_workflow_state = restored_workflow_state
@@ -964,6 +966,17 @@ def create_app(
             actor_id = actor_context.actor_id
 
         task = repository.get_task_durable(body.taskId)
+
+        if not task.teamSelection or task.teamSelection.status != "completed":
+            from app.team_selection.service import TeamSelectionService
+
+            team_selector = TeamSelectionService(
+                repository=repository,
+                identity_service=app.state.identity_service,
+                model_router=app.state.model_router,
+                event_broker=broker,
+            )
+            task = await team_selector.assign_team(task)
 
         enricher = ContextEnricher(
             identity_service=app.state.identity_service,

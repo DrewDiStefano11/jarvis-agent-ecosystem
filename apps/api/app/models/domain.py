@@ -13,6 +13,7 @@ from app.models.agent_runtime import (
 from app.models.autonomous_worker import AutonomousWorkerStatus
 from app.models.constraints import MAX_CORRELATION_ID_LENGTH
 from app.models.context import ContextAssemblerStatus
+from app.models.team_selection import TeamSelectionRecord
 
 AgentStatus = Literal[
     "idle",
@@ -135,6 +136,7 @@ class Task(ContractModel):
     createdBy: str
     assignedManagerId: str | None = None
     assignedAgentIds: list[str] = Field(default_factory=list)
+    teamSelection: TeamSelectionRecord | None = None
     priority: Literal["low", "medium", "high", "urgent"] = "medium"
     status: TaskStatus = "queued"
     progress: int = Field(default=0, ge=0, le=100)
