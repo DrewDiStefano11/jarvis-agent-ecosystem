@@ -348,18 +348,23 @@ def test_permission_summary_includes_granted_and_denied():
 
 
 def test_permission_summary_isolates_evaluation_errors():
+    class ThrowingIdentityService(MockIdentityService):
+        def check_permission_resource_access(
+            self, actor_id: str, permission: str, resource_type: str, resource_id: str
+        ):
+            raise RuntimeError("Database error")
+
     enricher = ContextEnricher(
-        identity_service=MockIdentityService(),
+        identity_service=ThrowingIdentityService(),
         settings=MockSettings(),
         repository=MockRepository(),
         tool_registry=MockToolRegistry(),
     )
-    sources = enricher.enrich("t1", actor_id="throw")
-    # All permissions will raise in MockIdentityService if perm == "throw"
-    # But wait, our mock raises if permission == "throw". The keys are "runtime.read", etc.
-    # We should test isolated failure of one permission evaluation or the whole thing.
-    # In MockIdentityService we didn't mock "throw" actor correctly. Let's just say it succeeds.
-    assert any(s.sourceId == "system-permission-summary" for s in sources)
+    sources = enricher.enrich("t1", actor_id="a1")
+    # Should not blow up, but should just not contain permission summary (or contain an error version, but our code skips it)
+    assert not any(s.sourceId == "system-permission-summary" for s in sources)
+    # But it should still contain other things like system-runtime-state
+    assert any(s.sourceId == "system-runtime-state" for s in sources)
 
 
 def test_permission_summary_has_correct_metadata():

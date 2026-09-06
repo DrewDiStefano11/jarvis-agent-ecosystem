@@ -305,13 +305,9 @@ class ContextEnricher:
                 except Exception:
                     pass
 
-        lines.extend(
-            [
-                "Prohibited execution classes: shell, browser, external_actions",
-                "All workspace tool execution requires explicit operator authorization",
-                "Maximum file size: 64 KB per operation",
-            ]
-        )
+        # Only include facts we can derive
+        # If we had a mechanism to query max file size or prohibited classes, we'd add it here.
+        # But since we cannot safely derive them, we omit them rather than forging them.
         content = "\n".join(lines) + "\n"
 
         return _source(
@@ -357,8 +353,6 @@ class ContextEnricher:
         ]
         if explicit_denials:
             lines.append("Note: explicit deny rules are in effect for this actor")
-        lines.append("Workspace execution requires explicit operator authorization")
-        lines.append("External actions are prohibited")
         content = "\n".join(lines) + "\n"
 
         return _source(
@@ -371,14 +365,10 @@ class ContextEnricher:
 
     def _persistence_facts(self) -> ContextSource:
         """Build persistence/recovery fact summary from actual implementation."""
+        # We cannot safely derive these at runtime from settings/constants alone.
+        # Following strict truthfulness guidelines, we omit hardcoded architectural claims.
         lines = [
-            "Task state is durable (SQLite with Alembic migrations)",
-            "Runtime state and checkpoints are durable",
-            "Model execution results are persisted with SHA-256 integrity hashes",
-            "Lease-fenced retries prevent duplicate execution",
-            "Emergency stop capability exists and is respected",
-            "Completed results survive API/worker restart",
-            "Recovery from interrupted executions is automatic",
+            "Persistence details are opaque to this environment.",
         ]
         content = "\n".join(lines) + "\n"
 

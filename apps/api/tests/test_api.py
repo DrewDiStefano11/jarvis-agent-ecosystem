@@ -17,14 +17,12 @@ from app.models.domain import SystemStatus
 from app.models.manifest import load_manifest
 
 
-from app.main import settings
-
 @pytest.fixture(autouse=True)
 def isolated_database(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     database = (tmp_path / "jarvis-test.db").as_posix()
     monkeypatch.setenv("JARVIS_DATABASE_URL", f"sqlite:///{database}")
-    monkeypatch.setattr(settings, "autonomous_worker_enabled", False)
-    monkeypatch.setattr(settings, "web_origin", "http://localhost:5173")
+    monkeypatch.setenv("JARVIS_AUTONOMOUS_WORKER_ENABLED", "false")
+    monkeypatch.setenv("JARVIS_WEB_ORIGIN", "http://localhost:5173")
 
 
 def client() -> TestClient:
@@ -478,3 +476,17 @@ def test_system_status_does_not_query_runtime_when_database_unreachable_or_schem
         system_status = client.get("/api/system/status").json()["data"]
         assert health["status"] == system_status["status"] == "degraded"
     assert calls["count"] == 0
+
+
+def test_autonomous_worker_max_concurrency_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    import pydantic
+
+    from app.core.config import Settings
+
+    monkeypatch.setenv("JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY", "1")
+    s = Settings()
+    assert s.autonomous_worker_max_concurrency == 1
+
+    monkeypatch.setenv("JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY", "2")
+    with pytest.raises(pydantic.ValidationError):
+        Settings()

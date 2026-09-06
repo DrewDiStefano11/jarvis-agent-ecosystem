@@ -44,7 +44,9 @@ from app.models.context import (
     ContextAssemblyEventPayload,
     ContextAssemblyListResponse,
     ContextAssemblyResponse,
+    ContextSourceType,
     CreateContextAssemblyRequest,
+    TrustLevel,
 )
 from app.models.domain import (
     AcquireTaskLeaseRequest,
@@ -912,7 +914,36 @@ def create_app(
         request: Request,
         body: CreateContextAssemblyRequest,
         idempotency_key: IdempotencyKeyHeader = None,
+        x_jarvis_actor_id: Annotated[str | None, Header(alias="X-Jarvis-Actor-Id")] = None,
     ) -> ApiResponse | JSONResponse:
+        from fastapi import HTTPException
+
+        for source in body.sources:
+            if source.trustLevel in {
+                TrustLevel.SYSTEM_POLICY,
+                TrustLevel.TRUSTED_CONFIGURATION,
+                TrustLevel.TASK_REQUEST,
+                TrustLevel.TRUSTED_VALIDATOR,
+                TrustLevel.TRUSTED_TOOL_RESULT,
+                TrustLevel.APPROVED_ARTIFACT,
+                TrustLevel.PRIOR_MODEL_OUTPUT,
+            }:
+                raise HTTPException(
+                    status_code=403, detail="Client cannot forge trusted system context sources"
+                )
+
+            if source.sourceType in {
+                ContextSourceType.SYSTEM_POLICY,
+                ContextSourceType.TASK_REQUEST,
+                ContextSourceType.TOOL_RESULT,
+                ContextSourceType.VALIDATOR_RESULT,
+                ContextSourceType.PRIOR_MODEL_OUTPUT,
+            }:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Client cannot forge backend-owned source types ({source.sourceType})",
+                )
+
         payload = body.model_dump(mode="json")
         replay = replay_idempotent(
             request,
@@ -923,6 +954,11 @@ def create_app(
         if replay is not None:
             return ApiResponse(data=ContextAssembly.model_validate(replay))
 
+        actor_id = None
+        if x_jarvis_actor_id is not None:
+            actor_context = app.state.agent_runtime_service.authenticate_actor(x_jarvis_actor_id)
+            actor_id = actor_context.actor_id
+
         task = repository.get_task_durable(body.taskId)
 
         enricher = ContextEnricher(
@@ -931,7 +967,7 @@ def create_app(
             repository=repository,
             tool_registry=getattr(app.state, "tool_execution_service", None),
         )
-        system_sources = enricher.enrich(body.taskId, actor_id=None)
+        system_sources = enricher.enrich(body.taskId, actor_id=actor_id)
         body.sources.extend(system_sources)
 
         item = context_assembler.assemble(task, body)
