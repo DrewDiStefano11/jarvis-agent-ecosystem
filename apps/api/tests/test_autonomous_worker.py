@@ -160,14 +160,52 @@ class FakeRouter:
     def __init__(self, contents: list[str], callback: Any = None) -> None:
         self.registry = FakeRegistry()
         self.contents = list(contents)
-        self.requests = []
+        self.all_requests = []
+        self.plan_requests = []
+        self.team_requests = []
         self.callback = callback
 
+    @property
+    def requests(self):
+        # Backward compatibility for existing tests that assume requests == plan_requests
+        return self.plan_requests
+
     async def execute(self, *, request, requirements, budget, pricing=None):
-        self.requests.append(request)
+        self.all_requests.append(request)
+
+        is_capabilities = False
+        if getattr(request, "output_schema", None):
+            schema = request.output_schema
+            if isinstance(schema, dict) and schema.get("title") == "RequiredCapabilitiesResult":
+                is_capabilities = True
+            elif getattr(schema, "name", None) == "required_capabilities":
+                is_capabilities = True
+
+        if is_capabilities:
+            self.team_requests.append(request)
+            import json
+
+            content = json.dumps({"required": [], "optional": [], "reasoning_summary": "mocked"})
+            return ModelExecutionResponse(
+                content=content,
+                provider="local-fake",
+                model="fixture-model",
+                input_tokens=0,
+                output_tokens=0,
+                usage_quality=UsageQuality.EXACT,
+                latency_ms=0,
+                finish_reason="stop",
+                task_id=request.task_id,
+                correlation_id=request.correlation_id,
+                estimated_cost_usd=0,
+            )
+
+        self.plan_requests.append(request)
         if self.callback is not None:
             self.callback()
+
         content = self.contents.pop(0)
+
         return ModelExecutionResponse(
             content=content,
             provider="local-fake",
