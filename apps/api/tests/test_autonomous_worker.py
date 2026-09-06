@@ -164,15 +164,28 @@ class FakeRouter:
         self.callback = callback
 
     async def execute(self, *, request, requirements, budget, pricing=None):
+        if getattr(request, "output_schema", None) and getattr(request.output_schema, "name", None) == "required_capabilities":
+            import json
+            content = json.dumps({"required": [], "optional": [], "reasoning_summary": "mocked"})
+            return ModelExecutionResponse(
+                content=content,
+                provider="local-fake",
+                model="fixture-model",
+                input_tokens=0,
+                output_tokens=0,
+                usage_quality=UsageQuality.EXACT,
+                latency_ms=0,
+                finish_reason="stop",
+                task_id=request.task_id,
+                correlation_id=request.correlation_id,
+                estimated_cost_usd=0,
+            )
+
         self.requests.append(request)
         if self.callback is not None:
             self.callback()
             
-        if getattr(request, "output_schema", None) and getattr(request.output_schema, "name", None) == "required_capabilities":
-            import json
-            content = json.dumps({"required": [], "optional": [], "reasoning_summary": "mocked"})
-        else:
-            content = self.contents.pop(0)
+        content = self.contents.pop(0)
             
         return ModelExecutionResponse(
             content=content,
