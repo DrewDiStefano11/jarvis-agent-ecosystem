@@ -2,7 +2,7 @@ from app.team_selection.service import TeamSelectionService
 
 
 def test_select_specialists_minimal_team():
-    service = TeamSelectionService(None, None, None, None)  # type: ignore
+    service = TeamSelectionService(None, None, None)  # type: ignore
     active_workforce = [
         {
             "id": "A",
@@ -39,7 +39,7 @@ def test_select_specialists_minimal_team():
 
 
 def test_select_specialists_hierarchy():
-    service = TeamSelectionService(None, None, None, None)  # type: ignore
+    service = TeamSelectionService(None, None, None)  # type: ignore
     active_workforce = [
         {
             "id": "A",
@@ -55,7 +55,7 @@ def test_select_specialists_hierarchy():
 
 
 def test_select_specialists_tie_breaker():
-    service = TeamSelectionService(None, None, None, None)  # type: ignore
+    service = TeamSelectionService(None, None, None)  # type: ignore
     active_workforce = [
         {
             "id": "A",
@@ -84,7 +84,7 @@ def test_select_specialists_tie_breaker():
 
 
 def test_missing_capability():
-    service = TeamSelectionService(None, None, None, None)  # type: ignore
+    service = TeamSelectionService(None, None, None)  # type: ignore
     active_workforce = [
         {
             "id": "A",
