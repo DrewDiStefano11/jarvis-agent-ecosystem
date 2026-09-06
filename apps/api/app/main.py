@@ -974,7 +974,6 @@ def create_app(
                 repository=repository,
                 identity_service=app.state.identity_service,
                 model_router=app.state.model_router,
-                event_broker=broker,
             )
             task = await team_selector.assign_team(task)
 

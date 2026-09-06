@@ -78,15 +78,21 @@ def main():
             self.reply({"models": [{"name": "fixture-model"}]})
 
         def do_POST(self):
-            calls.append(
-                json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            )
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            calls.append(payload)
             if office_mode:
                 time.sleep(3)  # Make real fixture execution observable in the office.
+
+            format_schema = payload.get("format", {})
+            if isinstance(format_schema, dict) and format_schema.get("title") == "RequiredCapabilitiesResult":
+                content = json.dumps({"required": [], "optional": [], "reasoning_summary": "Smoke fixture capabilities"})
+            else:
+                content = json.dumps(result)
+
             self.reply(
                 {
                     "model": "fixture-model",
-                    "message": {"role": "assistant", "content": json.dumps(result)},
+                    "message": {"role": "assistant", "content": content},
                     "done": True,
                     "done_reason": "stop",
                     "prompt_eval_count": 20,
@@ -304,9 +310,25 @@ for (const name of ['client', 'planning']) {
                 print(completed.stdout.strip())
                 # The planning browser checks an original and a corrected task;
                 # the office browser observes one actual worker execution.
-                expected_calls = 2 if browser_mode and not office_mode else 1
-                assert len(calls) == expected_calls, (
-                    f"Expected {expected_calls} inference requests, got {len(calls)}"
+                expected_tasks = 2 if browser_mode and not office_mode else 1
+                
+                team_calls = [
+                    c for c in calls
+                    if isinstance(c.get("format"), dict) and c.get("format").get("title") == "RequiredCapabilitiesResult"
+                ]
+                plan_calls = [
+                    c for c in calls
+                    if not (isinstance(c.get("format"), dict) and c.get("format").get("title") == "RequiredCapabilitiesResult")
+                ]
+                
+                assert len(team_calls) == expected_tasks, (
+                    f"Expected {expected_tasks} team capability requests, got {len(team_calls)}"
+                )
+                assert len(plan_calls) == expected_tasks, (
+                    f"Expected {expected_tasks} planning requests, got {len(plan_calls)}"
+                )
+                assert len(calls) == expected_tasks * 2, (
+                    f"Expected exactly {expected_tasks * 2} total inference requests, got {len(calls)}"
                 )
                 print(
                     "PASS: API + separate worker + frontend command replay + durable reviewed result"
