@@ -29,6 +29,8 @@ from app.autonomous_worker.repository import ModelExecutionRepository
 from app.autonomous_worker.router import router as autonomous_worker_router
 from app.autonomous_worker.service import AutonomousWorkerService
 from app.autonomous_worker.setup_router import router as local_planning_setup_router
+from app.catalog.router import router as catalog_router
+from app.catalog.service import CatalogService
 from app.context import ContextAssembler
 from app.context.enrichment import ContextEnricher
 from app.core.config import Settings
@@ -82,7 +84,7 @@ from app.simulator.engine import SimulatorEngine
 from app.tool_execution.router import router as tool_execution_router
 from app.tool_execution.service import ToolExecutionService
 
-DATABASE_REVISION = "20260905_08"
+DATABASE_REVISION = "20260906_09"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
@@ -266,6 +268,7 @@ def create_app(
     app.state.engine = engine
     app.state.task_leases = task_leases
     app.state.identity_service = IdentityService(session_factory)
+    app.state.catalog_service = CatalogService(session_factory)
     app.state.office_service = OfficeService(session_factory)
     app.state.agent_runtime_repository = SqlAlchemyAgentRuntimeRepository(
         session_factory, outbox_max_attempts=repository.outbox_max_attempts
@@ -293,6 +296,7 @@ def create_app(
     app.include_router(autonomous_worker_router)
     app.include_router(local_planning_setup_router)
     app.include_router(identity_router)
+    app.include_router(catalog_router)
     app.include_router(office_router)
     app.state.lease_recovery_task = None
     app.state.office_recovery_task = None

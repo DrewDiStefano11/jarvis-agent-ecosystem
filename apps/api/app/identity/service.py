@@ -13,6 +13,10 @@ from app.db.models import (
     AgentCapabilityAssignmentRow,
     AgentPermissionAssignmentRow,
     AgentRoleAssignmentRow,
+    CatalogActivationRow,
+    CatalogEntryRow,
+    CatalogRevisionRow,
+    CatalogSourceRow,
     IdentityAgentRow,
     IdentityAuditEventRow,
     IdentityCapabilityRow,
@@ -115,20 +119,23 @@ class IdentityService:
     def create_agent(self, data) -> IdentityAgentRow:
         with UnitOfWork(self.sessions) as uow:
             assert uow.session
-            if data.rank_id and not uow.session.get(IdentityRankRow, data.rank_id):
-                raise DomainError("RANK_NOT_FOUND", "Rank was not found.", 404)
-            row = IdentityAgentRow(id=uid("agent"), **data.model_dump())
-            uow.session.add(row)
-            self._audit(uow.session, "agent.created", "agent", row.id)
-            try:
-                uow.session.flush()
-            except IntegrityError as exc:
-                if not is_duplicate_agent_stable_key(exc):
-                    raise
-                raise DomainError(
-                    "DUPLICATE_STABLE_KEY", "Agent stable key already exists.", 409
-                ) from exc
-            return row
+            return self.create_agent_in_session(uow.session, data)
+
+    def create_agent_in_session(self, session: Session, data) -> IdentityAgentRow:
+        if data.rank_id and not session.get(IdentityRankRow, data.rank_id):
+            raise DomainError("RANK_NOT_FOUND", "Rank was not found.", 404)
+        row = IdentityAgentRow(id=uid("agent"), **data.model_dump())
+        session.add(row)
+        self._audit(session, "agent.created", "agent", row.id)
+        try:
+            session.flush()
+        except IntegrityError as exc:
+            if not is_duplicate_agent_stable_key(exc):
+                raise
+            raise DomainError(
+                "DUPLICATE_STABLE_KEY", "Agent stable key already exists.", 409
+            ) from exc
+        return row
 
     def list_agents(
         self, offset: int, limit: int, capability: str | None = None
@@ -164,6 +171,90 @@ class IdentityService:
     def get_agent(self, agent_id: str) -> IdentityAgentRow:
         with self.sessions() as s:
             return self._agent(s, agent_id)
+
+    def workforce_snapshot(self, limit: int = 20) -> list[dict]:
+        """Bounded metadata only, using existing effective capability assignments."""
+        limit = min(max(limit, 1), 100)
+        with self.sessions() as session:
+            rows = session.execute(
+                select(
+                    IdentityAgentRow,
+                    CatalogRevisionRow.normalized["role"].as_string(),
+                    CatalogSourceRow.repository,
+                    CatalogActivationRow.revision_id,
+                )
+                .outerjoin(
+                    CatalogActivationRow, CatalogActivationRow.identity_id == IdentityAgentRow.id
+                )
+                .outerjoin(CatalogEntryRow, CatalogEntryRow.id == CatalogActivationRow.entry_id)
+                .outerjoin(
+                    CatalogRevisionRow, CatalogRevisionRow.id == CatalogActivationRow.revision_id
+                )
+                .outerjoin(CatalogSourceRow, CatalogSourceRow.id == CatalogRevisionRow.source_id)
+                .where(
+                    IdentityAgentRow.lifecycle_state == "active",
+                    IdentityAgentRow.is_enabled,
+                    or_(CatalogActivationRow.entry_id.is_(None), CatalogEntryRow.enabled),
+                )
+                .order_by(IdentityAgentRow.is_system_agent.desc(), IdentityAgentRow.stable_key)
+                .limit(limit)
+            ).all()
+            agents = [row[0] for row in rows]
+            provenance = {row[0].id: row[1:] for row in rows}
+            if not agents:
+                return []
+            instant = now()
+            capabilities: dict[str, list[str]] = {agent.id: [] for agent in agents}
+            # Rank per identity in SQL: bounded rows even if an operator assigns
+            # thousands of capability labels to one identity.
+            from sqlalchemy import func
+
+            ranked = (
+                select(
+                    AgentCapabilityAssignmentRow.agent_id.label("agent_id"),
+                    IdentityCapabilityRow.stable_key.label("key"),
+                    func.row_number()
+                    .over(
+                        partition_by=AgentCapabilityAssignmentRow.agent_id,
+                        order_by=IdentityCapabilityRow.stable_key,
+                    )
+                    .label("position"),
+                )
+                .join(
+                    IdentityCapabilityRow,
+                    IdentityCapabilityRow.id == AgentCapabilityAssignmentRow.capability_id,
+                )
+                .where(
+                    AgentCapabilityAssignmentRow.agent_id.in_(capabilities),
+                    AgentCapabilityAssignmentRow.revoked_at.is_(None),
+                    AgentCapabilityAssignmentRow.starts_at <= instant,
+                    or_(
+                        AgentCapabilityAssignmentRow.expires_at.is_(None),
+                        AgentCapabilityAssignmentRow.expires_at > instant,
+                    ),
+                    IdentityCapabilityRow.is_enabled,
+                )
+                .subquery()
+            )
+            for agent_id, key in session.execute(
+                select(ranked.c.agent_id, ranked.c.key).where(ranked.c.position <= 12)
+            ):
+                capabilities[agent_id].append(key)
+            return [
+                dict(
+                    id=a.id,
+                    display_name=a.display_name,
+                    stable_key=a.stable_key,
+                    agent_type=a.agent_type,
+                    operational_status=a.operational_status,
+                    capabilities=sorted(set(capabilities[a.id])),
+                    role=provenance[a.id][0] or a.agent_type,
+                    source=provenance[a.id][1] or "Jarvis",
+                    catalog_revision_id=provenance[a.id][2],
+                    is_enabled=a.is_enabled,
+                )
+                for a in agents
+            ]
 
     def update_agent(self, agent_id: str, data) -> IdentityAgentRow:
         with UnitOfWork(self.sessions) as uow:
@@ -207,35 +298,45 @@ class IdentityService:
     ) -> IdentityAgentRow:
         with UnitOfWork(self.sessions) as uow:
             assert uow.session
-            row = self._agent(uow.session, agent_id)
-            if target == row.lifecycle_state:
-                return row
-            self._validate_attribution(uow.session, actor)
-            if target not in TRANSITIONS[row.lifecycle_state]:
-                raise DomainError(
-                    "INVALID_LIFECYCLE_TRANSITION",
-                    f"Cannot transition from {row.lifecycle_state} to {target}.",
-                    409,
-                )
-            previous = row.lifecycle_state
-            row.lifecycle_state = target
-            row.updated_at = now()
-            row.version += 1
-            if target in {"suspended", "retired"}:
-                row.operational_status = "offline"
-            if target == "retired":
-                row.retired_at = now()
-                row.is_enabled = False
-            self._audit(
-                uow.session,
-                f"agent.{target}",
-                "agent",
-                row.id,
-                actor,
-                reason,
-                {"lifecycle_state": [previous, target]},
-            )
+            return self.transition_in_session(uow.session, agent_id, target, actor, reason)
+
+    def transition_in_session(
+        self,
+        session: Session,
+        agent_id: str,
+        target: str,
+        actor: str | None = None,
+        reason: str = "",
+    ) -> IdentityAgentRow:
+        row = self._agent(session, agent_id)
+        if target == row.lifecycle_state:
             return row
+        self._validate_attribution(session, actor)
+        if target not in TRANSITIONS[row.lifecycle_state]:
+            raise DomainError(
+                "INVALID_LIFECYCLE_TRANSITION",
+                f"Cannot transition from {row.lifecycle_state} to {target}.",
+                409,
+            )
+        previous = row.lifecycle_state
+        row.lifecycle_state = target
+        row.updated_at = now()
+        row.version += 1
+        if target in {"suspended", "retired"}:
+            row.operational_status = "offline"
+        if target == "retired":
+            row.retired_at = now()
+            row.is_enabled = False
+        self._audit(
+            session,
+            f"agent.{target}",
+            "agent",
+            row.id,
+            actor,
+            reason,
+            {"lifecycle_state": [previous, target]},
+        )
+        return row
 
     def create_definition(self, kind: str, data):
         models = {

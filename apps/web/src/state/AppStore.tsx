@@ -10,6 +10,7 @@ import {
 } from 'react'
 import { post, request, WS_URL } from '../api/client'
 import { useRuntimeState } from './useRuntimeState'
+import { useCatalogState } from './useCatalogState'
 import { useOfficeState } from './useOfficeState'
 import { useToolExecutionState } from './useToolExecutionState'
 import type {
@@ -43,6 +44,7 @@ interface AppState {
 }
 
 interface Store extends AppState {
+  catalog: ReturnType<typeof useCatalogState>
   runtime: ReturnType<typeof useRuntimeState>
   office: ReturnType<typeof useOfficeState>
   tools: ReturnType<typeof useToolExecutionState>
@@ -116,6 +118,7 @@ function parseSnapshot(payload: Record<string, unknown>): {
 export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState(initial)
   const runtime = useRuntimeState(state.lastSync)
+  const catalog = useCatalogState(runtime.refreshRuntime)
   const office = useOfficeState(state.lastSync)
   const tools = useToolExecutionState(runtime.actorId, runtime.taskId, state.lastSync)
   const [selectedAgentId, selectAgent] = useState<string | null>(null)
@@ -346,6 +349,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
     () => ({
       ...state,
       runtime,
+      catalog,
       office,
       tools,
       refresh,
@@ -355,7 +359,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       selectedAgentId,
       selectedTaskId,
     }),
-    [state, runtime, office, tools, refresh, action, selectedAgentId, selectedTaskId],
+    [state, runtime, catalog, office, tools, refresh, action, selectedAgentId, selectedTaskId],
   )
   return <Context.Provider value={value}>{children}</Context.Provider>
 }
