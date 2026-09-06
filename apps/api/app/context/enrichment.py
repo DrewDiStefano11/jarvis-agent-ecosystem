@@ -81,7 +81,9 @@ class ContextEnricher:
         self.repository = repository
         self.tool_registry = tool_registry
 
-    def enrich(self, task_id: str, actor_id: str | None = None) -> list[ContextSource]:
+    def enrich(
+        self, task_id: str, actor_id: str | None = None, *, task=None
+    ) -> list[ContextSource]:
         """Build bounded authoritative context sources for a task.
 
         Each subsystem failure is isolated: a failed snapshot logs a warning
@@ -92,7 +94,7 @@ class ContextEnricher:
 
         # 1. Task state
         try:
-            task_source, project_id = self._task_state(task_id)
+            task_source, project_id = self._task_state(task_id, task=task)
             if task_source is not None:
                 sources.append(task_source)
         except Exception:
@@ -100,7 +102,12 @@ class ContextEnricher:
 
         # 2. Workforce snapshot
         try:
-            workforce = self._workforce_snapshot(project_id)
+            ids = None
+            if task is not None and task.teamSelection is not None:
+                ids = task.teamSelection.selectedAgentIds + (
+                    [task.teamSelection.managerId] if task.teamSelection.managerId else []
+                )
+            workforce = self._workforce_snapshot(project_id, agent_ids=ids)
             if workforce is not None:
                 sources.append(workforce)
         except Exception:
@@ -152,13 +159,12 @@ class ContextEnricher:
     # Individual snapshot builders
     # ------------------------------------------------------------------
 
-    def _task_state(self, task_id: str) -> tuple[ContextSource | None, str | None]:
+    def _task_state(self, task_id: str, *, task=None) -> tuple[ContextSource | None, str | None]:
         """Build task state snapshot. Returns (source, project_id)."""
         repo = self.repository
-        task = None
-        if hasattr(repo, "get_task_durable"):
+        if task is None and hasattr(repo, "get_task_durable"):
             task = repo.get_task_durable(task_id)
-        elif hasattr(repo, "tasks"):
+        elif task is None and hasattr(repo, "tasks"):
             task = repo.tasks.get(task_id)
         if task is None:
             return None, None
@@ -196,10 +202,16 @@ class ContextEnricher:
             task.projectId,
         )
 
-    def _workforce_snapshot(self, project_id: str | None) -> ContextSource | None:
+    def _workforce_snapshot(
+        self, project_id: str | None, *, agent_ids=None
+    ) -> ContextSource | None:
         """Build workforce snapshot of active, enabled agents."""
         if hasattr(self.identity_service, "workforce_snapshot"):
-            workforce = self.identity_service.workforce_snapshot(_MAX_AGENTS)
+            workforce = (
+                self.identity_service.workforce_snapshot(_MAX_AGENTS, agent_ids=agent_ids)
+                if agent_ids is not None
+                else self.identity_service.workforce_snapshot(_MAX_AGENTS)
+            )
             # Labels are operator/external data, never trusted configuration.
             # Fact gathering does not upgrade the trust of stored text.
             return _source(

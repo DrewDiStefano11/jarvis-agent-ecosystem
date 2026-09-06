@@ -620,7 +620,8 @@ class SqlAlchemyRepository:
                         delete(TaskAgentRow).where(TaskAgentRow.task_id == updated_task.id)
                     )
                     for agent_id in updated_task.assignedAgentIds:
-                        session.add(TaskAgentRow(task_id=updated_task.id, agent_id=agent_id))
+                        if agent_id in self.agents:
+                            session.add(TaskAgentRow(task_id=updated_task.id, agent_id=agent_id))
                     session.flush()
                 self._persist_audit(session)
                 if pending_workflow_run:
@@ -670,6 +671,28 @@ class SqlAlchemyRepository:
                 409,
             )
         session.merge(self._context_row(item))
+        if task.teamSelection is not None:
+            if (
+                current.teamSelection
+                and current.teamSelection.status == "completed"
+                and current.teamSelection.selectionId != task.teamSelection.selectionId
+            ):
+                raise DomainError(
+                    "CONTEXT_TEAM_CHANGED",
+                    "Team selection changed while preparing context. Try again.",
+                    409,
+                )
+            current.teamSelection = task.teamSelection
+            current.assignedManagerId = task.assignedManagerId
+            current.assignedAgentIds = task.assignedAgentIds
+            row.payload = current.model_dump(mode="json")
+            row.assigned_manager_id = current.assignedManagerId
+            session.execute(delete(TaskAgentRow).where(TaskAgentRow.task_id == task.id))
+            for agent_id in current.assignedAgentIds:
+                # Match _persist_entities: task_agents is the legacy simulator
+                # projection, while task.teamSelection owns real identity IDs.
+                if agent_id in self.agents:
+                    session.add(TaskAgentRow(task_id=task.id, agent_id=agent_id))
         session.flush()
 
     def _insert_created_task(self, session: Session, item: Task) -> None:

@@ -163,6 +163,7 @@ class FakeRouter:
         self.all_requests = []
         self.plan_requests = []
         self.team_requests = []
+        self.decomposition_requests = []
         self.callback = callback
 
     @property

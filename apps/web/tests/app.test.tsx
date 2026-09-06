@@ -23,7 +23,7 @@ class FakeWebSocket {static instances:FakeWebSocket[]=[];static CONNECTING=0;sta
 
 function renderApp(){return render(<BrowserRouter><AppStoreProvider><App/></AppStoreProvider></BrowserRouter>)}
 beforeEach(() => localStorage.clear())
-beforeEach(()=>{window.history.pushState({},'', '/');FakeWebSocket.instances=[];vi.stubGlobal('WebSocket',FakeWebSocket);vi.stubGlobal('fetch',vi.fn(async(input:string|URL|Request,init?:RequestInit)=>{const path=new URL(typeof input==='string'?input:input instanceof URL?input.href:input.url).pathname;const data=endpointData[path]??(init?.method==='POST'?{}:[]);return {ok:true,status:200,json:async()=>({data,meta:{schemaVersion:'1.0'}})} as Response}))})
+beforeEach(()=>{window.history.pushState({},'', '/');FakeWebSocket.instances=[];vi.stubGlobal('WebSocket',FakeWebSocket);vi.stubGlobal('fetch',vi.fn(async(input:string|URL|Request,init?:RequestInit)=>{const path=new URL(typeof input==='string'?input:input instanceof URL?input.href:input.url).pathname;const data=endpointData[path]??(path.endsWith('/decomposition')?null:init?.method==='POST'?{}:[]);return {ok:true,status:200,json:async()=>({data,meta:{schemaVersion:'1.0'}})} as Response}))})
 
 describe('Jarvis interface',()=>{
  test('dashboard renders synchronized seed state',async()=>{renderApp();expect(await screen.findByText('Good evening, operator.')).toBeInTheDocument();expect(screen.getByText('Available agents')).toBeInTheDocument();expect(screen.getByText('fixture 18%')).toBeInTheDocument()})
