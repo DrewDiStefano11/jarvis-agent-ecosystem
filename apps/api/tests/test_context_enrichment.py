@@ -361,9 +361,12 @@ def test_permission_summary_isolates_evaluation_errors():
         tool_registry=MockToolRegistry(),
     )
     sources = enricher.enrich("t1", actor_id="a1")
-    # Should not blow up, but should just not contain permission summary (or contain an error version, but our code skips it)
-    assert not any(s.sourceId == "system-permission-summary" for s in sources)
-    # But it should still contain other things like system-runtime-state
+    # Should contain fail-closed permission summary
+    ps = next(s for s in sources if s.sourceId == "system-permission-summary")
+    assert "Granted permissions: none" in ps.content
+    assert "(evaluation failed)" in ps.content
+
+    # And it should still contain other things like system-runtime-state
     assert any(s.sourceId == "system-runtime-state" for s in sources)
 
 
