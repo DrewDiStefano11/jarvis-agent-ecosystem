@@ -558,9 +558,10 @@ class SqlAlchemyRepository:
         *,
         created_task: Task | None = None,
         created_context: tuple[ContextAssembly, Task] | None = None,
+        updated_task: Task | None = None,
     ) -> dict[str, Any]:
         audit = envelope.pop("_audit", None)
-        persist_cache = created_task is None and created_context is None
+        persist_cache = created_task is None and created_context is None and updated_task is None
         pending_checkpoint = self._pending_checkpoint if persist_cache else None
         pending_workflow_run = self._pending_workflow_run if persist_cache else None
         try:
@@ -613,6 +614,14 @@ class SqlAlchemyRepository:
                     self._insert_created_task(session, created_task)
                 elif created_context is not None:
                     self._persist_created_context(session, *created_context)
+                elif updated_task is not None:
+                    session.merge(self._task_row(updated_task))
+                    session.execute(
+                        delete(TaskAgentRow).where(TaskAgentRow.task_id == updated_task.id)
+                    )
+                    for agent_id in updated_task.assignedAgentIds:
+                        session.add(TaskAgentRow(task_id=updated_task.id, agent_id=agent_id))
+                    session.flush()
                 self._persist_audit(session)
                 if pending_workflow_run:
                     session.add(WorkflowRunRow(**pending_workflow_run))
