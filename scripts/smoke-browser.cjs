@@ -30,10 +30,6 @@ const { chromium } = require(path.join(process.env.SMOKE_WEB, 'node_modules/play
     await nav.getByRole('link', { name: 'Planning', exact: true }).click()
     console.log('✅ Local capability planning succeeded');
 
-    // Re-focus browser on context assembly
-    await page.getByText('Assembly', { exact: true }).click();
-    console.log('✅ Navigated back to Assembly tab');
-    
     // Explicitly wait for the task option to be attached to the DOM
     // before attempting to select it. This mitigates a race where React
     // re-renders the options list while selectOption is interacting with it.
