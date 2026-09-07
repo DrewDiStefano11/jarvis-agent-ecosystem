@@ -260,6 +260,10 @@ class SqlAlchemyRepository:
                 assert uow.session is not None
                 self._persist_entities(uow.session)
                 self._persist_audit(uow.session)
+                db_system = uow.session.get(SystemStateRow, 1)
+                if db_system:
+                    self._system.current_sequence_number = db_system.current_sequence_number
+                    self._system.event_session_id = db_system.event_session_id
                 self._system.updated_at = datetime.now(UTC)
                 uow.session.merge(self._system)
         except Exception:
@@ -606,6 +610,10 @@ class SqlAlchemyRepository:
                     )
                 if persist_cache:
                     self._persist_entities(session)
+                    db_system = session.get(SystemStateRow, 1)
+                    if db_system:
+                        self._system.current_sequence_number = db_system.current_sequence_number
+                        self._system.event_session_id = db_system.event_session_id
                     self._system.updated_at = datetime.now(UTC)
                     session.merge(self._system)
                 elif created_task is not None:
@@ -1262,6 +1270,10 @@ class SqlAlchemyRepository:
                         run.resume_eligibility = False
                 self._persist_entities(session)
                 self._persist_audit(session)
+                db_system = session.get(SystemStateRow, 1)
+                if db_system:
+                    self._system.current_sequence_number = db_system.current_sequence_number
+                    self._system.event_session_id = db_system.event_session_id
                 self._system.updated_at = datetime.now(UTC)
                 session.merge(self._system)
                 if idempotency:

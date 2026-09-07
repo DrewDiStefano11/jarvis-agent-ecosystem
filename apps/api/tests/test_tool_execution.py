@@ -341,6 +341,9 @@ def test_nonempty_tool_downgrade_refuses_data_loss(tmp_path):
 
     with prepared(tmp_path) as (app, client, actor, worker, workspace, source, body):
         authorize(client, actor, body)
+        with app.state.engine.connect() as connection:
+            connection.execute(text("DELETE FROM task_decompositions"))
+            connection.commit()
         with pytest.raises(RuntimeError, match="not representable"):
             command.downgrade(migration_config(tmp_path / "tools.db"), "20260905_07")
         with app.state.engine.connect() as connection:
