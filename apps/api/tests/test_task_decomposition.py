@@ -452,8 +452,7 @@ def test_operator_protected_blocks_redecomposition(app):
 def test_decomposition_inference_is_strictly_bounded(app):
     task_id, assembly_id, router = setup(app)
     # The taxonomy contains 100+ capabilities, but the request should only include selected agent metadata
-    result = asyncio.run(service(app).prepare(task_id, assembly_id))
-
+    asyncio.run(service(app).prepare(task_id, assembly_id))
     req = router.decomposition_requests[0]
     user_msg = next(m.content for m in req.messages if m.role == "user")
 

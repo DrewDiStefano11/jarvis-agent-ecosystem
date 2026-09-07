@@ -286,13 +286,13 @@ def test_context_assembly_replay_decomposition_scoping_regression(tmp_path: Path
     url = database_url(tmp_path / "context-scoping-regression.db")
     body = context_body()
     headers = {"Idempotency-Key": "scoping-test"}
-    
+
     app = create_app(database_url=url)
     with TestClient(app) as client:
         # First creation
         created = client.post("/api/context/assemblies", json=body, headers=headers)
         assert created.status_code == 201
-        
+
         # Second creation triggers replay path which invokes DecompositionService.prepare()
         replay = client.post("/api/context/assemblies", json=body, headers=headers)
         assert replay.status_code == 201
