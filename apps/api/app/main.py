@@ -985,7 +985,6 @@ def create_app(
 
         if not task.teamSelection or task.teamSelection.status != "completed":
             from app.team_selection.service import TeamSelectionService
-            from app.decomposition.service import DecompositionService
 
             team_selector = TeamSelectionService(
                 repository=repository,
@@ -996,6 +995,7 @@ def create_app(
                 task = await team_selector.assign_team(task)
             except Exception as e:
                 import logging
+
                 logging.getLogger(__name__).warning("Team assignment failed: %s", e)
 
         enricher = ContextEnricher(

@@ -430,6 +430,7 @@ def test_operator_protected_blocks_redecomposition(app):
     with app.state.repository.session_factory() as session, session.begin():
         row = session.get(TaskDecompositionRow, first.id)
         from sqlalchemy.orm.attributes import flag_modified
+
         payload = row.payload.copy()
         payload["operatorProtected"] = True
         row.payload = payload
@@ -441,8 +442,9 @@ def test_operator_protected_blocks_redecomposition(app):
         payload["request"] = "something new"
         row.payload = payload
         flag_modified(row, "payload")
-        
+
     from app.core.errors import DomainError
+
     with pytest.raises(DomainError, match="Operator"):
         asyncio.run(service(app).prepare(task_id, assembly_id))
 

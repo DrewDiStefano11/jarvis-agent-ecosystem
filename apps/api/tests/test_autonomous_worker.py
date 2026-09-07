@@ -214,23 +214,25 @@ class FakeRouter:
             self.decomposition_requests.append(request)
             import json
 
-            content = json.dumps({
-                "schemaVersion": "1",
-                "objectiveSummary": "mocked objective",
-                "subtasks": [
-                    {
-                        "key": "mock-subtask",
-                        "title": "Mock",
-                        "description": "Mocked.",
-                        "requiredCapabilities": ["system.test"],
-                        "dependsOn": [],
-                        "deliverable": "None",
-                        "outputType": "text",
-                        "completionCriteria": ["Done."],
-                    }
-                ],
-                "issues": [],
-            })
+            content = json.dumps(
+                {
+                    "schemaVersion": "1",
+                    "objectiveSummary": "mocked objective",
+                    "subtasks": [
+                        {
+                            "key": "mock-subtask",
+                            "title": "Mock",
+                            "description": "Mocked.",
+                            "requiredCapabilities": ["system.test"],
+                            "dependsOn": [],
+                            "deliverable": "None",
+                            "outputType": "text",
+                            "completionCriteria": ["Done."],
+                        }
+                    ],
+                    "issues": [],
+                }
+            )
             return ModelExecutionResponse(
                 content=content,
                 provider="local-fake",
