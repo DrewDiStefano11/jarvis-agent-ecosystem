@@ -894,6 +894,17 @@ class ModelExecutionRow(Base):
     )
 
 
+class CoordinationRow(Base):
+    __tablename__ = "task_coordinations"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), index=True)
+    decomposition_id: Mapped[str] = mapped_column(ForeignKey("task_decompositions.id"), unique=True)
+    runtime_run_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_runtime_runs.run_id"), unique=True
+    )
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+
+
 class ToolExecutionRow(Base):
     __tablename__ = "tool_executions"
     execution_id: Mapped[str] = mapped_column(String(80), primary_key=True)

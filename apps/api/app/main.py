@@ -85,7 +85,7 @@ from app.team_selection.router import router as team_selection_router
 from app.tool_execution.router import router as tool_execution_router
 from app.tool_execution.service import ToolExecutionService
 
-DATABASE_REVISION = "20260906_10"
+DATABASE_REVISION = "20260907_11"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
