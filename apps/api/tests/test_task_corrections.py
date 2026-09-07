@@ -97,6 +97,7 @@ def test_correction_preserves_source_project_provenance_and_restart(tmp_path: Pa
         assembly["projectId"] = corrected["projectId"]
         assert client.post("/api/context/assemblies", json=assembly).status_code == 201
         assert client.get(f"/api/tasks/{source['id']}").json()["data"] == before
+        corrected = client.get(f"/api/tasks/{corrected['id']}").json()["data"]
     with TestClient(create_app(database_url=url)) as restarted:
         assert restarted.get(f"/api/tasks/{corrected['id']}").json()["data"] == corrected
         assert restarted.get(f"/api/tasks/{source['id']}").json()["data"] == before
