@@ -150,6 +150,21 @@ Every case ships a known-good `reference_output` (positive control) and
 known-bad `adversarial_outputs` (negative controls); CI asserts all
 references pass and every adversarial fails.
 
+### Model qualification
+
+`app.model_qualification/` (see [model-qualification.md](model-qualification.md))
+reuses this evaluation framework to decide whether an installed local model is
+qualified for a Jarvis role. It adds the role taxonomy, versioned
+qualification policy with mandatory gates, role scoring, ranking, and
+machine-readable profiles; it reuses these cases, expectations, providers, and
+metric formulas unchanged. Qualification recommends only — it never changes
+production routing.
+
+```bash
+python scripts/model_qualify.py --fixture     # CI-safe, labelled fixture evidence
+python scripts/model_qualify.py --model <installed-model>
+```
+
 ## Observability
 
 Each run records a bounded, secret-scrubbed timeline

@@ -374,6 +374,56 @@ class ExpectSynthesisCoverage(Expectation):
 
 
 @dataclass(frozen=True)
+class ExpectDefectDetection(Expectation):
+    """Review quality: detect every real defect and invent none.
+
+    ``issues`` entries are matched against ``expected_defects`` (recall) and
+    ``false_positive_defects`` (defects that are explicitly *not* present).
+    The score is the documented mean of recall and false-positive avoidance:
+
+        score = (recall + (1 - false_positive_rate)) / 2
+
+    where ``recall = |expected ∩ reported| / |expected|`` and
+    ``false_positive_rate = |reported \\ expected| / |reported|``. Passing
+    requires perfect recall, zero false positives, and — when given — the
+    expected verdict. This keeps "defect detection" and "false-positive
+    avoidance" deterministic and measurable without storing response bodies.
+    """
+
+    category: str = "review"
+    expected_defects: tuple[str, ...] = ()
+    false_positive_defects: tuple[str, ...] = ()
+    expected_verdict: str | None = None
+
+    def check(self, content: str, parsed: Any | None) -> ExpectationOutcome:
+        if not isinstance(parsed, dict):
+            return ExpectationOutcome(False, "review output is not a JSON object", 0.0)
+        issues = parsed.get("issues")
+        reported = {str(item) for item in issues} if isinstance(issues, list) else set()
+        expected = set(self.expected_defects)
+        detected = expected & reported
+        recall = len(detected) / len(expected) if expected else 1.0
+        false_positives = sorted(reported - expected)
+        false_positive_rate = len(false_positives) / len(reported) if reported else 0.0
+        score = max(0.0, min(1.0, (recall + (1.0 - false_positive_rate)) / 2))
+        problems: list[str] = []
+        missing = sorted(expected - reported)
+        if missing:
+            problems.append(f"missed defects: {missing}")
+        if false_positives:
+            problems.append(f"false positives: {false_positives}")
+        if self.expected_verdict is not None and parsed.get("verdict") != self.expected_verdict:
+            problems.append(
+                f"verdict {parsed.get('verdict')!r} != expected {self.expected_verdict!r}"
+            )
+        if problems:
+            return ExpectationOutcome(False, _detail("; ".join(problems)), score)
+        return ExpectationOutcome(
+            True, _detail(f"detected {sorted(detected)} without false positives"), score
+        )
+
+
+@dataclass(frozen=True)
 class ExpectNoInventedIds(Expectation):
     """Hallucination check: id-like tokens must come from a known set.
 

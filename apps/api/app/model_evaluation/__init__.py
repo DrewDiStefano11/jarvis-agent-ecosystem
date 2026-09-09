@@ -18,7 +18,12 @@ from app.model_evaluation.cases import (
     case_by_id,
     reference_scripts,
 )
-from app.model_evaluation.expectations import OUTPUT_SCHEMAS, Expectation, ExpectationOutcome
+from app.model_evaluation.expectations import (
+    OUTPUT_SCHEMAS,
+    Expectation,
+    ExpectationOutcome,
+    ExpectDefectDetection,
+)
 from app.model_evaluation.providers import (
     FIXTURE_MODEL_NAME,
     FIXTURE_PROVIDER_NAME,
@@ -75,6 +80,7 @@ __all__ = [
     "ExpectationOutcome",
     "LocalRouterProvider",
     "OUTPUT_SCHEMAS",
+    "ExpectDefectDetection",
     "ScriptedFixtureProvider",
     "aggregate_metrics",
     "all_cases",

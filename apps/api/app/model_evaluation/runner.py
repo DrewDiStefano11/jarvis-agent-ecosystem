@@ -37,6 +37,11 @@ Metric formulas (exact, no subjective scores):
 - Latency: mean/p95/max milliseconds over executed calls.
 - Tokens: summed input/output totals where the provider reported them.
 
+``aggregate_metrics_for_cases`` and ``context_sensitivity_for_cases`` expose the
+same formulas over an explicit case subset so role-scoped qualification
+(:mod:`app.model_qualification`) scores roles from one run without a second
+metric implementation.
+
 Runaway protection: ``max_calls`` bounds total provider calls (including
 repairs), ``per_call_timeout_seconds`` bounds each call, ``max_output_chars``
 bounds accepted responses. Violations end the run deterministically with a
@@ -47,6 +52,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -365,7 +371,16 @@ async def run_evaluation(
 
 
 def aggregate_metrics(report: EvaluationReport) -> dict[str, Any]:
-    cases = report.cases
+    return aggregate_metrics_for_cases(report.cases)
+
+
+def aggregate_metrics_for_cases(cases: Sequence[CaseEvaluation]) -> dict[str, Any]:
+    """Aggregate the documented metrics over an explicit case subset.
+
+    Qualification reuses this to score one role at a time from the same run;
+    the formulas are identical to the whole-report aggregation (no second
+    metric implementation exists).
+    """
     total = len(cases)
     passed = sum(1 for case in cases if case.passed)
     primary = [attempt for case in cases for attempt in case.attempts if not attempt.is_repair]
@@ -442,10 +457,14 @@ def aggregate_metrics(report: EvaluationReport) -> dict[str, Any]:
 
 
 def context_sensitivity(report: EvaluationReport) -> dict[str, int]:
+    return context_sensitivity_for_cases(report.cases)
+
+
+def context_sensitivity_for_cases(cases: Sequence[CaseEvaluation]) -> dict[str, int]:
     """Per paired variant: small_pass - large_pass in {-1, 0, 1}."""
-    by_id = {case.case_id: case for case in report.cases}
+    by_id = {case.case_id: case for case in cases}
     deltas: dict[str, int] = {}
-    for case in report.cases:
+    for case in cases:
         if case.context_variant_of is None:
             continue
         small = by_id.get(case.context_variant_of)
@@ -469,7 +488,7 @@ def _schema_passed(case: CaseEvaluation, attempt: AttemptRecord) -> bool:
     return bool(results) and all(result.passed for result in results)
 
 
-def _category_rates(cases: list[CaseEvaluation]) -> dict[str, float | None]:
+def _category_rates(cases: Sequence[CaseEvaluation]) -> dict[str, float | None]:
     totals: dict[str, int] = {}
     passed: dict[str, int] = {}
     for case in cases:
@@ -484,7 +503,7 @@ def _category_rates(cases: list[CaseEvaluation]) -> dict[str, float | None]:
     }
 
 
-def _scores(cases: list[CaseEvaluation], kind: type[Expectation]) -> list[float]:
+def _scores(cases: Sequence[CaseEvaluation], kind: type[Expectation]) -> list[float]:
     scores: list[float] = []
     for case in cases:
         names = {item.name for item in case.expectations if isinstance(item, kind)}
@@ -495,7 +514,7 @@ def _scores(cases: list[CaseEvaluation], kind: type[Expectation]) -> list[float]
     return scores
 
 
-def _invented_stats(cases: list[CaseEvaluation]) -> tuple[int, int]:
+def _invented_stats(cases: Sequence[CaseEvaluation]) -> tuple[int, int]:
     total = 0
     passed = 0
     for case in cases:
@@ -508,11 +527,11 @@ def _invented_stats(cases: list[CaseEvaluation]) -> tuple[int, int]:
     return total, passed
 
 
-def _mean(values: list[float]) -> float | None:
+def _mean(values: Sequence[float]) -> float | None:
     return sum(values) / len(values) if values else None
 
 
-def _percentile(values: list[float], quantile: float) -> float | None:
+def _percentile(values: Sequence[float], quantile: float) -> float | None:
     if not values:
         return None
     ordered = sorted(values)
