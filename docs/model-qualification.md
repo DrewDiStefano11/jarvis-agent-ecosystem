@@ -166,6 +166,23 @@ plus `bounded_instruction_rate >= 0.80` (planner, decomposer, specialist),
 `context_degradation_rate <= 0.50` (capability_classifier),
 `synthesis_completeness >= 0.75` and `hallucination_rate <= 0.20` (manager).
 
+Score thresholds per role (`minimum_score` / `qualified_score`):
+
+| Role | minimum | qualified |
+| --- | --- | --- |
+| manager | 0.55 | 0.75 |
+| planner | 0.55 | 0.75 |
+| capability_classifier | 0.60 | 0.80 |
+| decomposer | 0.55 | 0.75 |
+| specialist | 0.55 | 0.75 |
+| reviewer | 0.60 | 0.80 |
+| synthesizer | 0.60 | 0.75 |
+| repair_retry | 0.55 | 0.70 |
+
+Shared advisory thresholds are uniform across roles (a test enforces that
+`repair_frequency_max` and `repair_success_rate_min` never drift per role);
+`consistency_rate_min` is uniform except the documented reviewer exception.
+
 `secret_pass_rate` is mandatory for the classifier because a routing component
 that emits secret-bearing output is never acceptable.
 

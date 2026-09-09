@@ -1166,3 +1166,19 @@ def test_qualification_never_mutates_production_routing() -> None:
         after.model_provider_priority,
         after.model_ollama_model,
     ) == snapshot
+
+
+def test_shared_advisory_thresholds_are_consistent_across_roles() -> None:
+    """Shared gates must not drift per role (regression: repair bound differed)."""
+    thresholds: dict[str, set[float]] = {}
+    for role in all_roles():
+        for gate in policy_for(role).gates:
+            thresholds.setdefault(gate.key, set()).add(gate.threshold)
+    for key in ("repair_frequency_max", "repair_success_rate_min"):
+        assert len(thresholds[key]) == 1, f"{key} differs across roles: {thresholds[key]}"
+    assert thresholds["repair_frequency_max"] == {0.34}
+    assert thresholds["repair_success_rate_min"] == {0.50}
+    # consistency is uniform except the documented reviewer exception
+    assert thresholds["consistency_rate_min"] == {0.80, 0.85}
+    assert policy_for(QualificationRole.REVIEWER).advisory_gates[0].threshold == 0.85
+    assert policy_for(QualificationRole.MANAGER).advisory_gates[0].threshold == 0.80
