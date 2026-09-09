@@ -414,13 +414,28 @@ def render_profile_markdown(profiles: tuple[ModelProfile, ...], run: Qualificati
         lines.append("")
         for role in sorted(profile.roles):
             record = profile.roles[role]
-            failed = [gate for gate in record.gates if gate.status != "passed"]
-            if not failed:
-                continue
-            lines.append(
-                f"- `{role}` non-passing gates: "
-                + ", ".join(f"{gate.key}={gate.status}" for gate in failed)
-            )
+            # "failed" and "not evaluated" are different facts; never conflate them
+            failed = [gate for gate in record.gates if gate.status == "failed"]
+            unmeasured = [gate for gate in record.gates if gate.status == "not_evaluated"]
+            if failed:
+                lines.append(
+                    f"- `{role}` failed gates: "
+                    + ", ".join(
+                        f"{gate.key}{' (MANDATORY)' if gate.mandatory else ''}="
+                        f"{gate.observed if gate.observed is not None else 'n/a'} "
+                        f"vs {gate.direction} {gate.threshold:g}"
+                        for gate in failed
+                    )
+                )
+            if unmeasured:
+                lines.append(
+                    f"- `{role}` gates not measured: "
+                    + ", ".join(
+                        f"{gate.key}{' (MANDATORY)' if gate.mandatory else ''}"
+                        f" ({gate.metric} unavailable in this run)"
+                        for gate in unmeasured
+                    )
+                )
         lines.append("")
 
     lines += ["## Role ranking", ""]

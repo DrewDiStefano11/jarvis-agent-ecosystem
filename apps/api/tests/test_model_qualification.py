@@ -1184,3 +1184,17 @@ def test_shared_advisory_thresholds_are_consistent_across_roles() -> None:
     assert thresholds["consistency_rate_min"] == {0.80, 0.85}
     assert policy_for(QualificationRole.REVIEWER).advisory_gates[0].threshold == 0.85
     assert policy_for(QualificationRole.MANAGER).advisory_gates[0].threshold == 0.80
+
+
+def test_markdown_separates_failed_gates_from_unmeasured_gates() -> None:
+    """'failed' and 'not measured' are different facts and must never be merged."""
+    profile = persona_profile_sync("fixture-model/qualified")
+    run = build_run((profile,), repo_sha="test-sha", generated_at=STAMP)
+    markdown = render_profile_markdown((profile,), run)
+    assert "gates not measured:" in markdown
+    assert "not_evaluated" not in markdown
+    weak = persona_profile_sync("fixture-model/weak-decomposer")
+    weak_run = build_run((weak,), repo_sha="test-sha", generated_at=STAMP)
+    weak_markdown = render_profile_markdown((weak,), weak_run)
+    assert "failed gates: " in weak_markdown
+    assert "decomposition_quality_min (MANDATORY)" in weak_markdown
