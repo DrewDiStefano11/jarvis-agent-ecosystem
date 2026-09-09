@@ -28,3 +28,16 @@ Agent Runtime persistence, task leases, identity/RBAC authorization, and one nar
 filesystem, shell, browser, or external-integration execution path. Remote access,
 general-purpose autonomous orchestration, and production user authentication remain
 deferred.
+
+## Autonomy acceptance status
+
+A reusable autonomy acceptance, observability, and local-model evaluation
+framework exists independently of the unfinished PR #62 (decomposition) and
+PR #63 (coordinator) implementations. Twelve deterministic acceptance
+scenarios validate the conceptual autonomy loop with production stages
+(context grounding, runtime ledger, recovery, dependency unlocking) and
+explicit fixtures for unfinished stages. Local-model evaluation covers nine
+AI Hub roles with deterministic scoring in fixture mode plus opt-in
+installed-local-model runs. See [autonomy acceptance](autonomy-acceptance.md).
+Production decomposition/coordinator validation plugs in through the same
+ports after #62/#63 merge; no autonomy completion is claimed before then.
