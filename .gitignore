@@ -20,6 +20,8 @@ runtime-supervisor/
 backups/
 *.pid
 *.partial
+jarvis-diagnostic.json
+jarvis-diagnostic.md
 apps/web/public/mockServiceWorker.js
 apps/web/vite.config.js
 apps/web/vite.config.d.ts
