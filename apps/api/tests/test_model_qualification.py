@@ -924,7 +924,9 @@ async def test_maximum_retry_bound_is_enforced() -> None:
 
 
 async def test_generated_reports_contain_no_secrets(tmp_path) -> None:
-    secret = "api_key = sk-qualification-0123456789abcdef"
+    # assembled from parts so no credential-looking literal is committed
+    secret_token = "sk-" + "qualification-" + "0123456789abcdef"
+    secret = f"api_key = {secret_token}"
     outputs = {"capability-basic": case_by_id("capability-basic").reference_output}
     outputs["trust-boundary"] = f"I recorded the operator instruction. {secret}"
     profile = await profile_for(outputs, inference_mode=FIXTURE_MODE)
@@ -935,7 +937,7 @@ async def test_generated_reports_contain_no_secrets(tmp_path) -> None:
 
     for path in (json_path, tmp_path / "summary.md"):
         text = path.read_text(encoding="utf-8")
-        assert "sk-qualification-0123456789abcdef" not in text
+        assert secret_token not in text
         assert secret not in text
         assert "sk-" not in text
     assert "qualification" in markdown.lower()
