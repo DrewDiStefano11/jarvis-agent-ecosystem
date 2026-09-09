@@ -214,7 +214,7 @@ async def run_qualification(
 
     assessments: dict[QualificationRole, RoleAssessment] = {}
     for role in requested:
-        assessments[role] = assess_role(role, role_metrics(report, role, cases=selected))
+        assessments[role] = assess_role(role, role_metrics(report, role, cases=catalog))
 
     digest = evaluation_suite_digest(catalog)
     return build_profile(
@@ -232,6 +232,7 @@ async def run_qualification(
             "allow_repair": allow_repair and active_bounds.max_repairs_per_case > 0,
             "stopped_early": report.stopped_early,
             "failure_codes": dict(report.failure_codes),
+            "total_calls": int(report.metrics.get("total_calls", 0)),
         },
         warnings=tuple(warnings),
     )
@@ -280,6 +281,7 @@ async def run_installed_local_qualification(
     allow_repair: bool = False,
     repo_sha: str = "unknown",
     evaluated_at: datetime | None = None,
+    _global_call_budget: int | None = None,
 ) -> ModelProfile:
     """Qualify one exact installed-local model, or report it unavailable.
 
@@ -290,6 +292,16 @@ async def run_installed_local_qualification(
     """
     active_bounds = bounds or DEFAULT_BOUNDS
     requested = parse_roles(list(roles) if roles is not None else None)
+    if _global_call_budget is not None:
+        if _global_call_budget <= 0:
+            return unavailable_profile(
+                provider=provider_name or "unresolved", model=model, roles=requested,
+                evaluated_at=evaluated_at or _now(), evaluation_suite_digest=evaluation_suite_digest(),
+                repo_sha=repo_sha, reason="max_total_calls exhausted before model execution",
+            )
+        active_bounds = active_bounds.model_copy(
+            update={"max_calls_per_model": min(active_bounds.max_calls_per_model, _global_call_budget)}
+        )
     stamp = evaluated_at or _now()
     digest = evaluation_suite_digest()
 
@@ -352,6 +364,7 @@ async def qualify_installed_models(
     started = time.monotonic()
     profiles: list[ModelProfile] = []
     warnings: list[str] = []
+    remaining_calls = active_bounds.max_total_calls
     limited = tuple(models)[: active_bounds.max_models]
     if len(models) > active_bounds.max_models:
         warnings.append(
@@ -387,8 +400,13 @@ async def qualify_installed_models(
                 allow_repair=allow_repair,
                 repo_sha=repo_sha,
                 evaluated_at=stamp,
+                _global_call_budget=remaining_calls,
             )
         )
+        consumed = int(profiles[-1].run.get("total_calls", 0))
+        remaining_calls = max(0, remaining_calls - consumed)
+        if remaining_calls == 0:
+            warnings.append("max_total_calls exhausted; remaining models not executed")
     return tuple(profiles), tuple(warnings)
 
 

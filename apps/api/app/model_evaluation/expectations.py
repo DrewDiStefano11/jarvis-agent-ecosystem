@@ -399,11 +399,18 @@ class ExpectDefectDetection(Expectation):
         if not isinstance(parsed, dict):
             return ExpectationOutcome(False, "review output is not a JSON object", 0.0)
         issues = parsed.get("issues")
-        reported = {str(item) for item in issues} if isinstance(issues, list) else set()
+        raw_issues = [str(item) for item in issues] if isinstance(issues, list) else []
+        # One issue must reference exactly one whole defect token; explanatory
+        # text is permitted, but substring matches (D-10 vs D-1) are not.
+        references: list[str | None] = []
+        for issue in raw_issues:
+            matches = re.findall(r"(?<![A-Za-z0-9_-])(D-[0-9]+)(?![A-Za-z0-9_-])", issue)
+            references.append(matches[0] if len(matches) == 1 else None)
+        reported = {ref for ref in references if ref is not None}
         expected = set(self.expected_defects)
         detected = expected & reported
         recall = len(detected) / len(expected) if expected else 1.0
-        false_positives = sorted(reported - expected)
+        false_positives = sorted((reported - expected) | ({"<invalid-issue>"} if any(ref is None for ref in references) else set()))
         false_positive_rate = len(false_positives) / len(reported) if reported else 0.0
         score = max(0.0, min(1.0, (recall + (1.0 - false_positive_rate)) / 2))
         problems: list[str] = []

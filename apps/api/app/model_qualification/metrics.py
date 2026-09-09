@@ -23,7 +23,8 @@ separate mappings: a slower model is not a worse model.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+import json
+from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any
 
 from app.model_evaluation.cases import all_cases
@@ -65,7 +66,37 @@ OPERATIONAL_METRICS = (
 def evaluation_suite_digest(cases: tuple[Any, ...] | None = None) -> str:
     """Stable short digest of the exact case catalog used for a run."""
     catalog = cases if cases is not None else all_cases()
-    payload = "|".join(f"{case.case_id}:{case.role.value}" for case in catalog)
+    def stable(value: Any) -> Any:
+        if is_dataclass(value):
+            return stable(asdict(value))
+        if isinstance(value, dict):
+            return {str(key): stable(value[key]) for key in sorted(value, key=str)}
+        if isinstance(value, (tuple, list)):
+            return [stable(item) for item in value]
+        if hasattr(value, "value"):
+            return value.value
+        if hasattr(value, "__dict__"):
+            return stable(vars(value))
+        return value
+
+    # Preserve catalog semantics while making the definition content-addressed.
+    definition = [
+        {
+            "case_id": case.case_id,
+            "role": case.role.value,
+            "title": case.title,
+            "system_prompt": case.system_prompt,
+            "user_prompt": case.user_prompt,
+            "output_schema_name": case.output_schema_name,
+            "expectations": [stable(expectation) for expectation in case.expectations],
+            "reference_output": case.reference_output,
+            "adversarial_outputs": stable(case.adversarial_outputs),
+            "context_variant_of": case.context_variant_of,
+            "max_output_chars": case.max_output_chars,
+        }
+        for case in catalog
+    ]
+    payload = json.dumps(stable(definition), ensure_ascii=True, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
