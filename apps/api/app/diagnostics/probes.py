@@ -165,7 +165,8 @@ def inspect_sqlite(path: Path, *, deep: bool, core_tables: tuple[str, ...] = ())
         facts.open_error = "database file does not exist"
         return facts
     try:
-        uri = f"file:{path.as_posix()}?mode=ro"
+        # Match the supervisor's proven Windows-safe read-only URI pattern.
+        uri = f"{path.as_uri()}?mode=ro"
         connection = sqlite3.connect(uri, uri=True, timeout=5)
     except sqlite3.Error as exc:
         facts.open_error = exc.__class__.__name__

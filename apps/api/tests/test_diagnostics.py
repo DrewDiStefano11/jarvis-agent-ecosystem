@@ -19,6 +19,7 @@ from app.diagnostics.probes import HealthResult
 from app.diagnostics.runner import run_diagnostics
 from app.main import DATABASE_REVISION
 from app.model_providers.contracts import HealthStatus, ProviderHealth
+from app.model_providers.errors import ErrorCategory
 from tests.diagnostics_fixtures import (
     API_ROOT,
     ScriptedProbe,
@@ -326,6 +327,17 @@ def test_database_deep_integrity_failure(repository: Path, tmp_path: Path) -> No
     )
 
 
+def test_database_path_with_spaces_is_read_correctly(repository: Path, tmp_path: Path) -> None:
+    # Windows installations routinely live under paths with spaces; the
+    # read-only URI must stay correct there (mirrors supervisor behavior).
+    database = migrate_database(tmp_path / "Repository Data" / "runtime db.db", "head")
+    environment = base_environment(tmp_path, repository, database)
+    report = run(repository, environment, offline_probe()).report
+    database_check = report.check("database")
+    assert database_check.status == CheckStatus.HEALTHY, database_check.reason
+    assert database_check.identifiers["databaseRevision"] == DATABASE_REVISION
+
+
 def test_database_supports_only_sqlite_urls(repository: Path, tmp_path: Path) -> None:
     environment = base_environment(tmp_path, repository, tmp_path / "ignored.db")
     environment["JARVIS_DATABASE_URL"] = "postgresql://localhost/jarvis"
@@ -461,7 +473,7 @@ def test_provider_unavailable(repository: Path, seeded_database: Path) -> None:
         healthy=False,
         status=HealthStatus.UNAVAILABLE,
         model_available=None,
-        error_category="provider_unreachable",
+        error_category=ErrorCategory.PROVIDER_UNAVAILABLE.value,
         detail="connection refused",
     )
     report = run(
@@ -472,7 +484,7 @@ def test_provider_unavailable(repository: Path, seeded_database: Path) -> None:
     ).report
     provider = report.check("model_provider")
     assert provider.status == CheckStatus.BLOCKED
-    assert "service unreachable" in provider.reason
+    assert "unreachable" in provider.reason
 
 
 def test_provider_configured_model_missing(repository: Path, seeded_database: Path) -> None:
@@ -498,7 +510,7 @@ def test_provider_malformed_response(repository: Path, seeded_database: Path) ->
         healthy=False,
         status=HealthStatus.UNAVAILABLE,
         model_available=None,
-        error_category="malformed_provider_response",
+        error_category=ErrorCategory.MALFORMED_PROVIDER_RESPONSE.value,
         detail="Ollama model-list response is malformed",
     )
     report = run(

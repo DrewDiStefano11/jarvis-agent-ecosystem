@@ -24,6 +24,7 @@ from app.diagnostics.probes import (
     tcp_connect,
 )
 from app.model_providers.contracts import HealthStatus, ProviderHealth
+from app.model_providers.errors import ErrorCategory
 from app.model_providers.factory import build_provider_registry
 from app.model_providers.registry import ProviderRegistry
 
@@ -716,10 +717,14 @@ def check_provider(
 
 def _classify_provider_health(result: ProviderHealth) -> tuple[CheckStatus, str]:
     if not result.healthy:
-        if result.error_category == "malformed_provider_response":
+        if result.error_category == ErrorCategory.MALFORMED_PROVIDER_RESPONSE.value:
             return CheckStatus.BLOCKED, "provider returned a malformed response"
-        if result.error_category == "provider_unreachable":
-            return CheckStatus.BLOCKED, "provider service unreachable"
+        if result.error_category == ErrorCategory.PROVIDER_UNAVAILABLE.value:
+            return CheckStatus.BLOCKED, "provider service is unreachable or stopped"
+        if result.error_category == ErrorCategory.MODEL_UNAVAILABLE.value:
+            return CheckStatus.BLOCKED, "the configured model is unavailable on this provider"
+        if result.error_category == ErrorCategory.AUTHENTICATION_FAILURE.value:
+            return CheckStatus.BLOCKED, "provider rejected the configured credentials"
         if result.error_category:
             return CheckStatus.BLOCKED, f"provider error ({result.error_category})"
         return CheckStatus.BLOCKED, "provider is not healthy"
