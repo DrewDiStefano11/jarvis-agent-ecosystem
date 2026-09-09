@@ -172,13 +172,6 @@ async def persona_profile(name: str, **kwargs) -> ModelProfile:
     return profiles[0]
 
 
-def persona_profile_sync(name: str, **kwargs) -> ModelProfile:
-    """Sync helper for tests that do not need an event loop."""
-    import asyncio
-
-    return asyncio.run(persona_profile(name, **kwargs))
-
-
 def level_of(profile: ModelProfile, role: str) -> str:
     return profile.roles[role].qualification
 
@@ -780,8 +773,8 @@ def test_policy_document_is_machine_readable_and_explicit() -> None:
             assert gate["description"]
 
 
-def test_profile_schema_round_trip_and_rejects_corruption(tmp_path) -> None:
-    profile = persona_profile_sync("fixture-model/qualified")
+async def test_profile_schema_round_trip_and_rejects_corruption(tmp_path) -> None:
+    profile = await persona_profile("fixture-model/qualified")
     path = write_profile_json(tmp_path / "profile.json", profile)
     assert read_profile_json(path) == profile
 
@@ -1005,16 +998,16 @@ def test_every_role_has_measurable_mandatory_gates() -> None:
         assert unmeasured == [], f"{role.value}: {[gate.key for gate in unmeasured]}"
 
 
-def test_operational_signals_are_separate_from_quality() -> None:
-    profile = persona_profile_sync("fixture-model/qualified")
+async def test_operational_signals_are_separate_from_quality() -> None:
+    profile = await persona_profile("fixture-model/qualified")
     record = profile.roles["planner"]
     assert "latency_ms_mean" in record.evidence["operational"]
     # latency is recorded but never scored as a quality gate
     assert not [gate for gate in record.gates if "latency" in gate.metric]
 
 
-def test_recommendation_is_evidence_only() -> None:
-    profile = persona_profile_sync("fixture-model/qualified")
+async def test_recommendation_is_evidence_only() -> None:
+    profile = await persona_profile("fixture-model/qualified")
     run = build_run((profile,), repo_sha="test-sha", generated_at=STAMP)
     joined = " ".join(run.notes)
     assert "never changes production routing" in joined
@@ -1150,7 +1143,7 @@ def test_cli_discover_reports_unavailable_without_blaming_models(capsys) -> None
     assert document["models"] == []
 
 
-def test_qualification_never_mutates_production_routing() -> None:
+async def test_qualification_never_mutates_production_routing() -> None:
     before = Settings()
     snapshot = (
         before.model_execution_mode,
@@ -1159,7 +1152,7 @@ def test_qualification_never_mutates_production_routing() -> None:
         before.model_provider_priority,
         before.model_ollama_model,
     )
-    persona_profile_sync("fixture-model/qualified")
+    await persona_profile("fixture-model/qualified")
     after = Settings()
     assert (
         after.model_execution_mode,
@@ -1186,14 +1179,14 @@ def test_shared_advisory_thresholds_are_consistent_across_roles() -> None:
     assert policy_for(QualificationRole.MANAGER).advisory_gates[0].threshold == 0.80
 
 
-def test_markdown_separates_failed_gates_from_unmeasured_gates() -> None:
+async def test_markdown_separates_failed_gates_from_unmeasured_gates() -> None:
     """'failed' and 'not measured' are different facts and must never be merged."""
-    profile = persona_profile_sync("fixture-model/qualified")
+    profile = await persona_profile("fixture-model/qualified")
     run = build_run((profile,), repo_sha="test-sha", generated_at=STAMP)
     markdown = render_profile_markdown((profile,), run)
     assert "gates not measured:" in markdown
     assert "not_evaluated" not in markdown
-    weak = persona_profile_sync("fixture-model/weak-decomposer")
+    weak = await persona_profile("fixture-model/weak-decomposer")
     weak_run = build_run((weak,), repo_sha="test-sha", generated_at=STAMP)
     weak_markdown = render_profile_markdown((weak,), weak_run)
     assert "failed gates: " in weak_markdown
