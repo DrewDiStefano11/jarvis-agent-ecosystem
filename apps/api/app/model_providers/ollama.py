@@ -233,6 +233,22 @@ class OllamaProvider(ProviderBase):
         except ModelProviderError:
             return None
 
+    async def list_models(self) -> tuple[str, ...] | None:
+        """Installed Ollama models via the existing ``/api/tags`` endpoint.
+
+        Returns ``None`` (unknown) when the provider cannot enumerate models
+        under the current execution mode. Never downloads or starts anything.
+        """
+        network_allowed = provider_network_health_allowed() or (
+            self.execution_mode == "local_only" and self.is_local
+        )
+        if not network_allowed:
+            return None
+        try:
+            return tuple(sorted(await self._list_models()))
+        except ModelProviderError:
+            return None
+
     async def _list_models(self) -> set[str]:
         network_allowed = provider_network_health_allowed() or (
             self.execution_mode == "local_only" and self.is_local

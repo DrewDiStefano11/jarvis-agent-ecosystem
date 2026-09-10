@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('start', 'stop', 'restart', 'status', 'doctor', 'backup', 'autostart')]
+    [ValidateSet('start', 'stop', 'restart', 'status', 'doctor', 'runtime-doctor', 'backup', 'autostart')]
     [string]$Command = 'status',
 
     [Parameter(ValueFromRemainingArguments = $true)]
@@ -18,6 +18,11 @@ if (-not (Test-Path -LiteralPath $python -PathType Leaf)) {
 $apiDirectory = Join-Path $repository 'apps\api'
 Push-Location -LiteralPath $apiDirectory
 try {
+    if ($Command -eq 'runtime-doctor') {
+        $doctorScript = Join-Path $repository 'scripts\jarvis_doctor.py'
+        & $python $doctorScript @CommandArguments
+        exit $LASTEXITCODE
+    }
     & $python -m app.runtime_supervisor --repository $repository $Command @CommandArguments
     exit $LASTEXITCODE
 }

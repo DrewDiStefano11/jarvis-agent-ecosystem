@@ -22,6 +22,15 @@ class ProviderBase:
     async def model_available(self, model: str) -> bool | None:
         return None
 
+    async def list_models(self) -> tuple[str, ...] | None:
+        """Installed models advertised by this provider, or ``None`` when unknown.
+
+        Discovery only: implementations must never download, install, or start
+        anything, and must return ``None`` rather than guessing when the
+        provider cannot enumerate its models.
+        """
+        return None
+
     def __repr__(self) -> str:
         return (
             f"{type(self).__name__}(name={self.name!r}, default_model={self.default_model!r}, "

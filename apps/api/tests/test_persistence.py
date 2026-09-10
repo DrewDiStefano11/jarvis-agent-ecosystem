@@ -1614,6 +1614,24 @@ def test_reset_idempotency_replays_after_lost_response(tmp_path: Path) -> None:
         ]
         assert len(reset_audits) == 1
 
+    restarted = create_app(delay_ms=1, database_url=url)
+    with TestClient(restarted) as api:
+        assert restarted.state.repository.current_event_cursor() == (after_first_session, 0)
+        retry = api.post("/api/simulator/reset", headers=headers)
+        assert retry.status_code == 200
+        assert retry.json() == first.json()
+        assert restarted.state.repository.current_event_cursor() == (after_first_session, 0)
+        assert api.get("/api/system/status").json()["data"]["eventSessionId"] == after_first_session
+        with restarted.state.repository.session_factory() as session:
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(AuditEventRow)
+                    .where(AuditEventRow.event_type == "system.simulator.reset")
+                )
+                == 1
+            )
+
 
 def test_interrupted_workflow_has_checkpoint_and_resumes(tmp_path: Path) -> None:
     url = database_url(tmp_path / "recovery.db")

@@ -94,6 +94,18 @@ separate local runtime supervisor:
 .\scripts\jarvis.ps1 status
 ```
 
+To diagnose the **live** runtime at any time (API, database schema, supervisor,
+worker, local provider, readiness, emergency stop, and recent failures), run the
+read-only runtime doctor:
+
+```powershell
+python scripts\jarvis_doctor.py
+python scripts\jarvis_doctor.py --deep
+python scripts\jarvis_doctor.py --report
+```
+
+See [runtime doctor](docs/runtime-doctor.md).
+
 The supervisor keeps the loopback-only API and built web UI available, recovers owned child crashes
 with bounded backoff, and manages the autonomous worker only when its existing configuration already
 enables it. It provides graceful stop/restart, JSON status, rotating logs, consistent retained SQLite
@@ -126,6 +138,9 @@ Run `pnpm build` followed by `pnpm vite preview`, then use browser Application t
 
 ## Troubleshooting
 
+- Start with `python scripts\jarvis_doctor.py` (or `.\scripts\jarvis.ps1 runtime-doctor`):
+  it reports exactly which component is blocked or degraded and a safe remediation
+  hint. See [runtime doctor](docs/runtime-doctor.md).
 - CORS errors: keep `WEB_ORIGIN` aligned with the supervised web host and port
   (`http://127.0.0.1:5173` by default).
 - WebSocket remains offline: keep `VITE_WS_URL` aligned with the supervised API host and port

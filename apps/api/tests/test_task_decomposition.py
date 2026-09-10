@@ -236,6 +236,13 @@ def test_simple_automatic_replay_restart_and_zero_authority(app):
     restarted = create_app(database_url=app.state.settings.database_url)
     restarted.state.model_router = router
     assert service(restarted).current(task_id) == graph
+    with restarted.state.repository.session_factory() as session:
+        assert (
+            session.scalar(
+                select(func.count()).select_from(TaskRow).where(TaskRow.parent_task_id == task_id)
+            )
+            == 0
+        )
     restarted.state.engine.dispose()
 
 
@@ -430,6 +437,7 @@ def test_operator_protected_blocks_redecomposition(app):
     with app.state.repository.session_factory() as session, session.begin():
         row = session.get(TaskDecompositionRow, first.id)
         from sqlalchemy.orm.attributes import flag_modified
+
         payload = row.payload.copy()
         payload["operatorProtected"] = True
         row.payload = payload
@@ -441,8 +449,9 @@ def test_operator_protected_blocks_redecomposition(app):
         payload["request"] = "something new"
         row.payload = payload
         flag_modified(row, "payload")
-        
+
     from app.core.errors import DomainError
+
     with pytest.raises(DomainError, match="Operator"):
         asyncio.run(service(app).prepare(task_id, assembly_id))
 
@@ -450,8 +459,7 @@ def test_operator_protected_blocks_redecomposition(app):
 def test_decomposition_inference_is_strictly_bounded(app):
     task_id, assembly_id, router = setup(app)
     # The taxonomy contains 100+ capabilities, but the request should only include selected agent metadata
-    result = asyncio.run(service(app).prepare(task_id, assembly_id))
-
+    asyncio.run(service(app).prepare(task_id, assembly_id))
     req = router.decomposition_requests[0]
     user_msg = next(m.content for m in req.messages if m.role == "user")
 

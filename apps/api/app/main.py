@@ -991,7 +991,12 @@ def create_app(
                 identity_service=app.state.identity_service,
                 model_router=app.state.model_router,
             )
-            task = await team_selector.assign_team(task)
+            try:
+                task = await team_selector.assign_team(task)
+            except Exception as e:
+                import logging
+
+                logging.getLogger(__name__).warning("Team assignment failed: %s", e)
 
         enricher = ContextEnricher(
             identity_service=app.state.identity_service,

@@ -298,6 +298,17 @@ class OpenAICompatibleProvider(ProviderBase):
         except ModelProviderError:
             return None
 
+    async def list_models(self) -> tuple[str, ...] | None:
+        """Installed models advertised by this provider, or ``None`` when unknown.
+
+        Provider adapters are never contacted for qualification; this mirrors
+        :meth:`OllamaProvider.list_models` for diagnostics/discovery only.
+        """
+        try:
+            return tuple(sorted(await self._list_models()))
+        except ModelProviderError:
+            return None
+
     async def _get(self, path: str) -> httpx.Response:
         network_allowed = provider_network_health_allowed() or (
             self.execution_mode == "local_only" and self.is_local
