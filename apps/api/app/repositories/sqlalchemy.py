@@ -1270,10 +1270,9 @@ class SqlAlchemyRepository:
                         run.resume_eligibility = False
                 self._persist_entities(session)
                 self._persist_audit(session)
-                db_system = session.get(SystemStateRow, 1)
-                if db_system:
-                    self._system.current_sequence_number = db_system.current_sequence_number
-                    self._system.event_session_id = db_system.event_session_id
+                # Reset owns the session transition: commit the newly staged
+                # cursor together with its audit and idempotency result.
+                # Refreshing from the database here would restore the old session.
                 self._system.updated_at = datetime.now(UTC)
                 session.merge(self._system)
                 if idempotency:

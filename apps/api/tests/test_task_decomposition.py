@@ -236,6 +236,13 @@ def test_simple_automatic_replay_restart_and_zero_authority(app):
     restarted = create_app(database_url=app.state.settings.database_url)
     restarted.state.model_router = router
     assert service(restarted).current(task_id) == graph
+    with restarted.state.repository.session_factory() as session:
+        assert (
+            session.scalar(
+                select(func.count()).select_from(TaskRow).where(TaskRow.parent_task_id == task_id)
+            )
+            == 0
+        )
     restarted.state.engine.dispose()
 
 
