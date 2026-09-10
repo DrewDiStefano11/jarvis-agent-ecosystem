@@ -27,7 +27,16 @@ const { chromium } = require(path.join(process.env.SMOKE_WEB, 'node_modules/play
     await page.getByRole('button', { name: 'Create task', exact: true }).click()
     const task = (await (await created).json()).data
     assert.ok(task.id)
+    // Wait for the UI to finish updating after task creation before navigating away
+    await page.getByText('Browser golden path').first().waitFor()
     await nav.getByRole('link', { name: 'Planning', exact: true }).click()
+    await page.getByRole('heading', { name: 'Queue a local plan', exact: true }).waitFor()
+    console.log('✅ Local capability planning succeeded');
+
+    // Explicitly wait for the task option to be attached to the DOM
+    // before attempting to select it. This mitigates a race where React
+    // re-renders the options list while selectOption is interacting with it.
+    await page.locator('option[value="' + task.id + '"]').waitFor({ state: 'attached' });
     await page.getByLabel('Task and history').selectOption(task.id)
     await page.getByRole('button', { name: 'Prepare local planner for this task', exact: true }).click()
     await page.getByText('Local planner prepared for this task. Queue the plan when ready.', { exact: true }).waitFor()

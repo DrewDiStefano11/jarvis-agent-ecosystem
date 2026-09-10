@@ -11,7 +11,7 @@ router = APIRouter(prefix="/api/tasks/{taskId}/team-selection", tags=["team sele
 def get_team_selection(
     taskId: str, request: Request
 ) -> TypedApiResponse[TeamSelectionRecord | None]:
-    repository = request.app.state.repository()
+    repository = request.app.state.repository
     task = repository.get_task_durable(taskId)
     return TypedApiResponse(data=task.teamSelection)
 
@@ -20,7 +20,7 @@ def get_team_selection(
 async def trigger_team_selection(
     taskId: str, request: Request
 ) -> TypedApiResponse[TeamSelectionRecord]:
-    repository = request.app.state.repository()
+    repository = request.app.state.repository
     task = repository.get_task_durable(taskId)
 
     if task.teamSelection and task.teamSelection.status == "completed":
@@ -41,7 +41,7 @@ async def trigger_team_selection(
 async def trigger_team_reselection(
     taskId: str, request: Request
 ) -> TypedApiResponse[TeamSelectionRecord]:
-    repository = request.app.state.repository()
+    repository = request.app.state.repository
     task = repository.get_task_durable(taskId)
 
     # Force reselection by clearing the current one

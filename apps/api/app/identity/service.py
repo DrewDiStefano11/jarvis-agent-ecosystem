@@ -172,10 +172,14 @@ class IdentityService:
         with self.sessions() as s:
             return self._agent(s, agent_id)
 
-    def workforce_snapshot(self, limit: int = 20) -> list[dict]:
+    def workforce_snapshot(
+        self, limit: int = 20, *, agent_ids: list[str] | None = None, session=None
+    ) -> list[dict]:
         """Bounded metadata only, using existing effective capability assignments."""
         limit = min(max(limit, 1), 100)
-        with self.sessions() as session:
+        from contextlib import nullcontext
+
+        with nullcontext(session) if session is not None else self.sessions() as session:
             rows = session.execute(
                 select(
                     IdentityAgentRow,
@@ -195,6 +199,7 @@ class IdentityService:
                     IdentityAgentRow.lifecycle_state == "active",
                     IdentityAgentRow.is_enabled,
                     or_(CatalogActivationRow.entry_id.is_(None), CatalogEntryRow.enabled),
+                    IdentityAgentRow.id.in_(agent_ids) if agent_ids is not None else True,
                 )
                 .order_by(IdentityAgentRow.is_system_agent.desc(), IdentityAgentRow.stable_key)
                 .limit(limit)
@@ -575,12 +580,16 @@ class IdentityService:
         resource_type: str | None = None,
         resource_id: str | None = None,
         at: datetime | None = None,
+        *,
+        session=None,
     ) -> AuthorizationDecision:
         t = at or now()
         grants = []
         denials = []
         try:
-            with self.sessions() as s:
+            from contextlib import nullcontext
+
+            with nullcontext(session) if session is not None else self.sessions() as s:
                 actor = s.get(IdentityAgentRow, actor_id)
                 base = dict(
                     permission_key=permission_key,
@@ -909,10 +918,12 @@ class IdentityService:
             return row
 
     def check_resource_access(
-        self, actor_id: str, resource_type: str, resource_id: str, action: str
+        self, actor_id: str, resource_type: str, resource_id: str, action: str, *, session=None
     ) -> AuthorizationDecision:
         try:
-            return self._check_resource_access(actor_id, resource_type, resource_id, action)
+            return self._check_resource_access(
+                actor_id, resource_type, resource_id, action, session=session
+            )
         except Exception:
             return AuthorizationDecision(
                 allowed=False,
@@ -987,9 +998,11 @@ class IdentityService:
             )
 
     def _check_resource_access(
-        self, actor_id: str, resource_type: str, resource_id: str, action: str
+        self, actor_id: str, resource_type: str, resource_id: str, action: str, *, session=None
     ) -> AuthorizationDecision:
-        with self.sessions() as s:
+        from contextlib import nullcontext
+
+        with nullcontext(session) if session is not None else self.sessions() as s:
             actor = s.get(IdentityAgentRow, actor_id)
             permission = s.scalar(
                 select(IdentityPermissionRow).where(
@@ -999,7 +1012,9 @@ class IdentityService:
                 )
             )
             permission_key = permission.stable_key if permission else f"{resource_type}.{action}"
-            base = self.check_permission(actor_id, permission_key, resource_type, resource_id)
+            base = self.check_permission(
+                actor_id, permission_key, resource_type, resource_id, session=s
+            )
             if base.reason_code in {"actor_inactive", "evaluation_failed"}:
                 return base
             if not actor or actor.lifecycle_state != "active" or not actor.is_enabled:

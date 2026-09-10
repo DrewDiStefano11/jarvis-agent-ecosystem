@@ -286,6 +286,7 @@ class ContextAssembly(ContextContract):
     projectId: str
     status: Literal["completed", "review_required"]
     inputHash: str
+    taskInputFingerprint: str | None = None
     requestHash: str
     policyVersion: str
     modelRequest: ModelRequest | None

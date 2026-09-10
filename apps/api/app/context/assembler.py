@@ -186,6 +186,8 @@ class ContextAssembler:
                     "id": task.id,
                     "projectId": task.projectId,
                     "request": task.request,
+                    "title": task.title,
+                    "description": task.description,
                 },
             }
         )
@@ -347,6 +349,15 @@ class ContextAssembler:
             projectId=command.projectId,
             status=status,
             inputHash=input_hash,
+            taskInputFingerprint=deterministic_hash(
+                {
+                    "id": task.id,
+                    "projectId": task.projectId,
+                    "request": task.request,
+                    "title": task.title,
+                    "description": task.description,
+                }
+            ),
             requestHash=request_hash,
             policyVersion=command.policy.policyVersion,
             modelRequest=None if review_required else model_request,

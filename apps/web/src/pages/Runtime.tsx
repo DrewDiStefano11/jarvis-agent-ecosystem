@@ -5,12 +5,13 @@ import { ToolExecutionHistory, ToolExecutionPanel } from '../components/ToolExec
 import { newPlanningSubmission, submitPlanning, type PlanningSubmission } from '../api/planning'
 import { useAppStore } from '../state/AppStore'
 import { Status } from '../components/Status'
+import { PlannedWork } from '../components/PlannedWork'
 import { forgetPlanningSubmission, readPlanningRecovery, rememberPlanningSubmission, restorePlanningSubmission, type SavedPlanningSubmission } from '../state/planningRecovery'
 
 export function Runtime() {
   const [searchParams] = useSearchParams()
   const [mode, setMode] = useState<'planning' | 'workspace'>(searchParams.get('mode') === 'workspace' ? 'workspace' : 'planning')
-  const { runtime, tools, tasks, system, refresh, selectTask } = useAppStore()
+  const { runtime, tools, tasks, system, refresh, selectTask, decomposition } = useAppStore()
   const { identities, loadIdentities, actorId, selectActor, taskId, setTaskId, runs, executions, refreshRuntime } = runtime
   const [targetId, setTargetId] = useState('')
   const [message, setMessage] = useState('')
@@ -140,6 +141,7 @@ export function Runtime() {
       {pending && !busy && <><p>Retry reuses the same context and command IDs, including after recovering this form following a reload. Inspect history before starting different work.</p><button className="secondary" onClick={() => forget(pending.id)}>Clear submission form</button></>}
       {message && <p role="status">{message}</p>}
     </section>
+    <section className="panel"><PlannedWork record={decomposition.record} error={decomposition.error}/></section>
     <section className="panel"><h2>Runtime history</h2><button className="secondary" disabled={!actorId || runtime.loading} onClick={() => void refreshRuntime()}>Refresh runtime</button>
       {runtime.error && <p role="alert">{runtime.error}</p>}
       {!actorId && <p>Select a local identity to read authorized history.</p>}

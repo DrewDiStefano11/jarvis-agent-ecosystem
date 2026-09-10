@@ -163,6 +163,7 @@ class FakeRouter:
         self.all_requests = []
         self.plan_requests = []
         self.team_requests = []
+        self.decomposition_requests = []
         self.callback = callback
 
     @property
@@ -174,18 +175,64 @@ class FakeRouter:
         self.all_requests.append(request)
 
         is_capabilities = False
+        is_decomposition = False
         if getattr(request, "output_schema", None):
             schema = request.output_schema
-            if isinstance(schema, dict) and schema.get("title") == "RequiredCapabilitiesResult":
-                is_capabilities = True
-            elif getattr(schema, "name", None) == "required_capabilities":
-                is_capabilities = True
+            if isinstance(schema, dict):
+                title = schema.get("title")
+                if title == "RequiredCapabilitiesResult":
+                    is_capabilities = True
+                elif title == "DecompositionProposal":
+                    is_decomposition = True
+            else:
+                name = getattr(schema, "name", None)
+                if name == "required_capabilities":
+                    is_capabilities = True
+                elif name == "task_decomposition":
+                    is_decomposition = True
 
         if is_capabilities:
             self.team_requests.append(request)
             import json
 
             content = json.dumps({"required": [], "optional": [], "reasoning_summary": "mocked"})
+            return ModelExecutionResponse(
+                content=content,
+                provider="local-fake",
+                model="fixture-model",
+                input_tokens=0,
+                output_tokens=0,
+                usage_quality=UsageQuality.EXACT,
+                latency_ms=0,
+                finish_reason="stop",
+                task_id=request.task_id,
+                correlation_id=request.correlation_id,
+                estimated_cost_usd=0,
+            )
+
+        if is_decomposition:
+            self.decomposition_requests.append(request)
+            import json
+
+            content = json.dumps(
+                {
+                    "schemaVersion": "1",
+                    "objectiveSummary": "mocked objective",
+                    "subtasks": [
+                        {
+                            "key": "mock-subtask",
+                            "title": "Mock",
+                            "description": "Mocked.",
+                            "requiredCapabilities": ["system.test"],
+                            "dependsOn": [],
+                            "deliverable": "None",
+                            "outputType": "text",
+                            "completionCriteria": ["Done."],
+                        }
+                    ],
+                    "issues": [],
+                }
+            )
             return ModelExecutionResponse(
                 content=content,
                 provider="local-fake",

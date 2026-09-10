@@ -85,7 +85,7 @@ from app.team_selection.router import router as team_selection_router
 from app.tool_execution.router import router as tool_execution_router
 from app.tool_execution.service import ToolExecutionService
 
-DATABASE_REVISION = "20260906_09"
+DATABASE_REVISION = "20260906_10"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
@@ -300,6 +300,10 @@ def create_app(
     app.include_router(catalog_router)
     app.include_router(office_router)
     app.include_router(team_selection_router)
+    from app.decomposition.router import router as decomposition_router
+    from app.decomposition.service import DecompositionService
+
+    app.include_router(decomposition_router)
     app.state.lease_recovery_task = None
     app.state.office_recovery_task = None
     app.state.restored_workflow_state = restored_workflow_state
@@ -958,7 +962,19 @@ def create_app(
             payload,
         )
         if replay is not None:
-            return ApiResponse(data=ContextAssembly.model_validate(replay))
+            assembly = ContextAssembly.model_validate(replay)
+            replay_task = repository.get_task_durable(assembly.taskId)
+            if (
+                settings.model_execution_mode == "local_only"
+                and replay_task.startedAt is None
+                and replay_task.status
+                in {"queued", "planning", "assigned", "paused", "revision_requested"}
+            ):
+                await DecompositionService(
+                    repository, app.state.identity_service, app.state.model_router
+                ).prepare(assembly.taskId, assembly.id)
+                await broker.dispatch_pending()
+            return ApiResponse(data=assembly)
 
         actor_id = None
         if x_jarvis_actor_id is not None:
@@ -975,7 +991,12 @@ def create_app(
                 identity_service=app.state.identity_service,
                 model_router=app.state.model_router,
             )
-            task = await team_selector.assign_team(task)
+            try:
+                task = await team_selector.assign_team(task)
+            except Exception as e:
+                import logging
+
+                logging.getLogger(__name__).warning("Team assignment failed: %s", e)
 
         enricher = ContextEnricher(
             identity_service=app.state.identity_service,
@@ -983,12 +1004,27 @@ def create_app(
             repository=repository,
             tool_registry=getattr(app.state, "tool_execution_service", None),
         )
-        system_sources = enricher.enrich(body.taskId, actor_id=actor_id)
+        system_sources = enricher.enrich(body.taskId, actor_id=actor_id, task=task)
         body.sources.extend(system_sources)
 
         item = context_assembler.assemble(task, body)
         existing = repository.context_assemblies.get(item.id)
         if existing is not None:
+            if (
+                settings.model_execution_mode == "local_only"
+                and task.startedAt is None
+                and task.status
+                in {
+                    "queued",
+                    "planning",
+                    "assigned",
+                    "paused",
+                    "revision_requested",
+                }
+            ):
+                await DecompositionService(
+                    repository, app.state.identity_service, app.state.model_router
+                ).prepare(task.id, existing.id)
             completion = idempotency_result(
                 request,
                 idempotency_key,
@@ -1038,6 +1074,22 @@ def create_app(
                 item.id,
             ),
         )
+        if (
+            settings.model_execution_mode == "local_only"
+            and task.startedAt is None
+            and task.status
+            in {
+                "queued",
+                "planning",
+                "assigned",
+                "paused",
+                "revision_requested",
+            }
+        ):
+            await DecompositionService(
+                repository, app.state.identity_service, app.state.model_router
+            ).prepare(task.id, item.id)
+            await broker.dispatch_pending()
         return ApiResponse(data=item)
 
     @app.get("/api/workers", response_model=ApiResponse)

@@ -150,7 +150,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
         item["name"] for item in inspector.get_check_constraints("identity_agent_permissions")
     }
     with engine.connect() as connection:
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260906_09"
+        assert connection.scalar(text("select version_num from alembic_version")) == "20260906_10"
     engine.dispose()
     command.downgrade(config, "20260723_02")
     lease_engine = create_engine(database_url(path))
@@ -195,7 +195,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     command.current(config)
     with create_database_engine(database_url(path)).connect() as connection:
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260906_09"
+        assert connection.scalar(text("select version_num from alembic_version")) == "20260906_10"
     for revision in (root / "migrations" / "versions").glob("*.py"):
         source = revision.read_text(encoding="utf-8")
         assert "Base.metadata" not in source
@@ -1613,6 +1613,24 @@ def test_reset_idempotency_replays_after_lost_response(tmp_path: Path) -> None:
             if item["eventType"] == "system.simulator.reset"
         ]
         assert len(reset_audits) == 1
+
+    restarted = create_app(delay_ms=1, database_url=url)
+    with TestClient(restarted) as api:
+        assert restarted.state.repository.current_event_cursor() == (after_first_session, 0)
+        retry = api.post("/api/simulator/reset", headers=headers)
+        assert retry.status_code == 200
+        assert retry.json() == first.json()
+        assert restarted.state.repository.current_event_cursor() == (after_first_session, 0)
+        assert api.get("/api/system/status").json()["data"]["eventSessionId"] == after_first_session
+        with restarted.state.repository.session_factory() as session:
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(AuditEventRow)
+                    .where(AuditEventRow.event_type == "system.simulator.reset")
+                )
+                == 1
+            )
 
 
 def test_interrupted_workflow_has_checkpoint_and_resumes(tmp_path: Path) -> None:

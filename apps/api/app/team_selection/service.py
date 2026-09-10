@@ -86,20 +86,15 @@ class TeamSelectionService:
         )
         budget = TaskBudget(maximum_requests=1, maximum_output_tokens=1024)
 
-        try:
-            response = await self.model_router.execute(
-                request=request, requirements=requirements, budget=budget
-            )
-            payload = json.loads(response.content)
-            result = RequiredCapabilitiesResult.model_validate(payload)
-            # map_tags returns (valid, invalid)
-            valid_req, _ = map_tags(result.required)
-            valid_opt, _ = map_tags(result.optional)
-            return sorted(set(valid_req)), sorted(set(valid_opt)), result.reasoning_summary
-        except Exception as e:
-            logger.error("Capability inference failed", exc_info=e)
-            # If model is unavailable or malformed, return empty or a default fallback if known
-            return [], [], "Failed to infer capabilities from objective."
+        response = await self.model_router.execute(
+            request=request, requirements=requirements, budget=budget
+        )
+        payload = json.loads(response.content)
+        result = RequiredCapabilitiesResult.model_validate(payload)
+        # map_tags returns (valid, invalid)
+        valid_req, _ = map_tags(result.required)
+        valid_opt, _ = map_tags(result.optional)
+        return sorted(set(valid_req)), sorted(set(valid_opt)), result.reasoning_summary
 
     def _select_manager(self, task: Task, active_workforce: list[dict]) -> str | None:
         if task.assignedManagerId:

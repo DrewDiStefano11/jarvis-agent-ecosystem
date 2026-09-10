@@ -485,6 +485,21 @@ class IdentityAuditEventRow(Base):
     )
 
 
+class TaskDecompositionRow(Base):
+    __tablename__ = "task_decompositions"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), index=True)
+    active_task_id: Mapped[str | None] = mapped_column(ForeignKey("tasks.id"), unique=True)
+    version: Mapped[int] = mapped_column(Integer)
+    input_fingerprint: Mapped[str] = mapped_column(String(64))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    __table_args__ = (
+        UniqueConstraint("task_id", "version"),
+        CheckConstraint("version > 0"),
+        CheckConstraint("active_task_id IS NULL OR active_task_id = task_id"),
+    )
+
+
 class TaskRow(Base):
     __tablename__ = "tasks"
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
