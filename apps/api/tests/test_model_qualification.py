@@ -16,7 +16,11 @@ from pydantic import ValidationError
 
 from app.core.config import Settings
 from app.model_evaluation.cases import EvaluationCase, all_cases, case_by_id
-from app.model_evaluation.expectations import ExpectContainsAll, ExpectContainsNone
+from app.model_evaluation.expectations import (
+    ExpectContainsAll,
+    ExpectContainsNone,
+    ExpectDefectDetection,
+)
 from app.model_evaluation.providers import EvaluationUnavailableError
 from app.model_evaluation.runner import EvaluationBounds, run_evaluation
 from app.model_providers.contracts import HealthStatus, ProviderHealth
@@ -1200,3 +1204,35 @@ async def test_markdown_separates_failed_gates_from_unmeasured_gates() -> None:
     weak_markdown = render_profile_markdown((weak,), weak_run)
     assert "failed gates: " in weak_markdown
     assert "decomposition_quality_min (MANDATORY)" in weak_markdown
+
+
+def test_defect_detection_scores_false_positives_per_issue() -> None:
+    expectation = ExpectDefectDetection(expected_defects=("D-1", "D-2"))
+    perfect = expectation.check("", {"issues": ["D-1", "D-2"]})
+    assert perfect.passed and perfect.score == 1.0
+
+    explanatory = expectation.check(
+        "", {"issues": ["D-1: missing rollback", "D-2 because validation is absent"]}
+    )
+    assert explanatory.passed and explanatory.score == 1.0
+
+    invalid = ExpectDefectDetection(expected_defects=("D-1",)).check(
+        "", {"issues": ["there might be a bug here"]}
+    )
+    assert not invalid.passed and invalid.score == 0.0
+
+    mixed = ExpectDefectDetection(expected_defects=("D-1",)).check(
+        "", {"issues": ["D-1", "unclear concern"]}
+    )
+    assert not mixed.passed and mixed.score == 0.75
+
+    unknown = ExpectDefectDetection(expected_defects=("D-1",)).check("", {"issues": ["D-99"]})
+    assert not unknown.passed and unknown.score == 0.0
+
+    multiple = ExpectDefectDetection(expected_defects=("D-1", "D-2")).check(
+        "", {"issues": ["D-1 and D-2 are both broken"]}
+    )
+    assert not multiple.passed and multiple.score == 0.0
+
+    empty = ExpectDefectDetection(expected_defects=("D-1",)).check("", {"issues": []})
+    assert not empty.passed and empty.score == 0.5
