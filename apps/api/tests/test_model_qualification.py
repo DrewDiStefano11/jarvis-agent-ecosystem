@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from app.core.config import Settings
 from app.model_evaluation.cases import EvaluationCase, all_cases, case_by_id
+from app.model_evaluation.expectations import ExpectContainsAll, ExpectContainsNone
 from app.model_evaluation.providers import EvaluationUnavailableError
 from app.model_evaluation.runner import EvaluationBounds, run_evaluation
 from app.model_providers.contracts import HealthStatus, ProviderHealth
@@ -1012,6 +1013,14 @@ async def test_recommendation_is_evidence_only() -> None:
     joined = " ".join(run.notes)
     assert "never changes production routing" in joined
     assert isinstance(run, QualificationRun)
+
+
+def test_suite_digest_includes_concrete_expectation_type() -> None:
+    case = case_by_id("capability-basic")
+    common = {"category": "instruction", "substrings": ("required",)}
+    first = EvaluationCase(**{**case.__dict__, "expectations": (ExpectContainsAll(**common),)})
+    second = EvaluationCase(**{**case.__dict__, "expectations": (ExpectContainsNone(**common),)})
+    assert evaluation_suite_digest((first,)) != evaluation_suite_digest((second,))
 
 
 def test_suite_digest_changes_with_catalog() -> None:

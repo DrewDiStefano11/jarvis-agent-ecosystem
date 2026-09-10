@@ -410,7 +410,10 @@ class ExpectDefectDetection(Expectation):
         expected = set(self.expected_defects)
         detected = expected & reported
         recall = len(detected) / len(expected) if expected else 1.0
-        false_positives = sorted((reported - expected) | ({"<invalid-issue>"} if any(ref is None for ref in references) else set()))
+        false_positives = sorted(
+            (reported - expected)
+            | ({"<invalid-issue>"} if any(ref is None for ref in references) else set())
+        )
         false_positive_rate = len(false_positives) / len(reported) if reported else 0.0
         score = max(0.0, min(1.0, (recall + (1.0 - false_positive_rate)) / 2))
         problems: list[str] = []

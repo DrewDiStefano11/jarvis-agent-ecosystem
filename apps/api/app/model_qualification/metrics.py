@@ -66,9 +66,13 @@ OPERATIONAL_METRICS = (
 def evaluation_suite_digest(cases: tuple[Any, ...] | None = None) -> str:
     """Stable short digest of the exact case catalog used for a run."""
     catalog = cases if cases is not None else all_cases()
+
     def stable(value: Any) -> Any:
         if is_dataclass(value):
-            return stable(asdict(value))
+            return {
+                "__type__": f"{type(value).__module__}.{type(value).__qualname__}",
+                "fields": stable(asdict(value)),
+            }
         if isinstance(value, dict):
             return {str(key): stable(value[key]) for key in sorted(value, key=str)}
         if isinstance(value, (tuple, list)):
@@ -96,7 +100,9 @@ def evaluation_suite_digest(cases: tuple[Any, ...] | None = None) -> str:
         }
         for case in catalog
     ]
-    payload = json.dumps(stable(definition), ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    payload = json.dumps(
+        stable(definition), ensure_ascii=True, sort_keys=True, separators=(",", ":")
+    )
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 

@@ -295,12 +295,18 @@ async def run_installed_local_qualification(
     if _global_call_budget is not None:
         if _global_call_budget <= 0:
             return unavailable_profile(
-                provider=provider_name or "unresolved", model=model, roles=requested,
-                evaluated_at=evaluated_at or _now(), evaluation_suite_digest=evaluation_suite_digest(),
-                repo_sha=repo_sha, reason="max_total_calls exhausted before model execution",
+                provider=provider_name or "unresolved",
+                model=model,
+                roles=requested,
+                evaluated_at=evaluated_at or _now(),
+                evaluation_suite_digest=evaluation_suite_digest(),
+                repo_sha=repo_sha,
+                reason="max_total_calls exhausted before model execution",
             )
         active_bounds = active_bounds.model_copy(
-            update={"max_calls_per_model": min(active_bounds.max_calls_per_model, _global_call_budget)}
+            update={
+                "max_calls_per_model": min(active_bounds.max_calls_per_model, _global_call_budget)
+            }
         )
     stamp = evaluated_at or _now()
     digest = evaluation_suite_digest()
