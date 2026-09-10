@@ -124,6 +124,7 @@ class IdentityRuntimeAuthorizer(RuntimeAuthorizer):
         *,
         specification: AgentRunSpecification | None = None,
         snapshot: AgentRunSnapshot | None = None,
+        session=None,
     ) -> RuntimeAuthorizationContext:
         from app.agent_runtime.errors import RuntimePermissionDeniedError
 
@@ -132,11 +133,13 @@ class IdentityRuntimeAuthorizer(RuntimeAuthorizer):
             raise RuntimePermissionDeniedError(metadata={"operation": operation})
         permission_key = RUNTIME_PERMISSION_KEYS[operation]
         resource_id = target.task_id
+        session_options = {"session": session} if session is not None else {}
         admin_decision = self.identity.check_permission_resource_access(
             actor.actor_id,
             RUNTIME_ADMIN_PERMISSION,
             RUNTIME_ADMIN_RESOURCE_TYPE,
             RUNTIME_ADMIN_RESOURCE_ID,
+            **session_options,
         )
         if admin_decision.allowed:
             return RuntimeAuthorizationContext(
@@ -153,6 +156,7 @@ class IdentityRuntimeAuthorizer(RuntimeAuthorizer):
             permission_key,
             RUNTIME_RESOURCE_TYPE,
             resource_id,
+            **session_options,
         )
         if not decision.allowed:
             raise RuntimePermissionDeniedError(
