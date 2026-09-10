@@ -374,6 +374,70 @@ class ExpectSynthesisCoverage(Expectation):
 
 
 @dataclass(frozen=True)
+class ExpectDefectDetection(Expectation):
+    """Review quality: detect every real defect and invent none.
+
+    ``issues`` entries are matched against ``expected_defects`` (recall) and
+    ``false_positive_defects`` (defects that are explicitly *not* present).
+    The score is the documented mean of recall and false-positive avoidance:
+
+        score = (recall + (1 - false_positive_rate)) / 2
+
+    where ``recall = |expected ∩ reported| / |expected|`` and
+    ``false_positive_rate = |reported \\ expected| / |reported|``. Passing
+    requires perfect recall, zero false positives, and — when given — the
+    expected verdict. This keeps "defect detection" and "false-positive
+    avoidance" deterministic and measurable without storing response bodies.
+    """
+
+    category: str = "review"
+    expected_defects: tuple[str, ...] = ()
+    false_positive_defects: tuple[str, ...] = ()
+    expected_verdict: str | None = None
+
+    def check(self, content: str, parsed: Any | None) -> ExpectationOutcome:
+        if not isinstance(parsed, dict):
+            return ExpectationOutcome(False, "review output is not a JSON object", 0.0)
+        issues = parsed.get("issues")
+        raw_issues = [str(item) for item in issues] if isinstance(issues, list) else []
+        # One issue must reference exactly one whole defect token; explanatory
+        # text is permitted, but substring matches (D-10 vs D-1) are not.
+        references: list[str | None] = []
+        for issue in raw_issues:
+            matches = re.findall(r"(?<![A-Za-z0-9_-])(D-[0-9]+)(?![A-Za-z0-9_-])", issue)
+            references.append(matches[0] if len(matches) == 1 else None)
+        reported = {ref for ref in references if ref is not None}
+        expected = set(self.expected_defects)
+        detected = expected & reported
+        recall = len(detected) / len(expected) if expected else 1.0
+        invalid_count = sum(ref is None for ref in references)
+        unknown_count = sum(ref is not None and ref not in expected for ref in references)
+        false_positive_count = invalid_count + unknown_count
+        false_positives = sorted(
+            (reported - expected) | ({"<invalid-issue>"} if invalid_count else set())
+        )
+        # False-positive rate is per issue entry, not per distinct valid ID.
+        # Invalid and multi-ID entries therefore cannot improve the score.
+        false_positive_rate = false_positive_count / len(raw_issues) if raw_issues else 0.0
+        score = max(0.0, min(1.0, (recall + (1.0 - false_positive_rate)) / 2))
+        problems: list[str] = []
+        missing = sorted(expected - reported)
+        if missing:
+            problems.append(f"missed defects: {missing}")
+        if false_positives:
+            problems.append(f"false positives: {false_positives}")
+        if self.expected_verdict is not None and parsed.get("verdict") != self.expected_verdict:
+            problems.append(
+                f"verdict {parsed.get('verdict')!r} != expected {self.expected_verdict!r}"
+            )
+        if problems:
+            return ExpectationOutcome(False, _detail("; ".join(problems)), score)
+        return ExpectationOutcome(
+            True, _detail(f"detected {sorted(detected)} without false positives"), score
+        )
+
+
+@dataclass(frozen=True)
 class ExpectNoInventedIds(Expectation):
     """Hallucination check: id-like tokens must come from a known set.
 

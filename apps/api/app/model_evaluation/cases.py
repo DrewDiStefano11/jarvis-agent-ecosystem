@@ -27,6 +27,7 @@ from app.model_evaluation.expectations import (
     ExpectContainsAll,
     ExpectContainsNone,
     ExpectCorrectedParses,
+    ExpectDefectDetection,
     ExpectGraphValid,
     ExpectJsonParses,
     ExpectLengthBound,
@@ -389,6 +390,44 @@ def case_review_basic() -> EvaluationCase:
     )
 
 
+_REVIEW_DEFECT_SYSTEM = (
+    "You are a strict Jarvis reviewer. Review the artifact and respond with JSON "
+    "{verdict: 'approve'|'revise', issues: string[]}. Each issue must reference one "
+    "defect id of the artifact (for example 'D-1'). Report every real defect and "
+    "never report a defect that is not present."
+)
+
+
+def case_review_defects() -> EvaluationCase:
+    reference = _json({"verdict": "revise", "issues": ["D-1", "D-2"]})
+    return EvaluationCase(
+        case_id="review-defects",
+        role=EvaluationRole.REVIEW_CRITIQUE,
+        title="Detect every real defect without inventing extra ones",
+        system_prompt=_REVIEW_DEFECT_SYSTEM,
+        user_prompt=(
+            "Artifact: launch plan.\nDefects present: D-1 (no rollback step), "
+            "D-2 (owner unnamed).\nExplicit non-defects: D-3 (formatting), D-4 (tone)."
+        ),
+        output_schema_name="review_verdict",
+        expectations=(
+            ExpectJsonParses(),
+            ExpectSchemaValid(schema_name="review_verdict"),
+            ExpectDefectDetection(
+                expected_defects=("D-1", "D-2"),
+                false_positive_defects=("D-3", "D-4"),
+                expected_verdict="revise",
+            ),
+        ),
+        reference_output=reference,
+        adversarial_outputs={
+            "missed_defect": _json({"verdict": "revise", "issues": ["D-1"]}),
+            "false_positive": _json({"verdict": "revise", "issues": ["D-1", "D-2", "D-3"]}),
+            "wrong_verdict": _json({"verdict": "approve", "issues": ["D-1", "D-2"]}),
+        },
+    )
+
+
 def case_planning_basic() -> EvaluationCase:
     reference = _json(
         {
@@ -640,6 +679,7 @@ def all_cases() -> tuple[EvaluationCase, ...]:
         case_structured_strict(),
         case_synthesis_basic(),
         case_review_basic(),
+        case_review_defects(),
         case_planning_basic(),
         case_manager_basic(),
         case_specialist_strict(),

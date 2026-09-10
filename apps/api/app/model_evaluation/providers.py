@@ -78,10 +78,23 @@ class ScriptedFixtureProvider:
     inference_mode = "fixture"
     is_local = True
 
-    def __init__(self, scripts: dict[str, list[str | Exception]]) -> None:
+    def __init__(
+        self,
+        scripts: dict[str, list[str | Exception]],
+        *,
+        model_name: str | None = None,
+    ) -> None:
+        """Scripted responses keyed by case id.
+
+        ``model_name`` lets a caller label a scripted fixture model (used by
+        qualification personas so several fixture models can be compared); it
+        defaults to :data:`FIXTURE_MODEL_NAME` and never implies real inference.
+        """
         self._scripts = {key: list(value) for key, value in scripts.items()}
         self.calls: list[FixtureCall] = []
         self._counters: dict[str, int] = {}
+        if model_name:
+            self.model_name = model_name
 
     async def generate(self, request: ModelExecutionRequest) -> ModelExecutionResponse:
         case_id = (request.task_id or "unknown").split(":")[0]

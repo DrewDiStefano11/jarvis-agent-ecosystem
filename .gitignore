@@ -22,6 +22,9 @@ backups/
 *.partial
 jarvis-diagnostic.json
 jarvis-diagnostic.md
+model-qualification.json
+model-qualification-summary.md
+profile-*.json
 apps/web/public/mockServiceWorker.js
 apps/web/vite.config.js
 apps/web/vite.config.d.ts
