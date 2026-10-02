@@ -7,6 +7,7 @@ sleeps, timing races, or probabilistic retries are used.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 from pathlib import Path
@@ -610,8 +611,9 @@ async def test_concurrent_review_handling_creates_one_durable_effect(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("boundary", ["unblock", "begin_attempt"])
+@pytest.mark.parametrize("recovery_owner", ["manual", "lifespan"])
 async def test_revision_preparation_recovers_with_historical_execution(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, boundary: str, recovery_owner: str
 ) -> None:
     run_id = f"run-revision-crash-{boundary}"
     router = FakeRouter([json.dumps(INCOMPLETE_RESULT), json.dumps(VALID_RESULT)])
@@ -619,6 +621,17 @@ async def test_revision_preparation_recovers_with_historical_execution(
     service = app.state.autonomous_worker_service
     original = service._handle
     try:
+        # This test owns expired-lease recovery. The lifespan's concurrent consumer
+        # can legitimately recover the same lease between expiration and our call.
+        async def stop_background_recovery():
+            task = app.state.lease_recovery_task
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        client.portal.call(stop_background_recovery)
         first = await service.run_once(worker.id)
         assert first is not None and first.failureCode == "review_revision_requested"
 
@@ -634,7 +647,20 @@ async def test_revision_preparation_recovers_with_historical_execution(
         assert len(execution_rows(app, run_id)) == 1
         assert len(router.requests) == 1
         monkeypatch.setattr(service, "_handle", original)
-        expire_lease(app)
+        if recovery_owner == "manual":
+            expire_lease(app)
+        else:
+            # Force the exact CI ordering: the lifespan consumer wins before
+            # the manual caller. Zero here means already recovered, not lost.
+            with app.state.model_execution_repository.sessions.begin() as session:
+                session.execute(
+                    update(TaskLeaseRow)
+                    .where(TaskLeaseRow.task_id == "task-demo")
+                    .values(expires_at=ts(0))
+                )
+            assert client.portal.call(app.state.task_leases.recover_expired_leases) == 1
+            assert app.state.task_leases.recover_expired_leases() == 0
+        assert outbox_count(app, "task.lease.expired", "task-demo") == 1
         recovered = await service.run_once(worker.id)
         assert recovered is not None and recovered.stage == "completed"
         assert len(router.requests) == 2
