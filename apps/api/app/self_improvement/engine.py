@@ -59,6 +59,21 @@ def analyze(baseline: Baseline) -> Analysis:
             groups[(o.category, o.stage, o.role, o.model, o.provider, o.metric)].append(o)
     if len(groups) > 256:
         raise ValueError("too many weakness groups; reduce evidence window")
+    complete = all(s.complete and s.repo_sha == baseline.repo_sha for s in baseline.sources)
+    measured = tuple(o for o in baseline.observations if o.measured)
+    if (
+        complete
+        and len(groups) * len(measured) + sum(len(items) for items in groups.values()) > 65_536
+    ):
+        raise ValueError("experiment criteria exceed output budget; reduce evidence window")
+    # Share immutable criteria in memory; bound serialized copies across plans.
+    regression = (
+        tuple(
+            Criterion(observation_id=o.id, target=o.actual, direction=o.direction) for o in measured
+        )
+        if groups and complete
+        else ()
+    )
     weaknesses, proposals = [], []
     for key, items in sorted(groups.items()):
         category, stage, role, _, _, metric = key
@@ -74,7 +89,6 @@ def analyze(baseline: Baseline) -> Analysis:
             if subjects >= 2
             else "medium"
         )
-        complete = all(s.complete and s.repo_sha == baseline.repo_sha for s in baseline.sources)
         weakness = Weakness(
             id=digest([baseline.id, key, evidence]),
             category=category,
@@ -110,11 +124,6 @@ def analyze(baseline: Baseline) -> Analysis:
         # Select per-source metric keys; repeated runs remain individually visible.
         primary = tuple(
             Criterion(observation_id=o.id, target=o.expected, direction=o.direction) for o in items
-        )
-        regression = tuple(
-            Criterion(observation_id=o.id, target=o.actual, direction=o.direction)
-            for o in baseline.observations
-            if o.measured
         )
         experiment = (
             ExperimentPlan(
@@ -263,18 +272,24 @@ def compare_baselines(
     for key in sorted(old_metrics.keys() | new_metrics.keys()):
         old, new = old_metrics.get(key), new_metrics.get(key)
         label = "/".join(key)
+        if (
+            old is not None
+            and new is not None
+            and (old.direction, old.expected, old.hard_gate)
+            != (new.direction, new.expected, new.hard_gate)
+        ):
+            reasons.append(f"Changed metric definition/threshold/safety gate: {label}.")
+            continue
         if new is not None and old is not None and not old.measured and not new.measured:
             unchanged.append(label)
         elif new is None or not new.measured:
             missing.append(label)
         elif old is None or not old.measured:
             newly.append(label)
-        elif (old.direction, old.expected, old.hard_gate) != (
-            new.direction,
-            new.expected,
-            new.hard_gate,
-        ):
-            reasons.append(f"Changed metric definition/threshold/safety gate: {label}.")
+            if failed(new):
+                regressed.append(label)
+            elif new.hard_gate and new.expected is None:
+                reasons.append(f"Newly measured hard gate has no recorded expectation: {label}.")
         elif new.actual == old.actual:
             unchanged.append(label)
         elif (new.actual > old.actual) == (old.direction == "higher"):

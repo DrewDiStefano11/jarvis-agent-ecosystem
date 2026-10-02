@@ -135,7 +135,9 @@ and the read-only runtime evidence adapter.
 
 Use an already migrated database and the API Python environment. Input JSON files
 are bounded at 2 MB, source count at 64, observations at 4096, findings/proposals
-at 256. Overflow fails explicitly. No untrusted input is echoed in errors.
+at 256, and total serialized experiment criteria at 65,536. Overflow fails
+explicitly; repeated copies of the same artifact under aliases are rejected.
+Runtime time windows are normalized to UTC. No untrusted input is echoed in errors.
 
 ```powershell
 python scripts/jarvis_self_improve.py analyze --repo-sha <40-char-sha> `

@@ -32,11 +32,20 @@ class Contract(BaseModel):
     @classmethod
     def scrub_strings(cls, value):
         # Free text and identifiers receive the same existing security scrubber.
-        return (
-            scrub_text(redact_text(value, collect_secret_values(os.environ)))
-            if isinstance(value, str)
-            else value
-        )
+        secrets = collect_secret_values(os.environ)
+
+        def scrub(item):
+            if isinstance(item, str):
+                return scrub_text(redact_text(item, secrets))
+            if isinstance(item, tuple):
+                return tuple(scrub(child) for child in item)
+            if isinstance(item, list):
+                return [scrub(child) for child in item]
+            if isinstance(item, dict):
+                return {key: scrub(child) for key, child in item.items()}
+            return item
+
+        return scrub(value)
 
 
 class EvaluationObservation(Contract):
@@ -126,6 +135,8 @@ class Baseline(Contract):
         sources = {(s.source_type, s.source_id, s.digest) for s in self.sources}
         if len({(s.source_type, s.source_id) for s in self.sources}) != len(self.sources):
             raise ValueError("duplicate source references")
+        if len({(s.source_type, s.digest) for s in self.sources}) != len(self.sources):
+            raise ValueError("the same evidence artifact cannot be replayed under multiple aliases")
         if any(
             (o.source_type, o.source_id, o.evidence_digest) not in sources
             for o in self.observations

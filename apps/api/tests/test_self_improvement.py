@@ -1,5 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -303,6 +303,15 @@ def test_duplicate_alias_or_unbounded_output_rejected():
             supporting_evidence_ids=(digest("e"),),
             confidence="high",
         )
+    with pytest.raises(ValidationError, match="replayed"):
+        create_baseline(
+            repo_sha=SHA,
+            configuration_fingerprint=digest("config"),
+            safety_fingerprint=digest("safety"),
+            sources=base.sources
+            + (base.sources[0].model_copy(update={"source_id": "duplicate-alias"}),),
+            observations=base.observations,
+        )
 
 
 def test_analysis_is_idempotent_and_restart_safe(database):
@@ -446,6 +455,11 @@ def test_runtime_window_is_bounded_and_empty_not_failure(database):
     sessions, _, _ = database
     record, observations = RuntimeHistorySource(sessions, NOW, NOW + timedelta(hours=1)).collect()
     assert not observations and not record.complete
+    offset_start = NOW.astimezone(timezone(timedelta(hours=-4)))
+    same_record, _ = RuntimeHistorySource(
+        sessions, offset_start, offset_start + timedelta(hours=1)
+    ).collect()
+    assert same_record.configuration_digest == record.configuration_digest
     with pytest.raises(ValueError):
         RuntimeHistorySource(sessions, NOW, NOW)
 
@@ -654,3 +668,57 @@ def test_service_comparison_persists_original_criteria_and_does_not_append_audit
         assert not session.scalars(select(AuditEventRow)).all()
     with pytest.raises(ValueError, match="unknown proposal"):
         service.compare(before.baseline.id, after.baseline.id, digest("invented"), attestation())
+
+
+@pytest.mark.parametrize("hard", [False, True])
+def test_newly_measured_failure_blocks_positive_candidate(hard):
+    before = baseline((0, None), hard=hard)
+    after = baseline((1, 0), hard=hard)
+    result = compare(before, after)
+    assert result.newly_measured and result.improved
+    assert result.decision == "regressed" and result.regressed
+
+
+def test_nested_identifier_and_advisory_secrets_are_scrubbed_before_persistence(
+    database, monkeypatch
+):
+    sessions, _, _ = database
+    secret = "opaque-credential-value-2381"
+    monkeypatch.setenv("JARVIS_NESTED_TEST_API_KEY", secret)
+    result = analyze(baseline(provenance=source(case_ids=(secret, "case-b"))))
+    hypothesis = ImprovementHypothesis(
+        id=digest("nested-hypothesis"),
+        weakness_id=result.weaknesses[0].id,
+        suspected_subsystem="planner",
+        explanation="Advisory",
+        confidence="low",
+        supporting_evidence_ids=result.weaknesses[0].evidence_ids,
+        information_needed=(secret, f"Verify {secret}"),
+    )
+    from app.models.self_improvement import Analysis
+
+    analysis = Analysis.model_validate(
+        {**result.model_dump(mode="json"), "hypotheses": [hypothesis.model_dump(mode="json")]}
+    )
+    repository = ImprovementRepository(sessions)
+    saved = repository.save_analysis(analysis)
+    assert secret not in saved.model_dump_json()
+    with sessions() as session:
+        assert secret not in str(session.scalar(select(ImprovementRecordRow.payload)))
+
+
+def test_experiment_output_budget_prevents_multiplicative_payload_growth():
+    record = source(case_ids=tuple(f"case-{i}" for i in range(256)))
+    observations = tuple(
+        observation(record, NOW, f"case-{i}", "planning", f"metric-{i}", 0, expected=1)
+        for i in range(256)
+    )
+    oversized = create_baseline(
+        repo_sha=SHA,
+        configuration_fingerprint=digest("config"),
+        safety_fingerprint=digest("safety"),
+        sources=(record,),
+        observations=observations,
+    )
+    with pytest.raises(ValueError, match="output budget"):
+        analyze(oversized)

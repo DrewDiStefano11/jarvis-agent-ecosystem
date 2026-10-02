@@ -20,7 +20,12 @@ class RuntimeHistorySource:
     def __init__(self, session_factory, start, end, limit=256):
         if start.tzinfo is None or end.tzinfo is None or start >= end or not 1 <= limit <= 512:
             raise ValueError("runtime history requires a bounded timezone-aware window and limit")
-        self.sessions, self.start, self.end, self.limit = session_factory, start, end, limit
+        self.sessions, self.start, self.end, self.limit = (
+            session_factory,
+            start.astimezone(UTC),
+            end.astimezone(UTC),
+            limit,
+        )
 
     def collect(self):
         projected = []
