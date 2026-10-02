@@ -78,6 +78,7 @@ from app.office.router import router as office_router
 from app.office.service import OfficeService
 from app.repositories.sqlalchemy import IdempotencyResult, SqlAlchemyRepository
 from app.repositories.task_leases import TaskLeaseRepository
+from app.self_improvement.router import router as self_improvement_router
 from app.services.events import EventBroker
 from app.services.task_creation import prepare_task_creation
 from app.simulator.engine import SimulatorEngine
@@ -85,7 +86,7 @@ from app.team_selection.router import router as team_selection_router
 from app.tool_execution.router import router as tool_execution_router
 from app.tool_execution.service import ToolExecutionService
 
-DATABASE_REVISION = "20260906_10"
+DATABASE_REVISION = "20261002_si"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
@@ -292,6 +293,7 @@ def create_app(
     )
     app.state.tool_execution_service = ToolExecutionService(app)
     app.state.autonomous_worker_service.tool_executor = app.state.tool_execution_service
+    app.include_router(self_improvement_router)
     app.include_router(tool_execution_router)
     app.include_router(agent_runtime_router)
     app.include_router(autonomous_worker_router)
