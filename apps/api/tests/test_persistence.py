@@ -1961,3 +1961,30 @@ def test_seeded_audit_history_survives_blank_startup_and_recreation(tmp_path: Pa
         assert any(
             item["id"] == "audit-1" for item in second.get("/api/audit-events").json()["data"]
         )
+
+
+@pytest.mark.parametrize("filename", ["literal%20.db", "literal%3A.db", "literal%25.db"])
+def test_sqlite_percent_path_survives_application_and_alembic_roundtrip(
+    tmp_path, monkeypatch, filename
+):
+    monkeypatch.delenv("JARVIS_DATABASE_URL", raising=False)
+    path = tmp_path / filename
+    app = create_app(database_url=database_url(path))
+    try:
+        assert Path(app.state.engine.url.database).resolve() == path.resolve()
+        assert path.is_file()
+        config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
+        config.set_main_option("script_location", str(Path(__file__).parents[1] / "migrations"))
+        value = str(app.state.engine.url)
+        config.set_main_option("sqlalchemy.url", value.replace("%", "%%"))
+        assert config.get_main_option("sqlalchemy.url") == value
+        app.state.engine.dispose()
+        command.downgrade(config, "20260729_04")
+        command.upgrade(config, "head")
+        with create_database_engine(value).connect() as connection:
+            assert (
+                connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260906_10"
+            )
+        assert sorted(p.name for p in tmp_path.glob("*.db")) == [filename]
+    finally:
+        app.state.engine.dispose()
