@@ -39,3 +39,51 @@ def test_coordination_upgrade_from_dependency_and_empty_roundtrip(tmp_path):
             )
     finally:
         engine.dispose()
+
+
+def test_populated_main_upgrade_preserves_task_and_supported_roundtrip(tmp_path):
+    from datetime import UTC, datetime
+
+    from sqlalchemy.orm import Session
+
+    from app.db.models import TaskRow
+
+    path = tmp_path / "populated-main.db"
+    config = migration_config(path)
+    command.upgrade(config, "20260906_10")
+    engine = create_engine(database_url(path))
+    now = datetime.now(UTC)
+    with Session(engine) as session, session.begin():
+        session.add(
+            TaskRow(
+                id="preserved-task",
+                title="Populated upgrade",
+                description="Preserve history",
+                original_request="Preserve history",
+                creator="operator",
+                priority="normal",
+                status="draft",
+                progress=0,
+                status_message="Draft",
+                payload={"immutable_evidence": "preserved"},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    engine.dispose()
+    command.upgrade(config, "head")
+    with engine.connect() as connection:
+        assert (
+            connection.scalar(text("SELECT title FROM tasks WHERE id='preserved-task'"))
+            == "Populated upgrade"
+        )
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260907_11"
+    engine.dispose()
+    command.downgrade(config, "20260729_04")
+    command.upgrade(config, "head")
+    with engine.connect() as connection:
+        assert (
+            connection.scalar(text("SELECT title FROM tasks WHERE id='preserved-task'"))
+            == "Populated upgrade"
+        )
+    engine.dispose()

@@ -1,75 +1,155 @@
-# Milestone #63 — Coordinator / Synthesis / Retry Engine
+# Milestone #63 — Production Coordinator / Synthesis / Retry
 
-## Stack and authorization
+## Reconciliation
 
-- Original dependency #62 SHA: `4ffb459e245e2f179a6982acdb4d4c3b7543e885`.
-- Original `origin/main`: `d9198b8c3cd73e65ea9d2d6b8571ad35f962e797`.
 - Branch: `codex/coordinator-synthesis-retry`.
-- Development worktree: `C:\Jarvis\coordinator-synthesis-63`.
-- #62 worktree and `C:\Users\ddist\JARVIS-RUN` are untouched.
-- User explicitly authorized pushed phase checkpoints and an eventual review PR; no merge is authorized.
-- #62 was OPEN at inspection. GitHub metadata is authoritative for all final heads.
-- Latest observed #62 head: `0c10d2a7ac88af3db31e099a70b342f821b3b542`. This changes capability-inference failure behavior, its fake router, and browser synchronization. It has not been incorporated. Reassess at the next coherent checkpoint before touching request classification.
+- Original PR head: `b48b90dc38047fc1ca8d188c552d740dd98d3bc2`.
+- Authoritative main used for reconciliation: `f130e47e61000120d10e62adcf286d12b8140bdb`.
+- Main was merged into the feature branch semantically. There were no textual conflicts.
+- PR #62 remains authoritative for decomposition, assignment, persistence, reset behavior,
+  planned-work state, and UI. This milestone consumes its active `DecompositionRecord`; it does
+  not parse the objective into another graph or create competing child task records.
+- PR #66 model evaluation and qualification code is unchanged.
 
-## Current state — incomplete milestone
+## Coordinator architecture
 
-Phase A implements internal durable coordinator preparation and a canonical ready-node reservation. It does **not** expose a new API, dispatch model requests, or alter ordinary worker execution. Phases B–D remain required. Do not describe the milestone or runtime acceptance as complete.
+`CoordinatorService` is attached to the existing autonomous worker loop after planning-result
+recovery. An accepted planning run with an active ready decomposition is handed to a single
+durable `CoordinationRecord` instead of completing the parent task. The parent task lease and
+`RuntimeExecutionFence` remain authoritative for every runtime and coordinator write.
 
-## Architecture
+Each planned node has one deterministic runtime run per durable attempt. Runtime creation,
+queueing, claim, attempt start, checkpoint, attempt completion, and run completion use the
+existing authorized agent-runtime command ledger. The coordinator never grants permissions,
+changes team membership, changes provider policy, or creates executable child `TaskRow` records.
 
-`CoordinatorService` consumes the authoritative active #62 decomposition, exact parent planning runtime, team selection, and grounded assembly. `CoordinationRepository` serializes its small aggregate with the existing `SystemStateRow` first-write fence. One row per decomposition and one per parent runtime are database uniqueness invariants. A hash binds the full graph, so in-place operator edits cannot silently change reserved work.
+The coordinator API exposes the read-only projection at
+`GET /api/tasks/{task_id}/coordination`. Execution remains worker-owned.
 
-Claims require the existing `RuntimeExecutionFence` and current `TaskLeaseRow`. They retain a deterministic child runtime/attempt preparation reference. There is no new lease table, scheduler, worker identity, task identity, or authorization grant. The existing worker policy allows exactly one execution per process; readiness preserves every independent node, while this first claim primitive reserves one at a time.
+## Dependency and result semantics
 
-Runtime authorization now optionally accepts an existing SQLAlchemy session. The existing identity permission evaluator and administrative override semantics run inside the coordinator write transaction. Existing callers retain their prior behavior.
+- Root nodes are ready immediately.
+- A dependent node becomes claimable only after every named dependency is `succeeded` and has a
+  durable result digest, evidence list, and runtime checkpoint.
+- Independent work may continue while another independent node is waiting for retry eligibility.
+- Permanent upstream failure marks transitive dependants `blocked`; it never unlocks them.
+- Ready order and synthesis inputs use the deterministic topological order from PR #62.
+- In-place graph changes, including operator protection changes, invalidate the stored graph hash
+  and fail closed before another transition.
 
-## Lifecycle
+Specialist output is untrusted data. It must validate against `SpecialistResult`, explicitly cover
+every PR #62 completion criterion, stay within checkpoint bounds, and be persisted with a SHA-256
+digest and evidence before dependencies unlock.
 
-Current implementation only persists `active` coordination and `pending -> claimed` node preparation. Readiness is derived from the graph and eligible identities. Claiming does not itself begin a runtime attempt. Task cancellation, pause/review, terminal state, emergency stop, stale graph, expired lease, changed objective/team, ineligible specialist, and revoked worker permissions reject reservation.
+## Retry and recovery
 
-The selected manager must already be an enabled active planning/coordinator identity without catalog activation provenance. Imported specialists cannot become the manager. No identity is provisioned or elevated by coordination; existing #61 manager selection remains authoritative.
+- Maximum specialist attempts: 3 (one initial attempt plus at most 2 retries).
+- Maximum synthesis attempts: 2 (one initial attempt plus at most 1 retry).
+- Provider, timeout, malformed-response, and deterministic output-validation failures are
+  retryable within those bounds.
+- Budget exhaustion, disabled/invalid provider configuration, authorization/control-plane
+  refusal, cancellation, pause, emergency stop, lease loss, and stale inputs do not autonomously
+  retry.
+- Retry eligibility is durable and uses bounded exponential delay metadata; the worker never
+  sleeps inside a coordinator transaction.
+- Replaying an already recorded failure or success does not increment the attempt count or add an
+  event.
+- A restart reconstructs work from the coordination row plus runtime ledger. A validated runtime
+  checkpoint repairs a lost coordinator acknowledgement without repeating inference. A running
+  runtime with no checkpoint has an ambiguous provider outcome and blocks for operator review;
+  it is never automatically dispatched again. A reservation with no started runtime can retry
+  within the existing bounds. Same-lease concurrent callers cannot steal in-flight work. Losing
+  the parent lease prevents the stale process from checkpointing or committing.
 
-## Planned execution, retry, replan and synthesis work
+## Synthesis and completion
 
-Next integrate preparation references with existing authorized child runtime commands and the parent's exact task lease. Dispatch only bounded intellectual work through the existing local model router; unsupported actions must block. Persist validated specialist results and criteria assessments before unlocking dependencies. Use the existing retry policy's delay calculation with durable eligibility timestamps and bounded attempts, not sleeps. Preserve successful results and prior graph versions. #62 currently forbids automatic graph replacement once task execution has started: any replan must respect that constraint and use bounded auditable recovery/reselection rather than bypassing it.
+Synthesis starts only when every required node is `succeeded`. Its prompt contains only the
+durable, validated summaries/digests/evidence in topological order. The returned contributor list
+must exactly match those durable inputs. Synthesis is stored as data with an input digest, result
+digest, and runtime checkpoint.
 
-Manager synthesis must be a distinct request with durable provenance and idempotent finalization through `TaskLeaseRepository.complete_task`. No synthesis/result path is implemented yet. Crash recovery currently proves that a reserved reference survives expiry and cannot be reserved twice; resuming actual inference remains Phase C work.
+Parent completion uses `TaskLeaseRepository.complete_task` with a transaction-local completion
+guard that revalidates every node, evidence/checkpoint, synthesis state, and final result reference.
+The parent runtime is completed under the same fence. A crash after task completion is reconciled
+from the durable task result. Repeated worker iterations after completion do not execute nodes,
+synthesize, create artifacts, or emit another completion event.
 
-## Files and migration
+## Migration
 
-- `apps/api/app/coordination/{repository,service}.py`: preparation and fenced claim boundary.
-- `apps/api/app/models/coordination.py`: bounded contracts and derived readiness.
-- `apps/api/app/db/models.py`: `CoordinationRow`.
-- `apps/api/migrations/versions/20260907_11_task_coordination.py`: narrow table, task/decomposition/runtime FKs and uniqueness; populated downgrade refuses before DDL.
-- `apps/api/app/agent_runtime/authorization.py`, `apps/api/app/identity/service.py`: optional transaction-bound authorization reads.
-- `apps/api/app/main.py`, `apps/api/app/models/domain.py` and revision assertions: advance advertised schema head.
-- `apps/api/tests/test_coordination*.py`: migrated isolated DB, concurrency, authority, lifecycle and migration coverage.
+Revision `20260907_11` extends `20260906_10` and stores one coordination JSON aggregate per active
+decomposition/runtime. It adds no competing decomposition table. Populated downgrade refuses data
+loss and instructs the operator to export coordination history. The Alembic graph has one head.
 
-## Validation at this checkpoint
+## Acceptance boundary
 
-- Focused preparation/claim/operator suite: **17 passed**; migration roundtrip: **1 passed** (18 focused tests total). A prior combined run also passed all 18. Final manager checks preserve #61's preexisting planning identity without requiring an elevation.
-- Frontend typecheck, ESLint, **101 Vitest tests**, and production build: passed.
-- Full backend suite was launched before this checkpoint and remains running. It has reported failures in inherited worker tests; final names/details are not available until completion. Do not claim full backend success. Process/log ownership is recorded below so continuation can collect it.
-- Scripts Ruff format/check and `git diff --check`: passed.
-- Inherited #62 Ruff failures at the original dependency: formatting and unused `result` in `tests/test_task_decomposition.py`. These are not #63 changes; do not disguise their source.
-- Existing real API/worker/browser smoke was launched on an isolated temporary DB and is running. It is a regression check, not acceptance of the unfinished coordinator execution flow. Final exact-head Actions and #63 runtime acceptance remain pending.
+PR #64's twelve fixture scenarios remain explicitly labelled CI controls using
+`FIXTURE_STAGE_PROVENANCE`. Production ports use #61 team selection, #62 decomposition,
+the existing autonomous worker/coordinator for specialist dispatch, and distinct manager
+synthesis. `AutonomyHarness.run_production` drives an already queued, authorized task and reads
+the same durable task/runtime/coordinator records; it creates no competing runtime ledger.
+The CLI `production` mode requires an existing migrated database, enabled authorized worker,
+prepared context/graph, and a compatible installed local provider/model. It never provisions
+identities, permissions, models, or tool approvals. Retry waiting returns pending evidence;
+rerunning resumes the same durable task. Evidence verifies checkpoint provider/model identity.
+Model-call counts report persisted dispatch intents, including ambiguous interrupted requests.
 
-## Security review
+No installed Ollama endpoint was reachable during validation. Tests exercise production
+services with explicitly labelled scripted transport responses, not real model inference.
 
-Preparation/claims write only coordinator state, audit and outbox rows. Tests snapshot permissions, roles, ranks, activation, lifecycle and system flags after fixture provisioning and verify no changes. There are no workspace/tool grant writes or executable tool transports in this module. Runtime authorization, task lease, stop and active plan checks occur before each state mutation. Unsupported external actions and milestones #64/#65/#66 remain unimplemented.
+The repository browser smoke continues to validate the real API, worker process, local planning,
+decomposition compatibility, persisted runtime/Office behavior, lost-ack replay, and duplicate
+prevention. Coordinator dependency, retry, synthesis, completion, fencing, and restart behavior is
+covered deterministically in `tests/test_coordination.py`; the smoke fixture does not pretend to be
+real model inference.
 
-## Exact next actions
+## Security
 
-1. Collect the running full backend and existing runtime/browser regression results. Review any failure against the recorded #62 dependency before fixing it.
-2. Verify Phase A's pushed checkpoint/local and remote heads match. Update this handoff with actual validation outcomes.
-3. Evaluate latest #62 contract changes; checkpoint before any stack update. Never modify its worktree/history.
-4. Implement Phase B results/criteria/execution and durable bounded retries on the existing runtime, then validate and push.
-5. Implement Phase C synthesis, crash recovery, terminal summaries, bounded replan/reselection and push.
-6. Implement Phase D task-state UI/API integration, full security/concurrency/migration/runtime/browser acceptance, self-review and push.
-7. After #62 merges, reconcile #63 onto merged main so the final PR contains only #63 changes. Rerun full acceptance and exact-head Actions; open/ready the review PR, never merge it.
+All execution paths recheck emergency stop, task lifecycle, task lease, runtime fence, actor RBAC,
+selected team, identity lifecycle, capability assignment, context assembly, and decomposition
+fingerprint at the write boundary. Provider routing is local-only with no fallback. Model output
+cannot grant authority or alter lifecycle. Raw provider exceptions and unrestricted model content
+are not persisted as control-plane truth.
 
-## Local tooling
+PR #63 must not be merged by the implementation agent.
 
-This worktree has its own ignored `.venv` and `apps/web/node_modules`. From `apps/api`, use `../../.venv/Scripts/python.exe -m pytest` and `-m ruff`. Isolated pytest base directories are outside the repo under `C:\Jarvis\test-tmp-63-*`; backend Phase A log is `C:\Jarvis\63-backend-phase-a.log`. No runtime DB, sidecar, environment file, dependency, or build may be staged.
+## Operator visibility and deferred work
 
-Active tool sessions at first checkpoint: full backend `68585`, existing browser smoke `96759`. Browser log: `C:\Jarvis\63-browser-phase-a.log`; browser artifacts: `C:\Jarvis\63-browser-phase-a`. These are session-local convenience references, not durable acceptance evidence. The git handoff must ultimately record completed checks.
+The existing frontend AppStore owns a read-only coordination projection shared by Runtime
+and Task details. It displays node states, attempts, retry eligibility, failure reasons,
+provider/model identity, synthesis and final result. Backend events trigger refreshes.
+Blocked graphs preserve successful nodes and require operator reconciliation rather than
+automatic reselection or recursive replanning. In-flight runtime records may require operator
+recovery after authority is revoked; the coordinator does not invent cleanup authority.
+
+Deterministic validation checks schema, bounded results, exact node/criteria/evidence and
+checkpoint integrity. It does not independently establish factual quality. The next priority
+is an independent Result Verification/Critic milestone. Persistent semantic memory, broad
+browser/GitHub/email/cloud tools, qualification-driven production routing and full-floor Office
+navigation remain deferred. Local autonomous execution remains disabled by default.
+
+## Validation record
+
+- Exact starting main: `f130e47e61000120d10e62adcf286d12b8140bdb`.
+- Exact starting PR #63: `b48b90dc38047fc1ca8d188c552d740dd98d3bc2`.
+- Clean main: Ruff; 1290 backend tests passed, 2 skipped; frontend typecheck,
+  ESLint, 101 tests and production build; blank/supported migration roundtrip;
+  autonomy/evaluation/qualification fixture controls; local planning/browser/Office
+  and workforce smokes. Workspace smoke fixture mismatch was repaired separately
+  in draft PR #67 and cherry-picked here; no runtime behavior was changed by it.
+- Integrated branch: focused coordinator/migration tests (44 passed); frontend
+  typecheck, ESLint, 104 tests and build; API/worker/browser/Office, workforce and
+  authorized workspace-tool smokes passed. Extended decomposition browser smoke
+  proves three assigned specialist calls, distinct synthesis, durable completion,
+  dependency inputs, restart and UI reload using labelled fixture transport.
+- Alembic: one head `20260907_11`, blank upgrade, downgrade to `20260729_04`,
+  re-upgrade, populated main task preservation, populated coordination downgrade
+  refusal, API revision alignment. Complete backend results, final head and
+  exact-head CI/review gates are maintained in PR #63's description.
+- The old `smoke-team-selection.cjs` assumes a running localhost:5173 app and
+  root-installed Playwright; it is not a standalone isolated smoke. Selection
+  is covered by backend tests and the extended decomposition process/browser smoke.
+- No real installed-local model acceptance was performed; loopback Ollama was
+  unavailable. No merge has been attempted.
+- Final complete backend tree: Ruff format/lint pass; **1334 passed, 2 skipped**
+  (`pytest -q --basetemp=../../validation-pr63/final-backend -p no:cacheprovider`).
+  One upstream Starlette/httpx deprecation warning; no failing tests.

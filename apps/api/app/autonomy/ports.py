@@ -1,10 +1,9 @@
 """Stage ports (interfaces) for the autonomy acceptance loop.
 
 Each stage of the conceptual autonomy loop is expressed as a small protocol so
-that deterministic fixtures can stand in for unfinished PR #62/#63 production
-implementations behind a clean boundary. Production implementations plug in
-later by implementing the same protocol — the harness never branches on
-concrete fixture types.
+that deterministic CI controls and production service ports share the same
+contracts. Production ports delegate to the existing worker rather than
+creating a second runtime ledger.
 
 Provenance rules:
 
@@ -13,8 +12,8 @@ Provenance rules:
   explicit deterministic stand-in for unfinished work).
 - Fixture outputs are always labeled in evidence; fixtures are never described
   as real inference or real orchestration.
-- :data:`STAGE_PROVENANCE` documents, for each stage, what is production on
-  ``main`` today and what is fixture-backed pending PR #62/#63.
+- :data:`STAGE_PROVENANCE` describes production services;
+  :data:`FIXTURE_STAGE_PROVENANCE` describes scripted CI controls.
 """
 
 from __future__ import annotations
@@ -46,7 +45,7 @@ class StageProvenance:
     detail: str
 
 
-STAGE_PROVENANCE: dict[StageKind, StageProvenance] = {
+FIXTURE_STAGE_PROVENANCE: dict[StageKind, StageProvenance] = {
     StageKind.GROUND_CONTEXT: StageProvenance(
         stage=StageKind.GROUND_CONTEXT,
         implementation="production",
@@ -65,10 +64,7 @@ STAGE_PROVENANCE: dict[StageKind, StageProvenance] = {
     StageKind.DECOMPOSE: StageProvenance(
         stage=StageKind.DECOMPOSE,
         implementation="fixture",
-        detail=(
-            "Explicit scripted work graphs. Replace with the PR #62 "
-            "DecompositionService via DecompositionPort when it merges."
-        ),
+        detail=("Explicit scripted work graphs for deterministic CI controls."),
     ),
     StageKind.ASSIGN: StageProvenance(
         stage=StageKind.ASSIGN,
@@ -102,10 +98,7 @@ STAGE_PROVENANCE: dict[StageKind, StageProvenance] = {
     StageKind.SYNTHESIZE: StageProvenance(
         stage=StageKind.SYNTHESIZE,
         implementation="fixture",
-        detail=(
-            "Deterministic fixture synthesis over completed node outputs. Replace "
-            "with the PR #63 coordinator synthesis via SynthesisPort when it merges."
-        ),
+        detail=("Deterministic fixture synthesis over completed node outputs for CI controls."),
     ),
     StageKind.COMPLETE: StageProvenance(
         stage=StageKind.COMPLETE,
@@ -117,6 +110,24 @@ STAGE_PROVENANCE: dict[StageKind, StageProvenance] = {
 EXPECTED_FIXTURE_STAGES = frozenset(
     {StageKind.SELECT_TEAM, StageKind.DECOMPOSE, StageKind.EXECUTE_SPECIALIST, StageKind.SYNTHESIZE}
 )
+
+# Fixture scenarios keep their own truthful provenance. Production acceptance
+# binds the actual services, including authoritative task lease completion.
+STAGE_PROVENANCE = {
+    stage: StageProvenance(stage=stage, implementation="production", detail=detail)
+    for stage, detail in {
+        StageKind.GROUND_CONTEXT: "Persisted ContextAssembler assembly and provenance.",
+        StageKind.SELECT_TEAM: "TeamSelectionService capability inference and bounded workforce selection.",
+        StageKind.DECOMPOSE: "DecompositionService authoritative persisted graph.",
+        StageKind.ASSIGN: "DecompositionService capability assignment to the selected specialists.",
+        StageKind.EXECUTE_SPECIALIST: "CoordinatorService local router dispatch through fenced runtime commands.",
+        StageKind.EVALUATE_OUTPUT: "Coordinator strict result schema, criteria and checkpoint integrity validation.",
+        StageKind.RECOVER_RETRY: "Durable bounded coordination attempts, runtime checkpoints and task lease recovery.",
+        StageKind.UNLOCK_DEPENDENCIES: "CoordinationRepository unlocks only validated persisted upstream results.",
+        StageKind.SYNTHESIZE: "Distinct manager request over exact validated specialist contributors.",
+        StageKind.COMPLETE: "TaskLeaseRepository completion with a transaction-local live authorization guard.",
+    }.items()
+}
 
 
 @dataclass(frozen=True)

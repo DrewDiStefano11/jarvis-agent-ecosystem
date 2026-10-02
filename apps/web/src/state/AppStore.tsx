@@ -11,6 +11,7 @@ import {
 import { post, request, WS_URL } from '../api/client'
 import { useRuntimeState } from './useRuntimeState'
 import { useCatalogState } from './useCatalogState'
+import { useCoordinationState } from './useCoordinationState'
 import { useDecompositionState } from './useDecompositionState'
 import { useOfficeState } from './useOfficeState'
 import { useToolExecutionState } from './useToolExecutionState'
@@ -45,6 +46,7 @@ interface AppState {
 }
 
 interface Store extends AppState {
+  coordination: ReturnType<typeof useCoordinationState>
   decomposition: ReturnType<typeof useDecompositionState>
   catalog: ReturnType<typeof useCatalogState>
   runtime: ReturnType<typeof useRuntimeState>
@@ -125,6 +127,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const tools = useToolExecutionState(runtime.actorId, runtime.taskId, state.lastSync)
   const [selectedAgentId, selectAgent] = useState<string | null>(null)
   const [selectedTaskId, selectTask] = useState<string | null>(null)
+  const coordination = useCoordinationState(selectedTaskId ?? runtime.taskId, state.lastSync)
   const decomposition = useDecompositionState(selectedTaskId ?? runtime.taskId, state.lastSync)
   const primarySequences = useRef(new Map<string, number>())
   const runtimeSequences = useRef(new Map<string, number>())
@@ -354,6 +357,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       runtime,
       catalog,
       decomposition,
+      coordination,
       office,
       tools,
       refresh,
@@ -363,7 +367,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       selectedAgentId,
       selectedTaskId,
     }),
-    [state, runtime, catalog, decomposition, office, tools, refresh, action, selectedAgentId, selectedTaskId],
+    [state, runtime, catalog, decomposition, coordination, office, tools, refresh, action, selectedAgentId, selectedTaskId],
   )
   return <Context.Provider value={value}>{children}</Context.Provider>
 }

@@ -1,5 +1,7 @@
 # AI Hub completion mission
 
+Historical mission record: use the [current coordinator handoff](../handoffs/milestone-63-coordinator-handoff.md) for live integration state and remaining limitations.
+
 ## Starting point and protected work
 
 - Repository: DrewDiStefano11/jarvis-agent-ecosystem.
@@ -24,7 +26,7 @@ SQLite/Alembic → repository transactions + audit/outbox → identity/RBAC and 
 
 HTTP/WebSocket → `apps/web/src/state/AppStore.tsx` → dashboard/tasks/details/office. At baseline, the UI exposed primarily simulated agents, with no planning submission/result inspection and a CSS eight-zone office. The mission now connects the separate identity/runtime workforce through Planning and the shared Office view; see the implementation record below.
 
-Existing providers are neutral adapters but real execution is explicitly local-only. Tools, cloud execution, general autonomous task decomposition and Business Lab are not implemented. Preserve current security and permission boundaries while integrating supported functionality.
+Existing providers are neutral adapters and real execution remains explicitly local-only. Approved bounded workspace tools and Business Lab are implemented. Team selection, decomposition and PR #63 specialist coordination reuse the existing authority boundaries. Cloud execution, broad external tools and general adaptive replanning remain unavailable.
 
 ## Acceptance tracking
 
