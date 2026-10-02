@@ -87,7 +87,7 @@ def main() -> None:
     root = args.repository_root.resolve()
     api = root / "apps/api"
     web = root / "apps/web"
-    evidence = Path(tempfile.mkdtemp(prefix="jarvis-workspace-tools-"))
+    evidence = Path(tempfile.mkdtemp(prefix="jarvis-workspace-tools-")).resolve()
     workspace = evidence / "workspace"
     (workspace / "inputs").mkdir(parents=True)
     (workspace / "reports").mkdir()
@@ -155,13 +155,22 @@ def main() -> None:
             self.reply({"models": [{"name": "workspace-transport-fixture"}]})
 
         def do_POST(self):
-            calls.append(
-                json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            calls.append(payload)
+            schema = payload.get("format", {}).get("title")
+            content = (
+                {
+                    "required": [],
+                    "optional": [],
+                    "reasoning_summary": "Workspace fixture",
+                }
+                if schema == "RequiredCapabilitiesResult"
+                else fixture
             )
             self.reply(
                 {
                     "model": "workspace-transport-fixture",
-                    "message": {"role": "assistant", "content": json.dumps(fixture)},
+                    "message": {"role": "assistant", "content": json.dumps(content)},
                     "done": True,
                     "done_reason": "stop",
                     "prompt_eval_count": 20,
@@ -354,9 +363,10 @@ def main() -> None:
         browser("verify")
         assert (workspace / "reports/plan.md").read_bytes() == actual
         if args.provider == "fixture":
-            assert len(calls) == 1, (
-                f"Expected one fixture inference call, received {len(calls)}"
-            )
+            schemas = [call.get("format", {}).get("title") for call in calls]
+            assert schemas.count("RequiredCapabilitiesResult") == 1, schemas
+            assert schemas.count("WorkspacePlanResult") == 1, schemas
+            assert len(calls) == 2, schemas
         metadata = {
             "inference": "deterministic HTTP fixture"
             if args.provider == "fixture"
