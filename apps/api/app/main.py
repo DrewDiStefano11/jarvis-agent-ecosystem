@@ -33,6 +33,8 @@ from app.catalog.router import router as catalog_router
 from app.catalog.service import CatalogService
 from app.context import ContextAssembler
 from app.context.enrichment import ContextEnricher
+from app.coordination.router import router as coordination_router
+from app.coordination.service import CoordinatorService
 from app.core.config import Settings
 from app.core.errors import DomainError
 from app.core.transitions import InvalidTransitionError, validate_transition
@@ -85,7 +87,7 @@ from app.team_selection.router import router as team_selection_router
 from app.tool_execution.router import router as tool_execution_router
 from app.tool_execution.service import ToolExecutionService
 
-DATABASE_REVISION = "20260906_10"
+DATABASE_REVISION = "20260907_11"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
@@ -290,6 +292,16 @@ def create_app(
         runtime=app.state.agent_runtime_service,
         router=app.state.model_router,
     )
+    app.state.coordinator_service = CoordinatorService(
+        repository,
+        app.state.identity_service,
+        app.state.agent_runtime_service,
+        app.state.model_router,
+        task_leases,
+        heartbeat_interval_seconds=settings.autonomous_worker_heartbeat_interval_seconds,
+        lease_seconds=settings.autonomous_worker_lease_seconds,
+    )
+    app.state.autonomous_worker_service.coordinator = app.state.coordinator_service
     app.state.tool_execution_service = ToolExecutionService(app)
     app.state.autonomous_worker_service.tool_executor = app.state.tool_execution_service
     app.include_router(tool_execution_router)
@@ -304,6 +316,7 @@ def create_app(
     from app.decomposition.service import DecompositionService
 
     app.include_router(decomposition_router)
+    app.include_router(coordination_router)
     app.state.lease_recovery_task = None
     app.state.office_recovery_task = None
     app.state.restored_workflow_state = restored_workflow_state

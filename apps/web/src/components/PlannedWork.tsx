@@ -1,13 +1,13 @@
 import type { Decomposition } from '../types/decomposition'
 
-export function PlannedWork({ record, error }: { record: Decomposition | null; error: string }) {
+export function PlannedWork({ record, error, hasExecution = false }: { record: Decomposition | null; error: string; hasExecution?: boolean }) {
   return <section aria-label="Planned work">
     <h3>Planned Work</h3>
     {error && <p role="alert">{error}</p>}
     {!record && !error && <p className="muted">Prepare planning to create a specialist work plan.</p>}
     {record && <>
       <p>Version {record.version} · {record.status.replaceAll('_', ' ')}</p>
-      <p className="muted">This is planned work. Specialists have not executed these subtasks.</p>
+      {!hasExecution && <p className="muted">This is planned work. Specialists have not executed these subtasks.</p>}
       <p>{record.objectiveSummary}</p>
       {record.issues.map(issue => <div className="callout" key={issue.code + issue.affectedSubtasks.join(',')}>
         <strong>{issue.message}</strong>

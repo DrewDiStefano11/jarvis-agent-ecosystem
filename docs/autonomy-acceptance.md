@@ -8,34 +8,40 @@ Autonomy acceptance is the objective, repeatable answer to one question:
 > decompose the work, execute specialists, recover from failures, synthesize
 > results, and complete the objective reliably?
 
-This document describes the reusable framework that validates that loop. It
-does **not** claim full Jarvis autonomy. The completion claim is limited to:
-
-> A reusable autonomy acceptance, observability, and local-model evaluation
-> framework that is ready to validate the production decomposition/coordinator
-> implementations once PR #62 and PR #63 are merged.
+Production acceptance consumes an explicitly queued, authorized task through the existing
+worker, runtime, context, team-selection and decomposition services. Deterministic fixtures
+remain separate CI positive controls. Neither mode grants authority or activates agents.
 
 ## Production vs. fixture-backed functionality
 
-Each autonomy stage declares explicit provenance
-(`app.autonomy.ports.STAGE_PROVENANCE`), recorded in every evidence file:
+Production `STAGE_PROVENANCE` describes `ProductionTeamSelector` (#61),
+`ProductionDecomposer` (#62), `ProductionSpecialistExecutor` and
+`ProductionSynthesizer` (#63). The worker owns orchestration and the durable ledger.
+Specialist responses must match the node ID, every completion criterion, bounded evidence
+and output schema. Dependency unlock and final completion require validated runtime
+checkpoints; synthesis is a distinct local model request with exact contributors.
 
-| Stage | Implementation | Notes |
-|---|---|---|
-| `ground_context` | production | Real `ContextAssembler` over explicit bounded sources. |
-| `select_team` | fixture | Deterministic greedy cover over the production capability taxonomy; capability inference is fixture-supplied. |
-| `decompose` | fixture | Explicit scripted work graphs (stand-in for PR #62). |
-| `assign` | production | Deterministic capability-satisfaction assignment. |
-| `execute_specialist` | fixture content / production ledger | Specialist output text is scripted; attempts, checkpoints, recovery, and lineage flow through the real `AgentRuntimeService`. |
-| `evaluate_output` | production | Strict JSON/schema validation owned by the harness. |
-| `recover_retry` | production | Real recovery plans, bounded attempts, checkpoint lineage. |
-| `unlock_dependencies` | production | Deterministic readiness over the validated work graph. |
-| `synthesize` | fixture | Deterministic join over completed outputs (stand-in for PR #63). |
-| `complete` | production | Deterministic terminal-state mapping. |
+`FIXTURE_STAGE_PROVENANCE` describes the twelve scripted scenario controls: team capability
+inference, graph content, specialist text and synthesis content are fixtures. They exercise
+real runtime/repository contracts but do not prove real model quality. Production-service
+tests also use explicitly labelled fixture transport responses.
 
-Fixtures are deterministic, explicitly labeled (`is_fixture = True` plus
-fixture provenance in evidence), and never described as real inference,
-planning, or orchestration.
+## Running production acceptance
+
+Prepare bounded context and a ready decomposition, explicitly queue local autonomous planning,
+and enable an already authorized worker. Use the existing migrated operator database; the
+runner will not migrate, provision permissions, download models or authorize tools.
+
+```bash
+python scripts/autonomy-acceptance.py production --task-id TASK --worker-id WORKER --provider ollama --model INSTALLED_MODEL --out .local/production-acceptance
+```
+
+Evidence retains schema version 1.0, repository SHA, task/runtime/checkpoint IDs, retries,
+dispatch-intent count, stage provenance, checkpoint provider/model identity and durable final
+result. A provider/model identity mismatch fails acceptance. Waiting for durable backoff
+returns pending evidence; rerunning continues the same task. Interrupted dispatch without a
+checkpoint blocks rather than guessing whether the provider executed it. The CLI does not
+start another unattended worker or wait indefinitely.
 
 ## Running fixture acceptance
 
@@ -198,26 +204,16 @@ explicit bounds.
 - Schemas were not loosened; no tests were disabled; no regression coverage
   was removed.
 
-## Replacing fixtures after PR #62 / #63 merge
-
-1. Implement `DecompositionPort` with the PR #62 `DecompositionService`
-   (scripted graphs drop out; graph validation stays).
-2. Implement `SynthesisPort` (and recovery/claim surfaces) with the PR #63
-   coordinator (deterministic join drops out; completeness assertions stay).
-3. Swap capability inference from fixture-supplied lists to the qualified
-   local model; keep the greedy-cover parity tests.
-4. Re-run `acceptance` unchanged: identical scenarios, identical evidence
-   shape, with provenance flipping from `fixture` to `production`.
-
-No harness, scenario, or evidence rewrite is needed; ports are the only seam.
-
 ## Known limitations
 
-- Team selection and synthesis are deterministic fixtures, not model-backed.
-- Specialist output content is scripted; only the execution ledger is real.
-- Ready nodes execute sequentially in `node_id` order; the `ready_set`
-  timeline event exposes the parallelizable surface without concurrent
-  execution.
-- No HTTP routes, UI, migrations, or durable schema changes were added.
-- Local-model quality results depend on installed models and are not part
-  of CI assertions (CI asserts the fixture controls only).
+- Deterministic acceptance validates structure and lineage, not independent factual quality.
+  Independent Result Verification/Critic is the next milestone.
+- Production nodes execute sequentially in deterministic topological order; concurrent callers
+  cannot reserve or dispatch the same node twice.
+- Ineligible identity, stale graph/team/objective or exhausted retries preserve successful work
+  and require operator reconciliation. No recursive adaptive replanning is implemented.
+- No persistent semantic memory, broad browser/GitHub/email/cloud tools or automatic production
+  routing from qualification recommendations. Full-floor Office navigation remains limited.
+- Installed local-model evidence requires actual inference on an installed compatible model.
+  No reachable Ollama endpoint was available in the validation environment; fixture controls
+  and production-service tests must not be presented as real-model acceptance.

@@ -205,6 +205,144 @@ class ResumeIntegrityError(RuntimeError):
 class AutonomyHarness:
     """Executes one bounded autonomy acceptance run."""
 
+    @staticmethod
+    def run_production(app, *, task_id, worker_id, repo_sha, inference, bounds=None):
+        """Drive the production worker and inspect its durable truth.
+
+        The task/context/runtime and operator-authorized worker must already
+        exist. This runner never grants authority or starts providers. A retry
+        delay returns inspectable pending evidence; rerunning resumes the same
+        coordination rather than constructing a fixture graph or ledger.
+        """
+        from app.autonomy.coordinator_ports import (
+            ProductionDecomposer,
+            ProductionSpecialistExecutor,
+            ProductionSynthesizer,
+            ProductionTeamSelector,
+        )
+        from app.autonomy.evidence import (
+            AcceptanceEvidence,
+            EvidenceCounts,
+            EvidenceIds,
+            make_check,
+        )
+        from app.autonomy.ports import STAGE_PROVENANCE
+        from app.core.errors import DomainError
+
+        limits = bounds or HarnessBounds()
+        tracker = BoundTracker(limits)
+        started = datetime.now().astimezone()
+        app.state.autonomous_worker_service.validate_enabled()
+        task = app.state.repository.get_task_durable(task_id)
+        team = ProductionTeamSelector(app, task_id).select_team()
+        if team.status != "completed":
+            raise GraphValidationError("missing_capability", "Production team selection is blocked")
+        graph_record = app.state.coordinator_service.decomposition.current(task_id)
+        if graph_record is None:
+            raise GraphValidationError(
+                "context_required",
+                "Prepare bounded context and decomposition before queuing acceptance",
+            )
+        graph = ProductionDecomposer(app, task_id, graph_record.contextAssemblyId).decompose(
+            objective_key=task_id, team=team
+        )
+        graph.validate_structure(max_tasks=limits.max_tasks, max_depth=limits.max_dependency_depth)
+        executor = ProductionSpecialistExecutor(app, worker_id, task_id)
+        record = app.state.coordinator_service.repository.current(task_id)
+        for _ in range(limits.max_model_calls):
+            tracker.check_deadline()
+            if record and record.status in {"completed", "failed", "blocked"}:
+                break
+            before = record
+            if (
+                record
+                and all(node.status == "succeeded" for node in record.nodes)
+                and record.synthesis.status == "pending"
+            ):
+                try:
+                    ProductionSynthesizer(executor).synthesize(
+                        objective_key=task_id,
+                        results=(),
+                        expected_node_ids=tuple(
+                            node.subtaskId
+                            for node in app.state.coordinator_service.repository._ordered_successes(
+                                record, graph_record
+                            )
+                        ),
+                    )
+                except DomainError:
+                    pass
+                record = app.state.coordinator_service.repository.current(task_id)
+            else:
+                record = executor.advance()
+            if record == before:
+                break
+        task = app.state.repository.get_task_durable(task_id)
+        completed = bool(record and record.status == "completed" and task.status == "completed")
+        nodes = record.nodes if record else []
+        synthesis = record.synthesis if record else None
+        identities = {(node.provider, node.model) for node in nodes if node.status == "succeeded"}
+        if synthesis and synthesis.status == "succeeded":
+            identities.add((synthesis.provider, synthesis.model))
+        identity_matches = bool(identities) and identities == {
+            (inference.provider, inference.model)
+        }
+        passing = completed and identity_matches
+        return AcceptanceEvidence(
+            repo_sha=repo_sha,
+            scenario="production_golden_path",
+            inference=inference,
+            started_at=started,
+            ended_at=datetime.now().astimezone(),
+            verdict="pass" if passing else "fail",
+            terminal_state=task.status,
+            failure_reason=None
+            if passing
+            else (
+                "inference_identity_mismatch"
+                if completed
+                else (record.blockedReason or record.status if record else "planning_pending")
+            ),
+            bounds=limits.model_dump(),
+            counts=EvidenceCounts(
+                model_calls=record.modelDispatchCount if record else 0,
+                tasks=1,
+                completed_tasks=int(completed),
+                attempts=sum(node.attemptCount for node in nodes)
+                + (synthesis.attemptCount if synthesis else 0),
+                retries=sum(max(node.attemptCount - 1, 0) for node in nodes)
+                + (max(synthesis.attemptCount - 1, 0) if synthesis else 0),
+            ),
+            ids=EvidenceIds(
+                task_ids=(task_id,),
+                execution_ids=(record.id,) if record else (),
+                runtime_ids=tuple(node.runtimeRunId for node in nodes)
+                + ((synthesis.runtimeRunId,) if synthesis else ()),
+                checkpoint_ids=tuple(node.checkpointId for node in nodes if node.checkpointId)
+                + ((synthesis.checkpointId,) if synthesis and synthesis.checkpointId else ()),
+            ),
+            provenance=tuple(
+                {"stage": stage.value, "implementation": item.implementation, "detail": item.detail}
+                for stage, item in STAGE_PROVENANCE.items()
+            ),
+            checks=(
+                make_check(
+                    "inference_identity",
+                    f"{inference.provider}/{inference.model}",
+                    str(sorted(identities, key=str)),
+                    identity_matches,
+                ),
+                make_check("authoritative_task_completion", "completed", task.status, completed),
+                make_check(
+                    "validated_contributors",
+                    "all nodes succeeded",
+                    ",".join(node.status for node in nodes),
+                    bool(nodes) and all(node.status == "succeeded" for node in nodes),
+                ),
+            ),
+            final_result=synthesis.summary if completed else "",
+        )
+
     def __init__(
         self,
         config: HarnessConfig,
