@@ -60,12 +60,13 @@ deny/suspension/stop, empty receipt permission revocation and altered immutable
 lineage and capacity consumed after selection but before fenced commitment.
 Full backend: 1,385 passed/two existing skips in 609.83 seconds before the final
 capacity guard. Final backlog/self-improvement/persistence package: 136 passed.
-Frontend typecheck/ESLint/101 Vitest tests/build
-pass. API Ruff and script Ruff pass. No new migration/dependency. Use fresh
+Reconciled main `ee0dd09`: backlog/self-improvement/persistence/coordination migration
+integration package passes 139 tests. Frontend typecheck/ESLint/104 Vitest tests/build
+pass after reconciliation. API Ruff and script Ruff pass. Inherited migration head
+is `20260907_11`; no new migration/dependency. Use fresh
 validated short Windows temp roots for full pytest. No relevant tests are skipped.
 
-Before opening the PR: reconcile freshly fetched main `ee0dd09bf1825ab635e7a61d8fe2ae192f6e0444`,
-validate merged integration and new migration head, inspect diff/generated artifacts.
+Freshly fetched main `ee0dd09bf1825ab635e7a61d8fe2ae192f6e0444` is reconciled.
 Push/open/attach a dedicated PR, request fresh exact-head
 review and required CI, then select useful independent work while gates run.
 Record final SHA in PR comments rather than creating a self-referential commit.
