@@ -9,13 +9,13 @@ work, keep independent branches isolated, and do not touch PR #63.
 - PR: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/69
 - Branch/worktree: `codex/independent-result-verification`, `.worktrees/independent-result-verification`.
 - Original base `6626c5c4e267b737d86f8883201450e946aa1831`; merged/reconciled main
-  `ff11aba814b8caf67ca5b8f2af415e827e6ec63b` includes #68.
-- No migration; single inherited head `20261002_si`. #63 remains separately owned.
-- Latest pushed head before the current safety repair: `5332b819ad0c09e9b8fd7e890510775441bcffbc`.
-  Fresh review explicitly reviewed that SHA and found no actionable issues.
-  Run `37365540121` still runs backend; other gates were cancelled while queued.
-  A locally reproduced late native cancellation race requires a new head and
-  fresh exact-head gates. Final SHA/review request belong in the PR comments.
+  `ee0dd09bf1825ab635e7a61d8fe2ae192f6e0444` includes #68 and the merged coordinator.
+- No new migration; single inherited head `20260907_11`. The other session's branch
+  remains untouched; this work integrates only the now-merged main.
+- Latest pushed safety head before reconciliation: `4247ca012fe7ecf055c0c02fa039d8e1b6799fdc`.
+  Preserve verifier and coordinator together, including async finalization recovery
+  and task-filtered coordinator dispatch. Final merge SHA/fresh CI/review request
+  belong in PR comments.
 
 Frozen criteria, deterministic checks and a separate bounded local critic gate
 completion using native result/checkpoint/RBAC/lease/audit/outbox systems. Invalid
@@ -43,6 +43,9 @@ continues to report revoked authorization. New races use actual native commands.
 
 ## Validation for the pending transaction repair
 
+- Final reconciled full backend: 1,508 passed/two existing skips in 856.53 seconds.
+  Frontend typecheck/ESLint/104 Vitest tests/build and API/script Ruff pass.
+  Earlier checkpoints below are history superseded by this full run.
 - Current runtime-state completion fence: full affected verifier/worker/native
   authorization/planning-review package passes 145 tests in 128.24 seconds.
   The added regression first failed with a completed task despite cancellation;
@@ -71,11 +74,13 @@ API and certificate-verifying CLI reuse native identities, scoped controls,
 goals/audit/outbox/leases and system stop. Real TLS proves submit/inspect/cancel,
 pause/replay/resume/runtime cancellation, denial of worker confirmation and
 system stop/resume. Correction submission now requires source read authority at
-request and commit. PR #70 is open at `50fd6deb1a894a8b04ef0aa77b72f99f37b5ebcf`;
+request and commit. PR #70's pre-reconciliation head is `50fd6deb1a894a8b04ef0aa77b72f99f37b5ebcf`;
 the review's default HTTPS port finding is fixed, its thread resolved and fresh
 review requested. Full backend checkpoint: 1,414 passed/two existing skips;
 latest HTTP/config/actual TLS package: 32 passed. Required frontend gates pass
-with 101 tests. No public deployment. See its own handoff.
+with 101 tests. Reconciled-main full backend: 1,494 passed/two existing skips;
+frontend 104 tests and required checks pass. Publish reconciliation and request
+fresh exact-head gates. No public deployment. See its own handoff.
 
 Adaptive preparation remains isolated at old #69 head 7d3777f with its preserved
 handoff. Executable coordinator nodes are needed to prove reassignment and
@@ -84,10 +89,15 @@ verified-result graph reuse; never import unmerged #63 contracts.
 Next independent Self-Build prerequisite: durable prioritized improvement backlog,
 using merged #68's immutable evidence/proposals and native tasks/outbox. Fresh-main
 worktree `codex/improvement-backlog` was created at ff11aba. The native selector,
-admission provenance, loopback API and CLI are implemented; 19 targeted tests pass,
+admission provenance, loopback API and CLI are implemented; 20 targeted tests pass,
 including concurrency, commit-time revocation/stop, uncertain acknowledgement,
-protected tasks and invalid lineage. Full backend validation is running and frontend
-gates pass. Preserve frozen
+protected tasks and invalid lineage. PR #71 is pushed at `808bc03`, reconciled to
+main ee0dd09 with fresh gates requested. Full backend checkpoint: 1,385 passed/two
+skips; final guard package 136 passed; merged-main integration 139 passed; frontend104
+pass. Independent `codex/ci-evidence` at main ee0dd09 adds bounded native job
+observations for diagnosis without claiming root cause or quality. Ninety focused
+tests pass; actual exported GitHub JSON validates. Its final checks/publication
+remain pending. Preserve frozen
 criteria/provenance and existing execution authority; proposal selection must not
 auto-approve tools or claim autonomous coding. #68 currently provides diagnosis/
 planning/comparison only. Return to #69 when actionable, checkpoint remote after

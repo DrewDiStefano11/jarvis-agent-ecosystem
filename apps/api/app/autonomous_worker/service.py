@@ -79,6 +79,7 @@ from app.models.autonomous_worker import (
     WorkspacePlanResult,
 )
 from app.models.context import ContextAssembly
+from app.models.coordination import CoordinationRecord
 from app.models.tool_execution import ToolExecutionResult
 from app.repositories.task_leases import TaskLeaseRepository
 
@@ -114,6 +115,7 @@ class AutonomousWorkerService:
         self.router = router
         self.tool_executor = None
         self.verifier = IndependentVerifier(self)
+        self.coordinator = None
         self._checkpoint_execution_fence: ContextVar[RuntimeExecutionFence | None] = ContextVar(
             "autonomous_checkpoint_execution_fence", default=None
         )
@@ -129,20 +131,28 @@ class AutonomousWorkerService:
         if not providers:
             raise AutonomousWorkerError("NO_LOCAL_PROVIDER_AVAILABLE", status_code=503)
 
-    async def run_once(self, worker_id: str) -> ModelExecutionResult | ToolExecutionResult | None:
+    async def run_once(
+        self, worker_id: str, *, task_id: str | None = None
+    ) -> ModelExecutionResult | ToolExecutionResult | CoordinationRecord | None:
         self.validate_enabled()
         actor = self.runtime.authenticate_actor(self.settings.autonomous_worker_actor_id)
-        if self.tool_executor is not None:
+        if self.tool_executor is not None and task_id is None:
             tool_result = await self.tool_executor.run_once(worker_id, actor)
             if tool_result is not None:
                 return tool_result
         try:
-            if self._recover_pre_execution_pause(worker_id, actor):
+            if self._recover_pre_execution_pause(worker_id, actor, task_id):
                 return None
-            recovered = await self._recover_finalization(worker_id, actor)
+            recovered = await self._recover_finalization(worker_id, actor, task_id)
             if recovered is not None:
                 return recovered
-            work = self._acquire_work(worker_id, actor)
+            if self.coordinator is not None:
+                coordination = await self.coordinator.run_available(
+                    worker_id, actor, task_id=task_id
+                )
+                if coordination is not None:
+                    return coordination
+            work = self._acquire_work(worker_id, actor, task_id)
         except DomainError as exc:
             if exc.code == "EMERGENCY_STOP_ACTIVE":
                 raise AutonomousWorkerError(
@@ -355,9 +365,12 @@ class AutonomousWorkerService:
         self,
         worker_id: str,
         actor: RuntimeActorContext,
+        task_id: str | None = None,
     ) -> tuple[AgentRunSnapshot, ModelExecutionResult | None, Any] | None:
         for page in self.executions.iter_preparation_transition_recovery_pages():
             for candidate in page:
+                if task_id is not None and candidate.specification.task_id != task_id:
+                    continue
                 try:
                     recovered = self._recover_preparation_transition(
                         candidate,
@@ -371,6 +384,8 @@ class AutonomousWorkerService:
 
         for page in self.executions.iter_recoverable_uncommitted_pages():
             for execution in page:
+                if task_id is not None and execution.taskId != task_id:
+                    continue
                 try:
                     snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
                     if self._reconcile_cancelled_recovery(snapshot, actor, execution):
@@ -413,6 +428,8 @@ class AutonomousWorkerService:
 
         for page in self.executions.iter_revision_cycle_pages():
             for candidate in page:
+                if task_id is not None and candidate.specification.task_id != task_id:
+                    continue
                 try:
                     snapshot = self.runtime.read_run_authorized(
                         candidate.specification.run_id, actor
@@ -484,6 +501,8 @@ class AutonomousWorkerService:
 
         for page in self.executions.iter_queued_autonomous_run_pages():
             for snapshot in page:
+                if task_id is not None and snapshot.specification.task_id != task_id:
+                    continue
                 try:
                     snapshot = self.runtime.read_run_authorized(
                         snapshot.specification.run_id, actor
@@ -1301,6 +1320,36 @@ class AutonomousWorkerService:
             worker_id=worker_id,
             lease_token=lease_token,
         )
+        if self.coordinator is not None:
+            graph = self.coordinator.decomposition.current(execution.taskId)
+            if graph is not None and graph.status == "ready":
+                self.coordinator.prepare(
+                    execution.taskId,
+                    graph.id,
+                    execution.runtimeRunId,
+                    actor,
+                )
+                current = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
+                if current.state == AgentRunState.RUNNING:
+                    fence = RuntimeExecutionFence(
+                        task_id=execution.taskId,
+                        worker_id=worker_id,
+                        lease_token=lease_token,
+                    )
+                    self._handle(
+                        CompleteAttemptCommand,
+                        current,
+                        actor,
+                        self._scoped(
+                            "complete-attempt-for-coordination",
+                            self._attempt_cycle(execution.runtimeAttemptId),
+                        ),
+                        require_execution_enabled=True,
+                        execution_fence=fence,
+                        attempt_id=execution.runtimeAttemptId,
+                        detail="Validated planning result handed to production coordinator",
+                    )
+                return self.executions.mark_completed(execution.executionId)
         self.task_leases.complete_task(
             execution.taskId,
             worker_id,
@@ -1479,9 +1528,12 @@ class AutonomousWorkerService:
         self,
         worker_id: str,
         actor: RuntimeActorContext,
+        task_id: str | None = None,
     ) -> bool:
         for page in self.executions.iter_pre_execution_pause_recovery_pages():
             for candidate in page:
+                if task_id is not None and candidate.specification.task_id != task_id:
+                    continue
                 try:
                     if self._recover_pre_execution_pause_candidate(
                         candidate,
@@ -1636,10 +1688,12 @@ class AutonomousWorkerService:
         return snapshot
 
     async def _recover_finalization(
-        self, worker_id: str, actor: RuntimeActorContext
+        self, worker_id: str, actor: RuntimeActorContext, task_id: str | None = None
     ) -> ModelExecutionResult | None:
         for page in self.executions.iter_recoverable_result_pages(skip_corrupt=True):
             for execution in page:
+                if task_id is not None and execution.taskId != task_id:
+                    continue
                 try:
                     recovered = await self._recover_finalization_candidate(
                         execution,

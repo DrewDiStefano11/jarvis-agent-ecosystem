@@ -100,5 +100,6 @@ These prove execution and persistence of the verifier, not model judgment qualit
 on arbitrary tasks. Real model inference needs a configured running local model;
 none is downloaded or provisioned by this milestone. Software test/build evidence
 and coordinator node execution are not implemented on current main. This verifier
-does not depend on unmerged PR #63; #68 is merged into the reconciled base. Later integration must preserve
+integrates the coordinator and self-improvement foundation already merged into main.
+Later node-level independent verification must preserve
 the same authoritative result binding and frozen criterion policy.

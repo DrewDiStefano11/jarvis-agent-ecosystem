@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from app.agent_runtime.authorization import (
+    IdentityRuntimeAuthorizer,
     RuntimeActorContext,
     RuntimeAuthorizationContext,
     RuntimeAuthorizer,
@@ -154,6 +155,7 @@ class AgentRuntimeService:
         self._execution_fence: ContextVar[RuntimeExecutionFence | None] = ContextVar(
             "runtime_execution_fence", default=None
         )
+        self._commit_guard = ContextVar("runtime_commit_guard", default=None)
         self.utc_clock = utc_clock
         self.run_id_factory = run_id_factory or prefixed_identifier_factory("run")
         self.attempt_id_factory = attempt_id_factory or prefixed_identifier_factory("attempt")
@@ -179,15 +181,32 @@ class AgentRuntimeService:
         *,
         require_execution_enabled: bool = False,
         execution_fence: RuntimeExecutionFence | None = None,
+        commit_guard=None,
     ) -> RuntimeCommandResult:
         command = self._command_with_verified_actor(command, actor)
         context = self._authorize_command(command, actor)
+        if commit_guard is not None and isinstance(self.authorizer, IdentityRuntimeAuthorizer):
+            domain_guard = commit_guard
+            target = (
+                command.specification
+                if isinstance(command, CreateAgentRunCommand)
+                else self.repository.load_run(command.run_id).specification
+            )
+
+            def commit_guard(session):
+                domain_guard(session)
+                self.authorizer.authorize(
+                    actor, command.command_type, specification=target, session=session
+                )
+
         authorization_token = self._authorization_context.set(context)
         execution_token = self._execution_enabled_required.set(require_execution_enabled)
         fence_token = self._execution_fence.set(execution_fence)
+        guard_token = self._commit_guard.set(commit_guard)
         try:
             return self.handle(command)
         finally:
+            self._commit_guard.reset(guard_token)
             self._execution_fence.reset(fence_token)
             self._execution_enabled_required.reset(execution_token)
             self._authorization_context.reset(authorization_token)
@@ -504,6 +523,7 @@ class AgentRuntimeService:
             create=True,
             require_execution_enabled=self._execution_enabled_required.get(),
             execution_fence=self._execution_fence.get(),
+            **({"commit_guard": self._commit_guard.get()} if self._commit_guard.get() else {}),
         )
         if existing_record is not None:
             return existing_record.result.model_copy(update={"idempotent_replay": True}, deep=True)
@@ -978,6 +998,11 @@ class AgentRuntimeService:
                     expected_sequence=snapshot.event_sequence_number,
                     require_execution_enabled=self._execution_enabled_required.get(),
                     execution_fence=self._execution_fence.get(),
+                    **(
+                        {"commit_guard": self._commit_guard.get()}
+                        if self._commit_guard.get()
+                        else {}
+                    ),
                 )
                 if existing_record is not None:
                     return existing_record.result.model_copy(
@@ -1154,6 +1179,7 @@ class AgentRuntimeService:
             expected_sequence=aggregate.snapshot.event_sequence_number,
             require_execution_enabled=self._execution_enabled_required.get(),
             execution_fence=self._execution_fence.get(),
+            **({"commit_guard": self._commit_guard.get()} if self._commit_guard.get() else {}),
         )
         if existing_record is not None:
             return existing_record.result.model_copy(update={"idempotent_replay": True}, deep=True)
@@ -1361,6 +1387,7 @@ class AgentRuntimeService:
             expected_sequence=aggregate.snapshot.event_sequence_number,
             require_execution_enabled=self._execution_enabled_required.get(),
             execution_fence=self._execution_fence.get(),
+            **({"commit_guard": self._commit_guard.get()} if self._commit_guard.get() else {}),
         )
         if existing_record is not None:
             return existing_record.result.model_copy(update={"idempotent_replay": True}, deep=True)
