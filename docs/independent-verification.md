@@ -70,7 +70,9 @@ the persisted verdict is reused without repeating worker or critic inference.
 If recovery has not yet produced a verdict/review, their existing read, execute
 and checkpoint permissions govern that work. Terminal-action permission is
 checked after the outcome is known. Completion authorization is checked before
-any successful task mutation, so a passing verdict cannot bypass revoked completion.
+any successful task mutation and again inside its lease-fenced transaction using
+the same database session for RBAC. A denial or actor suspension committed after
+the initial check prevents completion without discarding the persisted verdict.
 
 `GET /api/model-executions/{executionId}/verification` exposes the verdict using
 the same runtime read authorization as the result. It returns `null` before a

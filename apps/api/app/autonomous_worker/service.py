@@ -1306,6 +1306,9 @@ class AutonomousWorkerService:
             worker_id,
             lease_token,
             f"model-execution:{execution.executionId}",
+            completion_guard=lambda session: self._authorize_recovery_action(
+                snapshot, actor, "complete_run", session=session
+            ),
         )
         snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
         return self._finalize_committed_task(snapshot, actor, execution)
@@ -1772,9 +1775,16 @@ class AutonomousWorkerService:
         snapshot: AgentRunSnapshot,
         actor: RuntimeActorContext,
         operation: str,
+        *,
+        session=None,
     ) -> None:
         if self.runtime.authorizer is not None:
-            self.runtime.authorizer.authorize(actor, operation, snapshot=snapshot)
+            self.runtime.authorizer.authorize(
+                actor,
+                operation,
+                snapshot=snapshot,
+                **({"session": session} if session is not None else {}),
+            )
 
     def _reconcile_cancelled_recovery(
         self,

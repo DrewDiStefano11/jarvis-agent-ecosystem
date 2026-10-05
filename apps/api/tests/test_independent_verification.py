@@ -405,6 +405,57 @@ async def test_escalation_recovery_uses_live_pause_permission(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["deny", "suspend"])
+async def test_completion_rechecks_live_authority_inside_task_transaction(
+    tmp_path, monkeypatch, change
+):
+    from app.models.identity import AssignPermissionRequest
+
+    router = CriticRouter()
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path, router=router, verification_criteria=(SEMANTIC,)
+    )
+    try:
+        service = app.state.autonomous_worker_service
+        complete = app.state.task_leases.complete_task
+        guarded = []
+
+        def revoke_then_complete(task_id, *args, **kwargs):
+            guarded.append(kwargs.get("completion_guard"))
+            if change == "suspend":
+                app.state.identity_service.transition(actor_id, "suspended")
+            else:
+                permission = next(
+                    item
+                    for item in app.state.identity_service.list_definitions("permission", 0, 100)
+                    if item.stable_key == "runtime.complete"
+                )
+                app.state.identity_service.assign_permission(
+                    actor_id,
+                    AssignPermissionRequest(
+                        permission_id=permission.id,
+                        effect="deny",
+                        resource_type="task",
+                        resource_id=task_id,
+                    ),
+                )
+            return complete(task_id, *args, **kwargs)
+
+        monkeypatch.setattr(app.state.task_leases, "complete_task", revoke_then_complete)
+        with pytest.raises(AutonomousWorkerError) as error:
+            await service.run_once(worker.id)
+        assert error.value.code == "EXECUTION_AUTHORIZATION_REVOKED"
+        execution = app.state.model_execution_repository.get_by_run("run-autonomous-1")
+        assert guarded and all(guard is not None for guard in guarded)
+        assert app.state.task_leases.task_status(execution.taskId) == "in_progress"
+        assert service.runtime.repository.load_run(execution.runtimeRunId).state.value == "running"
+        assert execution.stage == "finalization_pending"
+        assert len(router.requests) == len(router.critic_requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "malformed,invented,expected,count",
     [(1, False, "passed", 2), (2, False, "unverifiable", 2), (0, True, "unverifiable", 2)],
