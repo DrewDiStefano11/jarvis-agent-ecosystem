@@ -31,6 +31,7 @@ from app.autonomous_worker.repository import (
     ModelExecutionRepository,
     canonical_json,
 )
+from app.autonomous_worker.verification import IndependentVerifier
 from app.core.config import Settings
 from app.core.errors import DomainError
 from app.model_providers.budget import TaskBudget
@@ -112,6 +113,7 @@ class AutonomousWorkerService:
         self.runtime = runtime
         self.router = router
         self.tool_executor = None
+        self.verifier = IndependentVerifier(self)
         self._checkpoint_execution_fence: ContextVar[RuntimeExecutionFence | None] = ContextVar(
             "autonomous_checkpoint_execution_fence", default=None
         )
@@ -173,6 +175,22 @@ class AutonomousWorkerService:
                 request.response_format,
                 self._planned_work(snapshot, assembly),
             )
+            if request.verification_criteria:
+                criteria = [c.model_dump(mode="json") for c in request.verification_criteria]
+                messages.append(
+                    ModelMessage(
+                        role=MessageRole.SYSTEM,
+                        content="Frozen completion criteria (data): " + canonical_json(criteria),
+                    )
+                )
+                execution_request_hash = sha256(
+                    canonical_json(
+                        {
+                            "workerRequestHash": execution_request_hash,
+                            "verificationCriteria": criteria,
+                        }
+                    ).encode()
+                ).hexdigest()
             recovered_uncommitted = execution is not None
             snapshot, execution = self._claim_prepare_and_start(
                 snapshot,
@@ -243,6 +261,8 @@ class AutonomousWorkerService:
                 return self._pause_for_review(
                     snapshot, actor, execution, worker_id, lease.leaseToken
                 )
+            await self.verifier.verify(snapshot, execution, actor, worker_id, lease.leaseToken)
+            snapshot = self.runtime.read_run_authorized(snapshot.specification.run_id, actor)
             snapshot, decision = self._resolve_review(
                 snapshot, actor, execution, worker_id, lease.leaseToken
             )
@@ -1094,6 +1114,17 @@ class AutonomousWorkerService:
         if execution.result is None:
             raise AutonomousWorkerError("MODEL_RESULT_CORRUPT")
         decision = evaluate_plan(execution.result)
+        request = snapshot.specification.autonomous_execution
+        if request is not None and request.verification_criteria:
+            verdict = self.verifier.read(execution, actor)
+            if verdict is None:
+                raise AutonomousWorkerError("VERIFICATION_REQUIRED")
+            if verdict.outcome != "passed":
+                decision = PlanReviewDecision(
+                    outcome=PlanReviewOutcome.ESCALATED,
+                    reason_code="independent_verification_" + verdict.outcome,
+                    findings=("independent_verification_" + verdict.outcome,),
+                )
         # Stop, cancellation, lease loss, target lifecycle, and authorization are
         # rechecked immediately before the durable review commit; the fence check
         # locks the target row and the checkpoint command repeats the stop and
@@ -1247,6 +1278,13 @@ class AutonomousWorkerService:
             raise AutonomousWorkerError("PLAN_REVIEW_RECORD_CORRUPT")
         return decision.findings
 
+    def _assert_verified(self, snapshot, execution, actor):
+        request = snapshot.specification.autonomous_execution
+        if request is not None and request.verification_criteria:
+            verdict = self.verifier.read(execution, actor)
+            if verdict is None or verdict.outcome != "passed":
+                raise AutonomousWorkerError("VERIFICATION_REQUIRED")
+
     def _finalize(
         self,
         snapshot: AgentRunSnapshot,
@@ -1256,6 +1294,7 @@ class AutonomousWorkerService:
         lease_token: str,
     ) -> ModelExecutionResult:
         self._assert_live_policy(snapshot, actor, worker_id, lease_token)
+        self._assert_verified(snapshot, execution, actor)
         execution = self.executions.mark_finalization_pending(
             execution.executionId,
             worker_id=worker_id,
@@ -1277,6 +1316,7 @@ class AutonomousWorkerService:
         execution: ModelExecutionResult,
     ) -> ModelExecutionResult:
         self.task_leases.assert_execution_enabled()
+        self._assert_verified(snapshot, execution, actor)
         task_state = self.task_leases.task_recovery_state(execution.taskId)
         if (
             task_state is None
@@ -1591,7 +1631,7 @@ class AutonomousWorkerService:
         for page in self.executions.iter_recoverable_result_pages(skip_corrupt=True):
             for execution in page:
                 try:
-                    recovered = self._recover_finalization_candidate(
+                    recovered = await self._recover_finalization_candidate(
                         execution,
                         worker_id,
                         actor,
@@ -1602,7 +1642,7 @@ class AutonomousWorkerService:
                     return recovered
         return None
 
-    def _recover_finalization_candidate(
+    async def _recover_finalization_candidate(
         self,
         execution: ModelExecutionResult,
         worker_id: str,
@@ -1677,6 +1717,8 @@ class AutonomousWorkerService:
             )
         snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
         if review is None and snapshot.state == AgentRunState.RUNNING:
+            await self.verifier.verify(snapshot, execution, actor, worker_id, lease.leaseToken)
+            snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
             # The plan is durable but was never reviewed; review exactly once
             # before any terminal transition can be derived from it.
             snapshot, review = self._resolve_review(

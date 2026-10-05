@@ -155,3 +155,20 @@ means creating and authorizing a new reviewed plan.
 This slice executes the fixed steps the operator reviewed. List/read observations are
 stored and displayed, but are not fed to another model for synthesis. It exposes no
 shell, Python, cloud, network, or unrestricted absolute-path tool.
+
+## Independent result verification
+
+Queued `planning_review` autonomous specifications accept an optional immutable
+`verification_criteria` array of up to eight unique criteria. Supported modes are
+`field_nonempty`, `field_contains`, `artifact`, `test_evidence`, and `semantic`.
+OpenAPI defines the exact field bounds and the structured `VerificationResult`.
+Legacy specifications omit an empty policy to preserve their command hashes.
+
+`GET /api/model-executions/{executionId}/verification` returns
+`TypedApiResponse[VerificationResult | null]` with existing runtime read RBAC.
+Verification outcomes are `passed`, `needs_correction`, `failed`, `unverifiable`;
+only passing verification allows opted-in tasks to complete. Other outcomes pause
+for operator review. Errors `VERIFICATION_PROVENANCE_MISMATCH`,
+`VERIFICATION_RECORD_CORRUPT`, `VERIFICATION_REQUIRED`, and
+`VERIFICATION_IN_PROGRESS` fail closed. See [independent verification](independent-verification.md)
+for evidence, recovery, request budgets and acceptance boundaries.

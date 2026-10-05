@@ -1,0 +1,529 @@
+"""Real worker/SQLite/RBAC path; model responses are deterministic mocks."""
+
+import json
+
+import pytest
+from pydantic import ValidationError
+
+from app.autonomous_worker.errors import AutonomousWorkerError
+from app.autonomous_worker.verification import deterministic_checks, parse_review
+from app.models.autonomous_worker import PlanningReviewResult
+from app.models.verification import CompletionCriterion
+from tests.test_autonomous_worker import VALID_RESULT, FakeRouter, worker_fixture
+
+FIELD = CompletionCriterion(
+    id="recommendations",
+    description="Deliver an actionable plan",
+    mode="field_nonempty",
+    field="recommendations",
+)
+SEMANTIC = CompletionCriterion(
+    id="objective", description="Recommendations address the grounded objective", mode="semantic"
+)
+
+
+def reviewer(outcome="passed", evidence="result:model-execution-placeholder"):
+    return json.dumps(
+        {
+            "checks": [
+                {
+                    "criterionId": "objective",
+                    "outcome": outcome,
+                    "evidenceIds": [evidence],
+                    "reason": "Grounded plan addresses the requested objective",
+                }
+            ]
+        }
+    )
+
+
+class CriticRouter(FakeRouter):
+    def __init__(self, *, outcome="passed", malformed=0, invented=False, callback=None):
+        super().__init__([json.dumps(VALID_RESULT)])
+        self.critic_requests = []
+        self.outcome, self.malformed, self.invented = outcome, malformed, invented
+        self.critic_callback = callback
+
+    async def execute(self, *, request, requirements, budget, pricing=None):
+        if request.output_schema and request.output_schema.name == "independent_verdict":
+            self.critic_requests.append(request)
+            payload = json.loads(request.messages[-1].content)
+            if self.critic_callback:
+                self.critic_callback()
+            evidence = "invented:test:green" if self.invented else next(iter(payload["evidence"]))
+            content = (
+                "malformed"
+                if len(self.critic_requests) <= self.malformed
+                else reviewer(self.outcome, evidence)
+            )
+            from app.model_providers.contracts import ModelExecutionResponse
+
+            return ModelExecutionResponse(
+                content=content, provider="local-fake", model="fixture-model", latency_ms=0
+            )
+        return await super().execute(request=request, requirements=requirements, budget=budget)
+
+
+@pytest.mark.parametrize(
+    "mode,field,expected",
+    [
+        ("semantic", "summary", None),
+        ("field_contains", "risks", "x"),
+        ("field_nonempty", None, None),
+    ],
+)
+def test_incoherent_policy_rejected(mode, field, expected):
+    with pytest.raises(ValidationError):
+        CompletionCriterion(
+            id="criterion", description="frozen", mode=mode, field=field, expected=expected
+        )
+
+
+def test_claiming_success_does_not_satisfy_missing_deliverable():
+    result = PlanningReviewResult.model_validate(
+        {**VALID_RESULT, "summary": "Everything succeeded", "recommendations": []}
+    )
+    assert deterministic_checks((FIELD,), result, "result:1")[0].outcome == "needs_correction"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "not JSON",
+        '{"checks": []}',
+        reviewer(evidence="nonexistent"),
+        '{"checks": [{"criterionId":"objective","outcome":"passed","evidenceIds":[],"reason":"success"}]}',
+    ],
+)
+def test_malformed_changed_criteria_or_invented_evidence_rejected(content):
+    with pytest.raises((ValidationError, ValueError)):
+        parse_review(content, (SEMANTIC,), {"result:1"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("criteria", [(FIELD,), (FIELD, SEMANTIC)])
+async def test_real_worker_gates_completion_and_replays_one_verdict(tmp_path, criteria):
+    router = CriticRouter()
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path, router=router, verification_criteria=criteria
+    )
+    try:
+        service = app.state.autonomous_worker_service
+        result = await service.run_once(worker.id)
+        assert result.stage == "completed"
+        actor = service.runtime.authenticate_actor(actor_id)
+        verdict = service.verifier.read(result, actor)
+        assert verdict.outcome == "passed"
+        assert verdict.resultHash == result.resultHash
+        assert verdict.requestCount == (1 if SEMANTIC in criteria else 0)
+        assert await service.run_once(worker.id) is None
+        assert service.verifier.read(result, actor) == verdict
+        records = service.runtime.repository.list_checkpoints(result.runtimeRunId)
+        assert len([r for r in records if r.state_reference.endswith(":verdict")]) == 1
+        response = client.get(
+            f"/api/model-executions/{result.executionId}/verification",
+            headers={"X-Jarvis-Actor-Id": actor_id},
+        )
+        assert response.status_code == 200
+        assert response.json()["data"]["digest"] == verdict.digest
+        denied = client.get(f"/api/model-executions/{result.executionId}/verification")
+        assert denied.status_code in {401, 403}
+        if SEMANTIC in criteria:
+            request = router.critic_requests[0]
+            assert request.correlation_id.startswith("critic:")
+            assert request.messages[0].content != router.requests[0].messages[0].content
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_real_local_router_and_http_adapter_transport_fixture(tmp_path):
+    """Production transport/policy/runtime exercised; inference remains a fixture."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    from app.model_providers.ollama import OllamaProvider
+    from app.model_providers.registry import ProviderRegistry
+    from app.model_providers.retry import RetryExecutor, RetryPolicy
+    from app.model_providers.router import ModelRouter
+
+    calls = []
+
+    class Provider(BaseHTTPRequestHandler):
+        def log_message(self, *_):
+            pass
+
+        def reply(self, payload):
+            encoded = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(encoded)))
+            self.end_headers()
+            self.wfile.write(encoded)
+
+        def do_GET(self):
+            self.reply({"models": [{"name": "fixture-model"}]})
+
+        def do_POST(self):
+            payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            calls.append(payload)
+            if payload.get("format", {}).get("title") == "ReviewerVerdict":
+                evidence = next(iter(json.loads(payload["messages"][-1]["content"])["evidence"]))
+                content = reviewer(evidence=evidence)
+            else:
+                content = json.dumps(VALID_RESULT)
+            self.reply(
+                {
+                    "model": "fixture-model",
+                    "message": {"role": "assistant", "content": content},
+                    "done": True,
+                    "done_reason": "stop",
+                    "prompt_eval_count": 20,
+                    "eval_count": 40,
+                }
+            )
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path, router=CriticRouter(), verification_criteria=(SEMANTIC,)
+    )
+    try:
+        service = app.state.autonomous_worker_service
+        service.router = ModelRouter(
+            ProviderRegistry(
+                [
+                    OllamaProvider(
+                        name="local-fake",
+                        base_url=f"http://127.0.0.1:{server.server_port}",
+                        default_model="fixture-model",
+                        execution_mode="local_only",
+                    )
+                ]
+            ),
+            RetryExecutor(RetryPolicy(maximum_attempts=1)),
+        )
+        result = await service.run_once(worker.id)
+        assert result.stage == "completed"
+        verdict = service.verifier.read(result, service.runtime.authenticate_actor(actor_id))
+        assert verdict.outcome == "passed"
+        assert verdict.provider == "local-fake"
+        assert len(calls) == 2
+        assert calls[1]["format"]["title"] == "ReviewerVerdict"
+        assert await service.run_once(worker.id) is None
+        assert len(calls) == 2
+    finally:
+        client.__exit__(None, None, None)
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["needs_correction", "failed", "unverifiable"])
+async def test_nonpass_never_completes_task(tmp_path, outcome):
+    router = CriticRouter(outcome=outcome)
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path, router=router, verification_criteria=(SEMANTIC,)
+    )
+    try:
+        service = app.state.autonomous_worker_service
+        result = await service.run_once(worker.id)
+        verdict = service.verifier.read(result, service.runtime.authenticate_actor(actor_id))
+        assert verdict.outcome == outcome
+        assert app.state.task_leases.task_status(result.taskId) == "under_review"
+        assert result.stage == "human_review_required"
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "malformed,invented,expected,count",
+    [(1, False, "passed", 2), (2, False, "unverifiable", 2), (0, True, "unverifiable", 2)],
+)
+async def test_reviewer_repair_is_bounded_and_cannot_invent_evidence(
+    tmp_path, malformed, invented, expected, count
+):
+    router = CriticRouter(malformed=malformed, invented=invented)
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path, router=router, verification_criteria=(SEMANTIC,)
+    )
+    try:
+        service = app.state.autonomous_worker_service
+        result = await service.run_once(worker.id)
+        verdict = service.verifier.read(result, service.runtime.authenticate_actor(actor_id))
+        assert verdict.outcome == expected
+        assert len(router.critic_requests) == count == verdict.requestCount
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_lost_acknowledgement_recovers_without_second_reviewer_call(tmp_path, monkeypatch):
+    router = CriticRouter()
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path, router=router, verification_criteria=(SEMANTIC,)
+    )
+    try:
+        service = app.state.autonomous_worker_service
+        save = service.verifier._save
+
+        def crash(*args, **kwargs):
+            if args[5] == "response-0":
+                raise RuntimeError("lost acknowledgement")
+            return save(*args, **kwargs)
+
+        monkeypatch.setattr(service.verifier, "_save", crash)
+        with pytest.raises(RuntimeError, match="lost acknowledgement"):
+            await service.run_once(worker.id)
+        monkeypatch.setattr(service.verifier, "_save", save)
+        # Expire the held lease deterministically, then use the normal recovery path.
+        from datetime import UTC, datetime, timedelta
+
+        from sqlalchemy import update
+
+        from app.db.models import TaskLeaseRow
+
+        with app.state.repository.session_factory.begin() as session:
+            session.execute(
+                update(TaskLeaseRow).values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
+            )
+        app.state.task_leases.recover_expired_leases()
+        result = await service.run_once(worker.id)
+        assert result is not None
+        verdict = service.verifier.read(result, service.runtime.authenticate_actor(actor_id))
+        assert verdict.outcome == "unverifiable"
+        assert len(router.critic_requests) == 1
+        assert verdict.checks[0].reason == "reviewer_acknowledgement_uncertain"
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_persisted_response_survives_restart_without_second_call(tmp_path, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import update
+
+    from app.autonomous_worker.verification import IndependentVerifier
+    from app.db.models import TaskLeaseRow
+
+    router = CriticRouter()
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path, router=router, verification_criteria=(SEMANTIC,)
+    )
+    try:
+        service = app.state.autonomous_worker_service
+        save = service.verifier._save
+
+        def crash(*args, **kwargs):
+            saved = save(*args, **kwargs)
+            if args[5] == "response-0":
+                raise RuntimeError("response committed before crash")
+            return saved
+
+        monkeypatch.setattr(service.verifier, "_save", crash)
+        with pytest.raises(RuntimeError, match="response committed"):
+            await service.run_once(worker.id)
+        service.verifier = IndependentVerifier(service)
+        with app.state.repository.session_factory.begin() as session:
+            session.execute(
+                update(TaskLeaseRow)
+                .where(TaskLeaseRow.task_id == "task-demo")
+                .values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
+            )
+        app.state.task_leases.recover_expired_leases()
+        result = await service.run_once(worker.id)
+        assert result.stage == "completed"
+        verdict = service.verifier.read(result, service.runtime.authenticate_actor(actor_id))
+        assert verdict.outcome == "passed"
+        assert verdict.requestCount == 1
+        assert len(router.critic_requests) == 1
+        from fastapi.testclient import TestClient
+
+        from app.main import create_app
+        from tests.test_persistence import database_url
+
+        restarted = create_app(database_url=database_url(tmp_path / "run-autonomous-1.db"))
+        with TestClient(restarted) as restarted_client:
+            response = restarted_client.get(
+                f"/api/model-executions/{result.executionId}/verification",
+                headers={"X-Jarvis-Actor-Id": actor_id},
+            )
+            assert response.status_code == 200
+            assert response.json()["data"]["digest"] == verdict.digest
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_verifier_under_same_lease_cannot_dispatch_twice(tmp_path, monkeypatch):
+    from app.db.models import TaskLeaseRow
+
+    router = CriticRouter()
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path, router=router, verification_criteria=(SEMANTIC,)
+    )
+    try:
+        service = app.state.autonomous_worker_service
+        original = router.execute
+        rejected = []
+
+        async def interleave(*, request, **kwargs):
+            if request.output_schema and request.output_schema.name == "independent_verdict":
+                execution = service.executions.get_by_run("run-autonomous-1")
+                snapshot = service.runtime.repository.load_run("run-autonomous-1")
+                with app.state.repository.session_factory() as session:
+                    lease = session.get(TaskLeaseRow, "task-demo")
+                    lease_token = lease.lease_token
+                with pytest.raises(AutonomousWorkerError) as error:
+                    await service.verifier.verify(
+                        snapshot,
+                        execution,
+                        service.runtime.authenticate_actor(actor_id),
+                        worker.id,
+                        lease_token,
+                    )
+                assert error.value.code == "VERIFICATION_IN_PROGRESS"
+                rejected.append(True)
+            return await original(request=request, **kwargs)
+
+        monkeypatch.setattr(router, "execute", interleave)
+        result = await service.run_once(worker.id)
+        assert result.stage == "completed"
+        assert rejected == [True]
+        assert len(router.critic_requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+async def test_provenance_mismatch_fails_closed(tmp_path):
+    router = CriticRouter()
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path, router=router, verification_criteria=(FIELD,)
+    )
+    try:
+        service = app.state.autonomous_worker_service
+        result = await service.run_once(worker.id)
+        with pytest.raises(AutonomousWorkerError) as error:
+            service.verifier.read(
+                result.model_copy(update={"resultHash": "0" * 64}),
+                service.runtime.authenticate_actor(actor_id),
+            )
+        assert error.value.code == "VERIFICATION_PROVENANCE_MISMATCH"
+    finally:
+        client.__exit__(None, None, None)
+
+
+def test_real_workspace_artifact_hash_scope_and_provenance(tmp_path):
+    import asyncio
+
+    from tests.test_tool_execution import authorize, prepared
+
+    with prepared(tmp_path) as (app, client, actor_id, worker, workspace, source, body):
+        authorize(client, actor_id, body)
+        result = asyncio.run(app.state.autonomous_worker_service.run_once(worker.id))
+        artifact = result.artifacts[0]
+        criterion = CompletionCriterion(
+            id="report",
+            description="Expected report is durably delivered",
+            mode="artifact",
+            artifactId=artifact.artifactId,
+            expectedPath=artifact.relativePath,
+            expectedHash=artifact.contentHash,
+        )
+        service = app.state.autonomous_worker_service
+        actor = service.runtime.authenticate_actor(actor_id)
+        assert service.verifier.artifact_check(criterion, source, actor).outcome == "passed"
+        for invalid in (
+            criterion.model_copy(update={"expectedHash": "0" * 64}),
+            criterion.model_copy(update={"expectedPath": "reports/other.md"}),
+            criterion.model_copy(update={"artifactId": "artifact-tool-" + "0" * 32 + "-0"}),
+        ):
+            assert service.verifier.artifact_check(invalid, source, actor).outcome == "failed"
+        assert (
+            service.verifier.artifact_check(
+                criterion, source.model_copy(update={"taskId": "foreign-task"}), actor
+            ).outcome
+            == "failed"
+        )
+        assert (workspace / artifact.relativePath).exists()
+
+
+@pytest.mark.asyncio
+async def test_test_claim_is_unverifiable_without_command_journal(tmp_path):
+    criterion = CompletionCriterion(id="tests", description="Tests passed", mode="test_evidence")
+    router = CriticRouter()
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path, router=router, verification_criteria=(criterion,)
+    )
+    try:
+        service = app.state.autonomous_worker_service
+        result = await service.run_once(worker.id)
+        verdict = service.verifier.read(result, service.runtime.authenticate_actor(actor_id))
+        assert verdict.outcome == "unverifiable"
+        assert verdict.requestCount == 0
+        assert app.state.task_leases.task_status(result.taskId) == "under_review"
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["cancel", "stop", "lease", "revoke"])
+async def test_critic_cannot_commit_after_safety_boundary_changes(tmp_path, boundary):
+    from datetime import UTC, datetime
+
+    from sqlalchemy import update
+
+    from app.autonomous_worker.__main__ import _run_once_resilient
+    from app.db.models import TaskLeaseRow
+    from app.models.agent_runtime import RequestCancellationCommand
+
+    router = CriticRouter()
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path, router=router, verification_criteria=(SEMANTIC,)
+    )
+    service = app.state.autonomous_worker_service
+
+    def change():
+        if boundary == "stop":
+            app.state.repository.emergency_stop = True
+            app.state.repository.persist()
+        elif boundary == "lease":
+            with app.state.repository.session_factory.begin() as session:
+                session.execute(
+                    update(TaskLeaseRow)
+                    .where(TaskLeaseRow.task_id == "task-demo")
+                    .values(lease_token="rotated")
+                )
+        elif boundary == "revoke":
+            app.state.identity_service.transition(actor_id, "suspended")
+        else:
+            snapshot = service.runtime.repository.load_run("run-autonomous-1")
+            service.runtime.handle_authorized(
+                RequestCancellationCommand(
+                    run_id=snapshot.specification.run_id,
+                    command_id="cancel-critic",
+                    expected_run_version=snapshot.version,
+                    timestamp=datetime.now(UTC),
+                    reason_code="operator_cancelled",
+                    requester_reference=actor_id,
+                    detail="Cancel during independent review",
+                ),
+                service.runtime.authenticate_actor(actor_id),
+            )
+
+    router.critic_callback = change
+    try:
+        await _run_once_resilient(service, worker.id)
+        snapshot = service.runtime.repository.load_run("run-autonomous-1")
+        assert snapshot.state != "succeeded"
+        records = service.runtime.repository.list_checkpoints(snapshot.specification.run_id)
+        assert not any(r.state_reference.endswith(":verdict") for r in records)
+        assert app.state.task_leases.task_status("task-demo") != "completed"
+        assert len(router.critic_requests) == 1
+    finally:
+        client.__exit__(None, None, None)

@@ -304,6 +304,7 @@ def create_assembly_and_runtime(
     assembly_content: str = "Approved planning facts.",
     target_agent_id: str | None = None,
     response_format: str | None = None,
+    verification_criteria: tuple = (),
 ) -> str:
     assembly_response = client.post(
         "/api/context/assemblies",
@@ -320,6 +321,7 @@ def create_assembly_and_runtime(
         task_id=task_id,
         target_agent_id=target_agent_id,
         response_format=response_format,
+        verification_criteria=verification_criteria,
     )
     return assembly["id"]
 
@@ -333,6 +335,7 @@ def queue_autonomous_runtime(
     task_id: str,
     target_agent_id: str | None = None,
     response_format: str | None = None,
+    verification_criteria: tuple = (),
 ) -> None:
     specification = make_spec(
         run_id=run_id,
@@ -350,6 +353,7 @@ def queue_autonomous_runtime(
                 maximum_repair_calls=1,
                 maximum_output_tokens=1024,
                 maximum_execution_seconds=60,
+                verification_criteria=verification_criteria,
             )
         }
     )
@@ -385,6 +389,7 @@ def worker_fixture(
     run_id: str = "run-autonomous-1",
     assembly_content: str = "Approved planning facts.",
     response_format: str | None = None,
+    verification_criteria: tuple = (),
 ):
     app = create_app(delay_ms=1, database_url=database_url(tmp_path / f"{run_id}.db"))
     client = TestClient(app)
@@ -399,6 +404,7 @@ def worker_fixture(
         run_id=run_id,
         assembly_content=assembly_content,
         response_format=response_format,
+        verification_criteria=verification_criteria,
     )
     worker = app.state.task_leases.register_worker(
         "phase-2c-test-worker",
