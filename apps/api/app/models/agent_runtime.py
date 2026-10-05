@@ -518,7 +518,11 @@ class AutonomousExecutionSpecification(RuntimeContract):
     maximum_repair_calls: int = Field(default=1, ge=0, le=1)
     maximum_output_tokens: int = Field(default=2048, ge=128, le=16_384)
     maximum_execution_seconds: int = Field(default=300, ge=1, le=3600)
-    verification_criteria: tuple[CompletionCriterion, ...] = Field(default=(), max_length=8)
+    verification_criteria: tuple[CompletionCriterion, ...] = Field(
+        default=(),
+        max_length=8,
+        description="Planning completion criteria; artifact mode is unavailable until post-tool verification exists.",
+    )
 
     @model_serializer(mode="wrap")
     def preserve_legacy_serialization(self, handler):
@@ -547,6 +551,10 @@ class AutonomousExecutionSpecification(RuntimeContract):
             and self.execution_type != AutonomousExecutionType.PLANNING_REVIEW
         ):
             raise ValueError("independent planning verification requires planning_review execution")
+        if any(item.mode == "artifact" for item in self.verification_criteria):
+            raise ValueError(
+                "artifact criteria require post-tool verification, which is not available"
+            )
         if self.execution_type == AutonomousExecutionType.WORKSPACE_PLAN:
             if self.response_format != "workspace_plan_json_v1":
                 raise ValueError("workspace_plan requires workspace_plan_json_v1 output")

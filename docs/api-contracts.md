@@ -160,7 +160,9 @@ shell, Python, cloud, network, or unrestricted absolute-path tool.
 
 Queued `planning_review` autonomous specifications accept an optional immutable
 `verification_criteria` array of up to eight unique criteria. Supported modes are
-`field_nonempty`, `field_contains`, `artifact`, `test_evidence`, and `semantic`.
+`field_nonempty`, `field_contains`, `test_evidence`, and `semantic`. The criterion
+contract reserves `artifact`, but queued planning specifications reject it during
+validation until verification after authorized tool completion is implemented.
 OpenAPI defines the exact field bounds and the structured `VerificationResult`.
 Legacy specifications omit an empty policy to preserve their command hashes.
 

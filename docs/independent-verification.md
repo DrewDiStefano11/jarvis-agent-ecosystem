@@ -6,13 +6,16 @@ specification is immutable; model output cannot add criteria, change policy,
 grant tools, alter routing or authorize execution. Legacy requests omit the new
 field and retain their serialized command hashes and structural review behavior.
 
-Each criterion has a unique `id`, a bounded `description`, and one mode:
+Each criterion has a unique `id`, a bounded `description`, and one mode.
+Planning requests reject `artifact` criteria during specification validation: tool
+authorization requires a completed source result, so a matching artifact cannot
+exist before planning verification. Post-tool verification is not integrated yet.
 
 | Mode | Evidence and decision |
 | --- | --- |
 | `field_nonempty` | A named result field must contain a deliverable. Whitespace text is empty. |
 | `field_contains` | An exact substring must occur in `summary` or `analysis`. |
-| `artifact` | A frozen durable tool artifact ID, path and hash must match a completed, authorized execution associated with this task and its write scope. The stored content is hash validated by the existing artifact repository. |
+| `artifact` | Reserved contract mode; rejected in queued planning specifications until post-tool verification exists. |
 | `test_evidence` | Returns `unverifiable`: main has no authoritative software command/test journal yet. Prose and text artifacts cannot prove tests or builds. |
 | `semantic` | A distinct independent critic request evaluates the grounded objective, frozen criteria and persisted result content through the existing local-only model router. |
 
@@ -68,7 +71,9 @@ policy version and digest.
 
 The deterministic tests exercise the production worker, SQLite persistence,
 leases, runtime commands, RBAC, checkpoint recovery and HTTP read endpoint. A real
-authorized workspace report is created and checked for artifact provenance.
+authorized workspace report is created and checked directly against the internal
+artifact checker for provenance. This is component coverage, not an end-to-end
+planning artifact workflow; requests for that unavailable workflow are rejected.
 An actual loopback HTTP server drives the production Ollama adapter and model
 router, but its inference response is a deterministic fixture. Tests also use
 mock router responses to inject malformed output and safety races.

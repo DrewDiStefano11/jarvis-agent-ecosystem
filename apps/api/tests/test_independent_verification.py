@@ -7,6 +7,7 @@ from pydantic import ValidationError
 
 from app.autonomous_worker.errors import AutonomousWorkerError
 from app.autonomous_worker.verification import deterministic_checks, parse_review
+from app.models.agent_runtime import AutonomousExecutionSpecification, AutonomousExecutionType
 from app.models.autonomous_worker import PlanningReviewResult
 from app.models.verification import CompletionCriterion
 from tests.test_autonomous_worker import VALID_RESULT, FakeRouter, worker_fixture
@@ -77,6 +78,37 @@ def test_incoherent_policy_rejected(mode, field, expected):
         CompletionCriterion(
             id="criterion", description="frozen", mode=mode, field=field, expected=expected
         )
+
+
+@pytest.mark.parametrize("json_input", [False, True])
+def test_planning_request_rejects_artifact_policy_before_queueing(json_input):
+    criterion = CompletionCriterion(
+        id="report",
+        description="Deliver the report",
+        mode="artifact",
+        artifactId="artifact-tool-existing-0",
+        expectedPath="reports/result.md",
+        expectedHash="a" * 64,
+    )
+    policy = {
+        "execution_type": AutonomousExecutionType.PLANNING_REVIEW,
+        "context_assembly_id": "assembly-existing",
+        "verification_criteria": (FIELD, criterion),
+    }
+    with pytest.raises(ValidationError, match="artifact criteria require post-tool verification"):
+        if json_input:
+            AutonomousExecutionSpecification.model_validate_json(
+                json.dumps(
+                    {
+                        **policy,
+                        "verification_criteria": [
+                            item.model_dump() for item in policy["verification_criteria"]
+                        ],
+                    }
+                )
+            )
+        else:
+            AutonomousExecutionSpecification(**policy)
 
 
 def test_claiming_success_does_not_satisfy_missing_deliverable():
