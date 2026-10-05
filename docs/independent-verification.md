@@ -7,6 +7,8 @@ grant tools, alter routing or authorize execution. Legacy requests omit the new
 field and retain their serialized command hashes and structural review behavior.
 
 Each criterion has a unique `id`, a bounded `description`, and one mode.
+Descriptions and containment values are trimmed before freezing the policy;
+whitespace-only values are rejected, including Unicode whitespace.
 Planning requests reject `artifact` criteria during specification validation: tool
 authorization requires a completed source result, so a matching artifact cannot
 exist before planning verification. Post-tool verification is not integrated yet.

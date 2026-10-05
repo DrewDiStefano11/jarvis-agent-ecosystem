@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 Identifier = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")]
 Outcome = Literal["passed", "needs_correction", "failed", "unverifiable"]
@@ -22,6 +22,16 @@ class CompletionCriterion(VerificationContract):
     artifactId: Identifier | None = None
     expectedPath: str | None = Field(default=None, min_length=1, max_length=240)
     expectedHash: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+
+    @field_validator("description", "expected")
+    @classmethod
+    def meaningful_text(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value:
+            raise ValueError("completion criteria text must not be blank")
+        return value
 
     @model_validator(mode="after")
     def coherent_policy(self):

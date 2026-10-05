@@ -80,6 +80,34 @@ def test_incoherent_policy_rejected(mode, field, expected):
         )
 
 
+@pytest.mark.parametrize("blank", [" ", "\t", "\n", "\u2003"])
+@pytest.mark.parametrize("text_field", ["expected", "description"])
+def test_blank_completion_text_rejected(blank, text_field):
+    policy = dict(
+        id="deliverable",
+        description="Required report",
+        mode="field_contains",
+        field="summary",
+        expected="report",
+    )
+    policy[text_field] = blank
+    with pytest.raises(ValidationError, match="must not be blank"):
+        CompletionCriterion(**policy)
+
+
+def test_completion_text_is_normalized_before_policy_is_frozen():
+    criterion = CompletionCriterion(
+        id="deliverable",
+        description="  Required report\n",
+        mode="field_contains",
+        field="summary",
+        expected="\tcomplete report  ",
+    )
+    assert criterion.description == "Required report"
+    assert criterion.expected == "complete report"
+    assert criterion.model_dump()["expected"] == "complete report"
+
+
 @pytest.mark.parametrize("json_input", [False, True])
 def test_planning_request_rejects_artifact_policy_before_queueing(json_input):
     criterion = CompletionCriterion(

@@ -163,6 +163,7 @@ Queued `planning_review` autonomous specifications accept an optional immutable
 `field_nonempty`, `field_contains`, `test_evidence`, and `semantic`. The criterion
 contract reserves `artifact`, but queued planning specifications reject it during
 validation until verification after authorized tool completion is implemented.
+Descriptions and containment values are trimmed and must contain non-whitespace text.
 OpenAPI defines the exact field bounds and the structured `VerificationResult`.
 Legacy specifications omit an empty policy to preserve their command hashes.
 

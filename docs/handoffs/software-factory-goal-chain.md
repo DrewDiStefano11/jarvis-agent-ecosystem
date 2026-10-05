@@ -95,3 +95,17 @@ runs, overriding the earlier strictly sequential start rule. Merge gates remain.
 - After each validated #69 push, request explicit final-SHA review and let CI run
   asynchronously. Work on the independent remote milestone, then return at a
   meaningful checkpoint. No repeated CI waiting/status loops.
+
+## Review cycle 2 correction
+
+Codex's review of exact head `72dbd4055cf25478d809149613be6f58ce946ea6`
+found one P2: whitespace-only containment values could authorize meaningless
+completion. The policy now trims descriptions/containment values before freezing
+and rejects blank text, including Unicode whitespace. Nine new regression cases
+cover blank values and normalization; affected verifier/worker/review modules
+passed 108 tests. Required frontend typecheck/lint/101 tests/build and backend
+Ruff passed. This focused change follows the updated validation pyramid; the
+prior broad backend run passed 1,324 tests and new exact-head CI remains required.
+The new final SHA, thread resolution and review request are recorded in the PR
+body after the fix commit. Keep remote work independent and unfinished until its
+network/TLS/control integration is complete.
