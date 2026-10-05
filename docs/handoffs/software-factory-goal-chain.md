@@ -109,3 +109,19 @@ prior broad backend run passed 1,324 tests and new exact-head CI remains require
 The new final SHA, thread resolution and review request are recorded in the PR
 body after the fix commit. Keep remote work independent and unfinished until its
 network/TLS/control integration is complete.
+
+## Review cycle 3 recovery correction
+
+Exact-head runtime-browser CI passed at `157c82bb99eaaf753d34ddd0465ee44f07eb2cc6`
+in run `37354453333`, job `111913318917`. The earlier selector-detachment
+failure is fixed; do not rerun an obsolete commit or weaken smoke assertions.
+The exact-head Codex review found a separate P2: a durable escalated review could
+be stranded after a crash when completion permission was revoked, even with
+pause permission allowed. Recovery now derives pause authorization from that
+durable outcome. Two real-worker crash/recovery regressions exercise revoked
+completion and revoked pause separately, preserving deny precedence and avoiding
+duplicate model calls. The revoked-completion regression fails with the old
+check and passes with the fix. All 110 affected verifier/worker/review tests,
+backend Ruff, frontend typecheck/ESLint/101 Vitest tests/build and diff checks
+passed before the next coherent commit; exact final-SHA CI/review remain
+required. Continue independent remote-control development while those gates run.

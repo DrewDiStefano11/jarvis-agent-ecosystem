@@ -299,6 +299,73 @@ async def test_nonpass_never_completes_task(tmp_path, outcome):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("revoked_permission", ["runtime.complete", "runtime.pause"])
+async def test_escalation_recovery_uses_live_pause_permission(
+    tmp_path, monkeypatch, revoked_permission
+):
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import update
+
+    from app.db.models import TaskLeaseRow
+    from app.models.identity import AssignPermissionRequest
+
+    router = CriticRouter(outcome="needs_correction")
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path, router=router, verification_criteria=(SEMANTIC,)
+    )
+    try:
+        service = app.state.autonomous_worker_service
+        pause = service._pause_for_review
+
+        def crash_before_pause(*args, **kwargs):
+            raise RuntimeError("review persisted before pause")
+
+        monkeypatch.setattr(service, "_pause_for_review", crash_before_pause)
+        with pytest.raises(RuntimeError, match="review persisted before pause"):
+            await service.run_once(worker.id)
+        execution = app.state.model_execution_repository.get_by_run("run-autonomous-1")
+        actor = service.runtime.authenticate_actor(actor_id)
+        assert not execution.requiresHumanReview
+        assert service._durable_review_decision(execution, actor).outcome.value == "escalated"
+        permission = next(
+            item
+            for item in app.state.identity_service.list_definitions("permission", 0, 100)
+            if item.stable_key == revoked_permission
+        )
+        app.state.identity_service.assign_permission(
+            actor_id,
+            AssignPermissionRequest(
+                permission_id=permission.id,
+                effect="deny",
+                resource_type="task",
+                resource_id=execution.taskId,
+            ),
+        )
+        with app.state.repository.session_factory.begin() as session:
+            session.execute(
+                update(TaskLeaseRow)
+                .where(TaskLeaseRow.task_id == execution.taskId)
+                .values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
+            )
+        app.state.task_leases.recover_expired_leases()
+        monkeypatch.setattr(service, "_pause_for_review", pause)
+        recovered = await service.run_once(worker.id)
+        snapshot = service.runtime.read_run_authorized(execution.runtimeRunId, actor)
+        if revoked_permission == "runtime.complete":
+            assert recovered is not None and recovered.stage == "human_review_required"
+            assert snapshot.state.value == "paused"
+            assert app.state.task_leases.task_status(execution.taskId) == "under_review"
+        else:
+            assert recovered is None
+            assert snapshot.state.value == "running"
+            assert app.state.task_leases.task_status(execution.taskId) != "completed"
+        assert len(router.requests) == len(router.critic_requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "malformed,invented,expected,count",
     [(1, False, "passed", 2), (2, False, "unverifiable", 2), (0, True, "unverifiable", 2)],

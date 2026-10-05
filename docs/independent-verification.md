@@ -62,6 +62,11 @@ for operator review in this milestone; adaptive repair/replanning belongs to the
 next milestone. Cancelled, stopped, revoked or stale-lease work cannot commit a
 late verdict or verified success. Verification itself runs no workspace tools.
 
+Recovery reads the durable review outcome before choosing transition authorization.
+An escalated verdict requires live pause permission, including when completion
+permission has been revoked. Revoked pause permission still blocks recovery;
+the persisted verdict is reused without repeating worker or critic inference.
+
 `GET /api/model-executions/{executionId}/verification` exposes the verdict using
 the same runtime read authorization as the result. It returns `null` before a
 verdict exists or for legacy requests. The record contains stable verification,

@@ -1651,6 +1651,7 @@ class AutonomousWorkerService:
         snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
         task_state = self.task_leases.task_recovery_state(execution.taskId)
         task_status = None if task_state is None else task_state[0]
+        review = None
         if task_status == "cancelled":
             self._authorize_recovery_action(snapshot, actor, "confirm_cancellation")
         elif (
@@ -1663,18 +1664,20 @@ class AutonomousWorkerService:
         elif execution.requiresHumanReview:
             self._authorize_recovery_action(snapshot, actor, "confirm_pause")
         else:
-            self._authorize_recovery_action(snapshot, actor, "complete_run")
+            review = self._durable_review_decision(execution, actor)
+            self._authorize_recovery_action(
+                snapshot,
+                actor,
+                "confirm_pause"
+                if review is not None and review.outcome is PlanReviewOutcome.ESCALATED
+                else "complete_run",
+            )
         if self._reconcile_cancelled_recovery(snapshot, actor, execution):
             return None
         if self._reconcile_completed_elsewhere_recovery(snapshot, actor, execution):
             return None
         if self._reconcile_failed_recovery(snapshot, actor, execution):
             return None
-        review = (
-            None
-            if execution.requiresHumanReview
-            else self._durable_review_decision(execution, actor)
-        )
         if review is not None and review.outcome is PlanReviewOutcome.REVISION_REQUESTED:
             # The committed review record is authoritative: resume the bounded
             # revision transition instead of reviewing or finalizing again.
