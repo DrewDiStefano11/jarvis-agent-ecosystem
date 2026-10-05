@@ -55,8 +55,13 @@ single process only.
 
 ## Next work
 
-1. Commit/push/open and attach the remote PR, start exact-head CI/fresh review,
-   record evidence and immediately select independent useful work.
+1. PR [#70](https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/70)
+   is open and attached. Fresh review of `41147cdb2826637d1108fe3e6557d347f4cfc364`
+   found explicit HTTPS default-port normalization incompatible with the supported
+   client. The follow-up normalizes configured and received authorities using
+   HTTPX URL semantics, preserving single-host and nondefault-port checks.
+   HTTP/configuration/actual TLS tests pass: 32 tests. Publish the fix and request
+   exact-head CI/fresh review; record the final SHA in the PR and continue useful work.
 2. Reconcile newly merged main while preserving changes; shared RBAC overlaps
    are expected if #69 merges. Return to #69 when actionable.
 3. Adaptive correction needs real executable nodes

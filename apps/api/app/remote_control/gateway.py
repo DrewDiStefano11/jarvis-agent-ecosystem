@@ -5,9 +5,27 @@ from threading import Lock
 from time import monotonic
 from urllib.parse import urlsplit
 
+import httpx
 from starlette.responses import JSONResponse
 
 from app.core.config import Settings
+
+
+def normalize_authority(authority: str) -> tuple[bytes, int] | None:
+    """Compare HTTPS authorities using the supported client's URL normalization."""
+    if (
+        not authority
+        or len(authority) > 512
+        or any(character.isspace() or character in "/\\?#@" for character in authority)
+    ):
+        return None
+    try:
+        url = httpx.URL("https://" + authority)
+        if not url.raw_host or url.port == 0:
+            return None
+        return url.raw_host, 443 if url.port is None else url.port
+    except (httpx.InvalidURL, ValueError, UnicodeError):
+        return None
 
 
 class RequestBudget:
@@ -37,7 +55,9 @@ class RemoteGateway:
     def __init__(self, app, *, settings: Settings):
         self.app = app
         self.enabled = settings.remote_control_enabled
-        self.authority = urlsplit(settings.remote_origin).netloc.lower()
+        self.authority = normalize_authority(urlsplit(settings.remote_origin).netloc)
+        if self.enabled and self.authority is None:
+            raise ValueError("Remote HTTPS authority is invalid.")
         self.budget = RequestBudget(settings.remote_requests_per_minute)
 
     async def __call__(self, scope, receive, send):
@@ -47,7 +67,9 @@ class RemoteGateway:
             await send({"type": "websocket.close", "code": 1008})
             return
         headers = scope.get("headers", [])
-        hosts = [value.decode("latin-1").lower() for key, value in headers if key == b"host"]
+        hosts = [
+            normalize_authority(value.decode("latin-1")) for key, value in headers if key == b"host"
+        ]
         code, message, status = None, None, 403
         if not self.budget.take():
             code, message, status = "REMOTE_RATE_LIMITED", "Remote request budget exhausted.", 429

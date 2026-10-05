@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.models.identity import AssignPermissionRequest, CreatePermissionRequest
-from app.remote_control.gateway import RequestBudget
+from app.remote_control.gateway import RequestBudget, normalize_authority
 from tests.test_remote_control_access import TOKEN
 from tests.test_remote_goal_submission import (
     configured_service,
@@ -72,6 +72,40 @@ def test_remote_http_submission_replay_inspection_and_native_cancellation(remote
     audit = client.get("/api/remote/goals/" + task["id"] + "/audit?limit=2", headers=headers)
     assert audit.status_code == 200 and len(audit.json()["data"]["items"]) == 2
     assert all(item["actorIdentityId"] == actor.actor_id for item in audit.json()["data"]["items"])
+
+
+def test_explicit_default_https_port_accepts_supported_client_host(remote_http, monkeypatch):
+    original, _, _, headers = remote_http
+    monkeypatch.setenv("JARVIS_REMOTE_ORIGIN", "https://remote.test:443")
+    app = create_app(database_url=original.state.settings.database_url)
+    with TestClient(app, base_url="https://remote.test:443") as client:
+        response = client.get("/api/remote/goals", headers=headers)
+        assert response.request.headers["host"] == "remote.test"
+        assert response.status_code == 200, response.text
+        assert (
+            client.get(
+                "/api/remote/goals", headers=headers | {"Host": "remote.test:443"}
+            ).status_code
+            == 200
+        )
+        for host in ("remote.test:444", "remote.test:0", "user@remote.test", "remote.test/path"):
+            rejected = client.get("/api/remote/goals", headers=headers | {"Host": host})
+            assert rejected.status_code == 403
+            assert rejected.json()["error"]["code"] == "REMOTE_HOST_REJECTED"
+        duplicate = client.get(
+            "/api/remote/goals",
+            headers=[*headers.items(), ("Host", "remote.test"), ("Host", "remote.test:443")],
+        )
+        assert duplicate.status_code == 403
+
+
+def test_https_authority_normalization_preserves_host_and_nondefault_port():
+    assert normalize_authority("REMOTE.test:443") == normalize_authority("remote.test")
+    assert normalize_authority("[::1]:443") == normalize_authority("[::1]")
+    assert normalize_authority("remote.test:8443") != normalize_authority("remote.test")
+    assert normalize_authority("") is None
+    assert normalize_authority("remote.test:0") is None
+    assert normalize_authority("remote.test ") is None
 
 
 @pytest.mark.parametrize("revocation", ["none", "before", "commit"])
