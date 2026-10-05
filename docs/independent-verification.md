@@ -73,6 +73,10 @@ checked after the outcome is known. Completion authorization is checked before
 any successful task mutation and again inside its lease-fenced transaction using
 the same database session for RBAC. A denial or actor suspension committed after
 the initial check prevents completion without discarding the persisted verdict.
+That transaction also reads the current native runtime snapshot and checks the
+active attempt, task/target lineage and target lifecycle. A late cancellation
+rolls back completion before native cancellation reconciliation; a late pause
+returns `EXECUTION_COMPLETION_BLOCKED` while retaining the persisted result.
 
 `GET /api/model-executions/{executionId}/verification` exposes the verdict using
 the same runtime read authorization as the result. It returns `null` before a
@@ -96,5 +100,5 @@ These prove execution and persistence of the verifier, not model judgment qualit
 on arbitrary tasks. Real model inference needs a configured running local model;
 none is downloaded or provisioned by this milestone. Software test/build evidence
 and coordinator node execution are not implemented on current main. This verifier
-does not depend on unmerged PR #63 or #68. Their later integration must preserve
+does not depend on unmerged PR #63; #68 is merged into the reconciled base. Later integration must preserve
 the same authoritative result binding and frozen criterion policy.

@@ -1306,8 +1306,14 @@ class AutonomousWorkerService:
             worker_id,
             lease_token,
             f"model-execution:{execution.executionId}",
-            completion_guard=lambda session: self._authorize_recovery_action(
-                snapshot, actor, "complete_run", session=session
+            completion_guard=lambda session: self.executions.completion_guard(
+                session,
+                execution.executionId,
+                worker_id,
+                lease_token,
+                lambda current: self._authorize_recovery_action(
+                    current, actor, "complete_run", session=session
+                ),
             ),
         )
         snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)

@@ -456,6 +456,67 @@ async def test_completion_rechecks_live_authority_inside_task_transaction(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["cancel", "pause", "target_suspended"])
+async def test_task_completion_fences_late_native_runtime_change(tmp_path, monkeypatch, change):
+    from datetime import UTC, datetime
+
+    from app.models.agent_runtime import RequestCancellationCommand, RequestPauseCommand
+
+    router = CriticRouter()
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path, router=router, verification_criteria=(SEMANTIC,)
+    )
+    try:
+        service = app.state.autonomous_worker_service
+        complete = app.state.task_leases.complete_task
+
+        def cancel_then_complete(task_id, *args, **kwargs):
+            snapshot = service.runtime.repository.load_run("run-autonomous-1")
+            if change == "target_suspended":
+                app.state.identity_service.transition(snapshot.specification.agent_id, "suspended")
+                return complete(task_id, *args, **kwargs)
+            command = RequestCancellationCommand if change == "cancel" else RequestPauseCommand
+            service.runtime.handle_authorized(
+                command(
+                    run_id=snapshot.specification.run_id,
+                    command_id="cancel-at-task-completion",
+                    expected_run_version=snapshot.version,
+                    timestamp=datetime.now(UTC),
+                    reason_code="operator_cancelled" if change == "cancel" else "operator_pause",
+                    **({"requester_reference": actor_id} if change == "cancel" else {}),
+                    detail="Cancel after completion precheck",
+                ),
+                service.runtime.authenticate_actor(actor_id),
+            )
+            try:
+                return complete(task_id, *args, **kwargs)
+            except AutonomousWorkerError:
+                # The guarded transaction rolled back before native cancellation
+                # reconciliation runs outside it.
+                assert app.state.task_leases.task_status(task_id) == "in_progress"
+                raise
+
+        monkeypatch.setattr(app.state.task_leases, "complete_task", cancel_then_complete)
+        with pytest.raises(AutonomousWorkerError) as error:
+            await service.run_once(worker.id)
+        assert error.value.code == (
+            "EXECUTION_CANCELLED"
+            if change == "cancel"
+            else "EXECUTION_AUTHORIZATION_REVOKED"
+            if change == "target_suspended"
+            else "EXECUTION_COMPLETION_BLOCKED"
+        )
+        assert app.state.task_leases.task_status("task-demo") == (
+            "cancelled" if change == "cancel" else "in_progress"
+        )
+        execution = app.state.model_execution_repository.get_by_run("run-autonomous-1")
+        assert execution.stage == ("failed" if change == "cancel" else "finalization_pending")
+        assert len(router.requests) == len(router.critic_requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "malformed,invented,expected,count",
     [(1, False, "passed", 2), (2, False, "unverifiable", 2), (0, True, "unverifiable", 2)],

@@ -558,6 +558,32 @@ class ModelExecutionRepository:
             lease_token=lease_token,
         )
 
+    def completion_guard(self, session, execution_id, worker_id, lease_token, policy_check):
+        """Fence task completion against the current runtime and target identity."""
+        row = self._require_row(session, execution_id)
+        runtime = session.get(AgentRuntimeRunRow, row.runtime_run_id)
+        snapshot = (
+            None if runtime is None else AgentRunSnapshot.model_validate_json(runtime.snapshot_json)
+        )
+        if snapshot is None:
+            raise AutonomousWorkerError("EXECUTION_COMPLETION_BLOCKED")
+        policy_check(snapshot)
+        self._require_fence(session, row, worker_id, lease_token, datetime.now(UTC))
+        if snapshot.state in {
+            AgentRunState.CANCEL_REQUESTED,
+            AgentRunState.CANCELLING,
+            AgentRunState.CANCELLED,
+        }:
+            raise AutonomousWorkerError("EXECUTION_CANCELLED")
+        if (
+            snapshot.state != AgentRunState.RUNNING
+            or snapshot.active_attempt_id != row.runtime_attempt_id
+            or snapshot.specification.task_id != row.task_id
+            or snapshot.specification.agent_id != row.target_agent_id
+            or row.stage != ModelExecutionStage.FINALIZATION_PENDING.value
+        ):
+            raise AutonomousWorkerError("EXECUTION_COMPLETION_BLOCKED")
+
     def assert_advance_allowed(
         self, execution_id: str, *, worker_id: str, lease_token: str
     ) -> None:

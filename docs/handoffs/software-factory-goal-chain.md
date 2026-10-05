@@ -11,9 +11,11 @@ work, keep independent branches isolated, and do not touch PR #63.
 - Original base `6626c5c4e267b737d86f8883201450e946aa1831`; merged/reconciled main
   `ff11aba814b8caf67ca5b8f2af415e827e6ec63b` includes #68.
 - No migration; single inherited head `20261002_si`. #63 remains separately owned.
-- Latest pushed head before the pending repair: `91da926454a51e0081f08119f468a0ba8d613428`.
-  Run `37362645872` has passing runtime-browser/repository checks; exact final
-  SHA and fresh review request will be recorded in PR comments after repair push.
+- Latest pushed head before the current safety repair: `5332b819ad0c09e9b8fd7e890510775441bcffbc`.
+  Fresh review explicitly reviewed that SHA and found no actionable issues.
+  Run `37365540121` still runs backend; other gates were cancelled while queued.
+  A locally reproduced late native cancellation race requires a new head and
+  fresh exact-head gates. Final SHA/review request belong in the PR comments.
 
 Frozen criteria, deterministic checks and a separate bounded local critic gate
 completion using native result/checkpoint/RBAC/lease/audit/outbox systems. Invalid
@@ -31,8 +33,21 @@ task remains in progress, runtime running, result finalization pending. Native
 cancellation/recovery test wrappers forward this session without changing their
 existing assertions.
 
+The follow-up reproduction showed cancellation between service precheck and task
+transaction could still mark a task completed. The completion guard now reads the
+current runtime snapshot in the task session, checks active attempt/task/target
+lineage and active target, and applies current-snapshot RBAC there. Cancellation
+rolls back task completion before native cancellation reconciliation. A late pause
+blocks completion while preserving finalization-pending recovery; actor suspension
+continues to report revoked authorization. New races use actual native commands.
+
 ## Validation for the pending transaction repair
 
+- Current runtime-state completion fence: full affected verifier/worker/native
+  authorization/planning-review package passes 145 tests in 128.24 seconds.
+  The added regression first failed with a completed task despite cancellation;
+  it now proves transaction rollback and exact native cancellation/pause outcomes.
+  Frontend typecheck/ESLint/101 Vitest tests/build and Ruff pass after the repair.
 - Full backend run: 1,425 passed, two existing skips, five test-wrapper TypeErrors.
   All five are in the affected worker suite; wrappers were updated and the full
   affected verifier/worker/review/native authorization package passes 142 tests.
@@ -56,8 +71,11 @@ API and certificate-verifying CLI reuse native identities, scoped controls,
 goals/audit/outbox/leases and system stop. Real TLS proves submit/inspect/cancel,
 pause/replay/resume/runtime cancellation, denial of worker confirmation and
 system stop/resume. Correction submission now requires source read authority at
-request and commit. Broad backend validation is running; required frontend gates
-pass with 101 tests. No remote PR yet or public deployment. See its own handoff.
+request and commit. PR #70 is open at `50fd6deb1a894a8b04ef0aa77b72f99f37b5ebcf`;
+the review's default HTTPS port finding is fixed, its thread resolved and fresh
+review requested. Full backend checkpoint: 1,414 passed/two existing skips;
+latest HTTP/config/actual TLS package: 32 passed. Required frontend gates pass
+with 101 tests. No public deployment. See its own handoff.
 
 Adaptive preparation remains isolated at old #69 head 7d3777f with its preserved
 handoff. Executable coordinator nodes are needed to prove reassignment and
@@ -65,7 +83,11 @@ verified-result graph reuse; never import unmerged #63 contracts.
 
 Next independent Self-Build prerequisite: durable prioritized improvement backlog,
 using merged #68's immutable evidence/proposals and native tasks/outbox. Fresh-main
-worktree `codex/improvement-backlog` was created at ff11aba. Preserve frozen
+worktree `codex/improvement-backlog` was created at ff11aba. The native selector,
+admission provenance, loopback API and CLI are implemented; 19 targeted tests pass,
+including concurrency, commit-time revocation/stop, uncertain acknowledgement,
+protected tasks and invalid lineage. Full backend validation is running and frontend
+gates pass. Preserve frozen
 criteria/provenance and existing execution authority; proposal selection must not
 auto-approve tools or claim autonomous coding. #68 currently provides diagnosis/
 planning/comparison only. Return to #69 when actionable, checkpoint remote after

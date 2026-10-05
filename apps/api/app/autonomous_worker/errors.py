@@ -26,6 +26,7 @@ ERROR_MESSAGES = {
     "MODEL_RESULT_PERSISTENCE_FAILED": "The validated model result could not be persisted.",
     "EXECUTION_LEASE_LOST": "The worker no longer owns the current task lease.",
     "EXECUTION_CANCELLED": "The task or runtime execution was cancelled.",
+    "EXECUTION_COMPLETION_BLOCKED": "The current runtime no longer permits task completion.",
     "EXECUTION_EMERGENCY_STOPPED": "Emergency stop blocked autonomous execution.",
     "EXECUTION_AUTHORIZATION_REVOKED": "Authorization changed during autonomous execution.",
 }
