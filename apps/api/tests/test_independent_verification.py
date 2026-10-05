@@ -300,8 +300,8 @@ async def test_nonpass_never_completes_task(tmp_path, outcome):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("revoked_permission", ["runtime.complete", "runtime.pause"])
-@pytest.mark.parametrize("crash_boundary", ["verdict", "review"])
-@pytest.mark.parametrize("outcome", ["needs_correction", "failed", "unverifiable"])
+@pytest.mark.parametrize("crash_boundary", ["result", "verdict", "review"])
+@pytest.mark.parametrize("outcome", ["passed", "needs_correction", "failed", "unverifiable"])
 async def test_escalation_recovery_uses_live_pause_permission(
     tmp_path, monkeypatch, revoked_permission, crash_boundary, outcome
 ):
@@ -320,27 +320,42 @@ async def test_escalation_recovery_uses_live_pause_permission(
         service = app.state.autonomous_worker_service
         pause = service._pause_for_review
         resolve = service._resolve_review
+        verify = service.verifier.verify
+        finalize = service._finalize
 
         def crash_before_pause(*args, **kwargs):
             raise RuntimeError("nonpassing evidence persisted before pause")
 
-        monkeypatch.setattr(
-            service,
-            "_resolve_review" if crash_boundary == "verdict" else "_pause_for_review",
-            crash_before_pause,
-        )
+        async def crash_before_verification(*args, **kwargs):
+            crash_before_pause()
+
+        if crash_boundary == "result":
+            monkeypatch.setattr(service.verifier, "verify", crash_before_verification)
+        else:
+            monkeypatch.setattr(
+                service,
+                "_resolve_review"
+                if crash_boundary == "verdict"
+                else "_finalize"
+                if outcome == "passed"
+                else "_pause_for_review",
+                crash_before_pause,
+            )
         with pytest.raises(RuntimeError, match="nonpassing evidence persisted before pause"):
             await service.run_once(worker.id)
         execution = app.state.model_execution_repository.get_by_run("run-autonomous-1")
         actor = service.runtime.authenticate_actor(actor_id)
         assert not execution.requiresHumanReview
         verdict = service.verifier.read(execution, actor)
-        assert verdict.outcome == outcome
+        if crash_boundary == "result":
+            assert verdict is None and len(router.critic_requests) == 0
+        else:
+            assert verdict.outcome == outcome
         decision = service._durable_review_decision(execution, actor)
-        if crash_boundary == "verdict":
+        if crash_boundary != "review":
             assert decision is None
         else:
-            assert decision.outcome.value == "escalated"
+            assert decision.outcome.value == ("accepted" if outcome == "passed" else "escalated")
         permission = next(
             item
             for item in app.state.identity_service.list_definitions("permission", 0, 100)
@@ -364,9 +379,15 @@ async def test_escalation_recovery_uses_live_pause_permission(
         app.state.task_leases.recover_expired_leases()
         monkeypatch.setattr(service, "_pause_for_review", pause)
         monkeypatch.setattr(service, "_resolve_review", resolve)
+        monkeypatch.setattr(service.verifier, "verify", verify)
+        monkeypatch.setattr(service, "_finalize", finalize)
         recovered = await service.run_once(worker.id)
         snapshot = service.runtime.read_run_authorized(execution.runtimeRunId, actor)
-        if revoked_permission == "runtime.complete":
+        if outcome == "passed" and revoked_permission == "runtime.pause":
+            assert recovered is not None and recovered.stage == "completed"
+            assert snapshot.state.value == "succeeded"
+            assert app.state.task_leases.task_status(execution.taskId) == "completed"
+        elif outcome != "passed" and revoked_permission == "runtime.complete":
             assert recovered is not None and recovered.stage == "human_review_required"
             assert snapshot.state.value == "paused"
             assert app.state.task_leases.task_status(execution.taskId) == "under_review"
@@ -375,7 +396,10 @@ async def test_escalation_recovery_uses_live_pause_permission(
             assert snapshot.state.value == "running"
             assert app.state.task_leases.task_status(execution.taskId) != "completed"
         assert len(router.requests) == len(router.critic_requests) == 1
-        assert service.verifier.read(execution, actor) == verdict
+        recovered_verdict = service.verifier.read(execution, actor)
+        assert recovered_verdict.outcome == outcome
+        if verdict is not None:
+            assert recovered_verdict == verdict
     finally:
         client.__exit__(None, None, None)
 

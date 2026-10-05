@@ -67,6 +67,10 @@ An escalated review or persisted nonpassing verdict requires live pause permissi
 including a crash before the plan-review record is saved and when completion
 permission has been revoked. Revoked pause permission still blocks recovery;
 the persisted verdict is reused without repeating worker or critic inference.
+If recovery has not yet produced a verdict/review, their existing read, execute
+and checkpoint permissions govern that work. Terminal-action permission is
+checked after the outcome is known. Completion authorization is checked before
+any successful task mutation, so a passing verdict cannot bypass revoked completion.
 
 `GET /api/model-executions/{executionId}/verification` exposes the verdict using
 the same runtime read authorization as the result. It returns `null` before a

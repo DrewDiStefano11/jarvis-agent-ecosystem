@@ -1295,6 +1295,7 @@ class AutonomousWorkerService:
     ) -> ModelExecutionResult:
         self._assert_live_policy(snapshot, actor, worker_id, lease_token)
         self._assert_verified(snapshot, execution, actor)
+        self._authorize_recovery_action(snapshot, actor, "complete_run")
         execution = self.executions.mark_finalization_pending(
             execution.executionId,
             worker_id=worker_id,
@@ -1674,11 +1675,14 @@ class AutonomousWorkerService:
             needs_pause = (
                 review is not None and review.outcome is PlanReviewOutcome.ESCALATED
             ) or (verdict is not None and verdict.outcome != "passed")
-            self._authorize_recovery_action(
-                snapshot,
-                actor,
-                "confirm_pause" if needs_pause else "complete_run",
-            )
+            if needs_pause:
+                self._authorize_recovery_action(snapshot, actor, "confirm_pause")
+            elif review is not None or request is None or not request.verification_criteria:
+                self._authorize_recovery_action(snapshot, actor, "complete_run")
+            # With no authoritative review, verification/review may still select
+            # pause rather than completion. Their own read/execute/checkpoint
+            # permissions govern this work; _finalize checks completion before
+            # any successful task mutation once that outcome is known.
         if self._reconcile_cancelled_recovery(snapshot, actor, execution):
             return None
         if self._reconcile_completed_elsewhere_recovery(snapshot, actor, execution):

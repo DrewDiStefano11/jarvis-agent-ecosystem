@@ -153,3 +153,18 @@ and restoring every local change through a recoverable stash. Its dedicated
 disabled-by-default HTTPS gateway and native goal/runtime control integration
 are in development. Actual verified TLS submission/inspection/cancellation and
 transport/legacy-isolation acceptance passed. No remote PR or deployment exists.
+
+## All recovery windows and terminal permission
+
+The `cb92c97` review identified the remaining result-to-verdict crash window.
+When no authoritative review exists, recovery now defers terminal permission
+selection until verification/review establish the action. `_finalize` checks
+completion permission before marking finalization or committing task success.
+Twenty-four cases exercise result/verdict/review crash windows, passing and all
+three nonpassing verdicts, revoked pause and revoked completion. All 132 affected
+verifier/worker/review tests pass; frontend typecheck/ESLint/101 tests/build and
+Ruff pass. Prior full merged-main validation and actual browser evidence above
+remain valid; fresh exact-head CI and review are required for this bounded fix.
+The user's latest continuation explicitly requires continued repair/development
+rather than stopping at a pending gate or an artificial review/handoff boundary.
+Keep #63 untouched and continue the independent remote vertical while gates run.
