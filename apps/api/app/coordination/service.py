@@ -10,7 +10,7 @@ from hashlib import sha256
 from pydantic import ValidationError
 
 from app.agent_runtime.authorization import IdentityRuntimeAuthorizer, RuntimeActorContext
-from app.agent_runtime.errors import AgentRuntimeError
+from app.agent_runtime.errors import AgentRuntimeError, CommandConflictError, VersionConflictError
 from app.agent_runtime.repository import RuntimeExecutionFence
 from app.catalog.taxonomy import satisfies
 from app.coordination.repository import CoordinationRepository
@@ -206,8 +206,6 @@ class CoordinatorService:
 
         running = next((node for node in record.nodes if node.status == "running"), None)
         if running is not None:
-            if running.dispatchLeaseFingerprint == sha256(fence.lease_token.encode()).hexdigest():
-                return record
             return self._recover_node(record, running, fence, actor)
         claimed = next((node for node in record.nodes if node.status == "claimed"), None)
         if claimed is None:
@@ -217,11 +215,6 @@ class CoordinatorService:
 
         record = self._required(record_id)
         if record.synthesis.status == "running":
-            if (
-                record.synthesis.dispatchLeaseFingerprint
-                == sha256(fence.lease_token.encode()).hexdigest()
-            ):
-                return record
             return self._recover_synthesis(record, fence, actor)
         synthesis = self.repository.begin_synthesis(record.id, fence, self.live_validator(actor))
         if synthesis is not None:
@@ -307,23 +300,7 @@ class CoordinatorService:
                     "resultDigest": digest,
                 },
             )
-            snapshot = self._runtime_command(
-                CompleteAttemptCommand,
-                snapshot,
-                "complete-attempt",
-                fence,
-                actor,
-                attempt_id=node.runtimeAttemptId,
-                detail="Validated specialist result persisted",
-            )
-            self._runtime_command(
-                CompleteAgentRunCommand,
-                snapshot,
-                "complete-run",
-                fence,
-                actor,
-                detail="Coordinated specialist execution completed",
-            )
+            self._finish_checkpoint_runtime(node.runtimeRunId, node.runtimeAttemptId, fence, actor)
             return self.repository.record_success(
                 record.id,
                 node.subtaskId,
@@ -354,19 +331,8 @@ class CoordinatorService:
             )
 
     def _recover_node(self, record, node, fence, actor):
-        checkpoints = (
-            self.runtime.repository.list_checkpoints(node.runtimeRunId)
-            if self.runtime.repository.load_run(node.runtimeRunId) is not None
-            else []
-        )
-        checkpoint = next(
-            (
-                item
-                for item in checkpoints
-                if item.attempt_id == node.runtimeAttemptId
-                and item.metadata.get("schemaName") == "coordination-specialist-result-v1"
-            ),
-            None,
+        checkpoint = self._recovery_checkpoint(
+            node.runtimeRunId, node.runtimeAttemptId, "coordination-specialist-result-v1"
         )
         if checkpoint is not None:
             metadata = checkpoint.metadata
@@ -389,6 +355,11 @@ class CoordinatorService:
                 fence=fence,
                 validate_live=self.live_validator(actor),
             )
+        # Durable results take precedence over dispatch ownership, including a
+        # restart that resumes the original lease. Without a result the same
+        # lease may still be executing inference; leave its dispatch untouched.
+        if node.dispatchLeaseFingerprint == sha256(fence.lease_token.encode()).hexdigest():
+            return self._required(record.id)
         snapshot = self.runtime.repository.load_run(node.runtimeRunId)
         if snapshot is not None and snapshot.state == AgentRunState.RUNNING:
             # The provider may have accepted this dispatch. Without a checkpoint
@@ -466,23 +437,7 @@ class CoordinatorService:
                     "inputsDigest": record.synthesis.inputsDigest,
                 },
             )
-            snapshot = self._runtime_command(
-                CompleteAttemptCommand,
-                snapshot,
-                "complete-attempt",
-                fence,
-                actor,
-                attempt_id=attempt_id,
-                detail="Validated synthesis persisted",
-            )
-            self._runtime_command(
-                CompleteAgentRunCommand,
-                snapshot,
-                "complete-run",
-                fence,
-                actor,
-                detail="Coordinator synthesis completed",
-            )
+            self._finish_checkpoint_runtime(record.synthesis.runtimeRunId, attempt_id, fence, actor)
             return self.repository.record_synthesis(
                 record.id,
                 attempt_id,
@@ -511,19 +466,8 @@ class CoordinatorService:
     def _recover_synthesis(self, record, fence, actor):
         attempt_id = record.synthesis.runtimeAttemptId
         assert attempt_id is not None
-        checkpoints = (
-            self.runtime.repository.list_checkpoints(record.synthesis.runtimeRunId)
-            if self.runtime.repository.load_run(record.synthesis.runtimeRunId) is not None
-            else []
-        )
-        checkpoint = next(
-            (
-                item
-                for item in checkpoints
-                if item.attempt_id == attempt_id
-                and item.metadata.get("schemaName") == "coordination-synthesis-result-v1"
-            ),
-            None,
+        checkpoint = self._recovery_checkpoint(
+            record.synthesis.runtimeRunId, attempt_id, "coordination-synthesis-result-v1"
         )
         if checkpoint is not None:
             metadata = checkpoint.metadata
@@ -545,6 +489,13 @@ class CoordinatorService:
                 fence=fence,
                 validate_live=self.live_validator(actor),
             )
+        # As for specialists, reconcile checkpoints before suppressing an
+        # apparently concurrent dispatch owned by this lease.
+        if (
+            record.synthesis.dispatchLeaseFingerprint
+            == sha256(fence.lease_token.encode()).hexdigest()
+        ):
+            return self._required(record.id)
         snapshot = self.runtime.repository.load_run(record.synthesis.runtimeRunId)
         if snapshot is not None and snapshot.state == AgentRunState.RUNNING:
             raise DomainError(
@@ -839,6 +790,28 @@ class CoordinatorService:
         normalize_safe_metadata(payload, field_name="coordinator_result")
         return payload
 
+    def _recovery_checkpoint(self, run_id, attempt_id, schema_name):
+        try:
+            checkpoints = (
+                self.runtime.repository.list_checkpoints(run_id)
+                if self.runtime.repository.load_run(run_id) is not None
+                else []
+            )
+        except (ValueError, TypeError) as exc:
+            # A malformed persisted envelope is not an absent result and must
+            # never permit another inference or suppress recovery indefinitely.
+            raise DomainError(
+                "COORDINATION_CHECKPOINT_INVALID", "Checkpoint contract validation failed.", 409
+            ) from exc
+        return next(
+            (
+                item
+                for item in checkpoints
+                if item.attempt_id == attempt_id and item.metadata.get("schemaName") == schema_name
+            ),
+            None,
+        )
+
     def _validated_checkpoint(self, checkpoint, result_type):
         try:
             result = result_type.model_validate_json("".join(checkpoint.metadata["resultChunks"]))
@@ -857,28 +830,50 @@ class CoordinatorService:
     def _finish_checkpoint_runtime(self, run_id, attempt_id, fence, actor):
         snapshot = self.runtime.repository.load_run(run_id)
         if snapshot.state == AgentRunState.RUNNING:
-            snapshot = self._runtime_command(
-                CompleteAttemptCommand,
-                snapshot,
-                "complete-attempt",
-                fence,
-                actor,
-                attempt_id=attempt_id,
-                detail="Validated specialist result persisted"
-                if snapshot.specification.requested_capabilities
-                else "Validated synthesis persisted",
-            )
+            checkpoint_id = snapshot.latest_checkpoint_id
+            try:
+                snapshot = self._runtime_command(
+                    CompleteAttemptCommand,
+                    snapshot,
+                    "complete-attempt",
+                    fence,
+                    actor,
+                    attempt_id=attempt_id,
+                    detail="Validated specialist result persisted"
+                    if snapshot.specification.requested_capabilities
+                    else "Validated synthesis persisted",
+                )
+            except (CommandConflictError, VersionConflictError):
+                # A concurrent checkpoint reconciler can finish this exact runtime
+                # while the original dispatch acknowledges it. Accept only the
+                # durable advancement; success still revalidates the checkpoint,
+                # lease and live authority in the coordinator transaction.
+                snapshot = self.runtime.repository.load_run(run_id)
+                if (
+                    snapshot.state not in {AgentRunState.CLAIMED, AgentRunState.SUCCEEDED}
+                    or snapshot.latest_checkpoint_id != checkpoint_id
+                ):
+                    raise
         if snapshot.state == AgentRunState.CLAIMED:
-            self._runtime_command(
-                CompleteAgentRunCommand,
-                snapshot,
-                "complete-run",
-                fence,
-                actor,
-                detail="Coordinated specialist execution completed"
-                if snapshot.specification.requested_capabilities
-                else "Coordinator synthesis completed",
-            )
+            checkpoint_id = snapshot.latest_checkpoint_id
+            try:
+                self._runtime_command(
+                    CompleteAgentRunCommand,
+                    snapshot,
+                    "complete-run",
+                    fence,
+                    actor,
+                    detail="Coordinated specialist execution completed"
+                    if snapshot.specification.requested_capabilities
+                    else "Coordinator synthesis completed",
+                )
+            except (CommandConflictError, VersionConflictError):
+                snapshot = self.runtime.repository.load_run(run_id)
+                if (
+                    snapshot.state != AgentRunState.SUCCEEDED
+                    or snapshot.latest_checkpoint_id != checkpoint_id
+                ):
+                    raise
 
     async def _call_with_heartbeat(self, fence, call):
         if self.task_leases is None:

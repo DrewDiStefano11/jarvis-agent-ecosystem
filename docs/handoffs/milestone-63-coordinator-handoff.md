@@ -76,7 +76,7 @@ synthesize, create artifacts, or emit another completion event.
 
 ## Migration
 
-Revision `20260907_11` extends `20260906_10` and stores one coordination JSON aggregate per active
+Revision `20260907_11` extends main's `20261002_si` self-improvement revision and stores one coordination JSON aggregate per active
 decomposition/runtime. It adds no competing decomposition table. Populated downgrade refuses data
 loss and instructs the operator to export coordination history. The Alembic graph has one head.
 
@@ -122,12 +122,11 @@ automatic reselection or recursive replanning. In-flight runtime records may req
 recovery after authority is revoked; the coordinator does not invent cleanup authority.
 
 Deterministic validation checks schema, bounded results, exact node/criteria/evidence and
-checkpoint integrity. It does not independently establish factual quality. The next priority
-is an independent Result Verification/Critic milestone. Persistent semantic memory, broad
+checkpoint integrity. It does not independently establish factual quality. Independent Result Verification/Critic work is outside PR #63. Persistent semantic memory, broad
 browser/GitHub/email/cloud tools, qualification-driven production routing and full-floor Office
 navigation remain deferred. Local autonomous execution remains disabled by default.
 
-## Validation record
+## Prior validation record (before October 5 reconciliation)
 
 - Exact starting main: `f130e47e61000120d10e62adcf286d12b8140bdb`.
 - Exact starting PR #63: `b48b90dc38047fc1ca8d188c552d740dd98d3bc2`.
@@ -153,3 +152,34 @@ navigation remain deferred. Local autonomous execution remains disabled by defau
 - Final complete backend tree: Ruff format/lint pass; **1334 passed, 2 skipped**
   (`pytest -q --basetemp=../../validation-pr63/final-backend -p no:cacheprovider`).
   One upstream Starlette/httpx deprecation warning; no failing tests.
+
+
+## October 5 main reconciliation and recovery invariant
+
+PR #63 was reconciled with main `ff11aba814b8caf67ca5b8f2af415e827e6ec63b`
+without changing PR #69 or the remote-operation/adaptive-replanning branches.
+The self-improvement foundation, API router, dependency compatibility repairs,
+and existing runtime contracts remain present. The single migration head is
+`20260907_11`, now following unchanged main revision `20261002_si`.
+Populated self-improvement history survives upgrade and supported rollback;
+coordination and self-improvement independently guard populated downgrade.
+Earlier disposable feature-branch databases must not be reused as main schemas.
+
+The P1 review finding “Recover checkpoints before suppressing same-lease dispatch”
+is addressed in both specialist and synthesis recovery. Durable checkpoint
+validation/reconciliation precedes the lease fingerprint check. Only a dispatch
+without a durable result can be suppressed as possibly still in flight. A new
+service can recover using the original unexpired persisted lease immediately.
+Malformed checkpoint envelopes block with `COORDINATION_CHECKPOINT_INVALID`.
+
+Normal acknowledgement and checkpoint recovery share runtime completion.
+Optimistic command conflicts are accepted only when durable state confirms the
+same checkpoint already advanced; the coordinator success transaction still
+revalidates checkpoint contents, live authority and the task fence. Tests cover
+four crash boundaries per stage, genuinely concurrent inference, concurrent
+checkpoint reconcilers, original acknowledgement racing recovery, cancellation,
+emergency stop, permission revocation and corrupted checkpoint envelopes.
+
+Current local validation and exact-head GitHub Actions/review results are
+recorded in PR #63's description after the candidate is pushed. The prior test
+counts above describe the older candidate only. No PR merge is authorized.

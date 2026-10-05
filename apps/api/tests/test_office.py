@@ -565,7 +565,7 @@ def test_migration_roundtrip_retains_identity_and_other_domain_data(office):
     actor = assign(app, repo)
     config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     config.set_main_option("script_location", str(Path(__file__).parents[1] / "migrations"))
-    config.set_main_option("sqlalchemy.url", str(app.state.engine.url))
+    config.set_main_option("sqlalchemy.url", str(app.state.engine.url).replace("%", "%%"))
     migration.downgrade(config, "20260905_06")
     assert "office_placements" not in inspect(app.state.engine).get_table_names()
     with repo.sessions() as session:

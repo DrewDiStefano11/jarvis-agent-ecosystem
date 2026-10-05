@@ -13,10 +13,11 @@ For the current integration and transfer state, read the [coordinator handoff](d
 - deterministic departments, five permanent agents, tasks, approvals, artifacts, notifications, and audit fixtures
 - installable PWA metadata, offline shell, reconnection states, HTTP refresh fallback, and a 320px mobile layout
 - YAML agent manifests validated by Pydantic
-- SQLite persistence through typed SQLAlchemy models and Alembic head `20260907_11`
+- SQLite persistence through typed SQLAlchemy models and Alembic head `20260907_11`, following main's self-improvement revision `20261002_si`
 - transactional outbox, durable idempotency keys, workflow runs, per-step checkpoints, and safe restart recovery
 - deterministic context assembly with provenance checks, trust ordering, redaction, injection signals, bounded truncation, durable manifests, and review gating
 - registered worker lifecycle, atomic task acquisition, renewable fencing tokens, attempt history, cancellation revocation, and expired-lease recovery
+- advisory self-improvement analysis and comparison records using durable evidence ([guide](docs/self-improvement.md))
 - disabled-by-default local planning/review worker with explicit runtime queueing, task fencing, fixed structured output, one repair call, durable staged recovery, and authorization-gated results
 
 ## Explicit non-capabilities

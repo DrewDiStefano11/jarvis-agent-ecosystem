@@ -20,8 +20,6 @@ files are never committed.
 from __future__ import annotations
 
 # Application imports follow the explicit repository API path setup.
-# ruff: noqa: E402
-
 import argparse
 import asyncio
 import json
@@ -193,11 +191,10 @@ def cmd_evaluate_local(args: argparse.Namespace) -> int:
 
 
 def cmd_production(args):
-    from sqlalchemy.engine import make_url
-
     from app.autonomy.evidence import InferenceIdentity
     from app.autonomy.harness import AutonomyHarness
     from app.main import create_app
+    from sqlalchemy.engine import make_url
 
     settings = Settings()
     url = make_url(settings.database_url)

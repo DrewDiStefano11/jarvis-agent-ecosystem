@@ -35,9 +35,13 @@ async function ready(url, child) {
   throw Error(`Startup timeout: ${url}; logs: ${output}`)
 }
 async function stop(child) {
-  if (child.exitCode !== null || child.signalCode !== null) return
+  if (child.exitCode !== null || child.signalCode !== null || child.startError) return
   const exited = new Promise(resolve => child.once('exit', resolve))
-  child.kill(); await exited
+  // Windows virtualenv redirectors own a child Python process; stop this
+  // harness's complete tree so the restart can reclaim its loopback port.
+  if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+  else child.kill('SIGTERM')
+  await exited
 }
 const subtask = (key, capability, dependsOn = []) => ({ key, title: `Produce ${key} evidence`, description: 'Compare concrete alternatives and include source provenance.', requiredCapabilities: [capability], dependsOn,
   preferredAgentId: null, deliverable: 'A structured comparison with source references', outputType: key === 'prototype' ? 'code_patch' : 'analysis', completionCriteria: ['Include five observable comparisons or passing validation cases.'] })

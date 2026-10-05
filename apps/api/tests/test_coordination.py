@@ -375,7 +375,7 @@ def test_populated_downgrade_preserves_history(app, prepared):
     coordinator, actor, graph = prepared
     record = coordinator.prepare(graph.taskId, graph.id, "coord-parent", actor)
     config = Config(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
-    config.set_main_option("sqlalchemy.url", str(app.state.engine.url))
+    config.set_main_option("sqlalchemy.url", str(app.state.engine.url).replace("%", "%%"))
     with pytest.raises(RuntimeError, match="Export coordination history"):
         command.downgrade(config, "20260906_10")
     assert coordinator.repository.current(graph.taskId) == record
@@ -992,6 +992,292 @@ async def test_lost_synthesis_ack_reuses_checkpoint(app, prepared, monkeypatch):
         record = await coordinator.run_once(record.id, fence, actor)
     assert record.status == "completed"
     assert len(router.coordinator_calls) == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["specialist", "synthesis"])
+@pytest.mark.parametrize(
+    "crash_after", ["checkpoint", "complete-attempt", "complete-run", "before-ack"]
+)
+async def test_restart_recovers_checkpoint_under_original_lease(
+    app, prepared, monkeypatch, stage, crash_after
+):
+    coordinator, actor, _, record, fence = claim_fixture(app, prepared)
+    coordinator.task_leases = app.state.task_leases
+    router = install_coordinator_router(app, coordinator)
+    if stage == "synthesis":
+        for _ in range(3):
+            record = await coordinator.run_once(record.id, fence, actor)
+    command = coordinator._runtime_command
+
+    def command_then_crash(command_type, snapshot, operation, *args, **kwargs):
+        result = command(command_type, snapshot, operation, *args, **kwargs)
+        if operation == crash_after:
+            raise KeyboardInterrupt("process died after durable command")
+        return result
+
+    def crash_before_ack(*args, **kwargs):
+        raise KeyboardInterrupt("process died before coordinator acknowledgement")
+
+    monkeypatch.setattr(coordinator, "_runtime_command", command_then_crash)
+    if crash_after == "before-ack":
+        monkeypatch.setattr(
+            coordinator.repository,
+            "record_success" if stage == "specialist" else "record_synthesis",
+            crash_before_ack,
+        )
+    with pytest.raises(KeyboardInterrupt):
+        await coordinator.run_once(record.id, fence, actor)
+    interrupted = coordinator.repository.current(record.taskId)
+    target = interrupted.nodes[0] if stage == "specialist" else interrupted.synthesis
+    assert target.status == "running"
+    assert target.attemptCount == 1
+    assert len(coordinator.runtime.repository.list_checkpoints(target.runtimeRunId)) == 1
+    calls_before_restart = len(router.coordinator_calls)
+    restarted = CoordinatorService(
+        app.state.repository,
+        app.state.identity_service,
+        app.state.agent_runtime_service,
+        router,
+        app.state.task_leases,
+    )
+    # No lease expiry or takeover: one invocation must consume the durable result.
+    assert restarted.repository.fence_for_worker(record.taskId, fence.worker_id) == fence
+    recovered = await restarted.run_available(fence.worker_id, actor, task_id=record.taskId)
+    target = recovered.nodes[0] if stage == "specialist" else recovered.synthesis
+    assert target.status == "succeeded"
+    assert target.attemptCount == 1
+    assert target.checkpointId
+    assert restarted.runtime.repository.load_run(target.runtimeRunId).state == "succeeded"
+    assert len(router.coordinator_calls) == calls_before_restart
+    assert recovered.modelDispatchCount == calls_before_restart
+    for _ in range(5):
+        recovered = await restarted.run_available(fence.worker_id, actor, task_id=record.taskId)
+        if recovered.status == "completed":
+            break
+    assert recovered.status == "completed"
+    assert app.state.repository.get_task_durable(record.taskId).status == "completed"
+    assert len(router.coordinator_calls) == 4
+    with app.state.repository.session_factory() as session:
+        assert session.get(TaskLeaseRow, record.taskId) is None
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(AuditEventRow)
+                .where(AuditEventRow.event_type == "coordination.completed")
+            )
+            == 1
+        )
+
+
+@pytest.mark.asyncio
+async def test_same_lease_concurrent_synthesis_has_one_model_call(app, prepared):
+    import asyncio
+
+    coordinator, actor, _, record, fence = claim_fixture(app, prepared)
+    router = install_coordinator_router(app, coordinator)
+    for _ in range(3):
+        record = await coordinator.run_once(record.id, fence, actor)
+    entered, release = asyncio.Event(), asyncio.Event()
+    synthesis = coordinator._synthesis_call
+    calls = []
+
+    async def held_synthesis(record, nodes):
+        calls.append(record.id)
+        entered.set()
+        await release.wait()
+        return await synthesis(record, nodes)
+
+    coordinator._synthesis_call = held_synthesis
+    first = asyncio.create_task(coordinator.run_once(record.id, fence, actor))
+    await entered.wait()
+    second = await coordinator.run_once(record.id, fence, actor)
+    assert second.synthesis.status == "running"
+    assert second.status == "synthesizing"
+    release.set()
+    result = await first
+    assert result.synthesis.status == "succeeded"
+    assert calls == [record.id]
+    assert len(router.coordinator_calls) == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["specialist", "synthesis"])
+async def test_same_lease_recovery_can_race_original_checkpoint_ack(
+    app, prepared, monkeypatch, stage
+):
+    import asyncio
+
+    coordinator, actor, _, record, fence = claim_fixture(app, prepared)
+    coordinator.task_leases = app.state.task_leases
+    router = install_coordinator_router(app, coordinator)
+    if stage == "synthesis":
+        for _ in range(3):
+            record = await coordinator.run_once(record.id, fence, actor)
+    restarted = CoordinatorService(
+        app.state.repository,
+        app.state.identity_service,
+        app.state.agent_runtime_service,
+        router,
+        app.state.task_leases,
+    )
+    command = coordinator._runtime_command
+
+    def recover_before_ack(command_type, snapshot, operation, *args, **kwargs):
+        result = command(command_type, snapshot, operation, *args, **kwargs)
+        if operation == "checkpoint":
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                recovered = pool.submit(
+                    asyncio.run,
+                    restarted.run_available(fence.worker_id, actor, task_id=record.taskId),
+                ).result(timeout=10)
+            target = recovered.nodes[0] if stage == "specialist" else recovered.synthesis
+            assert target.status == "succeeded"
+        return result
+
+    monkeypatch.setattr(coordinator, "_runtime_command", recover_before_ack)
+    result = await coordinator.run_once(record.id, fence, actor)
+    assert result.status == ("active" if stage == "specialist" else "completing")
+    target = result.nodes[0] if stage == "specialist" else result.synthesis
+    assert target.status == "succeeded"
+    assert target.attemptCount == 1
+    assert len(router.coordinator_calls) == (1 if stage == "specialist" else 4)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["specialist", "synthesis"])
+async def test_concurrent_same_lease_checkpoint_reconcilers_converge(
+    app, prepared, monkeypatch, stage
+):
+    import asyncio
+
+    coordinator, actor, _, record, fence = claim_fixture(app, prepared)
+    coordinator.task_leases = app.state.task_leases
+    router = install_coordinator_router(app, coordinator)
+    if stage == "synthesis":
+        for _ in range(3):
+            record = await coordinator.run_once(record.id, fence, actor)
+    command = coordinator._runtime_command
+
+    def checkpoint_then_crash(command_type, snapshot, operation, *args, **kwargs):
+        result = command(command_type, snapshot, operation, *args, **kwargs)
+        if operation == "checkpoint":
+            raise KeyboardInterrupt("process died after checkpoint")
+        return result
+
+    monkeypatch.setattr(coordinator, "_runtime_command", checkpoint_then_crash)
+    with pytest.raises(KeyboardInterrupt):
+        await coordinator.run_once(record.id, fence, actor)
+    barrier = threading.Barrier(2)
+
+    def recover():
+        restarted = CoordinatorService(
+            app.state.repository,
+            app.state.identity_service,
+            app.state.agent_runtime_service,
+            router,
+            app.state.task_leases,
+        )
+        command = restarted._runtime_command
+
+        def raced_completion(command_type, snapshot, operation, *args, **kwargs):
+            if operation == "complete-attempt":
+                barrier.wait(timeout=10)
+            return command(command_type, snapshot, operation, *args, **kwargs)
+
+        restarted._runtime_command = raced_completion
+        return asyncio.run(restarted.run_available(fence.worker_id, actor, task_id=record.taskId))
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(recover) for _ in range(2)]
+        results = [future.result(timeout=20) for future in futures]
+    for result in results:
+        assert result.status == ("active" if stage == "specialist" else "completing")
+        target = result.nodes[0] if stage == "specialist" else result.synthesis
+        assert target.status == "succeeded"
+        assert target.attemptCount == 1
+    assert len(router.coordinator_calls) == (1 if stage == "specialist" else 4)
+    with app.state.repository.session_factory() as session:
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(AuditEventRow)
+                .where(
+                    AuditEventRow.event_type
+                    == (
+                        "coordination.subtask_succeeded"
+                        if stage == "specialist"
+                        else "coordination.synthesis_succeeded"
+                    )
+                )
+            )
+            == 1
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["specialist", "synthesis"])
+@pytest.mark.parametrize(
+    "change", ["emergency_stop", "permission_revoked", "checkpoint_corrupt", "cancelled"]
+)
+async def test_same_lease_checkpoint_recovery_preserves_live_guards(
+    app, prepared, monkeypatch, stage, change
+):
+    from app.db.models import AgentRuntimeCheckpointRow
+
+    coordinator, actor, graph, record, fence = claim_fixture(app, prepared)
+    coordinator.task_leases = app.state.task_leases
+    router = install_coordinator_router(app, coordinator)
+    if stage == "synthesis":
+        for _ in range(3):
+            record = await coordinator.run_once(record.id, fence, actor)
+    command = coordinator._runtime_command
+
+    def persist_then_crash(command_type, snapshot, operation, *args, **kwargs):
+        result = command(command_type, snapshot, operation, *args, **kwargs)
+        if operation == "checkpoint":
+            raise KeyboardInterrupt("process died after checkpoint")
+        return result
+
+    monkeypatch.setattr(coordinator, "_runtime_command", persist_then_crash)
+    with pytest.raises(KeyboardInterrupt):
+        await coordinator.run_once(record.id, fence, actor)
+    interrupted = coordinator.repository.current(record.taskId)
+    target = interrupted.nodes[0] if stage == "specialist" else interrupted.synthesis
+    if change == "cancelled":
+        app.state.task_leases.cancel_task(graph.taskId)
+    else:
+        with app.state.repository.session_factory() as session, session.begin():
+            if change == "emergency_stop":
+                session.get(SystemStateRow, 1).emergency_stop = True
+            elif change == "permission_revoked":
+                for row in session.scalars(
+                    select(AgentPermissionAssignmentRow).where(
+                        AgentPermissionAssignmentRow.agent_id == actor.actor_id
+                    )
+                ):
+                    row.revoked_at = datetime.now(UTC) - timedelta(seconds=1)
+            else:
+                checkpoint = session.scalar(
+                    select(AgentRuntimeCheckpointRow).where(
+                        AgentRuntimeCheckpointRow.run_id == target.runtimeRunId
+                    )
+                )
+                checkpoint.contract_json = "{}"
+    restarted = CoordinatorService(
+        app.state.repository,
+        app.state.identity_service,
+        app.state.agent_runtime_service,
+        router,
+        app.state.task_leases,
+    )
+    recovered = await restarted.run_available(fence.worker_id, actor, task_id=record.taskId)
+    assert recovered.status == "blocked"
+    target = recovered.nodes[0] if stage == "specialist" else recovered.synthesis
+    assert target.status != "succeeded"
+    assert target.resultDigest is None
+    assert app.state.repository.get_task_durable(record.taskId).status != "completed"
+    assert len(router.coordinator_calls) == (1 if stage == "specialist" else 4)
 
 
 @pytest.mark.asyncio

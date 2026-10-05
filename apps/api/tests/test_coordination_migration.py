@@ -87,3 +87,48 @@ def test_populated_main_upgrade_preserves_task_and_supported_roundtrip(tmp_path)
             == "Populated upgrade"
         )
     engine.dispose()
+
+
+def test_upgrade_from_self_improvement_preserves_populated_history(tmp_path):
+    import json
+    from datetime import UTC, datetime
+
+    import pytest
+    from alembic.script import ScriptDirectory
+
+    config = migration_config(tmp_path / "self-improvement-upgrade.db")
+    assert ScriptDirectory.from_config(config).get_heads() == ["20260907_11"]
+    command.upgrade(config, "20261002_si")
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    payload = json.dumps({"immutable_evidence": "preserve self-improvement history"})
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO self_improvement_records (id,kind,baseline_id,created_at,payload) "
+                "VALUES (:id,:kind,:baseline_id,:created_at,:payload)"
+            ),
+            dict(
+                id="preserved-analysis",
+                kind="analysis",
+                baseline_id="preserved-baseline",
+                created_at=datetime.now(UTC),
+                payload=payload,
+            ),
+        )
+    engine.dispose()
+    command.upgrade(config, "head")
+    with engine.connect() as connection:
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20260907_11"
+        assert connection.scalar(text("SELECT payload FROM self_improvement_records")) == payload
+    engine.dispose()
+    command.downgrade(config, "20261002_si")
+    assert "task_coordinations" not in inspect(engine).get_table_names()
+    with pytest.raises(RuntimeError, match="Export self-improvement history"):
+        command.downgrade(config, "20260906_10")
+    with engine.connect() as connection:
+        assert connection.scalar(text("SELECT payload FROM self_improvement_records")) == payload
+        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20261002_si"
+    engine.dispose()
+    command.upgrade(config, "head")
+    assert "task_coordinations" in inspect(engine).get_table_names()
+    engine.dispose()
