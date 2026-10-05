@@ -7,12 +7,14 @@ PR 1 — independent result verification and critique.
 - Repository: `DrewDiStefano11/jarvis-agent-ecosystem`.
 - Branch: `codex/independent-result-verification`.
 - Isolated worktree: `.worktrees/independent-result-verification`.
-- Exact base: `6626c5c4e267b737d86f8883201450e946aa1831`.
+- Original base: `6626c5c4e267b737d86f8883201450e946aa1831`; reconciled main
+  `ff11aba814b8caf67ca5b8f2af415e827e6ec63b` includes merged #68.
 - Candidate head: the feature branch HEAD; exact pushed SHA will be recorded in the PR gate comments. Source implementation is based on the exact base above.
 - PR URL: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/69.
 - Merged milestones: none. PRs 2–4 have not started.
-- Concurrent #68 and #63: both open at latest GitHub inspection; untouched.
-- Migration head: exactly `20260906_10`; no migration added. Blank upgrade, populated downgrade to `20260729_04`, and re-upgrade passed.
+- #68 is merged. #63 belongs to another session and must remain untouched.
+- Migration head: exactly `20261002_si`, inherited from #68; #69 adds no migration.
+  Full-suite migration tests pass, including supported downgrade/re-upgrade behavior.
 
 ## Implementation and validation
 
@@ -125,3 +127,29 @@ check and passes with the fix. All 110 affected verifier/worker/review tests,
 backend Ruff, frontend typecheck/ESLint/101 Vitest tests/build and diff checks
 passed before the next coherent commit; exact final-SHA CI/review remain
 required. Continue independent remote-control development while those gates run.
+
+## Review cycle 4 and merged-main validation
+
+The exact `ef886be` review found the separate crash window after the verdict is
+committed but before the escalated plan-review checkpoint exists. Recovery now
+reads that persisted verdict before choosing transition permission. Twelve real
+worker tests cover both windows, all three nonpassing outcomes, revoked completion
+and revoked pause; existing verdicts are reused without duplicate inference.
+
+Main `ff11aba814b8caf67ca5b8f2af415e827e6ec63b` was merged cleanly into #69.
+The definitive full backend run passed 1,372 tests with two existing skips;
+44 diagnostic fixture setups exceeded Windows's path-length limit in this deep
+worktree. Both diagnostic modules passed all 52 tests when rerun from a verified
+short temporary root, covering all previously errored cases. Combined coverage
+accounts for all 1,416 passing tests and the two existing skips, without weakening
+tests or changing production behavior. Ruff, frontend typecheck/ESLint/101 tests/
+build, diff/artifact checks and the single Alembic head pass. Both actual API/
+worker/frontend browser smoke paths passed after main integration, including
+office completion/emergency stop and planning recovery. Cycle-5 final-SHA
+review and exact-head CI remain required; no waiting/polling loop is permitted.
+
+The independent remote worktree was fast-forwarded to merged main after saving
+and restoring every local change through a recoverable stash. Its dedicated
+disabled-by-default HTTPS gateway and native goal/runtime control integration
+are in development. Actual verified TLS submission/inspection/cancellation and
+transport/legacy-isolation acceptance passed. No remote PR or deployment exists.

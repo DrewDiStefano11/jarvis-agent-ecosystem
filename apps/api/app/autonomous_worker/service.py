@@ -1665,12 +1665,19 @@ class AutonomousWorkerService:
             self._authorize_recovery_action(snapshot, actor, "confirm_pause")
         else:
             review = self._durable_review_decision(execution, actor)
+            request = snapshot.specification.autonomous_execution
+            verdict = (
+                self.verifier.read(execution, actor)
+                if review is None and request is not None and request.verification_criteria
+                else None
+            )
+            needs_pause = (
+                review is not None and review.outcome is PlanReviewOutcome.ESCALATED
+            ) or (verdict is not None and verdict.outcome != "passed")
             self._authorize_recovery_action(
                 snapshot,
                 actor,
-                "confirm_pause"
-                if review is not None and review.outcome is PlanReviewOutcome.ESCALATED
-                else "complete_run",
+                "confirm_pause" if needs_pause else "complete_run",
             )
         if self._reconcile_cancelled_recovery(snapshot, actor, execution):
             return None

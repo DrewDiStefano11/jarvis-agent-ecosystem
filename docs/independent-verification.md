@@ -63,7 +63,8 @@ next milestone. Cancelled, stopped, revoked or stale-lease work cannot commit a
 late verdict or verified success. Verification itself runs no workspace tools.
 
 Recovery reads the durable review outcome before choosing transition authorization.
-An escalated verdict requires live pause permission, including when completion
+An escalated review or persisted nonpassing verdict requires live pause permission,
+including a crash before the plan-review record is saved and when completion
 permission has been revoked. Revoked pause permission still blocks recovery;
 the persisted verdict is reused without repeating worker or critic inference.
 
