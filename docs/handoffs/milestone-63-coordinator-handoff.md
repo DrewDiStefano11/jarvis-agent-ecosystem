@@ -165,7 +165,7 @@ Populated self-improvement history survives upgrade and supported rollback;
 coordination and self-improvement independently guard populated downgrade.
 Earlier disposable feature-branch databases must not be reused as main schemas.
 
-The P1 review finding ìRecover checkpoints before suppressing same-lease dispatchî
+The P1 review finding ‚ÄúRecover checkpoints before suppressing same-lease dispatch‚Äù
 is addressed in both specialist and synthesis recovery. Durable checkpoint
 validation/reconciliation precedes the lease fingerprint check. Only a dispatch
 without a durable result can be suppressed as possibly still in flight. A new
@@ -183,3 +183,15 @@ emergency stop, permission revocation and corrupted checkpoint envelopes.
 Current local validation and exact-head GitHub Actions/review results are
 recorded in PR #63's description after the candidate is pushed. The prior test
 counts above describe the older candidate only. No PR merge is authorized.
+
+The fresh P2 review finding "Bound the full specialist checkpoint payload" is
+addressed by measuring the complete serialized chunk payload, including criteria,
+contributor IDs and JSON escaping, before accepting new specialist or synthesis
+results. Admission reserves space for bounded model identity and runtime event
+metadata. Oversized output follows the existing bounded validation retry path.
+The wire fields and schema versions remain compatible. Previously persisted
+checkpoints retain their original schema validation and actual runtime bounds;
+recovery does not apply the new conservative admission budget retroactively.
+Regression tests cover oversized criteria/escaping, maximum identity overhead,
+large valid outputs through durable final completion, and recovery of prior
+checkpoints without another inference.

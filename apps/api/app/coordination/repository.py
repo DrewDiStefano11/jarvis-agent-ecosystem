@@ -684,7 +684,8 @@ class CoordinationRepository:
         try:
             checkpoint = json.loads(row.contract_json)
             result = result_type.model_validate_json(
-                "".join(checkpoint["metadata"]["resultChunks"])
+                "".join(checkpoint["metadata"]["resultChunks"]),
+                context={"persisted_checkpoint": True},
             )
             material = json.dumps(
                 result.model_dump(mode="json"),

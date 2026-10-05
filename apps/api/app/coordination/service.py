@@ -50,7 +50,12 @@ from app.models.agent_runtime import (
     normalize_safe_metadata,
 )
 from app.models.context import ContextAssembly
-from app.models.coordination import CoordinationRecord, SpecialistResult, SynthesisResult
+from app.models.coordination import (
+    CoordinationRecord,
+    SpecialistResult,
+    SynthesisResult,
+    checkpoint_result_chunks,
+)
 from app.models.decomposition import PlannedSubtask, topological_keys
 
 
@@ -783,8 +788,7 @@ class CoordinatorService:
         return response
 
     def _checkpoint_payload(self, result):
-        material = result.model_dump_json()
-        payload = {"resultChunks": [material[i : i + 2000] for i in range(0, len(material), 2000)]}
+        payload = {"resultChunks": checkpoint_result_chunks(result)}
         provider, model = result._inference_identity
         payload.update(provider=provider, model=model)
         normalize_safe_metadata(payload, field_name="coordinator_result")
@@ -814,7 +818,12 @@ class CoordinatorService:
 
     def _validated_checkpoint(self, checkpoint, result_type):
         try:
-            result = result_type.model_validate_json("".join(checkpoint.metadata["resultChunks"]))
+            # New output admission has a conservative envelope reserve. Existing
+            # checkpoints already passed the runtime's actual metadata/event
+            # limits; preserve that authority while checking schema and digest.
+            result = result_type.model_validate_json(
+                "".join(checkpoint.metadata["resultChunks"]), context={"persisted_checkpoint": True}
+            )
             digest = self._digest(result.model_dump(mode="json"))
             if (
                 checkpoint.integrity_digest != digest

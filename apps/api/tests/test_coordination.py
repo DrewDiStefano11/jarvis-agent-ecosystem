@@ -89,10 +89,11 @@ def app(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def prepared(app):
-    task_id, assembly_id, _ = setup(
-        app, proposal([node("a"), node("b"), node("c", deps=["a", "b"])]), auto=True
-    )
+def prepared(app, request):
+    subtasks = [node("a"), node("b"), node("c", deps=["a", "b"])]
+    if hasattr(request, "param"):
+        subtasks[0]["completionCriteria"] = request.param
+    task_id, assembly_id, _ = setup(app, proposal(subtasks), auto=True)
     graph = service(app).current(task_id)
     sessions = app.state.repository.session_factory
     with sessions() as session, session.begin():
@@ -221,6 +222,235 @@ def authority_snapshot(app):
                 for a in session.scalars(select(IdentityAgentRow).order_by(IdentityAgentRow.id))
             ),
         )
+
+
+@pytest.mark.parametrize(
+    "result_type,payload",
+    [
+        (
+            SpecialistResult,
+            dict(
+                subtaskId="bounded",
+                summary="s" * 8_000,
+                evidence=["e" * 1_000] * 4,
+                completionCriteriaSatisfied=["c" * 1_200] * 8,
+            ),
+        ),
+        (
+            SpecialistResult,
+            dict(
+                subtaskId="bounded",
+                summary='"' * 6_000,
+                evidence=["evidence"],
+                completionCriteriaSatisfied=["criterion"],
+            ),
+        ),
+        (
+            SpecialistResult,
+            dict(
+                subtaskId="bounded",
+                summary="summary",
+                evidence=["evidence"],
+                completionCriteriaSatisfied=["\\" * 1_200] * 8,
+            ),
+        ),
+        (SynthesisResult, dict(summary='"' * 6_000, contributingSubtaskIds=["bounded"])),
+    ],
+    ids=["full-criteria-budget", "escaped-summary", "escaped-criteria", "escaped-synthesis"],
+)
+def test_result_schema_rejects_uncheckpointable_serialized_payload(result_type, payload):
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="serialized size|checkpoint bound"):
+        result_type.model_validate(payload)
+
+
+@pytest.mark.parametrize("stage", ["specialist", "synthesis"])
+def test_large_accepted_result_fits_full_runtime_checkpoint_event(stage):
+    from app.models.agent_runtime import (
+        MAX_METADATA_JSON_LENGTH,
+        AgentRunCheckpoint,
+        AgentRuntimeEventType,
+        RuntimeEventEnvelope,
+        canonical_json,
+    )
+
+    result = (
+        SpecialistResult(
+            subtaskId="n" * 120,
+            summary="s" * 8_000,
+            evidence=["e" * 1_000] * 4,
+            completionCriteriaSatisfied=["c" * 650] * 8,
+        )
+        if stage == "specialist"
+        else SynthesisResult(
+            summary="s" * 16_000,
+            contributingSubtaskIds=[str(i) + "n" * 119 for i in range(12)],
+        )
+    )
+    result._inference_identity = ('"' * 120, "\\" * 200)
+    coordinator = object.__new__(CoordinatorService)
+    digest = coordinator._digest(result.model_dump(mode="json"))
+    metadata = {
+        **coordinator._checkpoint_payload(result),
+        "schemaName": f"coordination-{stage}-result-v1",
+        "resultDigest": digest,
+    }
+    if stage == "synthesis":
+        metadata["inputsDigest"] = "sha256:" + "0" * 64
+    now = datetime.now(UTC)
+    checkpoint = AgentRunCheckpoint(
+        checkpoint_id="checkpoint-" + "c" * 48,
+        run_id="coord-" + "r" * 48,
+        attempt_id="coord-" + "a" * 48,
+        checkpoint_sequence=1,
+        run_version=5,
+        event_sequence=5,
+        timestamp=now,
+        state_reference="s" * 160,
+        integrity_digest=digest,
+        resume_cursor="n" * 120,
+        metadata=metadata,
+    )
+    event = RuntimeEventEnvelope(
+        event_id="event-bounded-result",
+        event_type=AgentRuntimeEventType.CHECKPOINT_RECORDED,
+        run_id=checkpoint.run_id,
+        attempt_id=checkpoint.attempt_id,
+        sequence_number=5,
+        run_version=5,
+        timestamp=now,
+        payload={"checkpoint": checkpoint.model_dump(mode="json")},
+    )
+    assert len(canonical_json(event.payload)) <= MAX_METADATA_JSON_LENGTH
+    restored = result.__class__.model_validate_json("".join(checkpoint.metadata["resultChunks"]))
+    assert restored.model_dump() == result.model_dump()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("prepared", [[f"{i}:" + "c" * 1_198 for i in range(8)]], indirect=True)
+async def test_long_criteria_and_large_synthesis_persist_without_retry(app, prepared):
+    coordinator, actor, _, record, fence = claim_fixture(app, prepared)
+    coordinator.task_leases = app.state.task_leases
+
+    def script(stage, payload, count, content):
+        if stage == "SpecialistResult" and count == 1:
+            return content | {"summary": "s" * 6_500, "evidence": ["e" * 1_000]}
+        if stage == "SynthesisResult":
+            return content | {"summary": "s" * 16_000}
+        return content
+
+    router = install_coordinator_router(app, coordinator, script=script)
+    for _ in range(5):
+        record = await coordinator.run_once(record.id, fence, actor)
+    assert record.status == "completed", record.blockedReason
+    assert not record.failures
+    assert all(node.attemptCount == 1 and node.checkpointId for node in record.nodes)
+    assert record.synthesis.attemptCount == 1
+    assert len(router.coordinator_calls) == 4
+    assert len(record.nodes[0].resultSummary) == 6_500
+    assert len(record.synthesis.summary) == 16_000
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["specialist", "synthesis"])
+async def test_existing_checkpoint_keeps_authority_after_output_bound_tightens(
+    app, prepared, stage
+):
+    from pydantic import ValidationError
+
+    from app.models.agent_runtime import RecordCheckpointCommand
+
+    coordinator, actor, graph, record, fence = claim_fixture(app, prepared)
+    coordinator.task_leases = app.state.task_leases
+    router = install_coordinator_router(app, coordinator)
+    if stage == "specialist":
+        claimed = coordinator.claim_ready(record.id, fence, actor)
+        target = coordinator.repository.begin_attempt(
+            record.id,
+            claimed.subtaskId,
+            claimed.runtimeAttemptId,
+            fence,
+            coordinator.live_validator(actor),
+        )
+        planned = graph.subtasks[0]
+        result_type = SpecialistResult
+        payload = dict(
+            subtaskId=target.subtaskId,
+            summary="s" * 6_000 + '"' * 2_000,
+            evidence=["e" * 1_000] * 4,
+            completionCriteriaSatisfied=planned.completionCriteria,
+        )
+        agent_id, capabilities = target.assignedAgentId, tuple(planned.requiredCapabilities)
+    else:
+        for _ in range(3):
+            record = await coordinator.run_once(record.id, fence, actor)
+        record, nodes = coordinator.repository.begin_synthesis(
+            record.id, fence, coordinator.live_validator(actor)
+        )
+        target = record.synthesis
+        result_type = SynthesisResult
+        payload = dict(
+            summary="s" * 15_050 + '"' * 950,
+            contributingSubtaskIds=[node.subtaskId for node in nodes],
+        )
+        agent_id = coordinator.runtime.repository.load_run(
+            record.runtimeRunId
+        ).specification.agent_id
+        capabilities = ()
+    # Simulate a result admitted by the previous PR revision. It exceeds the new
+    # conservative admission budget but still fits the actual durable envelope.
+    with pytest.raises(ValidationError, match="checkpoint bound"):
+        result_type.model_validate(payload)
+    result = result_type.model_validate(payload, context={"persisted_checkpoint": True})
+    material = result.model_dump_json()
+    digest = coordinator._digest(result.model_dump(mode="json"))
+    metadata = dict(
+        resultChunks=[material[i : i + 2_000] for i in range(0, len(material), 2_000)],
+        schemaName=f"coordination-{stage}-result-v1",
+        resultDigest=digest,
+        provider="local-fake",
+        model="fixture-model",
+    )
+    if stage == "synthesis":
+        metadata["inputsDigest"] = record.synthesis.inputsDigest
+    snapshot = coordinator._start_runtime(
+        record,
+        run_id=target.runtimeRunId,
+        attempt_id=target.runtimeAttemptId,
+        agent_id=agent_id,
+        operation="Legacy durable checkpoint fixture",
+        capabilities=capabilities,
+        fence=fence,
+        actor=actor,
+    )
+    coordinator._runtime_command(
+        RecordCheckpointCommand,
+        snapshot,
+        "checkpoint",
+        fence,
+        actor,
+        checkpoint_id="checkpoint-legacy",
+        attempt_id=target.runtimeAttemptId,
+        state_reference=f"coordination:{record.id}:{stage}",
+        integrity_digest=digest,
+        resume_cursor=stage,
+        checkpoint_metadata=metadata,
+    )
+    calls = len(router.coordinator_calls)
+    restarted = CoordinatorService(
+        app.state.repository,
+        app.state.identity_service,
+        app.state.agent_runtime_service,
+        router,
+        app.state.task_leases,
+    )
+    recovered = await restarted.run_available(fence.worker_id, actor, task_id=record.taskId)
+    target = recovered.nodes[0] if stage == "specialist" else recovered.synthesis
+    assert target.status == "succeeded"
+    assert target.resultDigest == digest
+    assert target.checkpointId == "checkpoint-legacy"
+    assert len(router.coordinator_calls) == calls
 
 
 def test_prepare_and_claim_are_durable_idempotent_and_grant_zero_authority(app, prepared):

@@ -3,9 +3,27 @@
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import Field, PrivateAttr, field_validator, model_validator
+from pydantic import Field, PrivateAttr, ValidationInfo, field_validator, model_validator
 
+from app.models.agent_runtime import (
+    MAX_METADATA_JSON_LENGTH,
+    MAX_TEXT_LENGTH,
+    canonical_json,
+    normalize_safe_metadata,
+)
 from app.models.decomposition import DecompositionRecord, StrictModel, ready_keys
+
+
+def checkpoint_result_chunks(result: StrictModel) -> list[str]:
+    material = result.model_dump_json()
+    chunks = [material[i : i + MAX_TEXT_LENGTH] for i in range(0, len(material), MAX_TEXT_LENGTH)]
+    payload = normalize_safe_metadata({"resultChunks": chunks}, field_name="coordinator_result")
+    # Reserve space for bounded provider/model names, schema/digests and the
+    # generated runtime checkpoint envelope inside the checkpoint-recorded event.
+    # Measure the actual chunk encoding: JSON escapes can expand even short text.
+    if len(canonical_json(payload)) > MAX_METADATA_JSON_LENGTH - 2_000:
+        raise ValueError("Coordinator result exceeds durable checkpoint bound")
+    return chunks
 
 
 class CoordinatedSubtask(StrictModel):
@@ -93,10 +111,12 @@ class SpecialistResult(StrictModel):
     )
 
     @model_validator(mode="after")
-    def bounded_checkpoint_payload(self):
+    def bounded_checkpoint_payload(self, info: ValidationInfo):
         size = len(self.summary) + sum(map(len, self.evidence))
         if size > 12_000:
             raise ValueError("Specialist result exceeds durable checkpoint bound")
+        if not (info.context or {}).get("persisted_checkpoint"):
+            checkpoint_result_chunks(self)
         return self
 
 
@@ -107,9 +127,11 @@ class SynthesisResult(StrictModel):
     contributingSubtaskIds: list[str] = Field(min_length=1, max_length=12)
 
     @model_validator(mode="after")
-    def unique_contributors(self):
+    def unique_contributors(self, info: ValidationInfo):
         if len(set(self.contributingSubtaskIds)) != len(self.contributingSubtaskIds):
             raise ValueError("Duplicate synthesis contributor")
+        if not (info.context or {}).get("persisted_checkpoint"):
+            checkpoint_result_chunks(self)
         return self
 
 
