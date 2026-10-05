@@ -23,7 +23,7 @@ runtime checkpoint/audit/outbox machinery. A read-only authorized API exposes th
 durable structured verdict. Nonpassing results pause for operator review.
 Uncertain dispatch acknowledgements never cause a repeated reviewer call.
 
-- Focused verifier tests: 27 passed, including real workspace artifacts, live
+- Focused verifier tests: 29 passed, including real workspace artifacts, live
   loopback HTTP transport with deterministic inference, malformed reviewer repair,
   invented evidence rejection, restart recovery, cancellation, emergency stop,
   lease loss, and target revocation.
@@ -31,7 +31,7 @@ Uncertain dispatch acknowledgements never cause a repeated reviewer call.
   64 passed before the additional acceptance scenarios.
 - Ruff format and lint: pass, including root scripts with exact successful-main CI Ruff 0.16.10; no dependency manifest changed.
 - Frontend: typecheck, ESLint, 101 tests, build pass; no frontend source changes.
-- Full backend pytest: 1,320 passed, two existing skips in 663.36 seconds; output in ignored `.local/full-backend-1.log`. The two recovery/concurrency tests added after full-suite collection passed in the complete 27-test focused verifier run.
+- Review-fix full backend pytest: 1,324 passed, two existing skips in 632.60 seconds. The browser-fix full run is recorded in the PR body after it completes.
 - Original head `9ec92e2f4e48ee9dc19ead97a7b0f39d329f4669`: all four jobs passed in Actions run `37309997386`. Review-fix head requires new checks.
 - Codex reviewed original head `9ec92e2f4e48ee9dc19ead97a7b0f39d329f4669`, finding one P2: artifact criteria cannot be fulfilled in the planning lifecycle. The fix rejects them at specification validation, with Python/JSON regression tests and corrected capability documentation. Fresh final-head review remains required.
 - Review threads and merge gates: pending.
@@ -67,3 +67,31 @@ journal exists. Existing worker structural revisions retain their prior behavior
 The four infrastructure milestone PRs have explicit goal-scoped push/merge
 authority once all gates pass. Do not merge #68/#63 or delete feature branches.
 Software Factory-created software PRs must never self-merge under this policy.
+
+## October 5 pipeline update
+
+The updated goal explicitly permits independent/dependent preparation while CI
+runs, overriding the earlier strictly sequential start rule. Merge gates remain.
+
+- Runtime-browser attempt 2 of run `37319318730`, job `111894309964`, failed in
+  the live-office task-to-planning transition: task creation returned before the
+  frontend refresh completed, and `selectOption` targeted a detached selector.
+  The smoke now follows the completed task-created planning link and asserts
+  shared runtime task selection. Both actual local browser commands passed,
+  including live office worker completion and emergency stop; inference is fixture
+  data. Application behavior and assertions were not weakened.
+- Independent next work: `codex/remote-operation-control` in
+  `.worktrees/remote-operation-control`, based on exact main `6626c5c4e267b737d86f8883201450e946aa1831`,
+  with no #69 dependency. Authentication/RBAC core and nine isolated-database tests
+  pass locally; HTTP/WebSocket/UI integration, TLS boundary, mutation audit and
+  revocation/transport acceptance still need implementation. No PR exists yet.
+- Adaptive preparation: `codex/adaptive-correction-replanning` in its own worktree,
+  dependent on #69 head `7d3777ff08f4a50faa363b23416b39eebc823424`.
+  `docs/handoffs/adaptive-correction-preparation.md` maps required evidence and
+  current-main gaps. Existing graphs are planned work, not executable nodes;
+  full reassignment and verified-result replan reuse must not be claimed from
+  retry-only/component tests. Do not import #63's unmerged execution contracts.
+- #68/#63 remain separate, untouched work. Check GitHub before each PR boundary.
+- After each validated #69 push, request explicit final-SHA review and let CI run
+  asynchronously. Work on the independent remote milestone, then return at a
+  meaningful checkpoint. No repeated CI waiting/status loops.
