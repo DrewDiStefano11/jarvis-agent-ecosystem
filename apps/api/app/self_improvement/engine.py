@@ -200,6 +200,11 @@ def create_baseline(
                     Path(__file__).parents[1] / "model_qualification" / "metrics.py",
                     Path(__file__).parents[1] / "model_qualification" / "policy.py",
                     Path(__file__).parents[1] / "model_qualification" / "scoring.py",
+                    Path(__file__).parents[1] / "model_qualification" / "roles.py",
+                    Path(__file__).parents[1] / "model_qualification" / "profile.py",
+                    Path(__file__).parents[1] / "model_evaluation" / "cases.py",
+                    Path(__file__).parents[1] / "model_evaluation" / "report.py",
+                    Path(__file__).parents[1] / "model_providers" / "errors.py",
                 )
             }
         ),

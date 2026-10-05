@@ -138,6 +138,15 @@ are bounded at 2 MB, source count at 64, observations at 4096, findings/proposal
 at 256, and total serialized experiment criteria at 65,536. Overflow fails
 explicitly; repeated copies of the same artifact under aliases are rejected.
 Runtime time windows are normalized to UTC. No untrusted input is echoed in errors.
+Known cancellation, superseded-task and operator-control codes are observations
+without failure expectations. Provider faults, model-output validation failures
+and workflow faults retain separate attribution; unknown codes are workflow
+failures, never inferred model-quality failures.
+
+Each baseline seals its first complete advisory graph. An identical replay retains
+the original capture timestamp. Changed hypotheses or proposals under that same
+baseline ID fail explicitly; they never silently overwrite or discard content.
+Generating later hypothesis revisions remains deferred.
 
 ```powershell
 python scripts/jarvis_self_improve.py analyze --repo-sha <40-char-sha> `
@@ -182,6 +191,11 @@ this PR imports no #63 types. When both schema migrations are integrated, rebase
 the later migration onto the earlier one to maintain a single Alembic head and
 update the current database revision assertions. This PR is independently
 migratable on today's exact main; do not merge two sibling heads unchanged.
+
+The backend dependency stays on SQLAlchemy 2.0 (`>=2.0,<2.1`). SQLAlchemy 2.1
+changes SQLite URL rendering and percent decoding, which breaks existing Windows
+migration and literal-percent-path contracts. Supporting 2.1 requires separate
+validation of those contracts.
 
 Future, unimplemented evolution:
 

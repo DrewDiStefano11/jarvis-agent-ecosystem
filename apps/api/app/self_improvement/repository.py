@@ -1,5 +1,6 @@
 """Append-only bounded analysis records; unique content IDs arbitrate concurrency."""
 
+from copy import deepcopy
 from datetime import UTC, datetime
 
 from sqlalchemy import JSON, DateTime, String, select
@@ -41,6 +42,15 @@ class ImprovementRepository:
                 row = session.get(ImprovementRecordRow, id)
                 if row is None or row.kind != kind or row.baseline_id != baseline_id:
                     raise
+                comparable = deepcopy(payload)
+                if kind == "analysis":
+                    # A repeated capture has a new clock; retain the first clock.
+                    # Every other change is an explicit immutable-record conflict.
+                    comparable["baseline"]["created_at"] = row.payload["baseline"]["created_at"]
+                if comparable != row.payload:
+                    raise ValueError(
+                        "immutable analysis record conflicts with different content"
+                    ) from None
                 return row.payload
         return payload
 

@@ -11,9 +11,47 @@ from app.db.models import (
     TaskRow,
     ToolExecutionRow,
 )
+from app.model_providers.errors import ErrorCategory
 from app.models.self_improvement import SourceProvenance
 from app.self_improvement.adapters import observation
 from app.self_improvement.engine import digest
+
+CONTROL_CODES = frozenset(
+    {
+        "execution_cancelled",
+        "task_cancelled",
+        "task_completed_elsewhere",
+        "human_review_required",
+        "emergency_stop",
+        "execution_emergency_stopped",
+        "provider_execution_disabled",
+        "model_execution_disabled",
+    }
+)
+VALIDATION_CODES = frozenset(
+    {
+        "model_output_repair_exhausted",
+        "model_output_invalid",
+        "model_result_invalid",
+        "schema_validation_failed",
+        "validation_failed",
+        "invalid_json",
+        "malformed_json",
+    }
+)
+PROVIDER_CODES = frozenset(category.value for category in ErrorCategory) - CONTROL_CODES
+
+
+def model_failure_signal(code):
+    """Known code taxonomy; unknown workflow faults aren't model quality."""
+    normalized = code.lower()
+    if normalized in CONTROL_CODES:
+        return "control_condition", 1, None, "execution", "execution"
+    if normalized in PROVIDER_CODES:
+        return "provider_success", 0, 1, "reliability", "provider"
+    if normalized in VALIDATION_CODES:
+        return "validation_success", 0, 1, "model_role", "model_validation"
+    return "execution_success", 0, 1, "execution", "execution"
 
 
 class RuntimeHistorySource:
@@ -193,19 +231,17 @@ class RuntimeHistorySource:
                     provider=row.provider or "unknown",
                 )
                 if row.failure_code:
-                    metric = (
-                        "provider_success"
-                        if "provider" in row.failure_code or "timeout" in row.failure_code
-                        else "validation_success"
+                    metric, actual, expected, category, stage = model_failure_signal(
+                        row.failure_code
                     )
                     capture(
                         row.updated_at,
                         row.execution_id,
-                        "model",
+                        stage,
                         metric,
-                        0,
-                        expected=1,
-                        category="reliability" if metric == "provider_success" else "model_role",
+                        actual,
+                        expected=expected,
+                        category=category,
                         failure_code=row.failure_code,
                         **identity,
                     )

@@ -29,7 +29,7 @@ from app.self_improvement.engine import (
     validate_hypothesis,
 )
 from app.self_improvement.repository import ImprovementRecordRow, ImprovementRepository
-from app.self_improvement.runtime import RuntimeHistorySource
+from app.self_improvement.runtime import RuntimeHistorySource, model_failure_signal
 from app.self_improvement.service import ImprovementService
 
 NOW = datetime(2026, 10, 2, tzinfo=UTC)
@@ -722,3 +722,55 @@ def test_experiment_output_budget_prevents_multiplicative_payload_growth():
     )
     with pytest.raises(ValueError, match="output budget"):
         analyze(oversized)
+
+
+@pytest.mark.parametrize(
+    "code,metric,category,has_weakness",
+    [
+        ("execution_cancelled", "control_condition", "execution", False),
+        ("task_completed_elsewhere", "control_condition", "execution", False),
+        ("human_review_required", "control_condition", "execution", False),
+        ("provider_execution_disabled", "control_condition", "execution", False),
+        ("task_failed", "execution_success", "execution", True),
+        ("unknown_workflow_fault", "execution_success", "execution", True),
+        ("provider_unavailable", "provider_success", "reliability", True),
+        ("MODEL_OUTPUT_REPAIR_EXHAUSTED", "validation_success", "model_role", True),
+    ],
+)
+def test_runtime_failure_codes_preserve_quality_attribution(code, metric, category, has_weakness):
+    actual_metric, actual, expected, actual_category, stage = model_failure_signal(code)
+    assert (actual_metric, actual_category) == (metric, category)
+    record = source()
+    evidence = observation(
+        record, NOW, "execution-a", stage, metric, actual, expected=expected, category=category
+    )
+    captured = create_baseline(
+        repo_sha=SHA,
+        configuration_fingerprint=digest("config"),
+        safety_fingerprint=digest("safety"),
+        sources=(record,),
+        observations=(evidence,),
+    )
+    result = analyze(captured)
+    assert bool(result.weaknesses) == has_weakness
+    assert all(weakness.category == category for weakness in result.weaknesses)
+
+
+def test_changed_hypotheses_at_same_baseline_are_rejected_without_data_loss(database):
+    sessions, _, _ = database
+    original = analyze(baseline())
+    repository = ImprovementRepository(sessions)
+    repository.save_analysis(original)
+    hypothesis = ImprovementHypothesis(
+        id=digest("additional-hypothesis"),
+        weakness_id=original.weaknesses[0].id,
+        suspected_subsystem="planner",
+        explanation="Additional advisory interpretation",
+        confidence="low",
+        supporting_evidence_ids=original.weaknesses[0].evidence_ids,
+        information_needed=("Collect more cases",),
+    )
+    changed = original.model_copy(update={"hypotheses": (hypothesis,)})
+    with pytest.raises(ValueError, match="conflicts with different content"):
+        repository.save_analysis(changed)
+    assert repository.analysis(original.baseline.id) == original
