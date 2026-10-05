@@ -76,6 +76,10 @@ from app.models.domain import (
 )
 from app.office.router import router as office_router
 from app.office.service import OfficeService
+from app.remote_control.access import RemoteControlAccess
+from app.remote_control.gateway import RemoteGateway
+from app.remote_control.router import router as remote_control_router
+from app.remote_control.service import RemoteControlService
 from app.repositories.sqlalchemy import IdempotencyResult, SqlAlchemyRepository
 from app.repositories.task_leases import TaskLeaseRepository
 from app.self_improvement.router import router as self_improvement_router
@@ -279,6 +283,23 @@ def create_app(
         app.state.agent_runtime_repository,
         authorizer=IdentityRuntimeAuthorizer(app.state.identity_service),
     )
+    if settings.remote_control_enabled:
+        assert settings.remote_operator_token is not None
+        access = RemoteControlAccess(
+            app.state.identity_service, settings.remote_operator_id, settings.remote_operator_token
+        )
+        # Validate configuration without coupling worker restart to remote
+        # operator lifecycle. Every remote request rechecks active/enabled state.
+        access.identity.get_agent(settings.remote_operator_id)
+        app.state.remote_control_service = RemoteControlService(
+            access,
+            repository,
+            broker,
+            task_leases,
+            app.state.agent_runtime_service,
+            app.state.agent_runtime_repository,
+        )
+        app.include_router(remote_control_router)
     app.state.model_router = build_model_router(settings)
     app.state.model_execution_repository = ModelExecutionRepository(
         session_factory,
@@ -341,6 +362,8 @@ def create_app(
 
     @app.middleware("http")
     async def enforce_local_control_plane(request: Request, call_next):
+        if settings.remote_control_enabled:
+            return await call_next(request)
         if not _is_loopback_peer(request.client.host if request.client else None):
             return JSONResponse(
                 status_code=403,
@@ -1415,6 +1438,9 @@ def create_app(
         finally:
             broker.disconnect(websocket)
 
+    # Keep the remote boundary outside CORS and every other application middleware.
+    # Preflight responses must obey the same dedicated-route and transport checks.
+    app.add_middleware(RemoteGateway, settings=settings)
     return app
 
 

@@ -563,10 +563,18 @@ class SimulatorEngine:
         self.run_id = None
         return self.control
 
-    async def emergency_stop(self) -> None:
+    async def emergency_stop(self, *, authorize=None, actor_identity_id=None) -> None:
         async with self._step_lock:
+            if authorize is not None:
+                if not actor_identity_id:
+                    raise ValueError("Authorized system control requires a verified identity")
+                self.repository.emergency_stop = (
+                    self.repository.system_control_snapshot().emergencyStop
+                )
             if self.repository.emergency_stop:
                 return
+            previous_control = self.control.model_copy(deep=True)
+            was_resumed = self._resume.is_set()
             checkpointable = bool(
                 self.run_id and self.control.state in {"running", "paused", "recovery_required"}
             )
@@ -588,9 +596,38 @@ class SimulatorEngine:
                     {"emergencyStop": True},
                     "paused",
                 )
-            await self.broker.emit("system.emergency_stop", {"active": True})
+            options = (
+                {}
+                if authorize is None
+                else {
+                    "authorize": authorize,
+                    "system_emergency_stop": True,
+                    "source": "remote-operator",
+                    "audit": {
+                        "summary": "Remote operator activated emergency stop",
+                        "actorIdentityId": actor_identity_id,
+                    },
+                }
+            )
+            try:
+                await self.broker.emit("system.emergency_stop", {"active": True}, **options)
+            except Exception:
+                if not self.repository.emergency_stop:
+                    self.control = previous_control
+                    self._resume.set() if was_resumed else self._resume.clear()
+                raise
 
-    async def system_resume(self) -> None:
+    async def system_resume(self, *, authorize=None, actor_identity_id=None) -> None:
+        async with self._step_lock:
+            await self._system_resume_locked(
+                authorize=authorize, actor_identity_id=actor_identity_id
+            )
+
+    async def _system_resume_locked(self, *, authorize=None, actor_identity_id=None) -> None:
+        if authorize is not None:
+            if not actor_identity_id:
+                raise ValueError("Authorized system control requires a verified identity")
+            self.repository.emergency_stop = self.repository.system_control_snapshot().emergencyStop
         if not self.repository.emergency_stop:
             raise DomainError("EMERGENCY_STOP_NOT_ACTIVE", "Emergency stop is not active.", 409)
         self.repository.emergency_stop = False
@@ -598,4 +635,17 @@ class SimulatorEngine:
             if agent.status == "paused" and agent.previousStatus:
                 agent.status = agent.previousStatus
                 agent.previousStatus = None
-        await self.broker.emit("system.resumed", {"active": False})
+        options = (
+            {}
+            if authorize is None
+            else {
+                "authorize": authorize,
+                "system_emergency_stop": False,
+                "source": "remote-operator",
+                "audit": {
+                    "summary": "Remote operator cleared emergency stop",
+                    "actorIdentityId": actor_identity_id,
+                },
+            }
+        )
+        await self.broker.emit("system.resumed", {"active": False}, **options)

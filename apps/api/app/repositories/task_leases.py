@@ -105,6 +105,7 @@ class TaskLeaseRepository:
         previous: str | None = None,
         new: str | None = None,
         payload: dict[str, Any] | None = None,
+        actor_identity_id: str | None = None,
     ) -> None:
         state = session.get(SystemStateRow, 1)
         if state is None:
@@ -143,7 +144,7 @@ class TaskLeaseRepository:
             AuditEventRow(
                 id=f"audit-{uuid4().hex[:12]}",
                 event_type=event_type,
-                actor=worker_id or "system",
+                actor=actor_identity_id or worker_id or "system",
                 agent_id=None,
                 task_id=task_id,
                 approval_id=None,
@@ -153,7 +154,12 @@ class TaskLeaseRepository:
                 sequence_number=state.current_sequence_number,
                 event_session_id=state.event_session_id,
                 timestamp=now,
-                payload={"summary": summary, "payload": event_payload, "artifactIds": []},
+                payload={
+                    "summary": summary,
+                    "payload": event_payload,
+                    "artifactIds": [],
+                    **({"actorIdentityId": actor_identity_id} if actor_identity_id else {}),
+                },
                 schema_version="1.0",
             )
         )
@@ -740,9 +746,22 @@ class TaskLeaseRepository:
         self.repository.reload()
         return self.repository.tasks[task_id]
 
-    def cancel_task(self, task_id: str) -> Task:
+    def cancel_task(
+        self,
+        task_id: str,
+        *,
+        authorize: Callable[[Session], None] | None = None,
+        actor_identity_id: str | None = None,
+    ) -> Task:
+        if actor_identity_id is not None and authorize is None:
+            raise ValueError("Identity-attributed cancellation requires transaction authorization")
         now = datetime.now(UTC)
         with self._write() as session:
+            if authorize is not None:
+                session.execute(
+                    update(SystemStateRow).where(SystemStateRow.id == 1).values(updated_at=now)
+                )
+                authorize(session)
             task = session.get(TaskRow, task_id)
             if task is None:
                 raise DomainError("TASK_NOT_FOUND", "The task was not found.", 404)
@@ -780,6 +799,8 @@ class TaskLeaseRepository:
             task.updated_at = now
             task.payload = payload
             event_payload["task"] = payload
+            if actor_identity_id is not None:
+                event_payload["remoteOperatorId"] = actor_identity_id
             self._add_event(
                 session,
                 "task.cancel",
@@ -788,6 +809,7 @@ class TaskLeaseRepository:
                 previous=previous,
                 new="cancelled",
                 payload=event_payload,
+                actor_identity_id=actor_identity_id,
             )
         self.repository.reload()
         return self.repository.tasks[task_id]

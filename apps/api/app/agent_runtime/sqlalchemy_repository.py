@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import UTC, datetime
 from hashlib import sha256
 from threading import RLock
@@ -72,6 +75,18 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
         self.sessions = sessions
         self.outbox_max_attempts = outbox_max_attempts
         self._commit_lock = RLock()
+        self._commit_authorizer: ContextVar[Callable[[Session, AgentRunSnapshot], None] | None] = (
+            ContextVar("runtime_commit_authorizer", default=None)
+        )
+
+    @contextmanager
+    def authorize_commits(self, authorize: Callable[[Session, AgentRunSnapshot], None]):
+        """Apply a caller's additional policy within every scoped command commit."""
+        token = self._commit_authorizer.set(authorize)
+        try:
+            yield
+        finally:
+            self._commit_authorizer.reset(token)
 
     def _awaiting_run_lock(self, run_id: str, command_id: str) -> None:
         """Deterministic test seam for the run-lock contention window.
@@ -223,10 +238,20 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
         )
         try:
             with self._commit_lock, self.sessions.begin() as s:
-                if autonomous_admission and s.bind.dialect.name == "sqlite":
+                commit_authorizer = self._commit_authorizer.get()
+                if (
+                    autonomous_admission or commit_authorizer is not None
+                ) and s.bind.dialect.name == "sqlite":
                     # SQLite ignores FOR UPDATE. Acquire its write fence before
                     # reading either the replay record or the authoritative task.
                     s.execute(text("BEGIN IMMEDIATE"))
+                if commit_authorizer is not None:
+                    s.execute(
+                        update(SystemStateRow)
+                        .where(SystemStateRow.id == 1)
+                        .values(updated_at=datetime.now(UTC))
+                    )
+                    commit_authorizer(s, snapshot)
                 replay = self._replay_processed_command(s, run_id, processed_command)
                 if replay is not None:
                     return replay

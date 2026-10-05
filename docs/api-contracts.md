@@ -155,3 +155,25 @@ means creating and authorizing a new reviewed plan.
 This slice executes the fixed steps the operator reviewed. List/read observations are
 stored and displayed, but are not fed to another model for synthesis. It exposes no
 shell, Python, cloud, network, or unrestricted absolute-path tool.
+
+## Registry identity audit attribution
+
+Audit records may include `actorIdentityId` for an authenticated registry identity.
+This is distinct from the simulated-agent foreign key. Legacy responses can retain
+registry attribution through the existing `verifiedActorId` alias in `actorAgentId`;
+new remote records explicitly use `actorIdentityId`. The native
+append-only audit row stores the verified identity in its existing actor column;
+no token or credential is returned. Records without registry attribution retain
+their existing actor fields.
+
+## Authenticated remote operations
+
+Explicit remote mode adds typed `/api/remote` routes described in
+[remote operation](remote-operation.md). Responses retain native `data` envelopes
+and domain error codes. Goal/agent/audit pages contain `items` and nullable
+`nextOffset`. Graph and model-result inspection can return null. Status exposes
+durable stop, simulator/recovery status, event session and last sequence without
+database/host credentials. Runtime commands accept only native pause requests,
+resume and cancellation requests. OpenAPI remains authoritative locally; its
+documentation endpoints are unavailable on the dedicated TLS listener.
+Remote grants supplement native RBAC without widening worker/tool authority.
