@@ -26,6 +26,9 @@ CONTROL_CODES = frozenset(
         "execution_emergency_stopped",
         "provider_execution_disabled",
         "model_execution_disabled",
+        "local_provider_required",
+        "runtime_execution_not_eligible",
+        "model_result_review_required",
     }
 )
 VALIDATION_CODES = frozenset(
@@ -39,7 +42,12 @@ VALIDATION_CODES = frozenset(
         "malformed_json",
     }
 )
-PROVIDER_CODES = frozenset(category.value for category in ErrorCategory) - CONTROL_CODES
+PROVIDER_CODES = (
+    frozenset(category.value for category in ErrorCategory)
+    | {"no_local_provider_available", "model_execution_timeout"}
+) - CONTROL_CODES
+BUDGET_CODES = frozenset({"model_execution_budget_exceeded"})
+PLANNING_CODES = frozenset({"review_revision_requested", "review_revision_exhausted"})
 
 
 def model_failure_signal(code):
@@ -49,6 +57,10 @@ def model_failure_signal(code):
         return "control_condition", 1, None, "execution", "execution"
     if normalized in PROVIDER_CODES:
         return "provider_success", 0, 1, "reliability", "provider"
+    if normalized in BUDGET_CODES:
+        return "budget_success", 0, 1, "efficiency", "model_budget"
+    if normalized in PLANNING_CODES:
+        return "planning_review_success", 0, 1, "planning", "planning_review"
     if normalized in VALIDATION_CODES:
         return "validation_success", 0, 1, "model_role", "model_validation"
     return "execution_success", 0, 1, "execution", "execution"

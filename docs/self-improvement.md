@@ -146,6 +146,11 @@ Known cancellation, superseded-task and operator-control codes are observations
 without failure expectations. Provider faults, model-output validation failures
 and workflow faults retain separate attribution; unknown codes are workflow
 failures, never inferred model-quality failures.
+Worker availability/timeout codes are provider reliability evidence; budget
+exhaustion is efficiency evidence within the existing limits. Local-only and
+eligibility guards are control conditions, and bounded reviewer revision codes
+are planning evidence. These mappings never propose weakening policy guards or
+increasing the resource budget.
 
 Each baseline seals its first complete advisory graph. An identical replay retains
 the original capture timestamp. Changed hypotheses or proposals under that same
