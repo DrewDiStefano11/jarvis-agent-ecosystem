@@ -29,7 +29,11 @@ from app.self_improvement.engine import (
     validate_hypothesis,
 )
 from app.self_improvement.repository import ImprovementRecordRow, ImprovementRepository
-from app.self_improvement.runtime import RuntimeHistorySource, model_failure_signal
+from app.self_improvement.runtime import (
+    RuntimeHistorySource,
+    model_failure_signal,
+    tool_failure_signal,
+)
 from app.self_improvement.service import ImprovementService
 
 NOW = datetime(2026, 10, 2, tzinfo=UTC)
@@ -800,3 +804,50 @@ def test_changed_hypotheses_at_same_baseline_are_rejected_without_data_loss(data
     with pytest.raises(ValueError, match="conflicts with different content"):
         repository.save_analysis(changed)
     assert repository.analysis(original.baseline.id) == original
+
+
+@pytest.mark.parametrize(
+    "code",
+    [
+        "TOOL_SCOPE_DENIED",
+        "TOOL_PATH_DENIED",
+        "TOOL_NOT_AUTHORIZED",
+        "TOOL_PLAN_CHANGED",
+        "TOOL_PATH_UNSAFE",
+        "TOOL_WORKSPACE_UNMARKED",
+        "TOOL_IO_LIMIT",
+        "EXECUTION_CANCELLED",
+    ],
+)
+def test_tool_policy_guards_do_not_create_execution_weaknesses(code):
+    metric, actual, expected, category, stage = tool_failure_signal(code)
+    assert (metric, expected) == ("control_condition", None)
+    record = source()
+    evidence = observation(
+        record,
+        NOW,
+        "tool-a",
+        stage,
+        metric,
+        actual,
+        expected=expected,
+        category=category,
+        failure_code=code,
+    )
+    captured = create_baseline(
+        repo_sha=SHA,
+        configuration_fingerprint=digest("config"),
+        safety_fingerprint=digest("safety"),
+        sources=(record,),
+        observations=(evidence,),
+    )
+    result = analyze(captured)
+    assert not result.weaknesses and not result.proposals
+    assert result.baseline.observations[0].failure_code == code
+
+
+@pytest.mark.parametrize(
+    "code", ["TOOL_RUNTIME_FAILED", "TOOL_WRITE_CONFLICT", "TOOL_PATH_NOT_FOUND"]
+)
+def test_genuine_tool_faults_remain_failed_execution_measurements(code):
+    assert tool_failure_signal(code) == ("tool_success", 0, 1, "execution", "tool")

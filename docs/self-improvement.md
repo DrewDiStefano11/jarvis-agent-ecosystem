@@ -151,6 +151,10 @@ exhaustion is efficiency evidence within the existing limits. Local-only and
 eligibility guards are control conditions, and bounded reviewer revision codes
 are planning evidence. These mappings never propose weakening policy guards or
 increasing the resource budget.
+Tool grant/scope/path/plan denials, unsafe or unmarked workspace guards, explicit
+resource limits and cancellation are also unscored control observations. They
+retain their original failure-code references without creating handler-fix
+proposals. Genuine tool execution faults retain failed tool-success measurements.
 
 Each baseline seals its first complete advisory graph. An identical replay retains
 the original capture timestamp. Changed hypotheses or proposals under that same

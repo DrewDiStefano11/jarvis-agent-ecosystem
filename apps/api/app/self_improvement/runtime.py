@@ -48,6 +48,34 @@ PROVIDER_CODES = (
 ) - CONTROL_CODES
 BUDGET_CODES = frozenset({"model_execution_budget_exceeded"})
 PLANNING_CODES = frozenset({"review_revision_requested", "review_revision_exhausted"})
+TOOL_CONTROL_CODES = CONTROL_CODES | frozenset(
+    {
+        "tool_scope_denied",
+        "tool_path_denied",
+        "tool_not_authorized",
+        "tool_plan_changed",
+        "tool_execution_disabled",
+        "tool_worker_identity_mismatch",
+        "tool_plan_not_ready",
+        "tool_runtime_not_ready",
+        "tool_runtime_not_running",
+        "tool_runtime_paused",
+        "tool_target_inactive",
+        "tool_path_invalid",
+        "tool_path_unsafe",
+        "tool_workspace_unsafe",
+        "tool_workspace_unmarked",
+        "tool_workspace_marker_invalid",
+        "tool_io_limit",
+    }
+)
+
+
+def tool_failure_signal(code):
+    """Expected grant, path and resource fences are not handler defects."""
+    if code.lower() in TOOL_CONTROL_CODES:
+        return "control_condition", 1, None, "execution", "tool_control"
+    return "tool_success", 0, 1, "execution", "tool"
 
 
 def model_failure_signal(code):
@@ -277,14 +305,17 @@ class RuntimeHistorySource:
                 ToolExecutionRow.failure_code,
             ):
                 if row.failure_code:
+                    metric, actual, expected, category, stage = tool_failure_signal(
+                        row.failure_code
+                    )
                     capture(
                         row.updated_at,
                         row.execution_id,
-                        "tool",
-                        "tool_success",
-                        0,
-                        expected=1,
-                        category="execution",
+                        stage,
+                        metric,
+                        actual,
+                        expected=expected,
+                        category=category,
                         failure_code=row.failure_code,
                         task_id=row.task_id,
                     )
