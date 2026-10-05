@@ -63,6 +63,8 @@ def baseline(
     category="model_role",
     hard=False,
     expected=1,
+    model="unknown",
+    provider="unknown",
 ):
     record = provenance or source()
     observations = tuple(
@@ -78,6 +80,8 @@ def baseline(
             role="planner",
             hard_gate=hard,
             inference_mode="fixture",
+            model=model,
+            provider=provider,
         )
         for i, value in enumerate(values)
     )
@@ -257,6 +261,20 @@ def test_loosened_metric_threshold_cannot_improve():
     result = compare(baseline(), baseline((1, 1), expected=0))
     assert result.decision == "inconclusive"
     assert any("threshold" in r for r in result.reasons)
+
+
+@pytest.mark.parametrize(
+    "change", [{"model": "different-model"}, {"provider": "different-provider"}]
+)
+def test_model_or_provider_substitution_invalidates_comparison(change):
+    before = baseline(model="baseline-model", provider="baseline-provider")
+    unchanged_identity = baseline((1, 1), model="baseline-model", provider="baseline-provider")
+    assert compare(before, unchanged_identity).decision == "improved"
+    identities = {"model": "baseline-model", "provider": "baseline-provider", **change}
+    result = compare(before, baseline((1, 1), **identities))
+    assert result.decision == "inconclusive"
+    assert any("model/provider identity" in reason for reason in result.reasons)
+    assert not result.improved
 
 
 def test_removed_or_unmeasured_evidence_is_not_improvement():

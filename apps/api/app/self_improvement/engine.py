@@ -280,6 +280,13 @@ def compare_baselines(
         if (
             old is not None
             and new is not None
+            and (old.model, old.provider) != (new.model, new.provider)
+        ):
+            reasons.append(f"Changed model/provider identity: {label}; direct comparison invalid.")
+            continue
+        if (
+            old is not None
+            and new is not None
             and (old.direction, old.expected, old.hard_gate)
             != (new.direction, new.expected, new.hard_gate)
         ):

@@ -98,6 +98,10 @@ cannot retroactively prove historical metric producer provenance.
 Changed suite/schema/evaluator versions, suite digests, case identities/counts,
 policy definitions/thresholds, inference mode, evaluation bounds, source sets,
 metric definitions or safety fingerprints invalidate direct comparison. Candidate
+model/provider identities must also remain unchanged, even for proposals whose
+category permits future reassignment experiments. Explicit reassignment
+compatibility is deferred; v1 never attributes a substituted model's results to
+the original candidate change. Candidate
 repository/configuration must match its operator attestation. Source repository
 identities must match each baseline. Deleted tests, relaxed thresholds, suppressed
 failures, inflated retry budgets, unsafe fallback and increased permissions must
