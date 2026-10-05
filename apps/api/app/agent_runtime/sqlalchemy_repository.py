@@ -213,6 +213,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
         create=False,
         require_execution_enabled=False,
         execution_fence: RuntimeExecutionFence | None = None,
+        commit_guard=None,
     ):
         run_id = snapshot.specification.run_id
         events = tuple(events)
@@ -223,7 +224,9 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
         )
         try:
             with self._commit_lock, self.sessions.begin() as s:
-                if autonomous_admission and s.bind.dialect.name == "sqlite":
+                if (
+                    autonomous_admission or commit_guard is not None
+                ) and s.bind.dialect.name == "sqlite":
                     # SQLite ignores FOR UPDATE. Acquire its write fence before
                     # reading either the replay record or the authoritative task.
                     s.execute(text("BEGIN IMMEDIATE"))
@@ -277,6 +280,8 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                             "Autonomous planning requires a queued or retrying task. Refresh the task before creating or queueing a run.",
                             409,
                         )
+                if commit_guard is not None:
+                    commit_guard(s)
                 old = []
                 previous_state: str | None = None
                 if create:

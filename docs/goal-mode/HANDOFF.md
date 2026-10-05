@@ -1,4 +1,6 @@
-# Next Codex handoff — active implementation checkpoint
+# Historical AI Hub implementation checkpoint
+
+This records an earlier integration snapshot. The [current coordinator handoff](../handoffs/milestone-63-coordinator-handoff.md) supersedes its live-state, continuation and capability claims.
 
 ## 1. Mission and authority
 
@@ -122,10 +124,11 @@ The #54 → #55 → #56 lineage has been preserved without deleting that worktre
    Repair canonical geometry and validate real door/collider clearance; never waive all
    doors/colliders just to make a screenshot. A bounded cross-room follow-up is active
    in `codex/ultra-hub-integration`; publish any useful unfinished patch remotely.
-5. Workforce profiles/capabilities/target assignment work; autonomous selection of an
-   appropriate multi-agent team and adaptive task decomposition are not implemented.
+5. Workforce profiles/capabilities/target assignment, bounded team selection and persisted
+   decomposition now work. PR #63 adds bounded specialist execution and synthesis;
+   general adaptive replanning remains deferred.
 6. Documentation such as older `CODEX-HANDOFF.md`, continuation/local-setup boundaries
-   predates these integrations. This file and latest source take precedence. Update
+   predates these integrations. The current coordinator handoff and latest source take precedence. Update
    operator documentation when the tool integration acceptance is complete.
 7. PR integration is unfinished. Main still lacks #55/#56/#53/#57 product work at the
    recorded snapshot. Do not call the Hub finished or use main as proof of these features.
