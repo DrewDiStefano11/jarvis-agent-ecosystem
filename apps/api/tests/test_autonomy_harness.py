@@ -26,7 +26,12 @@ from app.autonomy.harness import (
     HarnessHooks,
     StrictJsonOutputEvaluation,
 )
-from app.autonomy.ports import EXPECTED_FIXTURE_STAGES, STAGE_PROVENANCE, Assignment, StageKind
+from app.autonomy.ports import (
+    EXPECTED_FIXTURE_STAGES,
+    STAGE_PROVENANCE,
+    Assignment,
+    StageKind,
+)
 from app.autonomy.production import ContextGroundingAdapter, RuntimeExecutionAdapter
 from app.autonomy.scenarios import (
     SCENARIO_NAMES,
@@ -72,8 +77,8 @@ def test_fixture_stages_are_explicitly_labeled() -> None:
     for stage in StageKind:
         if stage not in EXPECTED_FIXTURE_STAGES:
             assert provenance[stage.value] == "production"
-    assert STAGE_PROVENANCE[StageKind.DECOMPOSE].implementation == "fixture"
-    assert STAGE_PROVENANCE[StageKind.SYNTHESIZE].implementation == "fixture"
+    assert STAGE_PROVENANCE[StageKind.DECOMPOSE].implementation == "production"
+    assert STAGE_PROVENANCE[StageKind.SYNTHESIZE].implementation == "production"
 
 
 def test_evidence_json_round_trip_and_summary(tmp_path) -> None:

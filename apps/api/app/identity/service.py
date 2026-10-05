@@ -943,6 +943,8 @@ class IdentityService:
         permission_key: str,
         resource_type: str,
         resource_id: str,
+        *,
+        session=None,
     ) -> AuthorizationDecision:
         """Evaluate resource access for a known permission stable key.
 
@@ -950,8 +952,10 @@ class IdentityService:
         callers from deriving policy actions from stable keys or operation names
         while reusing the same resource-policy evaluator as ``check_resource_access``.
         """
+        from contextlib import nullcontext
+
         try:
-            with self.sessions() as s:
+            with nullcontext(session) if session is not None else self.sessions() as s:
                 permission = s.scalar(
                     select(IdentityPermissionRow).where(
                         IdentityPermissionRow.stable_key == permission_key,
@@ -983,7 +987,9 @@ class IdentityService:
                         reason_code="resource_type_mismatch",
                     )
                 action = permission.action
-            return self.check_resource_access(actor_id, resource_type, resource_id, action)
+            return self.check_resource_access(
+                actor_id, resource_type, resource_id, action, session=session
+            )
         except Exception:
             return AuthorizationDecision(
                 allowed=False,

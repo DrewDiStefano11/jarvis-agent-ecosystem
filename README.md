@@ -2,7 +2,7 @@
 
 Jarvis is a local AI Hub with durable planning, identity/RBAC, task leases, a runtime ledger, recovery and an office reflecting real workforce state. An explicitly enabled worker can call an approved loopback model and persist a reviewed plan. Separately authorized workspace plans can list/read bounded inputs and write files/reports inside marked local workspaces. The seeded demonstration remains available and distinct from actual autonomous work.
 
-For the current integration and transfer state, read [Next Codex handoff](docs/goal-mode/NEXT_CODEX_HANDOFF.md). The continuation is still undergoing final acceptance and PR integration; passing a checkpoint does not mean the whole mission is complete.
+For the current integration and transfer state, read the [coordinator handoff](docs/handoffs/milestone-63-coordinator-handoff.md). Validation and review gates are recorded separately from implementation claims.
 
 ## What works in the current local phase
 
@@ -13,15 +13,16 @@ For the current integration and transfer state, read [Next Codex handoff](docs/g
 - deterministic departments, five permanent agents, tasks, approvals, artifacts, notifications, and audit fixtures
 - installable PWA metadata, offline shell, reconnection states, HTTP refresh fallback, and a 320px mobile layout
 - YAML agent manifests validated by Pydantic
-- SQLite persistence through typed SQLAlchemy models and Alembic head `20260906_09`
+- SQLite persistence through typed SQLAlchemy models and Alembic head `20260907_11`, following main's self-improvement revision `20261002_si`
 - transactional outbox, durable idempotency keys, workflow runs, per-step checkpoints, and safe restart recovery
 - deterministic context assembly with provenance checks, trust ordering, redaction, injection signals, bounded truncation, durable manifests, and review gating
 - registered worker lifecycle, atomic task acquisition, renewable fencing tokens, attempt history, cancellation revocation, and expired-lease recovery
+- advisory self-improvement analysis and comparison records using durable evidence ([guide](docs/self-improvement.md))
 - disabled-by-default local planning/review worker with explicit runtime queueing, task fencing, fixed structured output, one repair call, durable staged recovery, and authorization-gated results
 
 ## Explicit non-capabilities
 
-Real execution is explicitly enabled and local-only. Workspace tools require separate approval of exact actions, file contents and scope; model text cannot authorize itself. Plans are fixed: read observations do not drive adaptive subsequent reasoning. Code/shell execution, browser research, Git/GitHub, email/calendar/cloud services, spending and autonomous team decomposition are not implemented. Demo agents and their metrics/artifacts remain simulated. This is a trusted loopback application, not a publicly authenticated service.
+Real execution is explicitly enabled and local-only. Workspace tools require separate approval of exact actions, file contents and scope; model text cannot authorize itself. Ready team decompositions can execute assigned intellectual specialist work through the existing local model router, validate checkpoints, progress dependencies, retry within bounds, and synthesize a durable final result. Stale authority or graph inputs require operator reconciliation. Workspace plans remain fixed: read observations do not drive adaptive subsequent reasoning. Code/shell execution, browser research, Git/GitHub, email/calendar/cloud services and spending are unavailable. Demo agents and their metrics/artifacts remain simulated. This is a trusted loopback application, not a publicly authenticated service.
 
 **Planning** submits local plans, exposes exact workspace action review and displays durable model/tool results. **Business Lab** groups objectives and history using the same tasks and workforce. **Office** reuses the original prototype floor, camera and sprites, with durable placements and a limited verified route catalog; candidate geometry outside that catalog remains unapproved. See the [local setup guide](docs/goal-mode/local-setup.md), [workspace guide](docs/goal-mode/workspace-tools.md) and [acceptance harness](docs/WORKSPACE_ACCEPTANCE.md).
 

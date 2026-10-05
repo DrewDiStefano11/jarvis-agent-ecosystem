@@ -16,4 +16,17 @@ Revision `20260729_05` adds one focused `model_executions` table for the Phase 2
 
 Revision `20260905_06` makes convergence of active, open-ended permission grants a database invariant. Separate partial unique indexes cover global and resource-scoped grants while preserving finite schedules and revoked append-only history. Upgrade refuses legacy duplicate open grants so an operator can repair the history explicitly instead of having a migration silently discard or rewrite authorization records.
 
+PR #63 adds coordination revision `20260907_11` after current main's
+`20261002_si` self-improvement revision, which itself follows `20260906_10`.
+The revision identifiers are opaque; Alembic's `down_revision` chain determines
+order. There is one head, `20260907_11`. Upgrade from a populated main database
+preserves self-improvement records and adds `task_coordinations`. Empty coordination
+downgrade to `20261002_si` leaves self-improvement history intact. Both tables
+independently refuse downgrade while populated; export retained history first.
+Blank upgrade and supported downgrade to `20260729_04`/re-upgrade are tested.
+
+Earlier unmerged PR #63 validation databases stamped `20260907_11` used a different
+predecessor. Use fresh disposable validation databases for this reconciled candidate;
+do not treat those older feature-branch databases as deployed main schemas.
+
 To intentionally start clean in development, stop the API, back up anything needed, and delete the database plus its `-wal` and `-shm` sidecars from `apps/api/data`; then run `python -m alembic upgrade head`. This destroys local durable state and should never be automated against an uncertain path. Do not edit SQLite tables manually.

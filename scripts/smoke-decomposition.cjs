@@ -35,9 +35,13 @@ async function ready(url, child) {
   throw Error(`Startup timeout: ${url}; logs: ${output}`)
 }
 async function stop(child) {
-  if (child.exitCode !== null || child.signalCode !== null) return
+  if (child.exitCode !== null || child.signalCode !== null || child.startError) return
   const exited = new Promise(resolve => child.once('exit', resolve))
-  child.kill(); await exited
+  // Windows virtualenv redirectors own a child Python process; stop this
+  // harness's complete tree so the restart can reclaim its loopback port.
+  if (process.platform === 'win32') execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+  else child.kill('SIGTERM')
+  await exited
 }
 const subtask = (key, capability, dependsOn = []) => ({ key, title: `Produce ${key} evidence`, description: 'Compare concrete alternatives and include source provenance.', requiredCapabilities: [capability], dependsOn,
   preferredAgentId: null, deliverable: 'A structured comparison with source references', outputType: key === 'prototype' ? 'code_patch' : 'analysis', completionCriteria: ['Include five observable comparisons or passing validation cases.'] })
@@ -54,7 +58,13 @@ const model = http.createServer(async (req, res) => {
     const blocked = JSON.stringify(payload.messages).includes('BLOCKED ACCEPTANCE')
     result = { objectiveSummary: 'Assess an AI clipping business and produce a bounded prototype.', subtasks: [subtask('research', 'research.market'), subtask('finance', 'business.financial-analysis', ['research']), subtask('prototype', 'software.backend', ['research'])] }
     if (blocked) result.subtasks.push(subtask('security', 'software.security', ['prototype']))
-  } else result = { schemaVersion: '1.0', summary: 'The validated specialist plan is ready for future coordination.', analysis: 'This is planning acceptance; no specialist work has executed.', recommendations: [{ title: 'Inspect the work plan', description: 'Review deliverables and dependency inputs.', priority: 'high' }], risks: [{ title: 'Planned work only', description: 'Execution is deferred.', severity: 'low', mitigation: 'Coordinate in milestone 63.' }], assumptions: ['Deterministic transport fixture'], missingInformation: [], requiresHumanReview: false }
+  } else if (purpose === 'SpecialistResult') {
+    const input = JSON.parse(payload.messages[0].content.split('\n').slice(1).join('\n'))
+    result = { subtaskId: input.subtaskId, summary: `Fixture deliverable: ${input.title}`, evidence: ['Explicit deterministic transport fixture'], completionCriteriaSatisfied: input.completionCriteria }
+  } else if (purpose === 'SynthesisResult') {
+    const inputs = JSON.parse(payload.messages[0].content.split('\n').slice(1).join('\n'))
+    result = { summary: 'Durable fixture manager synthesis', contributingSubtaskIds: inputs.map(node => node.subtaskId) }
+  } else result = { schemaVersion: '1.0', summary: 'The validated specialist plan is ready for coordination.', analysis: 'Explicit deterministic planning transport fixture.', recommendations: [{ title: 'Inspect the work plan', description: 'Review deliverables and dependency inputs.', priority: 'high' }], risks: [], assumptions: ['Deterministic transport fixture'], missingInformation: [], requiresHumanReview: false }
   res.end(JSON.stringify({ model: 'fixture-model', message: { role: 'assistant', content: JSON.stringify(result) }, done: true, done_reason: 'stop', prompt_eval_count: 20, eval_count: 40 }))
 })
 
@@ -65,7 +75,7 @@ const model = http.createServer(async (req, res) => {
     const apiPort = await freePort(), webPort = await freePort()
     const base = `http://127.0.0.1:${apiPort}`, ui = `http://127.0.0.1:${webPort}`
     const db = `sqlite:///${path.join(output, 'acceptance.db').replaceAll('\\', '/')}`
-    const env = { ...process.env, JARVIS_DATABASE_URL: db, JARVIS_DATA_DIRECTORY: output,
+    const env = { ...process.env, PYTHONPATH: apiDir, JARVIS_DATABASE_URL: db, JARVIS_DATA_DIRECTORY: output,
       JARVIS_AUTONOMOUS_WORKER_ENABLED: 'false', JARVIS_MODEL_EXECUTION_MODE: 'disabled', JARVIS_MODEL_OLLAMA_ENABLED: 'false', JARVIS_MODEL_OPENAI_COMPATIBLE_ENABLED: 'false', JARVIS_MODEL_ALLOW_REMOTE: 'false', JARVIS_TOOL_EXECUTION_ENABLED: 'false', JARVIS_AUTO_MIGRATE: 'true', WEB_ORIGIN: ui }
     execFileSync(python, [path.join(root, 'scripts/decomposition-fixture.py'), '--database-url', db], { cwd: apiDir, env, stdio: 'pipe' })
     Object.assign(env, { JARVIS_MODEL_EXECUTION_MODE: 'local_only', JARVIS_MODEL_OLLAMA_ENABLED: 'true', JARVIS_MODEL_OLLAMA_BASE_URL: `http://127.0.0.1:${model.address().port}`, JARVIS_MODEL_OLLAMA_MODEL: 'fixture-model', JARVIS_MODEL_PROVIDER_PRIORITY: 'ollama', JARVIS_AUTONOMOUS_WORKER_ACTOR_ID: 'jarvis', JARVIS_AUTONOMOUS_WORKER_INSTANCE_ID: 'decomposition-smoke', JARVIS_AUTONOMOUS_WORKER_POLL_INTERVAL_MS: '100' })
@@ -97,6 +107,17 @@ const model = http.createServer(async (req, res) => {
       await pause(100)
     }
     assert.equal(executions.length, 1); assert.equal(executions[0].stage, 'completed')
+    let coordination
+    for (let i = 0; i < 300; i++) {
+      coordination = await request(`/api/tasks/${task.id}/coordination`)
+      if (coordination?.status === 'completed') break
+      if (['failed', 'blocked'].includes(coordination?.status)) throw Error(JSON.stringify(coordination))
+      await pause(100)
+    }
+    assert.equal(coordination.status, 'completed')
+    assert(coordination.nodes.every(node => node.status === 'succeeded' && node.checkpointId && node.provider === 'ollama'))
+    assert.equal(coordination.synthesis.status, 'succeeded')
+    assert.equal((await request(`/api/tasks/${task.id}`)).status, 'completed')
     await stop(worker)
     const blockedTask = await request('/api/tasks', { title: 'BLOCKED ACCEPTANCE', description: 'Evaluate the same business with security coverage.' })
     await request('/api/context/assemblies', { taskId: blockedTask.id, projectId: blockedTask.projectId ?? 'jarvis-agent-ecosystem', completionCriteria: 'Return a bounded specialist plan.' })
@@ -107,6 +128,7 @@ const model = http.createServer(async (req, res) => {
     api = start(python, ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', String(apiPort)], apiDir, env, 'api-restart')
     await ready(base + '/api/health', api)
     assert.deepEqual(await request(`/api/tasks/${task.id}/decomposition`), graph)
+    assert.deepEqual(await request(`/api/tasks/${task.id}/coordination`), coordination)
     const frontend = start('node', [path.join(web, 'node_modules/vite/bin/vite.js'), '--host', '127.0.0.1', '--port', String(webPort), '--strictPort'], web, { ...env, VITE_API_BASE_URL: base, VITE_WS_URL: `ws://127.0.0.1:${apiPort}/ws/events` }, 'web')
     await ready(ui, frontend)
     browser = await chromium.launch()
@@ -121,9 +143,12 @@ const model = http.createServer(async (req, res) => {
     await page.reload()
     await page.getByRole('button', { name: 'Open AI clipping business viability' }).click()
     await page.getByText('Version 1 · ready', { exact: true }).waitFor()
+    await page.getByRole('region', { name: 'Specialist execution' }).getByText('Durable fixture manager synthesis').waitFor()
     assert.equal(calls.filter(c => c.purpose === 'RequiredCapabilitiesResult').length, 2)
     assert.equal(calls.filter(c => c.purpose === 'DecompositionProposal').length, 2)
-    assert.equal(calls.length, 5)
+    assert.equal(calls.filter(c => c.purpose === 'SpecialistResult').length, 3)
+    assert.equal(calls.filter(c => c.purpose === 'SynthesisResult').length, 1)
+    assert.equal(calls.length, 9)
     assert(!JSON.stringify(calls).includes('EXTERNAL_PROMPT_NOT_FOR_DECOMPOSITION'))
     const plan = calls.find(c => !['RequiredCapabilitiesResult', 'DecompositionProposal'].includes(c.purpose))
     assert(JSON.stringify(plan).includes('VALIDATED PLANNED WORK'))
