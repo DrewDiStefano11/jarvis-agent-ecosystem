@@ -952,9 +952,9 @@ class IdentityService:
         callers from deriving policy actions from stable keys or operation names
         while reusing the same resource-policy evaluator as ``check_resource_access``.
         """
-        try:
-            from contextlib import nullcontext
+        from contextlib import nullcontext
 
+        try:
             with nullcontext(session) if session is not None else self.sessions() as s:
                 permission = s.scalar(
                     select(IdentityPermissionRow).where(

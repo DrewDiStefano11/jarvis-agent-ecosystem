@@ -19,14 +19,19 @@ files are never committed.
 
 from __future__ import annotations
 
+# Application imports follow the explicit repository API path setup.
 import argparse
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "apps" / "api"))
@@ -185,6 +190,63 @@ def cmd_evaluate_local(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_production(args):
+    from app.autonomy.evidence import InferenceIdentity
+    from app.autonomy.harness import AutonomyHarness
+    from app.main import create_app
+    from sqlalchemy.engine import make_url
+
+    settings = Settings()
+    url = make_url(settings.database_url)
+    if (
+        url.drivername != "sqlite"
+        or not url.database
+        or not Path(url.database).is_file()
+    ):
+        print(
+            "Production acceptance requires an existing migrated operator database.",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        asyncio.run(
+            build_local_provider(
+                settings, provider_name=args.provider, model=args.model
+            )
+        )
+    except EvaluationUnavailableError as exc:
+        print(f"Production acceptance unavailable: {exc}", file=sys.stderr)
+        return 2
+    previous = os.environ.get("JARVIS_AUTO_MIGRATE")
+    os.environ["JARVIS_AUTO_MIGRATE"] = "false"
+    try:
+        app = create_app(
+            database_url=settings.database_url, recover_interrupted_workflow=False
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("JARVIS_AUTO_MIGRATE", None)
+        else:
+            os.environ["JARVIS_AUTO_MIGRATE"] = previous
+    try:
+        evidence = AutonomyHarness.run_production(
+            app,
+            task_id=args.task_id,
+            worker_id=args.worker_id,
+            repo_sha=args.repo_sha or repo_sha(),
+            inference=InferenceIdentity(
+                mode="installed_local", provider=args.provider, model=args.model
+            ),
+        )
+        out = Path(args.out)
+        write_evidence_json(out / "production-autonomy.json", evidence)
+        write_markdown_summary(out / "production-autonomy.md", evidence)
+        print(f"production: {evidence.verdict} / {evidence.terminal_state}")
+        return 0 if evidence.verdict == "pass" else 1
+    finally:
+        app.state.engine.dispose()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -212,6 +274,19 @@ def build_parser() -> argparse.ArgumentParser:
     local.add_argument("--allow-repair", action="store_true")
     local.add_argument("--timeout-seconds", type=float, default=120.0)
     local.set_defaults(func=cmd_evaluate_local)
+    production = sub.add_parser(
+        "production",
+        help="Run production ports for an explicitly queued task; never grants authority",
+    )
+    production.add_argument(
+        "--out", default=str(ROOT / ".local" / "autonomy-acceptance")
+    )
+    production.add_argument("--repo-sha")
+    production.add_argument("--task-id", required=True)
+    production.add_argument("--worker-id", required=True)
+    production.add_argument("--provider", required=True)
+    production.add_argument("--model", required=True)
+    production.set_defaults(func=cmd_production)
     return parser
 
 

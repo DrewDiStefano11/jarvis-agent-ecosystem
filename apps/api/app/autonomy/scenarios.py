@@ -66,7 +66,7 @@ from app.autonomy.harness import (
     ResumeState,
     StrictJsonOutputEvaluation,
 )
-from app.autonomy.ports import STAGE_PROVENANCE, StageKind
+from app.autonomy.ports import FIXTURE_STAGE_PROVENANCE, StageKind
 from app.autonomy.production import (
     ContextGroundingAdapter,
     RuntimeExecutionAdapter,
@@ -304,7 +304,7 @@ def assemble_evidence(
                 "implementation": provenance.implementation,
                 "detail": provenance.detail,
             }
-            for provenance in (STAGE_PROVENANCE[stage] for stage in StageKind)
+            for provenance in (FIXTURE_STAGE_PROVENANCE[stage] for stage in StageKind)
         ),
         checks=tuple(checks),
         timeline=timeline if timeline is not None else harness.recorder.events,

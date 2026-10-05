@@ -36,6 +36,11 @@ single process only.
 
 ## Recorded validation
 
+- Final reconciled main `ee0dd09bf1825ab635e7a61d8fe2ae192f6e0444`: full backend
+  1,494 passed/two existing skips in 813.50 seconds; frontend typecheck/ESLint,
+  104 Vitest tests/build pass. API/script Ruff pass. Single inherited migration
+  head `20260907_11`. Remote authorization and native coordinator commit guards
+  both acquire the write fence before reads; both remain intact.
 - Access/goals/native leases: 23 passed.
 - Remote runtime/native runtime/leases: 39 passed.
 - Configuration/HTTP/actual TLS: 25 passed before final system additions.

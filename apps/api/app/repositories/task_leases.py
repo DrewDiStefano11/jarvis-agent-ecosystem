@@ -515,11 +515,14 @@ class TaskLeaseRepository:
         worker_id: str,
         lease_token: str,
         result_reference: str | None = None,
+        *,
+        allow_emergency_stop: bool = False,
     ) -> Task:
         now = datetime.now(UTC)
         with self._write() as session:
             lease = self._require_lease(session, task_id, worker_id, lease_token, now)
-            self._require_execution_enabled(session)
+            if not allow_emergency_stop:
+                self._require_execution_enabled(session)
             task = session.get(TaskRow, task_id)
             assert task is not None
             payload = dict(task.payload)
