@@ -164,3 +164,13 @@ Run [37498110186](https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/acti
 - Models reached the 1,500-second process watchdog with passing progress at 54%. Flushed phase records show all 32 admission tests took 481.96 seconds and the first 75 of 84 independent-verification tests took 411.28 seconds. Autonomy completed in about 808 test seconds and system in about 675. Admission now belongs to autonomy and independent verification to system. This balances measured file costs while keeping serial execution, exact collected-test union, all tests, and both timeout limits intact.
 
 Fresh exact-head hosted checks are required to establish merge readiness. These estimates do not guarantee runner timing: admission puts autonomy near 1,290 seconds, so inspect the next completed timings at a natural checkpoint. Old monolithic backend runs are not authoritative for reconciled feature heads.
+
+## Doctor test socket isolation
+
+The scripted `test_supervisor_not_running_is_degraded_not_blocked` scenario now
+uses an explicit offline TCP probe, like the adjacent diagnostic scenarios. A
+live unrelated listener on port 5173 previously made its overall readiness result
+blocked even though the test's HTTP provider was deliberately a fixture. This was
+reproduced on current main and the workspace-reservation branch. All supervisor
+and overall-status assertions remain unchanged; production socket/readiness
+behavior is unchanged. No real listener is stopped to satisfy a unit test.
