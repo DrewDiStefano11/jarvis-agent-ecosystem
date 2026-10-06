@@ -19,7 +19,10 @@ No Coordinator project marker was present; no shared board was created.
 
 Branch: `codex/research-retrieval-policy`.
 Worktree: `C:/Users/DDistefano/Documents/jarvis-agent-ecosystem/.worktrees/research-retrieval-policy`.
-Exact implementation head / PR / CI / review state: recorded at publication below.
+PR: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/74.
+Validated implementation commit: `19f5a9b7290e822ad5f8b5b42caee498ebda714c`.
+Hosted CI and exact-head Codex review are pending. The PR body and review request
+record the current publication head, including subsequent handoff-only commits.
 
 Additive pure URL, public-address, DNS-answer and redirect policy. No networking,
 HTTP route, model tool, database migration or execution authorization was added.
