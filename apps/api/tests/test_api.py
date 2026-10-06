@@ -167,6 +167,27 @@ def test_task_create_and_retry() -> None:
         assert retried.json()["data"]["retryCount"] == 1
 
 
+@pytest.mark.parametrize("retry_count", [0, 2])
+def test_failed_task_cannot_bypass_retry_via_pause_resume(retry_count) -> None:
+    with client() as api:
+        repository = api.app.state.repository
+        task = repository.get_task_durable("task-failed")
+        task.retryCount = retry_count
+        repository.tasks[task.id] = task
+        repository.persist()
+        with repository.session_factory() as session:
+            before = session.get(SystemStateRow, 1).current_sequence_number
+        paused = api.post("/api/tasks/task-failed/pause")
+        assert paused.status_code == 409
+        assert paused.json()["error"]["code"] == "TASK_NOT_PAUSABLE"
+        resumed = api.post("/api/tasks/task-failed/resume")
+        assert resumed.status_code == 409
+        assert repository.get_task_durable(task.id).status == "failed"
+        assert repository.get_task_durable(task.id).retryCount == retry_count
+        with repository.session_factory() as session:
+            assert session.get(SystemStateRow, 1).current_sequence_number == before
+
+
 def test_mutation_contracts_reject_unknown_fields_and_oversized_idempotency_keys() -> None:
     with client() as api:
         unknown = api.post(

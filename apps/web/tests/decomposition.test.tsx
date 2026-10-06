@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, expect, test, vi } from 'vitest'
 import { PlannedWork } from '../src/components/PlannedWork'
 import { useDecompositionState } from '../src/state/useDecompositionState'
@@ -21,11 +21,12 @@ afterEach(() => vi.unstubAllGlobals())
 
 test('shows planned owners, dependency outputs, criteria and explicit blocked state', () => {
   render(<PlannedWork record={record} error="" />)
-  expect(screen.getByText(/Market Researcher/)).toBeInTheDocument()
-  expect(screen.getByText(/Depends on: Compare markets/)).toBeInTheDocument()
-  expect(screen.getByText('Analyze economics · blocked')).toBeInTheDocument()
+  fireEvent.click(screen.getByText('Subtask details and deliverables'))
+  expect(screen.getByText(/Owner: Market Researcher/)).toBeInTheDocument()
+  expect(within(document.querySelector('.subtask-details')!).getByText(/Depends on: Compare markets/)).toBeInTheDocument()
+  expect(screen.getByText('Analyze economics · Planning readiness: blocked')).toBeInTheDocument()
   expect(screen.getByText('Include revenue and cost estimates.')).toBeInTheDocument()
-  expect(screen.getByText(/Specialists have not executed/)).toBeInTheDocument()
+  expect(screen.getByText(/Execution of these subtasks has not been confirmed/)).toBeInTheDocument()
 })
 
 test('reload reconstructs backend graph and stale requests cannot replace a new task', async () => {

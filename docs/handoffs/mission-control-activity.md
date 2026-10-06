@@ -38,3 +38,9 @@ Current main excludes Mission Control PRs above; no unmerged product code/contra
 ## Independent local review repair after #82 reconciliation
 
 User-authorized independent local review reproduced partial credential disclosure when a quoted password value crossed the 1,000-character summary or 2,000-character evidence limit. Bounded redaction now treats an unterminated recognized quoted assignment as sensitive through the end of the bounded input. Both quote styles and both bounds have regression coverage, including displayed/copied evidence. Processing stays bounded; no unrestricted scan or raw evidence export was added. All 121 frontend tests, typecheck, ESLint and build pass. Review must cover the final exact repaired SHA after common CI repair.
+
+## Main conflict reconciliation — 2026-10-06
+
+Merged main 4758891, including recently merged Mission Control shell, graph, approvals, task index, command, System and runtime history plus backlog and retrieval contracts. Only conflict was scripts/backend_ci_shards.json: retained main's complete manifest, including test_improvement_backlog.py and test_research_retrieval_contracts.py. Activity filtering, bounded disclosures and quoted-secret redaction are unchanged from reviewed head af250d2. Backend/CI workflow/manifest match main exactly; no other sessions' branches modified.
+
+Validation: all 181 frontend tests, typecheck, ESLint and production build pass. Backend Ruff and 62 isolated CI/backlog tests pass. backend_ci.py check collects 1736 tests and confirms shard coverage. Independent exact-head local review follows. Fresh CI is required before merge-ready; no automatic merge and no CI waiting.

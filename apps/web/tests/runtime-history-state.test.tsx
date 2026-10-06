@@ -1,0 +1,82 @@
+import { act, renderHook, waitFor } from '@testing-library/react'
+import { beforeEach, expect, it, vi } from 'vitest'
+import { request } from '../src/api/client'
+import { useRuntimeState } from '../src/state/useRuntimeState'
+import type { RuntimePage, RuntimeRun } from '../src/types/runtime'
+vi.mock('../src/api/client', () => ({ request: vi.fn() }))
+const read = vi.mocked(request)
+const run = (id: string, version = 1): RuntimeRun => ({ specification: { run_id: id, task_id: 'task', agent_id: 'worker', requested_operation: 'Plan', autonomous_execution: null }, state: 'queued', version, event_sequence_number: version, created_at: '2026-10-06T12:00:00Z', completed_at: null, started_at: null, last_heartbeat_at: null, latest_checkpoint_id: null, terminal_outcome: null, recovery_status: 'none', failure: null, blocking_reason: null, pause_reason: null, attempt_count: 0, status_detail: null, active_attempt_id: null })
+const page = (items: RuntimeRun[], next_offset: number | null): RuntimePage => ({ items, next_offset, total_count: items.length })
+function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes }); return { promise, resolve } }
+async function selected() {
+  const hook = renderHook(({ sync }) => useRuntimeState(sync), { initialProps: { sync: null as string | null } })
+  act(() => hook.result.current.selectActor('operator'))
+  await waitFor(() => expect(hook.result.current.pagesLoaded).toBe(1))
+  return hook
+}
+beforeEach(() => { read.mockReset() })
+it('uses the server cursor, blocks double clicks, keeps newest duplicate versions', async () => {
+  const pending = deferred<RuntimePage>()
+  read.mockResolvedValueOnce(page([run('a', 3)], 250)).mockReturnValueOnce(pending.promise)
+  const hook = await selected()
+  act(() => { void hook.result.current.loadMoreRuns(); void hook.result.current.loadMoreRuns() })
+  expect(read).toHaveBeenCalledTimes(2)
+  expect(read.mock.calls[1]).toEqual(['/api/agent-runtime/runs?limit=50&offset=250', { headers: { 'X-Jarvis-Actor-Id': 'operator' } }])
+  await act(async () => pending.resolve(page([run('a', 2), run('b', 4)], 400)))
+  expect(hook.result.current.runs.map(item => [item.specification.run_id, item.version])).toEqual([['a', 3], ['b', 4]])
+  expect(hook.result.current.pagesLoaded).toBe(2)
+  expect(hook.result.current.loadingMore).toBe(false)
+})
+it('counts empty authorized pages and stops at four requests', async () => {
+  read.mockResolvedValueOnce(page([], 250)).mockResolvedValueOnce(page([], 500)).mockResolvedValueOnce(page([], 750)).mockResolvedValueOnce(page([], 1000))
+  const hook = await selected()
+  for (let i = 0; i < 4; i++) await act(async () => { await hook.result.current.loadMoreRuns() })
+  expect(read).toHaveBeenCalledTimes(4)
+  expect(hook.result.current.pagesLoaded).toBe(4)
+  expect(hook.result.current.nextOffset).toBe(1000)
+})
+it('refresh supersedes a page; old completion cannot unlock the current request', async () => {
+  const older = deferred<RuntimePage>(), fresh = deferred<RuntimePage>()
+  read.mockResolvedValueOnce(page([run('a')], 50)).mockReturnValueOnce(older.promise).mockReturnValueOnce(fresh.promise)
+  const hook = await selected()
+  act(() => { void hook.result.current.loadMoreRuns(); void hook.result.current.refreshRuntime() })
+  await act(async () => older.resolve(page([run('obsolete')], 100)))
+  expect(hook.result.current.loading).toBe(true)
+  act(() => { void hook.result.current.loadMoreRuns() })
+  expect(read).toHaveBeenCalledTimes(3)
+  await act(async () => fresh.resolve(page([run('fresh')], 50)))
+  expect(hook.result.current.runs.map(item => item.specification.run_id)).toEqual(['fresh'])
+  expect(hook.result.current.pagesLoaded).toBe(1)
+})
+it('rejects stale actor replies', async () => {
+  const pending = deferred<RuntimePage>()
+  read.mockResolvedValueOnce(page([run('a')], 50)).mockReturnValueOnce(pending.promise).mockResolvedValueOnce(page([run('other')], null))
+  const hook = await selected()
+  act(() => { void hook.result.current.loadMoreRuns(); hook.result.current.selectActor('other-operator') })
+  await waitFor(() => expect(hook.result.current.runs[0]?.specification.run_id).toBe('other'))
+  await act(async () => pending.resolve(page([run('private')], 100)))
+  expect(hook.result.current.runs.map(item => item.specification.run_id)).toEqual(['other'])
+})
+it('failed authorized reads clear disclosures and stale cursors', async () => {
+  read.mockResolvedValueOnce(page([run('a')], 50)).mockRejectedValueOnce(new Error('Forbidden')).mockRejectedValueOnce(new Error('Offline'))
+  const hook = await selected()
+  await act(async () => { await hook.result.current.loadMoreRuns() })
+  expect(hook.result.current.runs).toEqual([])
+  expect(hook.result.current.executions).toEqual([])
+  expect(hook.result.current.nextOffset).toBeNull()
+  expect(hook.result.current.pagesLoaded).toBe(0)
+  expect(hook.result.current.error).toBe('Forbidden')
+  await act(async () => { await hook.result.current.refreshRuntime() })
+  expect(hook.result.current.nextOffset).toBeNull()
+  expect(hook.result.current.error).toBe('Offline')
+})
+it('task scope and ordered shared events replace loaded history', async () => {
+  read.mockResolvedValueOnce(page([run('a')], 50)).mockResolvedValueOnce(page([run('scoped')], null)).mockResolvedValueOnce([]).mockResolvedValueOnce(page([run('updated')], null)).mockResolvedValueOnce([])
+  const hook = await selected()
+  act(() => hook.result.current.setTaskId('task & one'))
+  await waitFor(() => expect(hook.result.current.runs[0]?.specification.run_id).toBe('scoped'))
+  expect(read.mock.calls[1]?.[0]).toBe('/api/agent-runtime/runs?limit=50&task_id=task%20%26%20one')
+  hook.rerender({ sync: 'next-event' })
+  await waitFor(() => expect(hook.result.current.runs[0]?.specification.run_id).toBe('updated'))
+  expect(hook.result.current.pagesLoaded).toBe(1)
+})
