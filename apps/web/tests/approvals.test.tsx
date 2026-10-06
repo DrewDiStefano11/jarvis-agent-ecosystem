@@ -55,3 +55,20 @@ test('backend rejection exposes error code without success claim',async()=>{
 })
 
 test('refusal acknowledges the actual rejected decision',async()=>{show();await userEvent.click(screen.getByRole('button',{name:'Reject'}));expect(screen.getByRole('status')).toHaveTextContent('Approval rejected.');expect(store.action).toHaveBeenCalledExactlyOnceWith('/api/approvals/a1/reject',{decisionNote:null})})
+
+test('a snapshot during submission cannot reconcile a later lost acknowledgement', async () => {
+ let reject!: (reason: Error) => void
+ store.action = vi.fn(() => new Promise<void>((_, fail) => { reject = fail })) as typeof store.action
+ const view = show()
+ await userEvent.click(screen.getByRole('button', {name: 'Approve'}))
+ store.lastSync = 'snapshot-during-request'
+ view.rerender(<MemoryRouter><Approvals/></MemoryRouter>)
+ await act(async () => reject(new TypeError('Ack lost')))
+ expect(screen.getByRole('button', {name: 'Approve'})).toBeDisabled()
+ expect(screen.getByRole('button', {name: 'Reject'})).toBeDisabled()
+ await userEvent.click(screen.getByRole('button', {name: 'Reject'}))
+ expect(store.action).toHaveBeenCalledOnce()
+ store.lastSync = 'snapshot-after-failure'
+ view.rerender(<MemoryRouter><Approvals/></MemoryRouter>)
+ expect(screen.getByRole('button', {name: 'Reject'})).toBeEnabled()
+})

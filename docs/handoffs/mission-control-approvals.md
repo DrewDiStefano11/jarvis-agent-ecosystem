@@ -33,3 +33,8 @@ Review allowance is exhausted on the GitHub Codex account. Exact-head review req
 ## Overlap and next work
 
 Active backend/research branches #70/#71/#72/#76/#77/#79 are not imported. This milestone avoids shell/Tasks/Details/Runtime/Workforce files owned by other Mission Control PRs. Next independent priority is bounded Activity evidence with timestamps/source, safe text, explicit truncation and copy. Talk to Jarvis/search should follow shell integration; contextual task recovery needs explicit task/run authority rather than generic first-failure selection. Continue the campaign from current merged main, reconciling overlaps first.
+
+
+## Independent local review repair after #82 reconciliation
+
+User-authorized independent local review found an in-flight snapshot could make a later lost acknowledgement's uncertainty baseline obsolete. The baseline now records the latest committed synchronization at failure through a ref, rather than submission-time closure state. Added a pending-request/snapshot/failure regression that proves Approve and Reject remain disabled until a subsequent snapshot. All 115 frontend tests, typecheck, ESLint and build pass; inherited backend checks pass. Backend terminal decision authority remains unchanged. Review must cover the final exact repaired SHA after common CI repair.

@@ -15,6 +15,8 @@ export function Approvals() {
   const [decisionError, setDecisionError] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const pending = useRef(false)
+  const latestSync = useRef(lastSync)
+  useEffect(() => { latestSync.current = lastSync }, [lastSync])
   const [uncertain, setUncertain] = useState<{ id: string; sync: string | null } | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [checkedAt, setCheckedAt] = useState(() => Date.now())
@@ -38,7 +40,7 @@ export function Approvals() {
     } catch (caught) {
       if (caught instanceof ApiError) setDecisionError(`${caught.message} (${caught.code}). Refresh the record before another decision.`)
       else {
-        setUncertain({ id: a.id, sync: lastSync })
+        setUncertain({ id: a.id, sync: latestSync.current })
         setDecisionError('Decision outcome could not be confirmed. Refresh state before retrying; the server may have recorded it. No automatic replay was sent.')
       }
     } finally { pending.current = false; setBusy(null) }
