@@ -35,7 +35,9 @@ interim/upgrade responses are rejected. Wire bytes have an independent bound
 endless stream of tiny chunk frames cannot bypass the decoded body budget.
 Only status 200 and textual MIME types (plain text, HTML, XHTML) are accepted.
 Compression and unknown/ambiguous charset parameters are rejected. UTF-8 or
-ASCII decoding must be valid; binary control bytes are rejected. Both declared
+ASCII decoding must be valid; decoded Unicode control characters (including DEL
+and C1 controls) are rejected except for the explicitly allowed tab, LF and CR.
+Both declared
 and streamed body size are bounded. All response/pool contexts close on failure
 or cancellation. Caller cancellation propagates as `CancelledError` so the native
 runtime can record its authoritative cancellation state.

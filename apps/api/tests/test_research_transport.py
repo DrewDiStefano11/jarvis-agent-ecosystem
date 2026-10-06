@@ -214,6 +214,8 @@ async def test_redirect_cycle_stops_at_hard_budget():
         ),
         (response(b"\xff"), "RESEARCH_CONTENT_UNSUPPORTED"),
         (response(b"\x00"), "RESEARCH_CONTENT_UNSUPPORTED"),
+        (response(b"\x7f"), "RESEARCH_CONTENT_UNSUPPORTED"),
+        (response("\u009b".encode()), "RESEARCH_CONTENT_UNSUPPORTED"),
         (
             response(headers=b"Content-Type: text/plain; charset=utf-16\r\n"),
             "RESEARCH_CONTENT_UNSUPPORTED",
@@ -304,6 +306,13 @@ async def test_prompt_injection_is_returned_only_as_untrusted_source_bytes():
     result = await client.retrieve("https://example.com")
     assert result.body == body
     assert len(connector.calls) == 1
+
+
+async def test_unicode_text_and_explicit_layout_controls_remain_supported():
+    body = "café\t漢字\n\r".encode()
+    client, connector = transport([response(body)])
+    assert (await client.retrieve("https://example.com")).body == body
+    assert connector.streams[0].closed
 
 
 async def test_redirect_cycle_is_rejected_before_second_connection():

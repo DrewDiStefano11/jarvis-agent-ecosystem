@@ -63,23 +63,28 @@ including handoff-only publication updates. This PR is stacked on #74.
 
 Pinned transport: `codex/research-pinned-transport`, worktree
 `C:/Users/DDistefano/Documents/jarvis-agent-ecosystem/.worktrees/research-pinned-transport`.
-New internal `app.research_transport`, explicit HTTPCore dependency, 26 passing
+New internal `app.research_transport`, explicit HTTPCore dependency, 29 passing
 deterministic transport tests, plus `docs/research-transport.md`. Depends on both
 prior slices. The three byte-identical contract-file snapshots used during
 validation were removed and replaced by the committed dependency #76 at
 `0eb663091c33483da78fe9f5f77fbcd81f3aefea`. Full backend run:
 1600 passed, two skips, 46 Windows MAX_PATH diagnostics setup errors. All
 diagnostics/report tests passed under a short isolated basetemp: 52 passed in
-189.52 seconds. All 124 affected policy/contract/transport tests pass after the
+189.52 seconds. All 127 affected policy/contract/transport tests pass after the
 policy repair. Ruff and all frontend gates pass. Inspect final dependency diff
 before publication; no native admission/persistence/recovery is claimed.
-Final dependency inspection and the 124-case affected suite pass on the actual
+Final dependency inspection and the 127-case affected suite pass on the actual
 stacked branch. Only transport module/tests, explicit HTTPCore dependency,
 transport documentation and this handoff are part of the transport diff.
 A final cancellation audit added explicit stream cleanup when TLS initialization
 is interrupted before the HTTP layer owns the connection. Its dedicated
 regression passes along with all transport cases. The temporary dependency
 snapshots were verified byte-identical before removal and are not committed.
+Exact-head review at `bad2ae1b1c70bb57a8ccb3139f0fe194b9f6e7f3` found P2
+acceptance of DEL and UTF-8 C1 controls. Both were reproduced with failing
+regressions. Validation now checks decoded Unicode category Cc, preserving tab,
+LF and CR; valid multilingual/layout text has positive coverage. All 29 transport
+tests and 127 combined affected cases pass. Fresh review is requested after push.
 PR: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/77.
 Validated implementation commit: `28c7eaff25b04cb0bc5e19b1c1444d6895395e1f`.
 Disabled by default, empty origin scope, no runtime/model registration. Hosted CI

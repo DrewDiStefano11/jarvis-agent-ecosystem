@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import socket
+import unicodedata
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -270,10 +271,13 @@ class ReadOnlyTransport:
                             fail("RESEARCH_RESPONSE_TOO_LARGE")
                         body.extend(chunk)
                     try:
-                        body.decode(encoding, errors="strict")
+                        decoded = body.decode(encoding, errors="strict")
                     except UnicodeError:
                         fail("RESEARCH_CONTENT_UNSUPPORTED")
-                    if any(value < 32 and value not in {9, 10, 13} for value in body):
+                    if any(
+                        unicodedata.category(char) == "Cc" and char not in "\t\n\r"
+                        for char in decoded
+                    ):
                         fail("RESEARCH_CONTENT_UNSUPPORTED")
                     return TransportText(
                         source_url,
