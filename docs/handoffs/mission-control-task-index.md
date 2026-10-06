@@ -24,3 +24,7 @@ Command milestone published: https://github.com/DrewDiStefano11/jarvis-agent-eco
 
 Reconciliation validation: all 113 frontend tests, typecheck, ESLint and build pass. Backend Ruff check/format pass (247 files). New CI watchdog tests initially lacked pytest-timeout in the shared interpreter; installed the declared plugin into an isolated visualization validation directory, leaving the shared environment unchanged, and reran with that directory on process-only PYTHONPATH. Final result must be recorded from terminal output before publication. Prior test failure was missing validation dependency, not a product regression. Browser product code unchanged from prior five-width actual API acceptance; no redundant rerun required for test/CI-only repair.
 Confirmed final backend result: 35 passed, 24 deselected, one existing Starlette warning, 10.49s. All required validation terminal and successful.
+
+## Latest main conflict reconciliation — 2026-10-06
+
+Reconciled with main 971b1d0 (merged shell #75, graph #80 and Approvals #83). Preserved feature work plus main's shell/navigation, task creation query state, task execution graph contracts and approval synchronization. Integration selectors reflect actual merged markup. Full frontend typecheck, ESLint, Vitest and production build pass; backend Ruff plus 41 isolated CI/authorization tests pass on the identical inherited backend. No backend or workflow divergence from main. Independent exact-head local re-review follows; hosted CI remains a gate. No merge is authorized and no CI waiting is planned.
