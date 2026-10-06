@@ -12,6 +12,8 @@
     "tests/test_model_qualification.py",
     "tests/test_planning_correction.py",
     "tests/test_planning_output_options.py",
+    "tests/test_remote_config.py",
+    "tests/test_remote_runtime_control.py",
     "tests/test_runtime_control_plane_hardening.py",
     "tests/test_task_leases.py",
     "tests/test_tool_execution_recovery.py"
@@ -30,6 +32,8 @@
     "tests/test_model_provider_adapters.py",
     "tests/test_persistence.py",
     "tests/test_planning_review_orchestration.py",
+    "tests/test_remote_goal_submission.py",
+    "tests/test_remote_http.py",
     "tests/test_task_projects.py",
     "tests/test_tool_execution.py"
   ],
@@ -49,6 +53,8 @@
     "tests/test_outbox_ordering.py",
     "tests/test_research_retrieval_contracts.py",
     "tests/test_research_url_policy.py",
+    "tests/test_remote_control_access.py",
+    "tests/test_remote_tls.py",
     "tests/test_tool_filesystem.py"
   ],
   "system": [
@@ -61,6 +67,7 @@
     "tests/test_model_provider_contracts.py",
     "tests/test_model_router.py",
     "tests/test_planning_http_golden_path.py",
+    "tests/test_remote_system_control.py",
     "tests/test_runtime_supervisor.py",
     "tests/test_self_improvement.py",
     "tests/test_task_corrections.py",

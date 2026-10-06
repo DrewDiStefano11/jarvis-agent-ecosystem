@@ -1,5 +1,6 @@
 """Opt-in correction through native worker/runtime/checkpoints with fixture inference."""
 
+import asyncio
 import json
 from copy import deepcopy
 
@@ -229,10 +230,10 @@ async def test_operator_control_blocks_correction_dispatch(tmp_path, control):
         service = app.state.autonomous_worker_service
         assert (await service.run_once(worker.id)).failureCode == "review_revision_requested"
         if control == "stop":
-            # The TestClient portal owns the simulator and broker event loop.
-            # Exercise the real operator route rather than crossing asyncio locks.
-            response = client.post("/api/system/emergency-stop")
-            assert response.status_code == 200
+            # The API lifespan owns simulator/broker locks on TestClient's loop.
+            # Invoke the operator action there, as a real HTTP request does.
+            response = await asyncio.to_thread(client.post, "/api/system/emergency-stop")
+            assert response.status_code == 200, response.text
             with pytest.raises(AutonomousWorkerError) as stopped:
                 await service.run_once(worker.id)
             assert stopped.value.code == "EXECUTION_EMERGENCY_STOPPED"

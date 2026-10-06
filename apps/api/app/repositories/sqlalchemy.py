@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.errors import DomainError
+from app.core.transitions import ACTIVE_STATES
 from app.db.models import (
     AgentRow,
     ApprovalRow,
@@ -238,6 +239,45 @@ class SqlAlchemyRepository:
                 raise DomainError("TASK_NOT_FOUND", "The task was not found.", 404)
             return Task.model_validate(row.payload)
 
+    def list_tasks_page(self, *, offset: int, limit: int) -> list[Task]:
+        if offset < 0 or not 1 <= limit <= 100:
+            raise ValueError("Task pages require bounded offset and limit")
+        with self.session_factory() as session:
+            rows = session.scalars(
+                select(TaskRow).order_by(TaskRow.created_at, TaskRow.id).offset(offset).limit(limit)
+            )
+            return [Task.model_validate(row.payload) for row in rows]
+
+    def task_audit_page(self, task_id: str, *, offset: int, limit: int) -> list[AuditEvent]:
+        if offset < 0 or not 1 <= limit <= 100:
+            raise ValueError("Audit pages require bounded offset and limit")
+        with self.session_factory() as session:
+            rows = session.scalars(
+                select(AuditEventRow)
+                .where(AuditEventRow.task_id == task_id)
+                .order_by(AuditEventRow.timestamp, AuditEventRow.id)
+                .offset(offset)
+                .limit(limit)
+            )
+            return [self._audit_from_row(row) for row in rows]
+
+    def system_control_snapshot(self):
+        from app.models.remote_control import RemoteSystemStatus
+
+        with self.session_factory() as session:
+            row = session.get(SystemStateRow, 1)
+            if row is None:
+                raise DomainError(
+                    "SYSTEM_STATE_UNAVAILABLE", "Durable system state is unavailable.", 503
+                )
+            return RemoteSystemStatus(
+                emergencyStop=row.emergency_stop,
+                simulatorStatus=row.simulator_status,
+                recoveryStatus=row.recovery_status,
+                eventSessionId=row.event_session_id,
+                lastSequenceNumber=row.current_sequence_number,
+            )
+
     def record_process_lifecycle(self, *, starting: bool) -> None:
         """Record API lifecycle without flushing cached worker-owned state."""
 
@@ -458,7 +498,7 @@ class SqlAlchemyRepository:
                     AuditEventRow(
                         id=item.id,
                         event_type=item.eventType,
-                        actor=actor or "system",
+                        actor=item.actorIdentityId or actor or "system",
                         agent_id=item.actorAgentId,
                         task_id=item.taskId,
                         approval_id=item.approvalId,
@@ -474,6 +514,11 @@ class SqlAlchemyRepository:
                             "summary": item.summary,
                             "payload": item.payload,
                             "artifactIds": item.artifactIds,
+                            **(
+                                {"actorIdentityId": item.actorIdentityId}
+                                if item.actorIdentityId
+                                else {}
+                            ),
                         },
                         schema_version="1.0",
                     )
@@ -491,6 +536,7 @@ class SqlAlchemyRepository:
             timestamp=row.timestamp,
             eventType=row.event_type,
             actorAgentId=actor_id,
+            actorIdentityId=row.payload.get("actorIdentityId"),
             taskId=row.task_id,
             previousState=row.previous_state,
             newState=row.new_state,
@@ -531,12 +577,14 @@ class SqlAlchemyRepository:
         payload: dict[str, object] | None = None,
         event_session_id: str | None = None,
         correlation_id: str = "phase-2-demo",
+        actor_identity_id: str | None = None,
     ) -> AuditEvent:
         item = AuditEvent(
             id=f"audit-{uuid4().hex[:12]}",
             timestamp=datetime.now(UTC),
             eventType=event_type,
             actorAgentId=agent_id,
+            actorIdentityId=actor_identity_id,
             taskId=task_id,
             previousState=previous,
             newState=new,
@@ -582,11 +630,22 @@ class SqlAlchemyRepository:
         created_context: tuple[ContextAssembly, Task] | None = None,
         updated_task: Task | None = None,
         authorize: Callable[[Session], None] | None = None,
+        system_emergency_stop: bool | None = None,
     ) -> dict[str, Any]:
+        if system_emergency_stop is not None and authorize is None:
+            raise ValueError("System control writes require fenced authorization")
         audit = envelope.pop("_audit", None)
-        persist_cache = created_task is None and created_context is None and updated_task is None
-        pending_checkpoint = self._pending_checkpoint if persist_cache else None
+        persist_cache = (
+            created_task is None
+            and created_context is None
+            and updated_task is None
+            and system_emergency_stop is None
+        )
+        pending_checkpoint = (
+            self._pending_checkpoint if persist_cache or system_emergency_stop is not None else None
+        )
         pending_workflow_run = self._pending_workflow_run if persist_cache else None
+        committed_agents = None
         try:
             with UnitOfWork(self.session_factory) as uow:
                 assert uow.session is not None
@@ -605,9 +664,9 @@ class SqlAlchemyRepository:
                 ).one_or_none()
                 if cursor is None:
                     raise RuntimeError("System state is unavailable.")
-                event_session_id, sequence_number = cursor
                 if authorize is not None:
                     authorize(session)
+                event_session_id, sequence_number = cursor
                 envelope.update(
                     {
                         "eventSessionId": event_session_id,
@@ -628,6 +687,7 @@ class SqlAlchemyRepository:
                         audit.get("payload") if isinstance(audit.get("payload"), dict) else None,
                         event_session_id=event_session_id,
                         correlation_id=str(envelope["correlationId"]),
+                        actor_identity_id=audit.get("actorIdentityId"),
                     )
                 if persist_cache:
                     self._persist_entities(session)
@@ -637,6 +697,27 @@ class SqlAlchemyRepository:
                         self._system.event_session_id = db_system.event_session_id
                     self._system.updated_at = datetime.now(UTC)
                     session.merge(self._system)
+                elif system_emergency_stop is not None:
+                    session.execute(
+                        update(SystemStateRow)
+                        .where(SystemStateRow.id == 1)
+                        .values(emergency_stop=system_emergency_stop)
+                    )
+                    committed_agents = self._persist_system_agent_control(
+                        session, system_emergency_stop
+                    )
+                    if pending_checkpoint is not None:
+                        payload = pending_checkpoint["payload"]
+                        payload["agentStatuses"] = {
+                            key: agent.status for key, agent in committed_agents.items()
+                        }
+                        payload["agentLocations"] = {
+                            key: agent.office.currentDestination
+                            for key, agent in committed_agents.items()
+                        }
+                        tasks = list(session.scalars(select(TaskRow)))
+                        payload["taskStatuses"] = {task.id: task.status for task in tasks}
+                        payload["taskProgressValues"] = {task.id: task.progress for task in tasks}
                 elif created_task is not None:
                     # The sequence update above serializes this write with worker
                     # commits. Never flush the API's stale task/agent cache here.
@@ -678,6 +759,8 @@ class SqlAlchemyRepository:
             raise
         if pending_workflow_run:
             self._pending_workflow_run = None
+        if committed_agents is not None:
+            self.agents = committed_agents
         if pending_checkpoint:
             self._system.last_checkpoint_id = pending_checkpoint["id"]
             self._system.simulator_status = pending_checkpoint["status"]
@@ -687,6 +770,36 @@ class SqlAlchemyRepository:
         if created_context is not None:
             self.context_assemblies[created_context[0].id] = created_context[0]
         return envelope
+
+    @staticmethod
+    def _persist_system_agent_control(session: Session, stop: bool) -> dict[str, Agent]:
+        """Read current agent projections under the control-plane write fence.
+
+        Update only the control fields. Task/lease state and other stale API
+        projections never enter this system-control commit.
+        """
+        agents = {}
+        for row in session.scalars(select(AgentRow)):
+            agent = Agent.model_validate(row.payload)
+            changed = False
+            if stop and agent.status in ACTIVE_STATES:
+                agent.previousStatus = agent.status
+                agent.status = "paused"
+                agent.statusMessage = "Paused by emergency stop"
+                changed = True
+            elif not stop and agent.status == "paused" and agent.previousStatus:
+                agent.status = agent.previousStatus
+                agent.previousStatus = None
+                agent.statusMessage = "Resumed after emergency stop"
+                changed = True
+            if changed:
+                row.status = agent.status
+                row.previous_status = agent.previousStatus
+                row.status_message = agent.statusMessage
+                row.payload = agent.model_dump(mode="json")
+                row.updated_at = datetime.now(UTC)
+            agents[row.id] = agent
+        return agents
 
     def _persist_created_context(self, session: Session, item: ContextAssembly, task: Task) -> None:
         row = session.get(TaskRow, task.id, with_for_update=True)

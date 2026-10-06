@@ -199,6 +199,7 @@ class AuditEvent(ContractModel):
     timestamp: datetime
     eventType: str
     actorAgentId: str | None = None
+    actorIdentityId: str | None = Field(default=None, min_length=1, max_length=120)
     taskId: str | None = None
     previousState: str | None = None
     newState: str | None = None

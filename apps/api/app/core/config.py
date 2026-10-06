@@ -26,6 +26,51 @@ class Settings(BaseSettings):
     sql_echo: bool = Field(False, alias="JARVIS_SQL_ECHO")
     auto_migrate: bool = Field(True, alias="JARVIS_AUTO_MIGRATE")
     simulator_auto_resume: bool = Field(False, alias="JARVIS_SIMULATOR_AUTO_RESUME")
+    remote_control_enabled: bool = Field(False, alias="JARVIS_REMOTE_CONTROL_ENABLED")
+    remote_operator_id: str = Field("", alias="JARVIS_REMOTE_OPERATOR_ID", max_length=120)
+    remote_operator_token: SecretStr | None = Field(None, alias="JARVIS_REMOTE_OPERATOR_TOKEN")
+    remote_origin: str = Field("", alias="JARVIS_REMOTE_ORIGIN", max_length=300)
+    remote_requests_per_minute: int = Field(
+        120, alias="JARVIS_REMOTE_REQUESTS_PER_MINUTE", ge=1, le=600
+    )
+
+    @model_validator(mode="after")
+    def validate_remote_control(self):
+        if not self.remote_control_enabled:
+            return self
+        from app.remote_control.access import TOKEN_PATTERN
+
+        if (
+            not self.remote_operator_id
+            or self.remote_operator_id != self.remote_operator_id.strip()
+        ):
+            raise ValueError("Remote control requires an exact existing operator identity")
+        if (
+            self.remote_operator_token is None
+            or TOKEN_PATTERN.fullmatch(self.remote_operator_token.get_secret_value()) is None
+        ):
+            raise ValueError("Remote control requires a strong base64url operator token")
+        origin = urlsplit(self.remote_origin)
+        if (
+            origin.scheme != "https"
+            or not origin.hostname
+            or origin.username is not None
+            or origin.password is not None
+            or origin.path not in {"", "/"}
+            or origin.query
+            or origin.fragment
+        ):
+            raise ValueError("Remote control requires a credential-free HTTPS origin")
+        try:
+            port = origin.port
+        except ValueError as exc:
+            raise ValueError("Remote HTTPS origin port is invalid") from exc
+        if port == 0:
+            raise ValueError("Remote HTTPS origin port is invalid")
+        if not self.database_url.startswith("sqlite"):
+            raise ValueError("Remote control currently requires the validated SQLite write fence")
+        return self
+
     outbox_poll_interval_ms: int = Field(
         250, alias="JARVIS_OUTBOX_POLL_INTERVAL_MS", ge=10, le=60_000
     )

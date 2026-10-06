@@ -134,8 +134,21 @@ class IdentityRuntimeAuthorizer(RuntimeAuthorizer):
         target = specification or (snapshot.specification if snapshot is not None else None)
         if target is None:
             raise RuntimePermissionDeniedError(metadata={"operation": operation})
+        return self.authorize_task(actor, operation, task_id=target.task_id, session=session)
+
+    def authorize_task(
+        self,
+        actor: RuntimeActorContext,
+        operation: str,
+        *,
+        task_id: str,
+        session: Session | None = None,
+    ) -> RuntimeAuthorizationContext:
+        """Use the same native policy for a goal without inventing a runtime run."""
+        from app.agent_runtime.errors import RuntimePermissionDeniedError
+
         permission_key = RUNTIME_PERMISSION_KEYS[operation]
-        resource_id = target.task_id
+        resource_id = task_id
         transaction = {"session": session} if session is not None else {}
         admin_decision = self.identity.check_permission_resource_access(
             actor.actor_id,

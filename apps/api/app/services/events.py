@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from fastapi import WebSocket
+from sqlalchemy.orm import Session
 
 from app.models.context import ContextAssembly
 from app.models.domain import EventEnvelope, Task
@@ -83,7 +84,8 @@ class EventBroker:
         created_task: Task | None = None,
         created_context: tuple[ContextAssembly, Task] | None = None,
         updated_task: Task | None = None,
-        authorize=None,
+        authorize: Callable[[Session], None] | None = None,
+        system_emergency_stop: bool | None = None,
     ) -> EventEnvelope:
         if not self.repository:
             self.sequence += 1
@@ -103,22 +105,26 @@ class EventBroker:
         if self.repository:
             if audit:
                 envelope["_audit"] = audit
+            authorization = {"authorize": authorize} if authorize is not None else {}
+            if system_emergency_stop is not None:
+                authorization["system_emergency_stop"] = system_emergency_stop
             try:
-                guarded = {"authorize": authorize} if authorize is not None else {}
                 if created_task is not None:
                     committed = self.repository.enqueue_event(
-                        envelope, idempotency, created_task=created_task, **guarded
+                        envelope, idempotency, created_task=created_task, **authorization
                     )
                 elif created_context is not None:
                     committed = self.repository.enqueue_event(
-                        envelope, idempotency, created_context=created_context, **guarded
+                        envelope, idempotency, created_context=created_context, **authorization
                     )
                 elif updated_task is not None:
                     committed = self.repository.enqueue_event(
-                        envelope, idempotency, updated_task=updated_task, **guarded
+                        envelope, idempotency, updated_task=updated_task, **authorization
                     )
                 else:
-                    committed = self.repository.enqueue_event(envelope, idempotency, **guarded)
+                    committed = self.repository.enqueue_event(
+                        envelope, idempotency, **authorization
+                    )
                 if committed is not None:
                     envelope = committed
                 event = EventEnvelope.model_validate(envelope)
