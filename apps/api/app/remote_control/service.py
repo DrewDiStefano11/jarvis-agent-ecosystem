@@ -136,11 +136,8 @@ class RemoteControlService:
                 )
 
         authorize()
-        current = self.repository.system_control_snapshot()
-        if current.emergencyStop == stop:
-            return current
         action = simulator.emergency_stop if stop else simulator.system_resume
-        await action(authorize=authorize, actor_identity_id=actor.actor_id)
+        await action(authorize=authorize, actor_identity_id=actor.actor_id, idempotent=True)
         return self.repository.system_control_snapshot()
 
     def active_agents(self, actor: RuntimeActorContext, *, offset: int, limit: int):

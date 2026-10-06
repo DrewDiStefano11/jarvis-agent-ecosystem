@@ -95,7 +95,10 @@ Emergency stop commits its native durable flag, audit and event without flushing
 stale API task cache over worker state, and fences completion. Clearing stop does
 not automatically resume simulation or forge worker acknowledgement. Duplicate
 desired-state system controls return current status. A committed stop survives
-lost acknowledgement, and retries do not duplicate its event. Runtime controls
+lost acknowledgement, and retries do not duplicate its event. Desired-state
+checks run under the simulator lock, including overlapping resume requests.
+Rejected resume commits restore paused agent memory; committed resumes survive
+lost acknowledgement without restoring the pre-resume state. Runtime controls
 retain native version/CAS and idempotent command replay.
 
 The process rate budget includes failed authentication/denied requests. Actual
@@ -103,6 +106,7 @@ streamed bodies are limited to 64 KiB within five seconds. The launcher limits
 concurrency to 16 and idle keepalive to five seconds. Goal/agent/audit page limits
 are 1–100 and offsets 0–100000; goal filtering scans at most five database pages
 per request and exposes no unauthorized count. Responses use `Cache-Control: no-store`.
+The same header applies to oversized and timed-out body rejection.
 
 ## Acceptance boundaries
 

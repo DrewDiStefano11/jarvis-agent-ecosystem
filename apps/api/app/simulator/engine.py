@@ -563,11 +563,14 @@ class SimulatorEngine:
         self.run_id = None
         return self.control
 
-    async def emergency_stop(self, *, authorize=None, actor_identity_id=None) -> None:
+    async def emergency_stop(
+        self, *, authorize=None, actor_identity_id=None, idempotent=False
+    ) -> None:
         async with self._step_lock:
             if authorize is not None:
                 if not actor_identity_id:
                     raise ValueError("Authorized system control requires a verified identity")
+                authorize()
                 self.repository.emergency_stop = (
                     self.repository.system_control_snapshot().emergencyStop
                 )
@@ -617,19 +620,30 @@ class SimulatorEngine:
                     self._resume.set() if was_resumed else self._resume.clear()
                 raise
 
-    async def system_resume(self, *, authorize=None, actor_identity_id=None) -> None:
+    async def system_resume(
+        self, *, authorize=None, actor_identity_id=None, idempotent=False
+    ) -> None:
         async with self._step_lock:
             await self._system_resume_locked(
-                authorize=authorize, actor_identity_id=actor_identity_id
+                authorize=authorize, actor_identity_id=actor_identity_id, idempotent=idempotent
             )
 
-    async def _system_resume_locked(self, *, authorize=None, actor_identity_id=None) -> None:
+    async def _system_resume_locked(
+        self, *, authorize=None, actor_identity_id=None, idempotent=False
+    ) -> None:
         if authorize is not None:
             if not actor_identity_id:
                 raise ValueError("Authorized system control requires a verified identity")
+            authorize()
             self.repository.emergency_stop = self.repository.system_control_snapshot().emergencyStop
         if not self.repository.emergency_stop:
+            if idempotent:
+                return
             raise DomainError("EMERGENCY_STOP_NOT_ACTIVE", "Emergency stop is not active.", 409)
+        previous_agents = {
+            agent_id: agent.model_copy(deep=True)
+            for agent_id, agent in self.repository.agents.items()
+        }
         self.repository.emergency_stop = False
         for agent in self.repository.agents.values():
             if agent.status == "paused" and agent.previousStatus:
@@ -648,4 +662,9 @@ class SimulatorEngine:
                 },
             }
         )
-        await self.broker.emit("system.resumed", {"active": False}, **options)
+        try:
+            await self.broker.emit("system.resumed", {"active": False}, **options)
+        except Exception:
+            if self.repository.system_control_snapshot().emergencyStop:
+                self.repository.agents = previous_agents
+            raise

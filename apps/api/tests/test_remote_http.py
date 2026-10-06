@@ -1,11 +1,14 @@
 """HTTP/service/database integration; real TLS process acceptance is separate."""
 
+import asyncio
+import json
+
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
 from app.models.identity import AssignPermissionRequest, CreatePermissionRequest
-from app.remote_control.gateway import RequestBudget, normalize_authority
+from app.remote_control.gateway import RemoteGateway, RequestBudget, normalize_authority
 from tests.test_remote_control_access import TOKEN
 from tests.test_remote_goal_submission import (
     configured_service,
@@ -293,6 +296,38 @@ def test_remote_streamed_body_is_bounded(remote_http):
     assert (
         response.status_code == 413 and response.json()["error"]["code"] == "REMOTE_BODY_TOO_LARGE"
     )
+    assert response.headers["cache-control"] == "no-store"
+
+
+@pytest.mark.asyncio
+async def test_remote_body_deadline_error_is_not_cacheable(remote_http):
+    app, _, _, _ = remote_http
+    messages = []
+
+    async def downstream(scope, receive, send):
+        pytest.fail("Slow body must not reach the application")
+
+    async def receive():
+        await asyncio.sleep(10)
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(message):
+        messages.append(message)
+
+    gateway = RemoteGateway(downstream, settings=app.state.settings)
+    await gateway(
+        {
+            "type": "http",
+            "scheme": "https",
+            "path": "/api/remote/goals",
+            "headers": [(b"host", b"remote.test:8443")],
+        },
+        receive,
+        send,
+    )
+    assert messages[0]["status"] == 408
+    assert (b"cache-control", b"no-store") in messages[0]["headers"]
+    assert json.loads(messages[1]["body"])["error"]["code"] == "REMOTE_BODY_TIMEOUT"
 
 
 def test_remote_failed_authentication_consumes_rate_budget(remote_http, monkeypatch):

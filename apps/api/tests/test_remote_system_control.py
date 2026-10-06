@@ -1,5 +1,8 @@
 """Emergency control keeps native leases, durable state, audit and revocation fences."""
 
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 from sqlalchemy import select
 
@@ -76,6 +79,10 @@ def test_system_revocation_at_commit_preserves_durable_and_memory_state(
     else:
         app.state.simulator.control.state = "running"
     before_control = app.state.simulator.control.model_copy(deep=True)
+    before_agents = {
+        agent_id: agent.model_copy(deep=True)
+        for agent_id, agent in app.state.repository.agents.items()
+    }
     original = app.state.broker.emit
 
     async def revoke_before_commit(*args, **kwargs):
@@ -93,6 +100,7 @@ def test_system_revocation_at_commit_preserves_durable_and_memory_state(
     )
     assert app.state.repository.system_control_snapshot().emergencyStop == (not stop)
     assert app.state.simulator.control == before_control
+    assert app.state.repository.agents == before_agents
     if stop:
         assert app.state.simulator._resume.is_set()
 
@@ -119,6 +127,70 @@ def test_committed_stop_survives_lost_acknowledgement_without_duplicate_event(
             select(AuditEventRow).where(
                 AuditEventRow.actor == actor.actor_id,
                 AuditEventRow.event_type == "system.emergency_stop",
+            )
+        ).all()
+        assert len(rows) == 1
+
+
+@pytest.mark.parametrize("stop", [True, False])
+def test_concurrent_desired_system_controls_commit_once(remote_http, monkeypatch, stop):
+    app, actor, client, headers = remote_http
+    grant_system(app, actor)
+    if not stop:
+        assert client.post("/api/remote/system/emergency-stop", headers=headers).status_code == 200
+    action_name = "emergency_stop" if stop else "system_resume"
+    original = getattr(app.state.simulator, action_name)
+    both_arrived = asyncio.Event()
+    arrivals = 0
+
+    async def overlap(**kwargs):
+        nonlocal arrivals
+        arrivals += 1
+        if arrivals == 2:
+            both_arrived.set()
+        await asyncio.wait_for(both_arrived.wait(), timeout=5)
+        return await original(**kwargs)
+
+    monkeypatch.setattr(app.state.simulator, action_name, overlap)
+    path = "/api/remote/system/" + ("emergency-stop" if stop else "resume")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        requests = [pool.submit(client.post, path, headers=headers) for _ in range(2)]
+        responses = [request.result(timeout=10) for request in requests]
+    assert all(response.status_code == 200 for response in responses)
+    assert responses[0].json() == responses[1].json()
+    assert app.state.repository.system_control_snapshot().emergencyStop == stop
+    with app.state.repository.session_factory() as session:
+        rows = session.scalars(
+            select(AuditEventRow).where(
+                AuditEventRow.actor == actor.actor_id,
+                AuditEventRow.event_type == ("system.emergency_stop" if stop else "system.resumed"),
+            )
+        ).all()
+        assert len(rows) == 1
+
+
+def test_committed_resume_survives_lost_acknowledgement(remote_http, monkeypatch):
+    app, actor, client, headers = remote_http
+    grant_system(app, actor)
+    assert client.post("/api/remote/system/emergency-stop", headers=headers).status_code == 200
+    original = app.state.broker.emit
+
+    async def lose_acknowledgement(*args, **kwargs):
+        await original(*args, **kwargs)
+        raise RuntimeError("injected committed resume acknowledgement loss")
+
+    monkeypatch.setattr(app.state.broker, "emit", lose_acknowledgement)
+    with pytest.raises(RuntimeError, match="acknowledgement loss"):
+        client.post("/api/remote/system/resume", headers=headers)
+    assert not app.state.repository.system_control_snapshot().emergencyStop
+    assert all(agent.status != "paused" for agent in app.state.repository.agents.values())
+    monkeypatch.setattr(app.state.broker, "emit", original)
+    assert client.post("/api/remote/system/resume", headers=headers).status_code == 200
+    with app.state.repository.session_factory() as session:
+        rows = session.scalars(
+            select(AuditEventRow).where(
+                AuditEventRow.actor == actor.actor_id,
+                AuditEventRow.event_type == "system.resumed",
             )
         ).all()
         assert len(rows) == 1

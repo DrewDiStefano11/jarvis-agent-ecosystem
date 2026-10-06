@@ -116,6 +116,7 @@ class RemoteGateway:
                                 }
                             },
                             status_code=413,
+                            headers={"Cache-Control": "no-store"},
                         )
                         return await response(scope, receive, send)
                     if not chunk.get("more_body", False):
@@ -130,6 +131,7 @@ class RemoteGateway:
                     }
                 },
                 status_code=408,
+                headers={"Cache-Control": "no-store"},
             )
             return await response(scope, receive, send)
         delivered = False

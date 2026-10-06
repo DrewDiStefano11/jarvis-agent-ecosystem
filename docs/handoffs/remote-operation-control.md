@@ -60,6 +60,21 @@ single process only.
 
 ## Next work
 
+Latest review repairs are implemented: both direct body-bound errors carry
+no-store; desired-state resume equality is checked inside the simulator lock;
+failed pre-commit resume restores paused agent snapshots while committed lost
+acknowledgements preserve the resumed state. Concurrent stop/resume retries return
+the same current status and commit one native audit/outbox event. Authorization
+is rechecked inside the lock, including no-op controls, and at mutation commit.
+Native non-remote resume retains its existing inactive-stop error.
+
+All 110 HTTP/system/real-TLS/native API/persistence/lease tests pass (107.54 seconds).
+Ruff API/scripts and frontend typecheck/ESLint/104 Vitest tests/build pass.
+Reconciled full backend checkpoint remains 1,494 passed/two existing skips.
+The previous hosted backend failed with runner communication loss and no steps;
+its browser job never acquired a runner. Publish repairs and use fresh-head gates.
+Current main remains ee0dd09; no new migration or dependency. Single head20260907_11.
+
 1. PR [#70](https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/70)
    is open and attached. Fresh review of `41147cdb2826637d1108fe3e6557d347f4cfc364`
    found explicit HTTPS default-port normalization incompatible with the supported
