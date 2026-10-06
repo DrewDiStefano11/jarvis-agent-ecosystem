@@ -119,6 +119,18 @@ async function stop(child) {
     await page.keyboard.press('Escape')
     for (const width of [1440,1920,1024,390,320]) {
       await page.setViewportSize({ width, height: 1000 })
+      assert.ok(await page.locator('.content').evaluate((el, minimum) => parseFloat(getComputedStyle(el).paddingBottom) >= minimum, width <= 760 ? 160 : 100), 'Launcher clearance overridden by shell')
+      if (width <= 760) {
+        const mobile = page.getByRole('navigation', { name: 'Mobile primary' })
+        await mobile.getByRole('button', { name: 'More navigation' }).click()
+        for (const link of await mobile.locator('a').all()) {
+          assert.ok(await link.evaluate(el => {
+            const box = el.getBoundingClientRect()
+            return el.contains(document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2))
+          }), 'Launcher obstructed expanded navigation')
+        }
+        await mobile.getByRole('button', { name: 'Close more navigation' }).click()
+      }
       await launch.click()
       await command.getByLabel('Find records and pages').fill('')
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), 'Page overflow')
