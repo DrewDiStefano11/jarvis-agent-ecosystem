@@ -63,17 +63,17 @@ including handoff-only publication updates. This PR is stacked on #74.
 
 Pinned transport: `codex/research-pinned-transport`, worktree
 `C:/Users/DDistefano/Documents/jarvis-agent-ecosystem/.worktrees/research-pinned-transport`.
-New internal `app.research_transport`, explicit HTTPCore dependency, 29 passing
+New internal `app.research_transport`, explicit HTTPCore dependency, 31 passing
 deterministic transport tests, plus `docs/research-transport.md`. Depends on both
 prior slices. The three byte-identical contract-file snapshots used during
 validation were removed and replaced by the committed dependency #76 at
 `0eb663091c33483da78fe9f5f77fbcd81f3aefea`. Full backend run:
 1600 passed, two skips, 46 Windows MAX_PATH diagnostics setup errors. All
 diagnostics/report tests passed under a short isolated basetemp: 52 passed in
-189.52 seconds. All 127 affected policy/contract/transport tests pass after the
+189.52 seconds. All 129 affected policy/contract/transport tests pass after the
 policy repair. Ruff and all frontend gates pass. Inspect final dependency diff
 before publication; no native admission/persistence/recovery is claimed.
-Final dependency inspection and the 127-case affected suite pass on the actual
+Final dependency inspection and the 129-case affected suite pass on the actual
 stacked branch. Only transport module/tests, explicit HTTPCore dependency,
 transport documentation and this handoff are part of the transport diff.
 A final cancellation audit added explicit stream cleanup when TLS initialization
@@ -85,6 +85,10 @@ acceptance of DEL and UTF-8 C1 controls. Both were reproduced with failing
 regressions. Validation now checks decoded Unicode category Cc, preserving tab,
 LF and CR; valid multilingual/layout text has positive coverage. All 29 transport
 tests and 127 combined affected cases pass. Fresh review is requested after push.
+Later reconciliation adds two giant Content-Length cases under 1 KiB and 8 KiB
+header budgets. Both return fixed errors, suppress raw header exception chains
+and close the connection. The parser already rejects excessive digit counts;
+no new exception handler was needed. Final transport count is 31, combined 129.
 PR: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/77.
 Validated implementation commit: `28c7eaff25b04cb0bc5e19b1c1444d6895395e1f`.
 Disabled by default, empty origin scope, no runtime/model registration. Hosted CI
@@ -121,3 +125,18 @@ integration while continuing independent source/search foundations.
 Fetch current main and inspect open PRs again at each branch boundary. Do not merge,
 force-reset, delete branches or modify other sessions' worktrees. The campaign
 request authorizes feature pushes, PR publication and exact-head Codex review.
+
+## Main reconciliation checkpoint
+
+The human merged #74 and #73. Current main is
+`1ee7a3cd72ec78a5765a9529a1c0faa26fefcfcb`. Retrieval contracts were reconciled
+with this main without conflicts. All 133 affected policy/contract and newly merged
+planning-correction/coordination-verification tests pass in 60.31 seconds. Backend
+Ruff and frontend typecheck, ESLint, 104 Vitest tests and build pass. PR #76 is
+retargeted to main at `c2d0b814e4670c8f5c7348ab3ad2582f9d6e3c6c`.
+Transport #77 consumed that dependency without conflicts. Its final 129 affected
+tests, Ruff and all required frontend gates pass on the reconciled source.
+Provenance implementation is checkpointed locally at `c152afe` in its dedicated
+source worktree, with full backend 1675 passing plus 106 affected reset cases;
+it must consume the reconciled transport before publication. No merge into main
+or feature-branch deletion was performed by this session.

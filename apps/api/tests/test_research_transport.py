@@ -238,6 +238,24 @@ async def test_malformed_binary_compressed_and_oversized_response(data, code):
     assert connector.streams[0].closed
 
 
+@pytest.mark.parametrize(
+    "header_limit,code",
+    [(1024, "RESEARCH_HEADERS_TOO_LARGE"), (8192, "RESEARCH_RESPONSE_INVALID")],
+)
+async def test_giant_content_length_is_bounded_before_body_read(header_limit, code):
+    wire = (
+        b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: "
+        + b"9" * 5000
+        + b"\r\n\r\n"
+    )
+    client, connector = transport([wire], limits=RetrievalLimits(maximumHeaderBytes=header_limit))
+    with pytest.raises(DomainError) as caught:
+        await client.retrieve("https://example.com")
+    assert caught.value.code == code
+    assert connector.streams[0].closed
+    assert "9" * 100 not in "".join(traceback.format_exception(caught.value))
+
+
 async def test_chunked_body_limit_and_truncated_response():
     for data in (
         b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n14\r\n"
