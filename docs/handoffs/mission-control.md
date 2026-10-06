@@ -120,3 +120,8 @@ PR #75: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/75. Initi
 Initial runtime-browser CI failed in live Office emergency-stop smoke because Playwright dismissed the newly required confirmation. The harness now explicitly accepts stop/resume; live Office smoke passes, including real worker activity and frozen movement. Frontend typecheck/lint/115 tests/build and five-viewport Mission Control smoke pass. Backend remains identical to the previously validated base. Screenshots: local Temp `jarvis-mission-control-35tUp1`; Office evidence: visualization directory `office-review-repair`. Current CI/review will run again on the published repair head; no merge attempted.
 
 Independent agent operations PR #78: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/78, head `2638851ea696f5e2ec22f9bd622d11220a7aeee1`, worktree `.worktrees/mission-control-agent-operations`; 106 frontend tests and real API workforce smoke passed. Exact-head review requested. Next independent priority: persisted task dependencies and version-matched execution visualization; no unmerged contracts required.
+
+
+### Accessible approval count repair
+
+Review of repair head `2f6de2d` found that the desktop link's aria-label hid its badge count from screen readers. Desktop and mobile Approvals links now announce the pending count in their accessible names. Added regression coverage; typecheck/lint/116 tests/build and real API five-width smoke pass (`jarvis-mission-control-1mev5x`). At this checkpoint that prior head's frontend, repository-integrity and runtime-browser CI are green; backend CI is still running. Republish and review the new exact head. No merge attempted.

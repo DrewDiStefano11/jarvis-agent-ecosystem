@@ -112,3 +112,9 @@ test('creation follows query navigation and Back while Tasks stays mounted', asy
   await userEvent.click(screen.getByRole('button', { name: 'History back' }))
   expect(screen.getByLabelText('Title')).toBeInTheDocument()
 })
+
+test('approval count is included in desktop and mobile accessible link names', () => {
+  store.approvals = [{ status: 'pending' }, { status: 'pending' }] as typeof store.approvals
+  renderShell()
+  expect(screen.getAllByRole('link', { name: 'Approvals, 2 pending approval records' })).toHaveLength(2)
+})
