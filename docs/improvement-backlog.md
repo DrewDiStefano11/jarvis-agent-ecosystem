@@ -50,8 +50,9 @@ The transaction revalidates baseline/proposal/weakness/evidence references,
 experiment digest, work classification and deterministic entry/task identifiers.
 
 A proposal is admitted once per baseline. Semantic scope suppresses active duplicates
-across later captures, including protected tasks under review. Completed, cancelled
-or failed work can be reconsidered only through a new baseline/proposal. A blocked
+across later captures, including protected tasks under review and failed tasks
+with operator retries remaining. Completed, cancelled or retry-exhausted failed
+work can be reconsidered only through a new baseline/proposal. A blocked
 high-priority candidate does not starve independent lower-priority work.
 Concurrent selectors use the native SQLite write fence. The entry, queued task,
 audit, outbox and actor-scoped idempotency receipt commit together. Retrying after

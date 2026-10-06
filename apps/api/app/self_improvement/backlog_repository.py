@@ -1,6 +1,6 @@
 """Append-only admission provenance linked to the native task lifecycle."""
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 
 from app.core.errors import DomainError
 from app.db.models import SystemStateRow, TaskRow
@@ -13,6 +13,14 @@ from app.self_improvement.repository import ImprovementRecordRow
 ENTRY_KIND = "backlog_entry"
 TERMINAL_TASKS = ("completed", "cancelled", "failed")
 MAX_ACTIVE_BACKLOG = 512
+
+
+def active_task_scope():
+    """Operator-retryable failures still reserve their original work scope."""
+    return or_(
+        TaskRow.status.not_in(TERMINAL_TASKS),
+        and_(TaskRow.status == "failed", TaskRow.retry_count < TaskRow.maximum_retries),
+    )
 
 
 class ImprovementBacklogRepository:
@@ -63,7 +71,7 @@ class ImprovementBacklogRepository:
                 )
                 .where(
                     ImprovementRecordRow.kind == ENTRY_KIND,
-                    (TaskRow.status.not_in(TERMINAL_TASKS)) | TaskRow.id.is_(None),
+                    active_task_scope() | TaskRow.id.is_(None),
                 )
                 .limit(MAX_ACTIVE_BACKLOG + 1)
             ).all()
@@ -120,7 +128,7 @@ class ImprovementBacklogRepository:
             .where(
                 ImprovementRecordRow.kind == ENTRY_KIND,
                 ImprovementRecordRow.payload["scope_key"].as_string() == entry.scope_key,
-                TaskRow.status.not_in(TERMINAL_TASKS),
+                active_task_scope(),
             )
             .limit(1)
         )
@@ -134,7 +142,7 @@ class ImprovementBacklogRepository:
             .outerjoin(TaskRow, TaskRow.id == ImprovementRecordRow.payload["task_id"].as_string())
             .where(
                 ImprovementRecordRow.kind == ENTRY_KIND,
-                (TaskRow.status.not_in(TERMINAL_TASKS)) | TaskRow.id.is_(None),
+                active_task_scope() | TaskRow.id.is_(None),
             )
             .limit(MAX_ACTIVE_BACKLOG + 1)
         ).all()

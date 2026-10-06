@@ -41,7 +41,11 @@ def backlog_service(request):
     )
 
 
-@router.post("/backlog/select", response_model=TypedApiResponse[ImprovementBacklogSelection])
+@router.post(
+    "/backlog/select",
+    response_model=TypedApiResponse[ImprovementBacklogSelection],
+    responses={201: {"model": TypedApiResponse[ImprovementBacklogSelection]}},
+)
 async def select_backlog(
     body: SelectImprovementRequest,
     request: Request,

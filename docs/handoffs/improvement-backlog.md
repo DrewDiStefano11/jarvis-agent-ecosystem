@@ -1,5 +1,13 @@
 # Improvement backlog implementation checkpoint
 
+October 6 fresh-review repairs preserve failed tasks with remaining operator
+retries in active-scope deduplication and capacity accounting, including the
+native admission transaction. Retry-exhausted failures remain terminal. OpenAPI
+now advertises both 200 and 201 with the same typed response envelope.
+Both findings first failed reproduction; the final backlog/self-improvement/
+task-lease/HTTP integration passes 130 tests. API/scripts Ruff and frontend
+typecheck/ESLint/104 tests/build pass. Request fresh exact-head CI and review.
+
 PR #71 is reconciled with merged #69/main
 `9d5eab1c5e169f7c99f3cf1e9e2ecafa3a725fdf`. The original `808bc03` head passed all
 four PR-event CI gates and clean exact-head review. The combined backlog/evidence/

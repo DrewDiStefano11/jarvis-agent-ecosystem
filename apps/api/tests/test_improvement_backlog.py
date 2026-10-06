@@ -298,6 +298,51 @@ async def test_new_baseline_preserves_active_protected_work_until_terminal(backl
     assert same_old_evidence.outcome == "blocked"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bypass_projection", [False, True])
+async def test_failed_task_with_retry_remaining_reserves_scope(
+    backlog_app, monkeypatch, bypass_projection
+):
+    from app.models.improvement_backlog import SelectImprovementRequest
+    from app.self_improvement.repository import ImprovementRepository
+
+    app, actor, service, _, request, _ = backlog_app
+    selected = await service.select(actor, request, "before-worker-failure")
+    leases = app.state.task_leases
+    worker = leases.register_worker("backlog-test", "backlog-test-instance")
+    _, lease = leases.acquire_task(worker.id, task_id=selected.entry.task_id)
+    failed = leases.fail_task(
+        selected.entry.task_id,
+        worker.id,
+        lease.leaseToken,
+        {"code": "TEST_FAILURE"},
+        retryable=False,
+    )
+    assert failed.status == "failed" and failed.retryCount < failed.maxRetries
+    later = ImprovementRepository(app.state.repository.session_factory).save_analysis(
+        analyze(baseline(values=(0, 0)))
+    )
+    later_request = SelectImprovementRequest(baseline_ids=(later.baseline.id,))
+    if bypass_projection:
+        monkeypatch.setattr(service.backlog, "admission_state", lambda ids: (set(), set()))
+        result = await service.select(actor, later_request, "after-worker-failure")
+        assert result.outcome == "blocked"
+    else:
+        assert (
+            await service.select(actor, later_request, "after-worker-failure")
+        ).outcome == "blocked"
+    assert len(service.backlog.entries()) == 1
+
+
+def test_backlog_selection_openapi_advertises_both_success_envelopes(backlog_app):
+    app, *_ = backlog_app
+    responses = app.openapi()["paths"]["/api/self-improvement/backlog/select"]["post"]["responses"]
+    assert (
+        responses["201"]["content"]["application/json"]["schema"]
+        == responses["200"]["content"]["application/json"]["schema"]
+    )
+
+
 def test_concurrent_operators_do_not_duplicate_active_work(backlog_app):
     import asyncio
     from concurrent.futures import ThreadPoolExecutor
