@@ -90,11 +90,13 @@ const actor = process.env.SMOKE_ACTOR
     // Emergency stop freezes movement and requires an explicit continuation.
     await page.getByRole('button', { name: 'Move identity', exact: true }).click()
     await waitPlacement(actor, 'moving')
+    page.once('dialog', dialog => dialog.accept())
     await page.getByRole('button', { name: 'Emergency stop', exact: true }).click()
     await waitPlacement(actor, 'stopped')
     console.log('Office emergency stop persisted')
     await page.getByText('Emergency stop is active.', { exact: false }).waitFor()
     assert.equal(await page.getByRole('button', { name: 'Continue move', exact: true }).isEnabled(), false)
+    page.once('dialog', dialog => dialog.accept())
     await page.getByRole('button', { name: 'Resume system', exact: true }).click()
     await page.getByRole('button', { name: 'Continue move', exact: true }).click()
     await waitPlacement(actor, 'idle')

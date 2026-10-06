@@ -2,7 +2,7 @@ import type { Coordination } from '../types/coordination'
 
 export function CoordinatedWork({ record, error }: { record: Coordination | null; error: string }) {
   if (!record && !error) return null
-  return <section aria-label="Specialist execution">
+  return <section className="coordinated-work" aria-label="Specialist execution">
     <h3>Specialist execution</h3>
     {error && <p role="alert">{error}</p>}
     {record && <>
