@@ -1,0 +1,109 @@
+# Independent result verification
+
+Explicitly queued `planning_review` runs can freeze up to eight
+`verification_criteria` in their autonomous execution specification. The runtime
+specification is immutable; model output cannot add criteria, change policy,
+grant tools, alter routing or authorize execution. Legacy requests omit the new
+field and retain their serialized command hashes and structural review behavior.
+
+Each criterion has a unique `id`, a bounded `description`, and one mode.
+Descriptions and containment values are trimmed before freezing the policy;
+whitespace-only values are rejected, including Unicode whitespace.
+Planning requests reject `artifact` criteria during specification validation: tool
+authorization requires a completed source result, so a matching artifact cannot
+exist before planning verification. Post-tool verification is not integrated yet.
+
+| Mode | Evidence and decision |
+| --- | --- |
+| `field_nonempty` | A named result field must contain a deliverable. Whitespace text is empty. |
+| `field_contains` | An exact substring must occur in `summary` or `analysis`. |
+| `artifact` | Reserved contract mode; rejected in queued planning specifications until post-tool verification exists. |
+| `test_evidence` | Returns `unverifiable`: main has no authoritative software command/test journal yet. Prose and text artifacts cannot prove tests or builds. |
+| `semantic` | A distinct independent critic request evaluates the grounded objective, frozen criteria and persisted result content through the existing local-only model router. |
+
+Example criterion policy for a planning result:
+
+```json
+[
+  {"id":"recommendations","description":"Provide actionable recommendations","mode":"field_nonempty","field":"recommendations"},
+  {"id":"objective","description":"Recommendations address the grounded objective","mode":"semantic"}
+]
+```
+
+The verifier reloads the authoritative result, checks its task/run/attempt/context
+and digest, then records deterministic checks and, when requested, semantic
+checks. The reviewer uses separate role instructions, correlation identity and
+JSON schema. It receives bounded data, not the worker prompt or a worker success
+flag as acceptance policy. Its brief reasons are user-facing findings, never
+hidden reasoning. The reviewer can cite only supplied evidence IDs. Missing,
+duplicate or rewritten criteria, invented evidence, unsupported passes, oversized
+or malformed responses are rejected. The application derives the aggregate
+outcome, with precedence `failed`, `unverifiable`, `needs_correction`, `passed`.
+
+Reviewer calls have a hard allowance of two per result (initial plus at most one
+schema repair), each bounded by the queued execution timeout and the worker
+timeout, capped at 2,048 output tokens. Router retry budgets allow one physical
+request per dispatch and no cloud fallback. Context over 40,000 UTF-8 bytes
+returns `unverifiable` rather than silently dropping evidence. These are additional
+reviewer calls; worker request counts keep their existing meaning and bound.
+
+Existing runtime checkpoints persist input binding, dispatch ownership,
+validated responses and one authoritative verdict. Canonical structured records
+use bounded string chunks to stay within the existing checkpoint/event metadata
+limits. No migration, parallel ledger, raw model transcript or secret is stored.
+Checkpoint commits use the existing actor authorization, lease fence, target
+lifecycle checks, emergency stop and audit/outbox boundary. A dispatch committed
+without a known response is not repeated: recovery under a new lease records
+`unverifiable`. A concurrent dispatch under the same lease is refused. A validated
+response committed before a crash is reused without another model call.
+
+Only a passing verdict allows an opted-in task to finalize. Other outcomes pause
+for operator review in this milestone; adaptive repair/replanning belongs to the
+next milestone. Cancelled, stopped, revoked or stale-lease work cannot commit a
+late verdict or verified success. Verification itself runs no workspace tools.
+
+Recovery reads the durable review outcome before choosing transition authorization.
+An escalated review or persisted nonpassing verdict requires live pause permission,
+including a crash before the plan-review record is saved and when completion
+permission has been revoked. Revoked pause permission still blocks recovery;
+the persisted verdict is reused without repeating worker or critic inference.
+If recovery has not yet produced a verdict/review, their existing read, execute
+and checkpoint permissions govern that work. Terminal-action permission is
+checked after the outcome is known. Completion authorization is checked before
+any successful task mutation and again inside its lease-fenced transaction using
+the same database session for RBAC. A denial or actor suspension committed after
+the initial check prevents completion without discarding the persisted verdict.
+That transaction also reads the current native runtime snapshot and checks the
+active attempt, task/target lineage and target lifecycle. A late cancellation
+rolls back completion before native cancellation reconciliation; a late pause
+returns `EXECUTION_COMPLETION_BLOCKED` while retaining the persisted result.
+Cancellation is detected before completion-only permission checks, including
+recovery after lease expiry. Revoking completion permission cannot prevent an
+otherwise authorized cancellation. Nonempty collection criteria require meaningful
+text in every assumption, recommendation and risk entry; whitespace alone fails.
+
+`GET /api/model-executions/{executionId}/verification` exposes the verdict using
+the same runtime read authorization as the result. It returns `null` before a
+verdict exists or for legacy requests. The record contains stable verification,
+task/run/attempt/result IDs, criteria/result hashes, outcome, checks, evidence
+references, reviewer role/provider/model, reviewer request count, UTC timestamp,
+policy version and digest.
+
+## Acceptance boundaries
+
+The deterministic tests exercise the production worker, SQLite persistence,
+leases, runtime commands, RBAC, checkpoint recovery and HTTP read endpoint. A real
+authorized workspace report is created and checked directly against the internal
+artifact checker for provenance. This is component coverage, not an end-to-end
+planning artifact workflow; requests for that unavailable workflow are rejected.
+An actual loopback HTTP server drives the production Ollama adapter and model
+router, but its inference response is a deterministic fixture. Tests also use
+mock router responses to inject malformed output and safety races.
+
+These prove execution and persistence of the verifier, not model judgment quality
+on arbitrary tasks. Real model inference needs a configured running local model;
+none is downloaded or provisioned by this milestone. Software test/build evidence
+are unavailable to this verifier without an execution journal. This verifier
+integrates the coordinator and self-improvement foundation already merged into main.
+Later node-level independent verification must preserve
+the same authoritative result binding and frozen criterion policy.

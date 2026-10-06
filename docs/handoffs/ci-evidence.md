@@ -1,5 +1,16 @@
 # CI evidence checkpoint
 
+PR #72 is reconciled with merged #69/main
+`9d5eab1c5e169f7c99f3cf1e9e2ecafa3a725fdf`. Combined evidence/verifier/worker/
+migration integration passes 210 tests (124.49 seconds), plus all 19 CI-adapter
+regressions (2.26 seconds), with Ruff clean. Frontend typecheck/ESLint/104 tests
+and production build pass. The
+original `c3ba136` exact-head review was clean and frontend/browser/integrity passed.
+Its backend job exceeded the one-hour limit while continuing through roughly 93%
+of the suite; logs show progress without an assertion failure. No timeout or retry
+budget has been raised. Fresh exact-head CI/review follow reconciliation; the
+earlier full backend checkpoint of 1,460 passed/two existing skips remains history.
+
 Independent branch `codex/ci-evidence` starts at freshly inspected main
 `ee0dd09bf1825ab635e7a61d8fe2ae192f6e0444`. Other sessions' branches are untouched.
 PR #69's review repairs are pushed at `47ce8d4`; remote PR #70's next review repairs

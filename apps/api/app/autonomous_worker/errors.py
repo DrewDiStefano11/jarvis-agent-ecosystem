@@ -3,6 +3,10 @@ from __future__ import annotations
 from app.core.errors import DomainError
 
 ERROR_MESSAGES = {
+    "VERIFICATION_IN_PROGRESS": "The independent reviewer dispatch is owned by the current execution lease.",
+    "VERIFICATION_PROVENANCE_MISMATCH": "Verification references do not match the authoritative result.",
+    "VERIFICATION_RECORD_CORRUPT": "The durable independent verification record failed integrity validation.",
+    "VERIFICATION_REQUIRED": "A passing independent verification is required for completion.",
     "AUTONOMOUS_WORKER_DISABLED": "The autonomous worker is disabled.",
     "MODEL_EXECUTION_DISABLED": "Local model execution is disabled.",
     "LOCAL_PROVIDER_REQUIRED": "A structurally loopback model provider is required.",
@@ -22,6 +26,7 @@ ERROR_MESSAGES = {
     "MODEL_RESULT_PERSISTENCE_FAILED": "The validated model result could not be persisted.",
     "EXECUTION_LEASE_LOST": "The worker no longer owns the current task lease.",
     "EXECUTION_CANCELLED": "The task or runtime execution was cancelled.",
+    "EXECUTION_COMPLETION_BLOCKED": "The current runtime no longer permits task completion.",
     "EXECUTION_EMERGENCY_STOPPED": "Emergency stop blocked autonomous execution.",
     "EXECUTION_AUTHORIZATION_REVOKED": "Authorization changed during autonomous execution.",
 }
