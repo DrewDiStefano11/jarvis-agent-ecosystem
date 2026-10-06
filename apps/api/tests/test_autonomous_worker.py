@@ -304,6 +304,7 @@ def create_assembly_and_runtime(
     assembly_content: str = "Approved planning facts.",
     target_agent_id: str | None = None,
     response_format: str | None = None,
+    verification_criteria: tuple = (),
 ) -> str:
     assembly_response = client.post(
         "/api/context/assemblies",
@@ -320,6 +321,7 @@ def create_assembly_and_runtime(
         task_id=task_id,
         target_agent_id=target_agent_id,
         response_format=response_format,
+        verification_criteria=verification_criteria,
     )
     return assembly["id"]
 
@@ -333,6 +335,7 @@ def queue_autonomous_runtime(
     task_id: str,
     target_agent_id: str | None = None,
     response_format: str | None = None,
+    verification_criteria: tuple = (),
 ) -> None:
     specification = make_spec(
         run_id=run_id,
@@ -350,6 +353,7 @@ def queue_autonomous_runtime(
                 maximum_repair_calls=1,
                 maximum_output_tokens=1024,
                 maximum_execution_seconds=60,
+                verification_criteria=verification_criteria,
             )
         }
     )
@@ -385,6 +389,7 @@ def worker_fixture(
     run_id: str = "run-autonomous-1",
     assembly_content: str = "Approved planning facts.",
     response_format: str | None = None,
+    verification_criteria: tuple = (),
 ):
     app = create_app(delay_ms=1, database_url=database_url(tmp_path / f"{run_id}.db"))
     client = TestClient(app)
@@ -399,6 +404,7 @@ def worker_fixture(
         run_id=run_id,
         assembly_content=assembly_content,
         response_format=response_format,
+        verification_criteria=verification_criteria,
     )
     worker = app.state.task_leases.register_worker(
         "phase-2c-test-worker",
@@ -1358,7 +1364,7 @@ async def test_cancellation_authorization_denial_preserves_recovery_record(
     assert authorizer is not None
     original_authorize = authorizer.authorize
 
-    def deny_cancellation(actor, operation, *, specification=None, snapshot=None):
+    def deny_cancellation(actor, operation, *, specification=None, snapshot=None, session=None):
         if cancellation_denied and operation in {
             "request_cancellation",
             "confirm_cancellation_start",
@@ -1370,6 +1376,7 @@ async def test_cancellation_authorization_denial_preserves_recovery_record(
             operation,
             specification=specification,
             snapshot=snapshot,
+            session=session,
         )
 
     monkeypatch.setattr(authorizer, "authorize", deny_cancellation)
@@ -2209,9 +2216,9 @@ async def test_task_cancellation_wins_before_runtime_success(
     )
     original_complete_task = app.state.task_leases.complete_task
 
-    def cancel_before_completion(task_id, worker_id, lease_token, result):
+    def cancel_before_completion(task_id, worker_id, lease_token, result, **kwargs):
         app.state.task_leases.cancel_task(task_id)
-        return original_complete_task(task_id, worker_id, lease_token, result)
+        return original_complete_task(task_id, worker_id, lease_token, result, **kwargs)
 
     monkeypatch.setattr(
         app.state.task_leases,
@@ -2522,7 +2529,7 @@ async def test_unauthorized_queued_run_does_not_block_later_work(
     assert authorizer is not None
     original_authorize = authorizer.authorize
 
-    def deny_first(actor, operation, *, specification=None, snapshot=None):
+    def deny_first(actor, operation, *, specification=None, snapshot=None, session=None):
         target = specification or (snapshot.specification if snapshot is not None else None)
         if target is not None and target.run_id == "run-aa-unauthorized":
             raise RuntimePermissionDeniedError(metadata={"operation": operation})
@@ -2531,6 +2538,7 @@ async def test_unauthorized_queued_run_does_not_block_later_work(
             operation,
             specification=specification,
             snapshot=snapshot,
+            session=session,
         )
 
     monkeypatch.setattr(authorizer, "authorize", deny_first)
@@ -2593,7 +2601,7 @@ async def test_in_flight_authorization_revocation_does_not_exit_polling(
     assert authorizer is not None
     original_authorize = authorizer.authorize
 
-    def deny_first_after_call(actor, operation, *, specification=None, snapshot=None):
+    def deny_first_after_call(actor, operation, *, specification=None, snapshot=None, session=None):
         target = specification or (snapshot.specification if snapshot is not None else None)
         if (
             authorization_revoked
@@ -2606,6 +2614,7 @@ async def test_in_flight_authorization_revocation_does_not_exit_polling(
             operation,
             specification=specification,
             snapshot=snapshot,
+            session=session,
         )
 
     monkeypatch.setattr(authorizer, "authorize", deny_first_after_call)
@@ -2658,7 +2667,7 @@ async def test_preparation_authorization_revocation_recovers_without_stranding(
             authorization_revoked = True
         return result
 
-    def deny_start(actor, operation, *, specification=None, snapshot=None):
+    def deny_start(actor, operation, *, specification=None, snapshot=None, session=None):
         target = specification or (snapshot.specification if snapshot is not None else None)
         if (
             authorization_revoked
@@ -2672,6 +2681,7 @@ async def test_preparation_authorization_revocation_recovers_without_stranding(
             operation,
             specification=specification,
             snapshot=snapshot,
+            session=session,
         )
 
     monkeypatch.setattr(service, "_handle", revoke_after_begin)
@@ -2782,7 +2792,7 @@ async def test_denied_result_recovery_does_not_starve_authorized_recovery(
         assert authorizer is not None
         original_authorize = authorizer.authorize
 
-        def deny_first(actor, operation, *, specification=None, snapshot=None):
+        def deny_first(actor, operation, *, specification=None, snapshot=None, session=None):
             target = specification or (snapshot.specification if snapshot is not None else None)
             if (
                 target is not None
@@ -2795,6 +2805,7 @@ async def test_denied_result_recovery_does_not_starve_authorized_recovery(
                 operation,
                 specification=specification,
                 snapshot=snapshot,
+                session=session,
             )
 
         monkeypatch.setattr(authorizer, "authorize", deny_first)

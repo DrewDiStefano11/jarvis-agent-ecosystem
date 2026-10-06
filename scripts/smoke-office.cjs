@@ -73,8 +73,10 @@ const actor = process.env.SMOKE_ACTOR
     const created = page.waitForResponse(response => response.url().endsWith('/api/tasks') && response.request().method() === 'POST')
     await page.getByRole('button', { name: 'Create task', exact: true }).click()
     const task = (await (await created).json()).data
-    await nav.getByRole('link', { name: 'Planning', exact: true }).click()
-    await page.getByLabel('Task and history').selectOption(task.id)
+    // The response precedes the shared-store refresh and task-created UI.
+    // Use the completed creation link, which also selects the task in runtime state.
+    await page.getByRole('link', { name: 'Open planning for this task', exact: true }).click()
+    assert.equal(await page.getByLabel('Task and history').inputValue(), task.id)
     await page.getByRole('button', { name: 'Prepare local planner for this task', exact: true }).click()
     await page.getByText('Local planner prepared for this task. Queue the plan when ready.', { exact: true }).waitFor()
     await page.getByRole('button', { name: 'Queue local plan', exact: true }).click()

@@ -1,5 +1,13 @@
 # Improvement backlog implementation checkpoint
 
+PR #71 is reconciled with merged #69/main
+`9d5eab1c5e169f7c99f3cf1e9e2ecafa3a725fdf`. The original `808bc03` head passed all
+four PR-event CI gates and clean exact-head review. The combined backlog/evidence/
+verifier/worker/migration integration passes 230 tests (137.55 seconds), with
+Ruff clean. Fresh exact-head CI/review are required after publication; no merge
+has been attempted. Existing admission, RBAC, scope deduplication, capacity,
+audit/outbox and native task boundaries are preserved.
+
 Branch `codex/improvement-backlog` starts from freshly fetched main
 `ff11aba814b8caf67ca5b8f2af415e827e6ec63b` after #68 merged. Other sessions and
 PR #63 remain untouched. This is the next independent Self-Build prerequisite;

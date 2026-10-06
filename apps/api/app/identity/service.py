@@ -944,7 +944,7 @@ class IdentityService:
         resource_type: str,
         resource_id: str,
         *,
-        session=None,
+        session: Session | None = None,
     ) -> AuthorizationDecision:
         """Evaluate resource access for a known permission stable key.
 
@@ -988,7 +988,11 @@ class IdentityService:
                     )
                 action = permission.action
             return self.check_resource_access(
-                actor_id, resource_type, resource_id, action, session=session
+                actor_id,
+                resource_type,
+                resource_id,
+                action,
+                **({"session": session} if session is not None else {}),
             )
         except Exception:
             return AuthorizationDecision(

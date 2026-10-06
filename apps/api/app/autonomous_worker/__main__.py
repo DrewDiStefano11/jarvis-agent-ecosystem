@@ -7,6 +7,7 @@ from app.autonomous_worker.errors import AutonomousWorkerError
 from app.main import create_app
 
 EXPECTED_RUN_ERRORS = {
+    "VERIFICATION_IN_PROGRESS",
     "EXECUTION_CANCELLED",
     "EXECUTION_EMERGENCY_STOPPED",
     "EXECUTION_LEASE_LOST",
