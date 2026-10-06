@@ -139,12 +139,19 @@ def test_pytest_watchdog_dumps_stack_and_aborts(tmp_path, phase):
         + ("    threading.Event().wait()\n" if phase == "call" else "    pass\n"),
         encoding="utf-8",
     )
+    # Hosted Windows uses D: for checkout and C: for temporary test files.
+    # Explicit config/root prevents pytest from walking C: to infer a root.
+    config = tmp_path / "pytest.ini"
+    config.write_text("[pytest]\n", encoding="utf-8")
     log = tmp_path / "timeout.log"
     command = [
         sys.executable,
         "-m",
         "pytest",
         str(test),
+        "-c",
+        str(config),
+        f"--rootdir={tmp_path}",
         "-vv",
         "--timeout=1",
         "--timeout-method=thread",
@@ -267,3 +274,84 @@ def test_exact_node_union_matches_full_collection(tmp_path, monkeypatch, change)
             ci.verify_coverage(tmp_path)
     else:
         assert ci.verify_coverage(tmp_path) == 0
+
+
+@pytest.mark.parametrize("state", ["exited", "recycled"])
+def test_cleanup_ignores_retired_pid_records_that_cannot_be_waited_on(state):
+    class RetiredProcess:
+        pid = 10156
+
+        def is_running(self):
+            # psutil returns False for exited or creation-time-mismatched PIDs.
+            return False
+
+        def kill(self):
+            raise AssertionError(f"Must not kill {state} process")
+
+        def wait(self, timeout):
+            raise psutil.AccessDenied(self.pid)
+
+    terminated = ci.terminate_descendants([RetiredProcess()])
+    assert terminated == []
+    ci.wait_for_descendants(terminated)
+
+
+def test_cleanup_does_not_silence_access_denied_for_a_live_descendant():
+    class LiveProcess:
+        pid = 10156
+
+        def is_running(self):
+            return True
+
+        def kill(self):
+            raise psutil.AccessDenied(self.pid)
+
+    with pytest.raises(psutil.AccessDenied):
+        ci.terminate_descendants([LiveProcess()])
+
+
+def test_descendant_wait_uses_identity_checks_instead_of_raw_pid_wait():
+    class TerminatedProcess:
+        checks = iter([True, False])
+
+        def is_running(self):
+            return next(self.checks)
+
+        def wait(self, timeout):
+            raise psutil.AccessDenied(10156)
+
+    ci.wait_for_descendants([TerminatedProcess()])
+
+
+def test_descendant_wait_fails_if_cleanup_does_not_finish(monkeypatch):
+    from types import SimpleNamespace
+
+    times = iter([0, 2])
+    monkeypatch.setattr(ci, "time", SimpleNamespace(monotonic=lambda: next(times)))
+    with pytest.raises(RuntimeError, match="survived cleanup"):
+        ci.wait_for_descendants([SimpleNamespace(pid=10156, is_running=lambda: True)], timeout=1)
+
+
+def test_cleanup_permission_failure_still_stops_owned_command(tmp_path, monkeypatch):
+    launched = []
+    original = ci.subprocess.Popen
+
+    def launch(*args, **kwargs):
+        process = original(*args, **kwargs)
+        launched.append(process)
+        return process
+
+    def denied(_processes):
+        raise psutil.AccessDenied(10156)
+
+    monkeypatch.setattr(ci.subprocess, "Popen", launch)
+    monkeypatch.setattr(ci, "terminate_descendants", denied)
+    with pytest.raises(psutil.AccessDenied):
+        ci.run_command(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            env=dict(os.environ),
+            log=tmp_path / "denied.log",
+            timeout=0.1,
+        )
+    assert len(launched) == 1
+    assert launched[0].poll() is not None

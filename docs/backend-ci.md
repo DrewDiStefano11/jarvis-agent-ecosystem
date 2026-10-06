@@ -90,7 +90,7 @@ The initial fetched base was `9d5eab1`; the implementation refreshed to
 1,527 cases in 4.41s and completed locally on Windows/Python 3.12 in **837.22s**:
 1,525 passed, 2 existing environment skips (unconfigured local model and unavailable
 file symlink privileges; junction coverage still ran). A separate profile of the
-four newly merged files passed 107 cases in 50.57s. Final collection includes
+four newly merged files passed 107 cases in 50.57s. The initial PR collection includes
 **1,661 cases**, including 27 new CI-tool regression cases.
 
 The previous hosted [successful backend job](https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/actions/runs/37056517399/job/111002448819)
@@ -112,7 +112,7 @@ No pathological migration, lock, or unbounded transform was reproduced; migratio
 code and downgrade safety remain unchanged. The separate gate now makes a future
 slow phase immediately visible and bounded.
 
-Measured local validation of the final shard selection (four independent processes,
+Measured local validation of the initial shard selection (four independent processes,
 each with fresh temp paths on the same Windows machine):
 
 | Check | Collected cases | Measured execution |
@@ -137,3 +137,20 @@ was diagnostics CLI/report at 21.49s, followed by the fake-provider live probe a
 timeout exercises, process cleanup, and repeated isolated migration/application
 setup. No test assertions, recovery windows, production transactions, migrations,
 or provider behavior were weakened for speed; no xdist was introduced.
+
+The first hosted PR run exposed a Windows cleanup failure after successful test
+sessions: waiting on recorded, exited descendant PIDs could encounter a recycled
+protected process. Cleanup now checks process creation identity and waits only
+for descendants it terminated. Six additional regression cases cover retired
+PIDs, cleanup deadlines, and preservation of real permission failures. Updated
+collection includes 1,667 cases and 33 CI-tool regression cases.
+
+The first hosted run measured pytest session times of 657.67s (runtime),
+986.16s (autonomy), 620.69s (models), and 1252.03s (system). Only system's
+job passed: runtime/models failed in cleanup after passing tests, and autonomy
+reported three failures in the new watchdog regression harness. The harness now
+uses an explicit temporary pytest config/root to handle C: temp files with a D:
+checkout. Application assertions remain unchanged. The final assignments use
+these hosted file totals, spreading office, identity/RBAC, persistence, and
+correction costs across independent runners. Local and exact-head hosted
+validation are repeated after this rebalance; PR evidence records final timings.

@@ -39,6 +39,35 @@ def load_shards(api: Path = API, manifest: Path = MANIFEST) -> dict[str, list[st
     return groups
 
 
+def terminate_descendants(processes: list) -> list:
+    import psutil
+
+    terminated = []
+    for child in reversed(processes):
+        try:
+            # is_running checks creation time as well as PID. An old record may
+            # now refer to an exited process or a PID recycled by Windows.
+            if child.is_running():
+                child.kill()
+                terminated.append(child)
+        except psutil.NoSuchProcess:
+            pass
+    return terminated
+
+
+def wait_for_descendants(processes: list, timeout: float = 5) -> None:
+    # psutil.wait_procs calls wait() on raw PIDs before checking identity. On
+    # Windows an exited/recycled PID can make OpenProcess return AccessDenied.
+    # Poll only identity-checked records we actually killed instead.
+    deadline = time.monotonic() + timeout
+    while alive := [child for child in processes if child.is_running()]:
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"Tracked descendants survived cleanup: {[child.pid for child in alive]}"
+            )
+        time.sleep(0.05)
+
+
 def run_command(
     command: list[str], *, env: dict[str, str], log: Path, timeout: float
 ) -> int:
@@ -87,15 +116,15 @@ def run_command(
                         descendants[child.pid] = child
                 except psutil.NoSuchProcess:
                     pass
-            for child in reversed(list(descendants.values())):
-                try:
-                    child.kill()
-                except psutil.NoSuchProcess:
-                    pass
-            if process.poll() is None:
-                process.kill()
-            process.wait(timeout=10)
-            psutil.wait_procs(list(descendants.values()), timeout=5)
+            try:
+                terminated = terminate_descendants(list(descendants.values()))
+            finally:
+                # A genuine descendant permission error must still stop the
+                # pytest command; never leave it running against abandoned state.
+                if process.poll() is None:
+                    process.kill()
+                process.wait(timeout=10)
+            wait_for_descendants(terminated)
             print(reader.read(), end="", flush=True)
     elapsed = time.monotonic() - started
     print(
