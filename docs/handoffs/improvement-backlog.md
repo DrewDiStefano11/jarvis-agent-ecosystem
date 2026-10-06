@@ -134,3 +134,15 @@ downgrade and re-upgrade passed during reconciliation; this repair changes no sc
 Fresh independent exact-head review and sharded CI are required after publishing
 this repair. Record the final SHA and review in the PR. Do not merge automatically.
 If only external CI remains, stop execution as the operator requested.
+
+## 2026-10-06 task-graph main conflict resolution
+
+Reconciled main `7b761b1cf6a4aac6fd689b2699a6dfc9db6a4f46` after #80 merged.
+Resolve the shard manifest conflict by retaining backlog tests in models while
+inheriting main's moves of autonomous-runtime admission to autonomy and independent
+verification to system. Native backlog deduplication and immutable lineage repair
+are unchanged; preserve all imported task-graph behavior and the portal-loop stop
+test. Ruff/format and complete 1,698-test collection pass. Focused backend: 74
+passed. Frontend typecheck, ESLint, 111 Vitest tests and production build pass.
+Publish this head and record fresh independent review. Stop while hosted CI waits;
+do not merge automatically.

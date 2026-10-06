@@ -142,7 +142,7 @@ export function Runtime() {
       {pending && !busy && <><p>Retry reuses the same context and command IDs, including after recovering this form following a reload. Inspect history before starting different work.</p><button className="secondary" onClick={() => forget(pending.id)}>Clear submission form</button></>}
       {message && <p role="status">{message}</p>}
     </section>
-    <section className="panel"><PlannedWork record={decomposition.record} error={decomposition.error} hasExecution={Boolean(coordination.record)}/><CoordinatedWork record={coordination.record} error={coordination.error}/></section>
+    <section className="panel"><PlannedWork record={decomposition.record} error={decomposition.error} execution={coordination.record}/><CoordinatedWork record={coordination.record} error={coordination.error}/></section>
     <section className="panel"><h2>Runtime history</h2><button className="secondary" disabled={!actorId || runtime.loading} onClick={() => void refreshRuntime()}>Refresh runtime</button>
       {runtime.error && <p role="alert">{runtime.error}</p>}
       {!actorId && <p>Select a local identity to read authorized history.</p>}
