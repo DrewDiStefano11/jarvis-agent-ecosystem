@@ -1,6 +1,6 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import { Link, MemoryRouter, useNavigate } from 'react-router-dom'
 import { beforeEach, expect, test, vi } from 'vitest'
 import App from '../src/App'
 import { useAppStore } from '../src/state/AppStore'
@@ -81,3 +81,34 @@ test('collapsed desktop navigation retains accessible destination names', async 
   expect(screen.getByRole('button', { name: 'Collapse sidebar' })).toHaveAttribute('aria-expanded', 'true')
 })
 
+
+test('failed refresh keeps known blockers visible with a stale qualifier', () => {
+  store.system = { ...healthySystem, emergencyStop: true, outboxExhaustedCount: 2 }
+  store.error = 'Refresh failed'
+  renderShell()
+  expect(screen.getByRole('link', { name: /Emergency stop is active/ })).toBeInTheDocument()
+  expect(screen.getByRole('link', { name: /2 event deliveries exhausted/ })).toBeInTheDocument()
+  expect(screen.getByText(/Last-known blockers shown/)).toBeInTheDocument()
+})
+test('mobile More reveals destinations after its trigger in keyboard order', async () => {
+  renderShell()
+  const mobile = within(screen.getByRole('navigation', { name: 'Mobile primary' }))
+  expect(mobile.queryByRole('link', { name: 'Office' })).not.toBeInTheDocument()
+  await userEvent.click(mobile.getByRole('button', { name: 'More navigation' }))
+  await userEvent.tab()
+  expect(mobile.getByRole('link', { name: 'Agents' })).toHaveFocus()
+})
+function QueryNavigation() {
+  const navigate = useNavigate()
+  return <><Link to="/tasks?create=1">Creation deep link</Link><Link to="/tasks">Clear query</Link><button onClick={() => navigate(-1)}>History back</button></>
+}
+test('creation follows query navigation and Back while Tasks stays mounted', async () => {
+  render(<MemoryRouter initialEntries={['/tasks']}><App/><QueryNavigation/></MemoryRouter>)
+  expect(screen.queryByLabelText('Title')).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('link', { name: 'Creation deep link' }))
+  expect(screen.getByLabelText('Title')).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('link', { name: 'Clear query' }))
+  expect(screen.queryByLabelText('Title')).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: 'History back' }))
+  expect(screen.getByLabelText('Title')).toBeInTheDocument()
+})

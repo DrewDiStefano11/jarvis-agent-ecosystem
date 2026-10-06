@@ -13,15 +13,15 @@ export function Tasks() {
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('all')
   const [priority, setPriority] = useState('all')
-  const [creating, setCreating] = useState(searchParams.get('create') === '1')
+  const creating = searchParams.get('create') === '1'
   const [createdId, setCreatedId] = useState('')
   const [warning, setWarning] = useState('')
   const roots = tasks.filter(task => !task.parentTaskId && task.title.toLowerCase().includes(search.toLowerCase())
     && (status === 'all' || task.status === status) && (priority === 'all' || task.priority === priority))
   return <>
-    <header className="page-title"><div><p className="eyebrow">Work orchestration</p><h1>Tasks</h1><p>Trace requests from assignment through audited delivery.</p></div><button className="primary" onClick={() => { setCreating(!creating); setSearchParams({}); setCreatedId('') }}>+ New task</button></header>
+    <header className="page-title"><div><p className="eyebrow">Work orchestration</p><h1>Tasks</h1><p>Trace requests from assignment through audited delivery.</p></div><button className="primary" onClick={() => { setSearchParams(creating ? {} : { create: '1' }); setCreatedId('') }}>+ New task</button></header>
     {correctionId && !loading && !canCorrect && <p role="alert">{source ? 'This task is still active. Inspect its progress or cancel it before creating a correction.' : 'The source task is unavailable. Refresh the Hub and inspect task history.'}</p>}
-    {(creating || Boolean(canCorrect)) && <TaskCreateForm key={source?.id ?? 'new'} source={canCorrect ? source : undefined} onCreated={(task, storageWarning) => { setCreatedId(task.id); setWarning(storageWarning); setCreating(false); setSearchParams({}) }}/>}
+    {(creating || Boolean(canCorrect)) && <TaskCreateForm key={source?.id ?? 'new'} source={canCorrect ? source : undefined} onCreated={(task, storageWarning) => { setCreatedId(task.id); setWarning(storageWarning); setSearchParams({}) }}/>}
     {createdId && <div className="panel" role="status"><p>Task created and queued. <Link to="/runtime" onClick={() => runtime.setTaskId(createdId)}>Open planning for this task</Link></p>{warning && <p>{warning}</p>}</div>}
     <div className="filters"><label>Search<input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search tasks"/></label><label>Status<select value={status} onChange={event => setStatus(event.target.value)}><option value="all">All</option>{[...new Set(tasks.map(task => task.status))].map(value => <option key={value}>{value}</option>)}</select></label><label>Priority<select value={priority} onChange={event => setPriority(event.target.value)}><option value="all">All</option>{['urgent', 'high', 'medium', 'low'].map(value => <option key={value}>{value}</option>)}</select></label></div>
     <section className="task-list">{roots.map(task => <article className="task-card" key={task.id}>

@@ -111,3 +111,12 @@ the authorized fetched page. Full model reasoning/tool execution acceptance is
 outside this shell change and is not claimed.
 
 Existing planning/worker browser golden path also passed: real API plus separate worker, fixture inference, lost-acknowledgement reload/recovery, corrections, original-result preservation and Office navigation. Evidence: C:/Users/DDistefano/.codex/visualizations/2026/10/06/01a11181-6f92-75e3-87b8-2a6413df8ab0/planning-acceptance. Fixture inference is transport/recovery evidence, not real reasoning evidence.
+
+
+### Review repair checkpoint — 2026-10-06
+
+PR #75: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/75. Initial head `04eb461fdd14cb3508d4d77cb0c9fd212c73afd7` received three P2 findings. All reproduced and repaired: preserve last-known blockers after failed refresh, place expanded mobile destinations after More in both DOM and visual order, and derive task creation from query state so same-route navigation/Back works. Regression tests and real API browser checks cover the changes.
+
+Initial runtime-browser CI failed in live Office emergency-stop smoke because Playwright dismissed the newly required confirmation. The harness now explicitly accepts stop/resume; live Office smoke passes, including real worker activity and frozen movement. Frontend typecheck/lint/115 tests/build and five-viewport Mission Control smoke pass. Backend remains identical to the previously validated base. Screenshots: local Temp `jarvis-mission-control-35tUp1`; Office evidence: visualization directory `office-review-repair`. Current CI/review will run again on the published repair head; no merge attempted.
+
+Independent agent operations PR #78: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/78, head `2638851ea696f5e2ec22f9bd622d11220a7aeee1`, worktree `.worktrees/mission-control-agent-operations`; 106 frontend tests and real API workforce smoke passed. Exact-head review requested. Next independent priority: persisted task dependencies and version-matched execution visualization; no unmerged contracts required.

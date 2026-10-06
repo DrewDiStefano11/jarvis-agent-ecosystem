@@ -88,6 +88,8 @@ async function stop(child) {
     }
     await page.getByRole('button', { name:'More navigation', exact:true }).click()
     const mobile = page.getByRole('navigation', { name:'Mobile primary', exact:true })
+    await page.keyboard.press('Tab')
+    assert.equal(await mobile.getByRole('link', { name:'Agents', exact:true }).evaluate(element => element === document.activeElement), true)
     await mobile.getByRole('link', { name:'System', exact:true }).click()
     await page.getByRole('heading', { name:'System', exact:true }).waitFor()
     assert.equal(await page.getByRole('button', { name:'More navigation', exact:true }).getAttribute('aria-expanded'), 'false')
@@ -109,6 +111,10 @@ async function stop(child) {
     const task = (await (await accepted).json()).data
     assert.ok(task.id)
     await page.getByText('Task created and queued.', { exact:false }).waitFor()
+    await page.goBack()
+    await page.getByLabel('Title', { exact:true }).waitFor()
+    await page.goForward()
+    await page.getByLabel('Title', { exact:true }).waitFor({ state:'hidden' })
     await nav.getByRole('link', { name:'Overview', exact:true }).click()
     await page.getByRole('button', { name:'Inspect Mission Control acceptance task', exact:true }).click()
     await page.getByRole('dialog', { name:'Mission Control acceptance task', exact:true }).waitFor()
