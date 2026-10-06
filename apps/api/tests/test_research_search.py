@@ -84,10 +84,16 @@ def test_result_and_input_sequence_budgets_are_bounded():
             batch(candidates, limit=limit)
 
 
-@pytest.mark.parametrize("query", [" ", "a\nheader", "a\x00b", "a" * 501])
+@pytest.mark.parametrize("query", [" ", "a\nheader", "a\x00b", "a" * 501, "a\x7fb", "a\u009bb"])
 def test_queries_reject_empty_control_and_oversized_text(query):
     with pytest.raises(ValidationError):
         SearchQuery(query=query)
+
+
+@pytest.mark.parametrize("field,value", [("title", "source\x7f"), ("snippet", "source\u009b")])
+def test_discovery_text_rejects_del_and_utf8_c1_controls(field, value):
+    with pytest.raises(ValidationError):
+        SearchCandidate(**(candidate().model_dump() | {field: value}))
 
 
 @pytest.mark.parametrize(

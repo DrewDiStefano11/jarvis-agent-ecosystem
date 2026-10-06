@@ -41,6 +41,8 @@ checkpoint or enforce a global query budget. Those are pending native integratio
 requirements, not advertised capabilities. Query/title/snippet/URL content can be
 sensitive or adversarial. Do not log raw contract validation errors or input
 values, and do not promote discovery text into trusted instructions.
+Query, title and snippet validation rejects all Unicode Cc control characters,
+including DEL and C1 controls, while allowing ordinary multilingual text.
 
 Deterministic tests cover URL safety, normalization/deduplication, result bounds,
 local/remote policy, control characters, immutable structural contracts, stable

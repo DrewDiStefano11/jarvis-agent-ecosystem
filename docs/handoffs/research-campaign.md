@@ -94,15 +94,18 @@ Search contract preparation: `codex/research-search-contract`, worktree
 `C:/Users/DDistefano/Documents/jarvis-agent-ecosystem/.worktrees/research-search-contract`.
 Provider-neutral discovery models, pure normalization/deduplication, stable identity
 and digest validation, and an adapter protocol; no provider or dispatcher activated.
-26 focused search tests and 72 policy cases pass. Ruff and all frontend gates pass.
+30 focused search tests and 72 policy cases pass. Ruff and all frontend gates pass.
 Full backend run: 1619 passed, two skips, two failures (live diagnostics overall
 health and a traceback assertion whose source lines shifted when the policy
 dependency was updated during the running suite). The final current-source
-98-case policy/search suite passes. All 52 diagnostics/report tests pass in a
+102-case policy/search suite passes. All 52 diagnostics/report tests pass in a
 fresh short isolated basetemp in 191.73 seconds. Future full runs should use
 short external temp paths and avoid changing source files while tests run.
 Source/snippet text remains untrusted and search results are discovery leads
 rather than retrieved evidence.
+The transport review identified DEL/C1 acceptance. The same audit was applied
+to search queries, titles and snippets: all Unicode Cc controls are rejected,
+with four additional regression cases. The 102-case affected suite passes.
 PR: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/79.
 Validated implementation commit: `1a7a5974f6e19ce3302a12bc6f0165265e5b5692`.
 Hosted CI and exact-head review are pending; current publication head is in the

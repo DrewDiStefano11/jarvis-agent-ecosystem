@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import unicodedata
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -47,7 +48,7 @@ class SearchQuery(SearchContract):
     def bounded_text(cls, value: str) -> str:
         if not value.strip() or len(value.encode("utf-8")) > 2000:
             raise ValueError("query must contain bounded substantive text")
-        if any(ord(char) < 32 or ord(char) == 127 for char in value):
+        if any(unicodedata.category(char) == "Cc" for char in value):
             raise ValueError("query must not contain control characters")
         return value
 
@@ -63,7 +64,7 @@ class SearchCandidate(SearchContract):
     @classmethod
     def safe_text(cls, value: str | None) -> str | None:
         if value is not None and (
-            not value.strip() or any(ord(char) < 32 or ord(char) == 127 for char in value)
+            not value.strip() or any(unicodedata.category(char) == "Cc" for char in value)
         ):
             raise ValueError("discovery text must be substantive and control-free")
         return value
