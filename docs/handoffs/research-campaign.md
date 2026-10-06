@@ -56,7 +56,10 @@ The full backend run passed 1573 tests with two skips but had 48 diagnostics
 fixture-copy errors from Windows MAX_PATH in the deep local basetemp. Every
 diagnostics/report test was rerun in a short isolated temp directory: 52 passed,
 188.93 seconds. No test was skipped to work around the errors and no production
-change was needed. Publication is the next step; the PR body records exact head.
+change was needed. PR: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/76.
+Validated implementation commit: `963302750c57d495c77dc8a19eb3d44b6b86f4b2`.
+Hosted CI and exact-head review are pending; the PR body records the current head
+including handoff-only publication updates. This PR is stacked on #74.
 
 Pinned transport: `codex/research-pinned-transport`, worktree
 `C:/Users/DDistefano/Documents/jarvis-agent-ecosystem/.worktrees/research-pinned-transport`.
