@@ -65,3 +65,18 @@ integration evidence remains applicable. Request fresh exact-head review and CI.
 Preserve the original adaptive preparation; merged
 coordinator now exists, but independent node verification/correction/replanning
 still needs a complete real execution vertical slice.
+
+## 2026-10-06 reconciliation after backlog and Mission Control merges
+
+Main `91085847c19a6b96de43231c2102353732961149` includes merged #71.
+Resolve the API-contract documentation conflict by retaining both bounded CI
+provenance/import contracts and native backlog selection/read contracts. Keep
+main's backlog models-shard registration and this PR's CI-evidence registration;
+complete test collection verifies every test file is assigned exactly once.
+Preserve imported Mission Control shell, approvals and runtime-history behavior.
+Fresh validation and independent exact-head review are recorded in PR comments.
+Stop during hosted CI; do not merge automatically. #71 and #73 are already merged.
+
+Validation for this reconciliation: 152 focused backend tests passed; complete
+1,717-test collection, Ruff and formatting pass. Frontend typecheck, ESLint,
+144 Vitest tests and production build pass. No schema or migration change.

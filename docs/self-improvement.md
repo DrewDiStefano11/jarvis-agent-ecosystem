@@ -6,6 +6,11 @@ This milestone does not allow Jarvis to autonomously rewrite or deploy itself.
 There is no executor, model invocation, source editing, routing change, permission
 change, model installation, shell execution, remote provider, or approval API.
 
+An additional [durable improvement backlog](improvement-backlog.md) admits one
+persisted opportunity as a native queued task through explicit local identity/RBAC.
+It retains frozen evidence and experiment references, suppresses duplicate active
+work and supports durable replay. Selection does not approve or execute a change.
+
 ## Evidence and baseline
 
 The existing evidence CLI also accepts `ci_run:alias:path` from an operator export:

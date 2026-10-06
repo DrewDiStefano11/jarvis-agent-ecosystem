@@ -7,6 +7,27 @@ do not establish test quality, root cause or comparable experiment definitions.
 The existing analysis read envelopes and route permissions remain unchanged.
 See [evidence import](self-improvement.md) for the exact CLI export/import commands.
 
+## Improvement backlog
+
+OpenAPI defines `SelectImprovementRequest`, `ImprovementBacklogSelection` and
+`ImprovementBacklogItem`. Local POST `/api/self-improvement/backlog/select` requires
+active `X-Jarvis-Actor-Id`, native `select_improvement` access on
+`administrative_function/improvement_backlog`, and bounded `Idempotency-Key`.
+The body supplies one to eight unique persisted `baseline_ids`. New admission is
+201; replay/empty/blocked is 200. The native `data` envelope contains `outcome`,
+nullable `entry`, `scanned_proposals` and `blocked_proposals`. The immutable entry
+retains evidence/proposal/baseline references, experiment digest, work kind,
+native task ID and verified selection identity/time.
+
+GET `/api/self-improvement/backlog` requires separate `read_improvement` access;
+`offset` is 0..100000 and `limit` 1..100. Items contain current native `task_status`.
+Both routes remain loopback-only. Missing actor is 401, permission denial 403,
+missing baseline 404, lineage/scan/database conflict 409, emergency-stop admission
+423 and invalid contract 422. Existing envelopes, sequences and event versions
+remain unchanged. See [operator commands](improvement-backlog.md).
+
+## Existing surfaces
+
 OpenAPI at `/openapi.json` is authoritative. All successful responses use `{ "data": ..., "meta": { "schemaVersion": "1.0" } }`. Domain failures use `{ "error": { "code", "message", "details" } }` with 404 for unknown IDs, 409 for invalid state/idempotency conflicts, 403 for prohibited black risk, and 423 for emergency-stop restrictions.
 
 Routes:
