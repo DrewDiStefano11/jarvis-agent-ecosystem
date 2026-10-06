@@ -3,6 +3,9 @@ import { request } from '../api/client'
 import { identityPages, registerIdentity } from '../api/identities'
 import type { IdentityCapability, IdentityRegistration, ModelExecution, RuntimeIdentity, RuntimePage, RuntimeRun } from '../types/runtime'
 
+export const RUNTIME_HISTORY_PAGE_LIMIT = 4
+export const RUNTIME_HISTORY_PAGE_SIZE = 50
+
 /** Shared runtime projection; reuses AppStore synchronization, never another socket. */
 export function useRuntimeState(lastSync: string | null) {
   const [actorId, setActor] = useState('')
@@ -18,6 +21,9 @@ export function useRuntimeState(lastSync: string | null) {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [nextOffset, setNextOffset] = useState<number | null>(null)
+  const [pagesLoaded, setPagesLoaded] = useState(0)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const requestTicket = useRef<number | null>(null)
   const generation = useRef(0)
   const actorRef = useRef(actorId)
 
@@ -63,6 +69,9 @@ export function useRuntimeState(lastSync: string | null) {
 
   const selectActor = useCallback((id: string) => {
     generation.current += 1
+    requestTicket.current = null
+    setPagesLoaded(0)
+    setLoadingMore(false)
     actorRef.current = id
     setActor(id)
     setRuns([])
@@ -74,6 +83,9 @@ export function useRuntimeState(lastSync: string | null) {
 
   const setTaskId = useCallback((id: string) => {
     generation.current += 1
+    requestTicket.current = null
+    setPagesLoaded(0)
+    setLoadingMore(false)
     setTask(id)
     setNextOffset(null)
     setLoading(false)
@@ -85,6 +97,8 @@ export function useRuntimeState(lastSync: string | null) {
   const refreshRuntime = useCallback(async () => {
     if (!actorId) return
     const current = ++generation.current
+    requestTicket.current = current
+    setLoadingMore(false)
     setLoading(true)
     try {
       const headers = { 'X-Jarvis-Actor-Id': actorId }
@@ -94,6 +108,7 @@ export function useRuntimeState(lastSync: string | null) {
       ])
       if (current !== generation.current) return
       setRuns(page.items)
+      setPagesLoaded(1)
       setExecutions(results)
       setNextOffset(page.next_offset)
       setError(null)
@@ -102,11 +117,54 @@ export function useRuntimeState(lastSync: string | null) {
       // Authorization revocation must clear previously disclosed result text.
       setRuns([])
       setExecutions([])
+      setNextOffset(null)
+      setPagesLoaded(0)
       setError(caught instanceof Error ? caught.message : 'Runtime synchronization failed')
     } finally {
-      if (current === generation.current) setLoading(false)
+      if (current === generation.current) { requestTicket.current = null; setLoading(false) }
     }
   }, [actorId, taskId])
+
+  const loadMoreRuns = useCallback(async () => {
+    if (!actorId || nextOffset === null || pagesLoaded >= RUNTIME_HISTORY_PAGE_LIMIT || requestTicket.current !== null) return
+    const offset = nextOffset
+    const current = ++generation.current
+    requestTicket.current = current
+    setLoading(true)
+    setLoadingMore(true)
+    try {
+      const page = await request<RuntimePage>(`/api/agent-runtime/runs?limit=${RUNTIME_HISTORY_PAGE_SIZE}&offset=${offset}${taskId ? `&task_id=${encodeURIComponent(taskId)}` : ''}`, {
+        headers: { 'X-Jarvis-Actor-Id': actorId },
+      })
+      if (current !== generation.current) return
+      if (page.next_offset !== null && page.next_offset <= offset) throw new Error('Runtime history did not advance. Refresh to read it again.')
+      setRuns(previous => {
+        const merged = new Map(previous.map(run => [run.specification.run_id, run]))
+        for (const run of page.items) {
+          const existing = merged.get(run.specification.run_id)
+          if (!existing || run.version >= existing.version) merged.set(run.specification.run_id, run)
+        }
+        return [...merged.values()].slice(0, RUNTIME_HISTORY_PAGE_LIMIT * RUNTIME_HISTORY_PAGE_SIZE)
+      })
+      setPagesLoaded(previous => previous + 1)
+      setNextOffset(page.next_offset)
+      setError(null)
+    } catch (caught) {
+      if (current !== generation.current) return
+      // A failed authorized read may represent revocation: clear all disclosures.
+      setRuns([])
+      setExecutions([])
+      setNextOffset(null)
+      setPagesLoaded(0)
+      setError(caught instanceof Error ? caught.message : 'Runtime history could not be loaded')
+    } finally {
+      if (current === generation.current) {
+        requestTicket.current = null
+        setLoading(false)
+        setLoadingMore(false)
+      }
+    }
+  }, [actorId, taskId, nextOffset, pagesLoaded])
 
   useEffect(() => {
     let cancelled = false
@@ -130,5 +188,5 @@ export function useRuntimeState(lastSync: string | null) {
   return { actorId, selectActor, identities, loadIdentities, identityError, identityLoading, createIdentity,
     updateIdentity, transitionIdentity, capabilities, capabilityMembers, loadCapabilities, loadCapabilityMembers,
     runs, executions, taskId, setTaskId,
-    error, loading, nextOffset, refreshRuntime, command }
+    error, loading, loadingMore, pagesLoaded, nextOffset, loadMoreRuns, refreshRuntime, command }
 }

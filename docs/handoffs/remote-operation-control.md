@@ -140,3 +140,20 @@ and all seven remote-control test registrations. No runtime behavior is dropped.
 Ruff/format and complete 1,727-test collection pass. Focused backend: 54 passed.
 Frontend typecheck, ESLint, 111 Vitest tests and production build pass. Publish
 this reconciled head, record fresh independent review, and stop during hosted CI.
+
+## 2026-10-06 reconciliation after backlog and Mission Control merges
+
+Main `91085847c19a6b96de43231c2102353732961149` includes merged #71.
+Preserve both remote actorIdentityId and backlog verifiedActorId attribution in
+append-only audit persistence. Keep authorization on every broker write path,
+with one callback inside the native repository write fence. Keep guarded receipt
+completion from main and remote atomic emergency-stop/checkpoint persistence.
+Frontend Mission Control shell, approval and runtime history behavior is inherited.
+No authorization fence, audit record, native task or checkpoint behavior is dropped.
+Fresh validation and independent exact-head review are recorded in PR comments.
+Stop during hosted CI; do not merge automatically. #71 and #73 are already merged.
+
+Validation for this reconciliation: 108 focused native remote-control, backlog,
+API and CI tests passed, including rollback/revocation and both audit identity
+paths. Complete 1,758-test collection, Ruff and formatting pass. Frontend typecheck,
+ESLint, 144 Vitest tests and production build pass. No schema or migration change.

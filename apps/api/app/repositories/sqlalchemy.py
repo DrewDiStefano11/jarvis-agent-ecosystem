@@ -488,11 +488,17 @@ class SqlAlchemyRepository:
         existing = set(session.scalars(select(AuditEventRow.id)))
         for item in self.audit:
             if item.id not in existing:
+                verified_actor = (
+                    item.payload.get("verifiedActorId") if isinstance(item.payload, dict) else None
+                )
+                actor = item.actorAgentId or (
+                    verified_actor if isinstance(verified_actor, str) else None
+                )
                 session.add(
                     AuditEventRow(
                         id=item.id,
                         event_type=item.eventType,
-                        actor=item.actorIdentityId or item.actorAgentId or "system",
+                        actor=item.actorIdentityId or actor or "system",
                         agent_id=item.actorAgentId,
                         task_id=item.taskId,
                         approval_id=item.approvalId,
@@ -595,10 +601,21 @@ class SqlAlchemyRepository:
             self._audit_session_ids[item.id] = event_session_id
         return item
 
-    def complete_idempotency(self, result: IdempotencyResult) -> None:
+    def complete_idempotency(
+        self, result: IdempotencyResult, *, authorize: Callable[[Session], None] | None = None
+    ) -> None:
         try:
             with UnitOfWork(self.session_factory) as uow:
                 assert uow.session is not None
+                if authorize is not None:
+                    if uow.session.bind and uow.session.bind.dialect.name == "sqlite":
+                        uow.session.execute(text("BEGIN IMMEDIATE"))
+                    uow.session.execute(
+                        update(SystemStateRow)
+                        .where(SystemStateRow.id == 1)
+                        .values(updated_at=datetime.now(UTC))
+                    )
+                    authorize(uow.session)
                 self._store_idempotency(uow.session, result)
         except Exception:
             self.reload()

@@ -871,7 +871,7 @@ def create_app(
         item = repository.get_task_durable(task_id)
         repository.tasks[item.id] = item
         if action == "pause":
-            if item.status in {"completed", "cancelled", "paused"}:
+            if item.status in {"completed", "cancelled", "failed", "paused"}:
                 raise DomainError(
                     "TASK_NOT_PAUSABLE", f"Task in {item.status} cannot be paused.", 409
                 )
