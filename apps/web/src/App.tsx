@@ -1,3 +1,4 @@
+import { JarvisCommand } from './components/JarvisCommand'
 import { lazy, Suspense, useLayoutEffect, useState } from 'react'
 import { Link, NavLink, Route, Routes, useLocation } from 'react-router-dom'
 import { AgentDetails, TaskDetails } from './components/Details'
@@ -68,6 +69,6 @@ export default function App() {
         <Routes><Route path="/" element={<Dashboard/>}/><Route path="/tasks" element={<Tasks/>}/><Route path="/agents" element={<Agents/>}/><Route path="/approvals" element={<Approvals/>}/><Route path="/audit" element={<Audit/>}/><Route path="/runtime" element={<Runtime/>}/><Route path="/lab" element={<BusinessLab/>}/><Route path="/office" element={<Suspense fallback={<p>Loading office…</p>}><Office/></Suspense>}/><Route path="/system" element={<System/>}/><Route path="*" element={<NotFound/>}/></Routes>
       </main>
       <nav className={`mobile-nav${more ? ' mobile-nav-expanded' : ''}`} aria-label="Mobile primary">{links.filter(link => 'mobile' in link && link.mobile).map(link => <NavLink key={link.to} to={link.to} end={link.to === '/'} className="mobile-main-link" aria-label={link.to === '/approvals' && pending > 0 ? `${link.label}, ${pending} pending approval records` : link.label} onClick={() => setMore(false)}><NavIcon name={link.icon}/><small>{link.label}</small></NavLink>)}<button className="mobile-more" aria-expanded={more} aria-label={more ? 'Close more navigation' : 'More navigation'} onClick={() => setMore(value => !value)}><span aria-hidden="true">{more ? '×' : '•••'}</span><small>More</small></button>{more && links.filter(link => !('mobile' in link && link.mobile)).map(link => <NavLink key={link.to} to={link.to} className="mobile-extra-link" onClick={() => setMore(false)}><NavIcon name={link.icon}/><small>{link.label}</small></NavLink>)}</nav>
-    </div>{selectedAgentId && <AgentDetails/>}{selectedTaskId && <TaskDetails/>}
+    </div><JarvisCommand/>{selectedAgentId && <AgentDetails/>}{selectedTaskId && <TaskDetails/>}
   </div>
 }
