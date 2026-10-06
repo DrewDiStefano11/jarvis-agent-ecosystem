@@ -181,6 +181,9 @@ correction for failed/needs-correction results using native retries. It requires
 explicit verification criteria and a frozen run deadline bounded by the policy.
 Absent policy is omitted from legacy serialization. Fixed limits are one retry,
 eight planning/critic dispatches across two cycles and 1–3600 elapsed seconds.
+Run-version-fenced native checkpoints reserve each physical dispatch before
+provider access. Unknown recovered worker acknowledgements consume their slot
+and pause with `model_dispatch_outcome_unknown` for operator reconciliation.
 Native review checkpoints bind verifier/policy digests; model text grants no
 authority. Unverifiable, human-review-required and exhausted correction pause for
 operator review. See [planning correction](planning-correction.md). Node-level
@@ -191,7 +194,9 @@ Optional `coordinator_verification` freezes policy version
 `maximum_elapsed_seconds` (1–3600). It requires planning-review execution and a
 bounded run deadline. Absent policy is omitted from legacy serialization. Critic
 dispatches, responses and verdicts use native runtime checkpoints and consume
-the existing 38-dispatch coordinator budget. Node success and task completion
+the existing 38-dispatch coordinator budget. Native reservation refuses exhausted
+budgets before inference and leaves coordination blocked for operator review.
+Node success and task completion
 revalidate exact passing proof, planned inputs, criteria, policy and source
 checkpoint inside their native transactions. Unknown critic outcomes never
 redispatch; unavailable/invented evidence fails closed. New inference is barred

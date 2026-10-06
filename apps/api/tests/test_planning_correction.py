@@ -272,6 +272,13 @@ async def test_worker_and_critic_repairs_consume_at_most_eight_dispatches(tmp_pa
         assert len(router.requests) == len(router.critic_requests) == 4
         assert await service.run_once(worker.id) is None
         assert len(router.requests) + len(router.critic_requests) == 8
+        reservations = [
+            item
+            for item in service.runtime.repository.list_checkpoints("run-autonomous-1")
+            if item.metadata.get("schemaName") == "planning-dispatch-1"
+        ]
+        assert len(reservations) == 8
+        assert sorted(item.metadata["ordinal"] for item in reservations) == list(range(1, 9))
     finally:
         client.__exit__(None, None, None)
 

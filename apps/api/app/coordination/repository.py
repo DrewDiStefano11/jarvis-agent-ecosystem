@@ -463,6 +463,12 @@ class CoordinationRepository:
         with self._write() as session:
             row, record = self._record(session, record_id)
             self._live_record(session, record, fence, validate_live)
+            if record.modelDispatchCount >= 38:
+                raise DomainError(
+                    "COORDINATION_MODEL_BUDGET_EXCEEDED",
+                    "Coordinator dispatch budget exhausted.",
+                    409,
+                )
             record.modelDispatchCount += 1
             record.updatedAt = datetime.now(UTC)
             row.payload = record.model_dump(mode="json")

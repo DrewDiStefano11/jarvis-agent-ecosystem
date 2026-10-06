@@ -1,5 +1,18 @@
 # Adaptive correction preparation
 
+October 6 review repairs reserve planning/critic dispatches in the existing
+native checkpoint ledger before provider access. Frozen policy digests, ordinal
+validation and runtime version fencing enforce the shared eight-dispatch bound;
+uncertain recovered worker calls pause for reconciliation without another call.
+Exhausted structural review retains its exact verifier digest and recovery
+rejects missing proof. Native coordinator reservation refuses count 38 inside
+its write transaction, including concurrent contenders, leaving a valid blocked
+record without critic inference. All three findings first failed reproductions.
+The focused correction/node-verification package passes 35 tests. API/scripts
+Ruff and frontend typecheck/ESLint/104 tests/build pass. Final full backend
+validation passes 1,560 tests with two existing skips (951.41 seconds). Publish
+this repair checkpoint and request fresh exact-head CI/review.
+
 This is implementation preparation, not a completed capability or merge-ready PR.
 The updated October 5 goal permits a dependent branch while PR #69 gates run.
 

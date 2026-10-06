@@ -321,6 +321,7 @@ class AutonomousWorkerService:
                 "MODEL_OUTPUT_REPAIR_EXHAUSTED",
                 "NO_LOCAL_PROVIDER_AVAILABLE",
                 "MODEL_EXECUTION_BUDGET_EXCEEDED",
+                "MODEL_DISPATCH_OUTCOME_UNKNOWN",
                 "MODEL_EXECUTION_TIMEOUT",
                 "MODEL_EXECUTION_DISABLED",
                 "LOCAL_PROVIDER_REQUIRED",
@@ -903,6 +904,13 @@ class AutonomousWorkerService:
         request = snapshot.specification.autonomous_execution
         assert request is not None
         self._assert_live_policy(snapshot, actor, worker_id, lease_token)
+        execution = self.executions.get(execution_id)
+        if request.correction_policy is not None:
+            if execution.requestCount >= request_count:
+                raise AutonomousWorkerError("MODEL_DISPATCH_OUTCOME_UNKNOWN")
+            self.reserve_planning_dispatch(
+                snapshot, execution, actor, worker_id, lease_token, "worker", request_count
+            )
         self.executions.record_call_started(
             execution_id,
             worker_id=worker_id,
@@ -1230,6 +1238,7 @@ class AutonomousWorkerService:
                 outcome=PlanReviewOutcome.ESCALATED,
                 reason_code="planning_correction_limit_reached",
                 findings=decision.findings,
+                verification_digest=decision.verification_digest,
                 correction_policy_digest=self._correction_policy_digest(request.correction_policy),
             )
         # Stop, cancellation, lease loss, target lifecycle, and authorization are
@@ -1255,6 +1264,68 @@ class AutonomousWorkerService:
     @staticmethod
     def _correction_policy_digest(policy):
         return sha256(canonical_json(policy.model_dump(mode="json")).encode()).hexdigest()
+
+    def reserve_planning_dispatch(
+        self, snapshot, execution, actor, worker_id, lease_token, role, request_index
+    ):
+        """Reserve a physical call using the native run version and checkpoint ledger."""
+        from app.models.agent_runtime import stable_hash
+
+        policy = snapshot.specification.autonomous_execution.correction_policy
+        if policy is None:
+            return
+        current = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
+        slot = stable_hash([execution.executionId, role, request_index])[:40]
+        checkpoint_id = "checkpoint-dispatch-" + slot
+        records = self.runtime.checkpoints_authorized(execution.runtimeRunId, actor)
+        reservations = [
+            item for item in records if item.metadata.get("schemaName") == "planning-dispatch-1"
+        ]
+        policy_digest = self._correction_policy_digest(policy)
+        for item in reservations:
+            if (
+                item.integrity_digest != "sha256:" + stable_hash(item.metadata)
+                or item.metadata.get("policyDigest") != policy_digest
+            ):
+                raise AutonomousWorkerError("MODEL_RESULT_CORRUPT")
+            if item.checkpoint_id == checkpoint_id:
+                if role == "critic" and item.metadata.get("ownerDigest") == stable_hash(
+                    [worker_id, lease_token]
+                ):
+                    raise AutonomousWorkerError("VERIFICATION_IN_PROGRESS")
+                raise AutonomousWorkerError("MODEL_DISPATCH_OUTCOME_UNKNOWN")
+        if sorted(item.metadata.get("ordinal", 0) for item in reservations) != list(
+            range(1, len(reservations) + 1)
+        ):
+            raise AutonomousWorkerError("MODEL_RESULT_CORRUPT")
+        if len(reservations) >= policy.maximum_model_dispatches:
+            raise AutonomousWorkerError("MODEL_EXECUTION_BUDGET_EXCEEDED")
+        metadata = {
+            "schemaName": "planning-dispatch-1",
+            "executionId": execution.executionId,
+            "role": role,
+            "requestIndex": request_index,
+            "policyDigest": policy_digest,
+            "ownerDigest": stable_hash([worker_id, lease_token]),
+            "ordinal": len(reservations) + 1,
+        }
+        result = self._handle_command(
+            RecordCheckpointCommand,
+            current,
+            actor,
+            "dispatch-" + slot,
+            require_execution_enabled=True,
+            execution_fence=RuntimeExecutionFence(
+                task_id=execution.taskId, worker_id=worker_id, lease_token=lease_token
+            ),
+            checkpoint_id=checkpoint_id,
+            attempt_id=execution.runtimeAttemptId,
+            state_reference=f"planning-dispatch:{execution.executionId}:{role}:{request_index}",
+            integrity_digest="sha256:" + stable_hash(metadata),
+            checkpoint_metadata=metadata,
+        )
+        if result.idempotent_replay:
+            raise AutonomousWorkerError("MODEL_DISPATCH_OUTCOME_UNKNOWN")
 
     def execution_timeout(self, snapshot):
         request = snapshot.specification.autonomous_execution

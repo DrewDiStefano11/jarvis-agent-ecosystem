@@ -23,6 +23,9 @@ independent verdict that preceded them. Human-review-required and unverifiable
 outcomes remain operator exceptions.
 
 Two planning cycles each permit at most two worker and two critic dispatches.
+Native run-version-fenced checkpoints reserve each worker and critic dispatch
+against the shared eight-call bound before provider access. A recovered worker
+dispatch with an unknown acknowledgement pauses for operator reconciliation.
 Existing per-attempt reservations and persisted reviewer dispatches prevent repeat
 inference after uncertain acknowledgement. Coordinator children retain their own
 native budget; eight bounds this planning correction segment. The frozen deadline
