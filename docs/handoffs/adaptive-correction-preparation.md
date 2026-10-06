@@ -4,10 +4,11 @@ This is implementation preparation, not a completed capability or merge-ready PR
 The updated October 5 goal permits a dependent branch while PR #69 gates run.
 
 - Branch: `codex/adaptive-correction-replanning`.
-- Current dependency: PR #69, head `47ce8d48e6f1ccd64fe78a73223f8a706821e62f`.
-- Reconciled main: `ee0dd09bf1825ab635e7a61d8fe2ae192f6e0444`.
-- No PR exists yet. Do not merge before #69; refresh onto its actual merge/main
-  before final validation/review. Preserve current partial implementation.
+- PR #69 merged after all exact-head gates and clean review; main is
+  `9d5eab1c5e169f7c99f3cf1e9e2ecafa3a725fdf`, merged into this branch.
+- Planning correction checkpoint `04d06ae6b69b39505745359da7ba52853da9f115` is pushed.
+- PR #73 exists on the planning checkpoint. Preserve current partial
+  node-verification implementation; full adaptive capability remains incomplete.
 - #68/#63 have merged. Integrate only current main; other sessions stay untouched.
 
 ## Current implementation checkpoint
@@ -34,7 +35,37 @@ command; the diagnostic rerun with faulthandler passed all cases. No tests weake
 Checkpoint this coherent slice on the existing branch, without opening a PR
 claiming the complete adaptive milestone. Full validation follows its final scope.
 This proves no reassignment or result-preserving replan; those remain required for
-the full milestone. Priority remote review persistence repair is currently active.
+the full milestone.
+
+## Active node-verification work
+
+An opt-in immutable `coordinator_verification` policy now journals independent
+critic dispatches, responses and verdicts in existing child runtime checkpoints.
+Source result, exact planned inputs/criteria, upstream result provenance and policy
+digests bind the verdict. Native node success and final completion require a
+matching passing proof inside their transactions. Critic requests consume the
+existing 38-dispatch coordinator budget, with at most two requests per attempt.
+The frozen deadline fences new dispatches and clamps physical request timeouts;
+already committed results can reconcile without another call.
+
+Eighteen initial tests pass across targeted runs: actual three-node coordination
+and task completion, failed/needs-correction/unverifiable outcomes, schema repair,
+invented evidence refusal, lease takeover without repeat inference, native success
+enforcement against service bypass, deadline/clamping, and resealed foreign task,
+criterion or false passing verdict rejection, concurrent critic ownership, unknown
+response recovery and late stop/revocation/suspension. Initial recovery testing caught and
+fixed datetime serialization changing the sealed verdict digest. Full integration
+and concurrency/control-plane adversarial checks remain required before committing
+this slice. Coordinator/planning integration passes 97 tests; full backend is
+running on the combined node-verification candidate. No reassignment or versioned
+replan/reuse has been added yet.
+
+PR #73 frontend failures were cold lazy Office imports exceeding DOM query bounds:
+the job's failed DOM contained only `Loading office…`. A temporary 2.5-second
+real-module import delay reproduced both exact failures. Awaiting the real module
+in test setup made both unchanged interaction assertions pass under the same delay.
+The diagnostic delay was removed. Typecheck, ESLint, all 104 Vitest tests and build
+pass; no production code, retry allowance, query timeout or assertions changed.
 
 ## Evidence from current architecture
 
