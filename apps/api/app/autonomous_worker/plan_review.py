@@ -11,6 +11,7 @@ orchestration; ``analysis``/``summary`` remain stored explanation.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
@@ -50,14 +51,21 @@ class PlanReviewDecision:
     outcome: PlanReviewOutcome
     reason_code: str
     findings: tuple[str, ...] = ()
+    verification_digest: str | None = None
+    correction_policy_digest: str | None = None
 
     def as_metadata(self) -> dict[str, Any]:
-        return {
+        value = {
             "outcome": self.outcome.value,
             "reasonCode": self.reason_code,
             "findings": list(self.findings),
             "policyVersion": PLAN_REVIEW_POLICY_VERSION,
         }
+        if self.verification_digest is not None:
+            value["verificationDigest"] = self.verification_digest
+        if self.correction_policy_digest is not None:
+            value["correctionPolicyDigest"] = self.correction_policy_digest
+        return value
 
 
 class PlanReviewRecordError(ValueError):
@@ -116,10 +124,26 @@ def decision_from_metadata(metadata: Mapping[str, Any]) -> PlanReviewDecision:
         raise PlanReviewRecordError("invalid review findings")
     if len(findings) > MAX_REVIEW_FINDINGS:
         raise PlanReviewRecordError("too many review findings")
+    references = {
+        "verification_digest": metadata.get("verificationDigest"),
+        "correction_policy_digest": metadata.get("correctionPolicyDigest"),
+    }
+    if any(
+        value is not None
+        and (not isinstance(value, str) or re.fullmatch(r"[a-f0-9]{64}", value) is None)
+        for value in references.values()
+    ):
+        raise PlanReviewRecordError("invalid correction provenance digest")
+    if (
+        references["verification_digest"] is not None
+        and references["correction_policy_digest"] is None
+    ):
+        raise PlanReviewRecordError("correction verdict requires a frozen policy digest")
     return PlanReviewDecision(
         outcome=PlanReviewOutcome(outcome),
         reason_code=reason_code,
         findings=tuple(findings),
+        **references,
     )
 
 
