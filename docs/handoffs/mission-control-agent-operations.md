@@ -91,3 +91,10 @@ records. Keep readiness distinct from actual execution, preserve dependency keys
 include an accessible list, inspect full labels/deliverables, and avoid inventing
 review/verification stages not exposed by merged contracts. Reconcile main between
 major milestones, and never merge/delete branches here.
+
+
+### Published review repair checkpoint
+
+PR #78: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/78. Initial exact head `2638851ea696f5e2ec22f9bd622d11220a7aeee1` received two P2 findings. Fixed lifecycle choices use the merged contract's four states, so the selected filter remains represented after its last identity transitions. Successful profile/lifecycle acknowledgements now live in the workforce section, surviving a card leaving search/lifecycle/availability filters. No domain state moved or added.
+
+Regression tests cover reactivation under suspended, disabling under enabled, and renaming out of a name filter. Real API smoke reproduces lifecycle/availability transitions and confirms acknowledgements. Typecheck/lint/108 tests/build pass; screenshot/browser evidence `jarvis-workforce-EddRsT` in local Temp. Initial frontend/integrity/runtime-browser CI are green; backend CI pending. Republish and review the new exact head; no merge attempted.

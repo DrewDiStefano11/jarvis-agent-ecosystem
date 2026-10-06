@@ -204,3 +204,33 @@ test('inspect opens and focuses the existing profile controls without issuing co
   expect(within(profile).getByRole('button', { name: 'Activate identity' })).toBeInTheDocument()
   expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
 })
+
+test('lifecycle selection remains representable after its last identity transitions', async () => {
+  rows = [{ ...first, lifecycle_state: 'suspended' }]
+  renderWorkforce()
+  await screen.findByRole('article', { name: 'Identity Researcher' })
+  await userEvent.selectOptions(screen.getByLabelText('Lifecycle', { exact: true }), 'suspended')
+  await userEvent.click(screen.getByRole('button', { name: 'Reactivate identity' }))
+  await screen.findByText('No identities match this selection.')
+  expect(screen.getByLabelText('Lifecycle', { exact: true })).toHaveValue('suspended')
+  expect(screen.getByRole('option', { name: 'suspended' })).toBeInTheDocument()
+  expect(screen.getByRole('status')).toHaveTextContent('Researcher: Identity activated')
+})
+test('acknowledgement survives an identity leaving availability or search filters', async () => {
+  rows = [{ ...first, stable_key: 'native-agent', lifecycle_state: 'active' }]
+  renderWorkforce()
+  await screen.findByRole('article', { name: 'Identity Researcher' })
+  await userEvent.selectOptions(screen.getByLabelText('Availability', { exact: true }), 'enabled')
+  await userEvent.click(screen.getByRole('button', { name: 'Disable identity' }))
+  expect(await screen.findByRole('status')).toHaveTextContent('Researcher: Identity disabled.')
+  expect(screen.queryByRole('article', { name: 'Identity Researcher' })).not.toBeInTheDocument()
+  await userEvent.selectOptions(screen.getByLabelText('Availability', { exact: true }), '')
+  await userEvent.type(screen.getByLabelText('Find an identity'), 'Researcher')
+  const card = within(await screen.findByRole('article', { name: 'Identity Researcher' }))
+  await userEvent.click(card.getByRole('button', { name: 'Edit profile' }))
+  await userEvent.clear(card.getByLabelText('Display name'))
+  await userEvent.type(card.getByLabelText('Display name'), 'Analyst')
+  await userEvent.click(card.getByRole('button', { name: 'Save profile' }))
+  expect(await screen.findByRole('status')).toHaveTextContent('Researcher: Profile saved.')
+  expect(screen.queryByRole('article', { name: 'Identity Analyst' })).not.toBeInTheDocument()
+})
