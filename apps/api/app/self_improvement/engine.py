@@ -121,6 +121,12 @@ def analyze(baseline: Baseline) -> Analysis:
             "efficiency": "Terminate repeated identical failed model requests within existing bounds rather than repeating an unchanged request.",
         }
         description = f"Target {stage}/{role}, measurement {metric}: {candidates[category]}"
+        if all(item.source_type == "ci_run" for item in items):
+            description = (
+                f"Target CI measurement {metric}: Collect bounded job/step outcomes and "
+                "original suite/policy provenance; distinguish setup failure, test regression "
+                "and timeout before selecting an implementation change."
+            )
         # Select per-source metric keys; repeated runs remain individually visible.
         primary = tuple(
             Criterion(observation_id=o.id, target=o.expected, direction=o.direction) for o in items
@@ -194,6 +200,8 @@ def create_baseline(
                     Path(__file__),
                     Path(__file__).with_name("adapters.py"),
                     Path(__file__).with_name("runtime.py"),
+                    Path(__file__).with_name("ci.py"),
+                    Path(__file__).parents[1] / "models" / "ci_evidence.py",
                     Path(__file__).parents[1] / "models" / "self_improvement.py",
                     Path(__file__).parents[1] / "model_evaluation" / "runner.py",
                     Path(__file__).parents[1] / "model_evaluation" / "expectations.py",

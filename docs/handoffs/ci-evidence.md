@@ -1,0 +1,39 @@
+# CI evidence checkpoint
+
+Independent branch `codex/ci-evidence` starts at freshly inspected main
+`ee0dd09bf1825ab635e7a61d8fe2ae192f6e0444`. Other sessions' branches are untouched.
+PR #69's review repairs are pushed at `47ce8d4`; remote PR #70's next review repairs
+are in progress. Durable improvement backlog PR #71 is pushed at `808bc03` with a
+clean exact-head review. Its backend job did not acquire a runner and was rerun.
+
+## Implemented vertical slice
+
+An operator-exported bounded GitHub Actions run can enter native Improvement Lab
+analysis through existing CLI `--evidence ci_run:alias:path`. Native DTOs discard
+step/command/URL text. Recorded successful, failed, timed-out and startup-failed
+jobs become numeric observations. Cancelled/skipped/neutral/action-required/stale
+or pending jobs remain unmeasured; absence of jobs cannot claim success. CI heads
+must match the requested baseline SHA. Job identity/clock/status and scan bounds
+are validated. No external integration or GitHub mutation runs inside Jarvis.
+
+CI outcomes lack frozen historical test suite/policy/configuration definitions, so
+provenance remains incomplete and proposals remain evidence gathering. Native
+deterministic proposals explicitly request cause/suite evidence rather than guessing
+startup fixes or claiming a regression. The evaluator digest covers both the adapter
+and its native input contract. No execution approval, migration or dependency.
+
+## Validation and next action
+
+- Full backend: 1,460 passed, two existing skips. Windows runner wall-clock timing
+  includes a long session interruption; it is not a runtime performance measure.
+- Ninety focused CI/native self-improvement tests pass, including real temporary
+  SQLite migrations and CLI persistence. An actual bounded GH export validates.
+- API/scripts Ruff, frontend typecheck/ESLint/104 Vitest tests/build and diff
+  integrity pass. Single migration head remains `20260907_11`.
+- Publish a coherent commit and PR, then record exact-head CI/review in PR comments.
+  No root cause, regression attribution or software repair is inferred from job
+  status alone. Continue priority review repairs while external gates run.
+
+Preserve the original adaptive preparation; merged
+coordinator now exists, but independent node verification/correction/replanning
+still needs a complete real execution vertical slice.

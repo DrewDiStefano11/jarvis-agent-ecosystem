@@ -125,6 +125,10 @@ class ArtifactSource:
         self.kind, self.source_id, self.payload = kind, source_id, payload
 
     def collect(self):
+        if self.kind == "ci_run":
+            from app.self_improvement.ci import CIRunSource
+
+            return CIRunSource(self.source_id, self.payload).collect()
         if (
             self.kind in ("autonomy_acceptance", "model_evaluation", "model_qualification")
             and self.payload.get("schema_version", "1.0") != "1.0"

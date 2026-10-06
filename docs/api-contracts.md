@@ -1,5 +1,12 @@
 # HTTP contracts
 
+Improvement Lab `SourceProvenance.source_type` also accepts `ci_run`. Its bounded
+`CIRunEvidence`/`CIJobEvidence` import contracts project an operator-exported
+GitHub Actions JSON run. CI source provenance stays incomplete; job conclusions
+do not establish test quality, root cause or comparable experiment definitions.
+The existing analysis read envelopes and route permissions remain unchanged.
+See [evidence import](self-improvement.md) for the exact CLI export/import commands.
+
 OpenAPI at `/openapi.json` is authoritative. All successful responses use `{ "data": ..., "meta": { "schemaVersion": "1.0" } }`. Domain failures use `{ "error": { "code", "message", "details" } }` with 404 for unknown IDs, 409 for invalid state/idempotency conflicts, 403 for prohibited black risk, and 423 for emergency-stop restrictions.
 
 Routes:
