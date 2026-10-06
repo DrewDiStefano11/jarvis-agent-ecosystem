@@ -322,3 +322,34 @@ describe('Live office controls', () => {
   }
  })
 })
+
+test('lost reset acknowledgement latches shared reconciliation across navigation and obsolete reads', async () => {
+ window.history.pushState({}, '', '/system')
+ renderApp()
+ await screen.findByText('Reported backend status: healthy')
+ await userEvent.click(screen.getByText('Demonstration controls'))
+ const original = vi.mocked(fetch).getMockImplementation()!
+ let finishOld!: (value: Response) => void
+ let holdStatus = true
+ vi.mocked(fetch).mockImplementation(async (input, init) => {
+  const path = new URL(String(input)).pathname
+  if (path === '/api/simulator/reset' && init?.method === 'POST') throw new TypeError('Ack lost')
+  if (path === '/api/system/status' && holdStatus) return new Promise<Response>(resolve => {finishOld = resolve})
+  return original(input, init)
+ })
+ vi.spyOn(window, 'confirm').mockReturnValue(true)
+ await userEvent.click(screen.getByRole('button', {name: 'Refresh state'}))
+ await userEvent.click(screen.getByRole('button', {name: 'Reset demo'}))
+ await screen.findByText(/Request outcome could not be confirmed/)
+ expect(screen.getByRole('button', {name: 'Reset demo'})).toBeDisabled()
+ await act(async () => finishOld({ok: true, status: 200, json: async () => ({data: system})} as Response))
+ expect(screen.getByRole('button', {name: 'Reset demo'})).toBeDisabled()
+ await userEvent.click(screen.getAllByRole('link', {name: 'Dashboard'})[0]!)
+ await userEvent.click(screen.getAllByRole('link', {name: 'System'})[0]!)
+ await userEvent.click(screen.getByText('Demonstration controls'))
+ expect(screen.getByRole('button', {name: 'Reset demo'})).toBeDisabled()
+ expect(vi.mocked(fetch).mock.calls.filter(([url, init]) => String(url).endsWith('/api/simulator/reset') && init?.method === 'POST')).toHaveLength(1)
+ holdStatus = false
+ await userEvent.click(screen.getByRole('button', {name: 'Refresh state'}))
+ await waitFor(() => expect(screen.getByRole('button', {name: 'Reset demo'})).toBeEnabled())
+})

@@ -118,6 +118,20 @@ async function stop(child) {
     page.once('dialog', dialog => dialog.dismiss())
     await page.getByRole('button', { name:'Reset demo', exact:true }).click()
     assert.equal(writes.length, beforeReset)
+    // A destructive reset can be accepted before its acknowledgement is lost.
+    // Shared uncertainty must disable a second reset until post-failure refresh.
+    await page.route(`${base}/api/simulator/reset`, async route => { await route.fetch(); await route.abort('failed') })
+    const resetBeforeLost = writes.filter(route => route === '/api/simulator/reset').length
+    page.once('dialog', dialog => dialog.accept())
+    await page.getByRole('button', { name:'Reset demo', exact:true }).click()
+    await page.getByText(/Request outcome could not be confirmed/).waitFor()
+    assert.equal(await page.getByRole('button', { name:'Reset demo', exact:true }).isEnabled(), false)
+    await page.getByRole('button', { name:'Reset demo', exact:true }).evaluate(button => button.click())
+    assert.equal(writes.filter(route => route === '/api/simulator/reset').length, resetBeforeLost + 1)
+    await page.unroute(`${base}/api/simulator/reset`)
+    await page.getByRole('button', { name:'Refresh state', exact:true }).click()
+    await page.getByText(/Last-known data may be outdated/).waitFor({ state:'hidden' })
+    assert.equal(await page.getByRole('button', { name:'Reset demo', exact:true }).isEnabled(), true)
     // Accept server write but drop the response: do not invent acknowledgement or replay.
     let lost = false
     await page.route(`${base}/api/system/emergency-stop`, async route => {

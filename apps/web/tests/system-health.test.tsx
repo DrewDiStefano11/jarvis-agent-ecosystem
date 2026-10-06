@@ -103,3 +103,13 @@ test('technical identifiers remain available behind a native disclosure', () => 
   expect(within(detail).getByText('merged-revision (current)')).toBeInTheDocument()
   expect(within(detail).getByText('operator')).toBeInTheDocument()
 })
+
+test('stale emergency state cannot resume but emergency stop remains available', () => {
+ store.system = {...snapshot, emergencyStop: true}
+ store.resyncRequired = true
+ const view = show()
+ expect(screen.getByRole('button', {name: 'Resume system'})).toBeDisabled()
+ store.system = {...snapshot, emergencyStop: false}
+ view.rerender(<MemoryRouter><System/></MemoryRouter>)
+ expect(screen.getByRole('button', {name: 'Emergency stop'})).toBeEnabled()
+})

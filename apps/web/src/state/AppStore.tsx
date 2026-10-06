@@ -185,7 +185,17 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
 
   const action = useCallback(
     async <T,>(path: string, body?: unknown) => {
-      const result = await post<T>(path, body)
+      let result: T
+      try {
+        result = await post<T>(path, body)
+      } catch (caught) {
+        // Invalidate reads started before the uncertain write outcome. A later
+        // authoritative snapshot must reconcile shared state before more work.
+        refreshGeneration.current += 1
+        setState(current => ({ ...current, resyncRequired: true,
+          error: 'Control outcome requires reconciliation. Refresh state before retrying.' }))
+        throw caught
+      }
       await refresh()
       return result
     },

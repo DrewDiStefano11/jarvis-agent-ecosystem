@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useAppStore } from '../state/AppStore'
 import '../styles/system-health.css'
@@ -12,6 +12,7 @@ export function System() {
   const [message, setMessage] = useState('')
   const [controlError, setControlError] = useState('')
   const [busy, setBusy] = useState(false)
+  const controlPending = useRef(false)
   const [refreshing, setRefreshing] = useState(false)
   const worker = system?.autonomousWorker
   const stale = Boolean(error || resyncRequired || connection !== 'connected')
@@ -19,11 +20,12 @@ export function System() {
   const unknown = 'Unavailable'
   const date = (value: string | null | undefined) => value ? new Date(value).toLocaleString() : 'Not recorded'
   const run = async (path: string, label: string, body?: unknown, confirmation?: string) => {
-    if (busy || (confirmation && !window.confirm(confirmation))) return
+    if (controlPending.current || (path !== '/api/system/emergency-stop' && stale) || (confirmation && !window.confirm(confirmation))) return
+    controlPending.current = true
     setBusy(true); setMessage(''); setControlError('')
     try { await action(path, body); setMessage(`${label} request acknowledged. Inspect the current state before further action.`) }
     catch (caught) { setControlError(`Request outcome could not be confirmed. Refresh state before retrying. ${caught instanceof Error ? caught.message : 'Control unavailable.'}`) }
-    finally { setBusy(false) }
+    finally { controlPending.current = false; setBusy(false) }
   }
   const technical: [string, ReactNode][] = [
     ['Backend', system?.status ?? unknown], ['Storage', system?.storageBackend ?? unknown],
@@ -62,7 +64,7 @@ export function System() {
         <HealthRow label="Task leases" value={system ? `${system.activeLeaseCount} active / ${system.expiredLeaseCount} expired` : unknown} tone={system?.expiredLeaseCount ? 'warning' : 'muted'}/>
         <HealthRow label="Event delivery" value={system ? `${system.outboxPendingCount} pending / ${system.outboxExhaustedCount} exhausted` : unknown} tone={system?.outboxExhaustedCount ? 'danger' : 'muted'}/>
       </dl></section>
-      <section className="system-health-panel system-health-controls" aria-labelledby="system-controls-title"><h2 id="system-controls-title">System controls</h2><p>Emergency stop blocks new execution and stops office movement. Review active work before resuming.</p><button className="system-stop" disabled={!system || busy} onClick={() => void run(system?.emergencyStop ? '/api/system/resume' : '/api/system/emergency-stop', system?.emergencyStop ? 'Resume system' : 'Emergency stop', undefined, system?.emergencyStop ? 'Resume the system? Review interrupted work first. Existing authorization and recovery rules still apply.' : 'Stop the system? New execution and office movement will stop. Inspect active work before resuming.')}>{busy ? 'Awaiting acknowledgement…' : system?.emergencyStop ? 'Resume system' : 'Emergency stop'}</button><small>Confirmation required. Existing authorization still applies.</small></section>
+      <section className="system-health-panel system-health-controls" aria-labelledby="system-controls-title"><h2 id="system-controls-title">System controls</h2><p>Emergency stop blocks new execution and stops office movement. Review active work before resuming.</p><button className="system-stop" disabled={!system || busy || (system.emergencyStop && stale)} onClick={() => void run(system?.emergencyStop ? '/api/system/resume' : '/api/system/emergency-stop', system?.emergencyStop ? 'Resume system' : 'Emergency stop', undefined, system?.emergencyStop ? 'Resume the system? Review interrupted work first. Existing authorization and recovery rules still apply.' : 'Stop the system? New execution and office movement will stop. Inspect active work before resuming.')}>{busy ? 'Awaiting acknowledgement…' : system?.emergencyStop ? 'Resume system' : 'Emergency stop'}</button><small>Confirmation required. Existing authorization still applies. Refresh stale state before resuming.</small></section>
       <section className="system-health-panel system-local-execution" aria-labelledby="system-local-title"><h2 id="system-local-title">Local execution</h2><p>Explicitly queued local planning and its configured provider.</p><dl>
         <HealthRow label="Worker" value={worker?.status ?? unknown} tone={worker?.enabled && worker.status === 'degraded' ? 'warning' : 'muted'}/>
         <HealthRow label="Provider" value={worker ? worker.providerReady ? 'Ready' : 'Not ready' : unknown} tone={worker?.providerReady ? 'good' : 'muted'}/>
