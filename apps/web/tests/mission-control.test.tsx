@@ -118,3 +118,32 @@ test('approval count is included in desktop and mobile accessible link names', (
   renderShell()
   expect(screen.getAllByRole('link', { name: 'Approvals, 2 pending approval records' })).toHaveLength(2)
 })
+
+
+test('shell blocks stale resume while preserving emergency stop and reconciled resume', async () => {
+  vi.mocked(window.confirm).mockReturnValue(true)
+  store.system = { ...healthySystem, emergencyStop: true }
+  store.error = 'Read failed'
+  const view = renderShell()
+  const rerender = () => view.rerender(<MemoryRouter><App/></MemoryRouter>)
+  expect(screen.getByRole('button', { name: 'Resume system' })).toBeDisabled()
+  await userEvent.click(screen.getByRole('button', { name: 'Resume system' }))
+  expect(store.action).not.toHaveBeenCalled()
+  store.error = null
+  store.resyncRequired = true
+  rerender()
+  expect(screen.getByRole('button', { name: 'Resume system' })).toBeDisabled()
+  store.resyncRequired = false
+  store.connection = 'reconnecting'
+  rerender()
+  expect(screen.getByRole('button', { name: 'Resume system' })).toBeDisabled()
+  store.system = healthySystem
+  rerender()
+  await userEvent.click(screen.getByRole('button', { name: 'Emergency stop' }))
+  expect(store.action).toHaveBeenCalledWith('/api/system/emergency-stop')
+  store.system = { ...healthySystem, emergencyStop: true }
+  store.connection = 'connected'
+  rerender()
+  await userEvent.click(screen.getByRole('button', { name: 'Resume system' }))
+  expect(store.action).toHaveBeenCalledWith('/api/system/resume')
+})
