@@ -35,6 +35,13 @@ and its native input contract. No execution approval, migration or dependency.
 
 ## Validation and next action
 
+October 6 review repairs: the CI example uses the repository-root wrapper
+`python scripts/jarvis_self_improve.py`; the canonical artifact inventory includes
+`ci_run`. The wrapper's `analyze --help` succeeds from the repository root.
+All 19 adapter regressions, API/scripts Ruff and frontend typecheck/ESLint/104
+tests/build pass. These repairs change documentation only; prior backend
+integration evidence remains applicable. Request fresh exact-head review and CI.
+
 - Full backend: 1,460 passed, two existing skips. Windows runner wall-clock timing
   includes a long session interruption; it is not a runtime performance measure.
 - Ninety focused CI/native self-improvement tests pass, including real temporary

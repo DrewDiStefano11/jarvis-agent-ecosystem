@@ -12,7 +12,7 @@ The existing evidence CLI also accepts `ci_run:alias:path` from an operator expo
 
 ```powershell
 gh run view <run-id> --json databaseId,headSha,status,conclusion,updatedAt,jobs > ci-run.json
-python -m app.self_improvement.cli analyze --evidence ci_run:control-plane-ci:ci-run.json --repo-sha <exported-head-sha> --configuration-fingerprint <digest> --safety-fingerprint <digest> --json
+python scripts/jarvis_self_improve.py analyze --evidence ci_run:control-plane-ci:ci-run.json --repo-sha <exported-head-sha> --configuration-fingerprint <digest> --safety-fingerprint <digest> --json
 ```
 
 The export is bounded to 256 jobs and the existing two-megabyte file limit. Only
@@ -195,7 +195,7 @@ python scripts/jarvis_self_improve.py compare <before-id> <after-id> `
 Jarvis Settings supply the URL. `analyze --runtime-start <ISO-time>` and
 `--runtime-end <ISO-time>` include bounded durable history. Supported artifact
 kinds: `autonomy_acceptance`, `model_evaluation`, `model_qualification`,
-`runtime_doctor`. CLI fingerprints are digests, not raw configuration JSON.
+`runtime_doctor`, `ci_run`. CLI fingerprints are digests, not raw configuration JSON.
 `analyze` writes only analysis records. It never migrates or starts the runtime.
 
 The candidate attestation file has the exact fields:
