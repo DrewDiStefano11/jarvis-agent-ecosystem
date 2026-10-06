@@ -14,6 +14,7 @@ from app.agent_runtime.errors import AgentRuntimeError, CommandConflictError, Ve
 from app.agent_runtime.repository import RuntimeExecutionFence
 from app.catalog.taxonomy import satisfies
 from app.coordination.repository import CoordinationRepository
+from app.coordination.verification import NodeVerifier
 from app.core.errors import DomainError
 from app.db.models import ContextAssemblyRow, IdentityAgentRow
 from app.decomposition.service import DecompositionService, fingerprint
@@ -88,6 +89,7 @@ class CoordinatorService:
         self.lease_seconds = lease_seconds
         self.decomposition = DecompositionService(tasks, identities, router)
         self.authorizer = IdentityRuntimeAuthorizer(identities)
+        self.verifier = NodeVerifier(self)
 
     def live_validator(self, actor):
         def validate(session, task, graph, run):
@@ -211,7 +213,7 @@ class CoordinatorService:
 
         running = next((node for node in record.nodes if node.status == "running"), None)
         if running is not None:
-            return self._recover_node(record, running, fence, actor)
+            return await self._recover_node(record, running, fence, actor)
         claimed = next((node for node in record.nodes if node.status == "claimed"), None)
         if claimed is None:
             claimed = self.claim_ready(record.id, fence, actor)
@@ -281,7 +283,7 @@ class CoordinatorService:
                 fence=fence,
                 actor=actor,
             )
-            self.repository.record_dispatch(record.id, fence, self.live_validator(actor))
+            self.repository.record_dispatch(record.id, fence, self.dispatch_validator(actor))
             result = await self._call_with_heartbeat(fence, self._specialist_call(record, planned))
             expected = set(planned.completionCriteria)
             if expected != set(result.completionCriteriaSatisfied):
@@ -305,6 +307,10 @@ class CoordinatorService:
                     "resultDigest": digest,
                 },
             )
+            if not await self._verify_node(
+                record, node, graph, planned, result, checkpoint_id, fence, actor
+            ):
+                return self._required(record.id)
             self._finish_checkpoint_runtime(node.runtimeRunId, node.runtimeAttemptId, fence, actor)
             return self.repository.record_success(
                 record.id,
@@ -335,7 +341,7 @@ class CoordinatorService:
                 validate_live=self.live_validator(actor),
             )
 
-    def _recover_node(self, record, node, fence, actor):
+    async def _recover_node(self, record, node, fence, actor):
         checkpoint = self._recovery_checkpoint(
             node.runtimeRunId, node.runtimeAttemptId, "coordination-specialist-result-v1"
         )
@@ -348,6 +354,10 @@ class CoordinatorService:
                 raise DomainError(
                     "COORDINATION_CHECKPOINT_INVALID", "Checkpoint criteria differ.", 409
                 )
+            if not await self._verify_node(
+                record, node, graph, planned, result, checkpoint.checkpoint_id, fence, actor
+            ):
+                return self._required(record.id)
             self._finish_checkpoint_runtime(node.runtimeRunId, node.runtimeAttemptId, fence, actor)
             return self.repository.record_success(
                 record.id,
@@ -392,6 +402,32 @@ class CoordinatorService:
             validate_live=self.live_validator(actor),
         )
 
+    async def _verify_node(self, record, node, graph, planned, result, checkpoint_id, fence, actor):
+        parent = self.runtime.repository.load_run(record.runtimeRunId)
+        if parent.specification.autonomous_execution.coordinator_verification is None:
+            return True
+        verdict = await self.verifier.verify(
+            record, node, graph, planned, result, checkpoint_id, fence, actor
+        )
+        if verdict is None:
+            return False
+        if verdict.outcome == "passed":
+            return True
+        self._fail_runtime(
+            node.runtimeRunId, node.runtimeAttemptId, FailureClassification.VALIDATION, fence, actor
+        )
+        self.repository.record_failure(
+            record.id,
+            node.subtaskId,
+            node.runtimeAttemptId,
+            category="validation",
+            detail=f"Independent node verdict {verdict.outcome}: {verdict.digest}",
+            retryable=verdict.outcome in {"failed", "needs_correction"},
+            fence=fence,
+            validate_live=self.live_validator(actor),
+        )
+        return False
+
     async def _execute_synthesis(self, record, nodes, fence, actor):
         attempt_id = record.synthesis.runtimeAttemptId
         assert attempt_id is not None
@@ -417,7 +453,7 @@ class CoordinatorService:
                 fence=fence,
                 actor=actor,
             )
-            self.repository.record_dispatch(record.id, fence, self.live_validator(actor))
+            self.repository.record_dispatch(record.id, fence, self.dispatch_validator(actor))
             result = await self._call_with_heartbeat(fence, self._synthesis_call(record, nodes))
             expected = [node.subtaskId for node in nodes]
             if result.contributingSubtaskIds != expected:
@@ -756,13 +792,14 @@ class CoordinatorService:
         parent = self.runtime.repository.load_run(record.runtimeRunId)
         assert parent is not None and parent.specification.autonomous_execution is not None
         request = parent.specification.autonomous_execution
+        timeout = self.dispatch_timeout(parent)
         maximum_output_tokens = min(request.maximum_output_tokens, 16_384)
         model_request = ModelExecutionRequest(
             messages=[ModelMessage(role=MessageRole.USER, content=prompt)],
             model=request.model_name,
             temperature=0,
             max_output_tokens=maximum_output_tokens,
-            timeout_seconds=request.maximum_execution_seconds,
+            timeout_seconds=timeout,
             task_id=record.taskId,
             correlation_id=record.id,
             required_capability=ModelCapability.CHAT,
@@ -779,13 +816,34 @@ class CoordinatorService:
             allow_remote=False,
             allow_fallback=False,
         )
-        async with asyncio.timeout(request.maximum_execution_seconds):
+        async with asyncio.timeout(timeout):
             response = await self.router.execute(
                 request=model_request,
                 requirements=requirements,
                 budget=TaskBudget(maximum_requests=1, maximum_output_tokens=maximum_output_tokens),
             )
         return response
+
+    @staticmethod
+    def dispatch_timeout(run):
+        request = run.specification.autonomous_execution
+        timeout = request.maximum_execution_seconds
+        if request.coordinator_verification is not None:
+            deadline = run.specification.deadline
+            remaining = (deadline - datetime.now(UTC)).total_seconds() if deadline else 0
+            timeout = min(timeout, remaining)
+            if timeout <= 0:
+                raise DomainError("COORDINATION_DEADLINE_EXCEEDED", "Run deadline elapsed.", 409)
+        return timeout
+
+    def dispatch_validator(self, actor):
+        live = self.live_validator(actor)
+
+        def validate(session, task, graph, run):
+            live(session, task, graph, run)
+            self.dispatch_timeout(run)
+
+        return validate
 
     def _checkpoint_payload(self, result):
         payload = {"resultChunks": checkpoint_result_chunks(result)}

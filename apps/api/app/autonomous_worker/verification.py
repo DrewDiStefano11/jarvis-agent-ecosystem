@@ -322,6 +322,9 @@ class IndependentVerifier:
                             provider, model = response_record["provider"], response_record["model"]
                             break
                         continue
+                    self.worker.reserve_planning_dispatch(
+                        snapshot, execution, actor, worker_id, lease_token, "critic", index + 1
+                    )
                     claimed = self._save(
                         snapshot,
                         execution,
@@ -344,10 +347,7 @@ class IndependentVerifier:
                     )
                     try:
                         self.worker._assert_live_policy(snapshot, actor, worker_id, lease_token)
-                        timeout = min(
-                            request.maximum_execution_seconds,
-                            self.worker.settings.autonomous_worker_max_execution_seconds,
-                        )
+                        timeout = self.worker.execution_timeout(snapshot)
                         async with asyncio.timeout(timeout):
                             response = await self.worker.router.execute(
                                 request=ModelExecutionRequest(
