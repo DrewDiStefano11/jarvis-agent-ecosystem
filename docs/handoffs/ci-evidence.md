@@ -1,5 +1,15 @@
 # CI evidence checkpoint
 
+October 6 sharded-CI reconciliation: main
+`05d7628b15b7665927584a7349ac3c1af9cf247c` includes merged #82 and #73.
+The merge is conflict-free; added CI-adapter tests are explicitly assigned to the
+models shard. Complete collection coverage passes for 1,686 cases, and blank
+SQLite upgrade/downgrade/re-upgrade passes. Focused CI/self-improvement/correction
+recovery passes 107 tests (45.90s). API/scripts Ruff and frontend typecheck/ESLint/
+104 tests/build pass. Old monolithic backend runs are superseded. Require fresh
+exact-head sharded CI and review; current user instruction prohibits automatic
+merging. Root CLI documentation repairs and evidence bounds remain intact.
+
 PR #72 is reconciled with merged #69/main
 `9d5eab1c5e169f7c99f3cf1e9e2ecafa3a725fdf`. Combined evidence/verifier/worker/
 migration integration passes 210 tests (124.49 seconds), plus all 19 CI-adapter

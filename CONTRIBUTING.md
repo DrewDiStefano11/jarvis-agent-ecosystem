@@ -71,3 +71,11 @@ Merging is heavily restricted. The following criteria must be met:
 - Branch mergeability without conflicts must be confirmed.
 - The head SHA must be re-verified immediately before the final merge action.
 - Only Drew may authorize merging unless repository policy changes explicitly.
+
+## Backend CI shards
+
+Run `python scripts/backend_ci.py check` to validate complete test assignment,
+`python scripts/backend_ci.py migrations` for the blank SQLite gate, and
+`python scripts/backend_ci.py runtime` (or `autonomy`, `models`, `system`) to
+reproduce a serial CI shard. See [backend CI policy and timing evidence](docs/backend-ci.md)
+for diagnostics, timeout exceptions, and how to assign/rebalance new test files.
