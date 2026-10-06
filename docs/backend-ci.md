@@ -154,3 +154,13 @@ checkout. Application assertions remain unchanged. The final assignments use
 these hosted file totals, spreading office, identity/RBAC, persistence, and
 correction costs across independent runners. Local and exact-head hosted
 validation are repeated after this rebalance; PR evidence records final timings.
+
+
+## Hosted timing reconciliation after Mission Control rebases
+
+Run [37498110186](https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/actions/runs/37498110186) on exact feature head `3f1a84980f113a3c20f6fe8726bcc4cfab932537` exposed two distinct issues in the inherited sharded checks:
+
+- Runtime stopped at the 300-second per-test watchdog in `test_operator_control_blocks_correction_dispatch[stop]`. That async test directly awaited the simulator from the pytest loop while TestClient's lifespan dispatcher owned its event loop. The test now invokes the real emergency-stop HTTP route through TestClient and verifies HTTP 200 before retaining its worker refusal and no-extra-dispatch assertions. Production code and stop authority are unchanged. The standalone old test passed locally; the hosted cross-loop timeout is the failure evidence.
+- Models reached the 1,500-second process watchdog with passing progress at 54%. Flushed phase records show all 32 admission tests took 481.96 seconds and the first 75 of 84 independent-verification tests took 411.28 seconds. Autonomy completed in about 808 test seconds and system in about 675. Admission now belongs to autonomy and independent verification to system. This balances measured file costs while keeping serial execution, exact collected-test union, all tests, and both timeout limits intact.
+
+Fresh exact-head hosted checks are required to establish merge readiness. These estimates do not guarantee runner timing: admission puts autonomy near 1,290 seconds, so inspect the next completed timings at a natural checkpoint. Old monolithic backend runs are not authoritative for reconciled feature heads.
