@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Protocol
 
+from sqlalchemy.orm import Session
+
 from app.core.errors import DomainError
 from app.identity.service import IdentityService
 from app.models.agent_runtime import AgentRunSnapshot, AgentRunSpecification
@@ -85,6 +87,7 @@ class RuntimeAuthorizer(Protocol):
         *,
         specification: AgentRunSpecification | None = None,
         snapshot: AgentRunSnapshot | None = None,
+        session: Session | None = None,
     ) -> RuntimeAuthorizationContext: ...
 
 
@@ -124,7 +127,7 @@ class IdentityRuntimeAuthorizer(RuntimeAuthorizer):
         *,
         specification: AgentRunSpecification | None = None,
         snapshot: AgentRunSnapshot | None = None,
-        session=None,
+        session: Session | None = None,
     ) -> RuntimeAuthorizationContext:
         from app.agent_runtime.errors import RuntimePermissionDeniedError
 
@@ -133,13 +136,13 @@ class IdentityRuntimeAuthorizer(RuntimeAuthorizer):
             raise RuntimePermissionDeniedError(metadata={"operation": operation})
         permission_key = RUNTIME_PERMISSION_KEYS[operation]
         resource_id = target.task_id
-        session_options = {"session": session} if session is not None else {}
+        transaction = {"session": session} if session is not None else {}
         admin_decision = self.identity.check_permission_resource_access(
             actor.actor_id,
             RUNTIME_ADMIN_PERMISSION,
             RUNTIME_ADMIN_RESOURCE_TYPE,
             RUNTIME_ADMIN_RESOURCE_ID,
-            **session_options,
+            **transaction,
         )
         if admin_decision.allowed:
             return RuntimeAuthorizationContext(
@@ -156,7 +159,7 @@ class IdentityRuntimeAuthorizer(RuntimeAuthorizer):
             permission_key,
             RUNTIME_RESOURCE_TYPE,
             resource_id,
-            **session_options,
+            **transaction,
         )
         if not decision.allowed:
             raise RuntimePermissionDeniedError(

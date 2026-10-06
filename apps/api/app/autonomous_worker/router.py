@@ -8,6 +8,7 @@ from app.agent_runtime.authorization import RuntimeActorContext
 from app.autonomous_worker.service import AutonomousWorkerService
 from app.models.autonomous_worker import ModelExecutionResult
 from app.models.domain import TypedApiResponse
+from app.models.verification import VerificationResult
 
 router = APIRouter(prefix="/api/model-executions", tags=["model-executions"])
 
@@ -33,6 +34,18 @@ def get_execution(
     runtime_actor: Annotated[RuntimeActorContext, Depends(actor)],
 ) -> TypedApiResponse[ModelExecutionResult]:
     return TypedApiResponse(data=worker_service.read_result_authorized(execution_id, runtime_actor))
+
+
+@router.get(
+    "/{execution_id}/verification", response_model=TypedApiResponse[VerificationResult | None]
+)
+def get_verification(
+    execution_id: str,
+    worker_service: Annotated[AutonomousWorkerService, Depends(service)],
+    runtime_actor: Annotated[RuntimeActorContext, Depends(actor)],
+) -> TypedApiResponse[VerificationResult | None]:
+    execution = worker_service.read_result_authorized(execution_id, runtime_actor)
+    return TypedApiResponse(data=worker_service.verifier.read(execution, runtime_actor))
 
 
 @router.get(
