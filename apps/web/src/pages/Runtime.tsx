@@ -1,3 +1,4 @@
+import { RuntimeRunHistory } from '../components/RuntimeRunHistory'
 import { CoordinatedWork } from '../components/CoordinatedWork'
 import { request } from '../api/client'
 import { useEffect, useState } from 'react'
@@ -13,7 +14,7 @@ export function Runtime() {
   const [searchParams] = useSearchParams()
   const [mode, setMode] = useState<'planning' | 'workspace'>(searchParams.get('mode') === 'workspace' ? 'workspace' : 'planning')
   const { runtime, tools, tasks, system, refresh, selectTask, decomposition, coordination } = useAppStore()
-  const { identities, loadIdentities, actorId, selectActor, taskId, setTaskId, runs, executions, refreshRuntime } = runtime
+  const { identities, loadIdentities, actorId, selectActor, taskId, setTaskId, executions, refreshRuntime } = runtime
   const [targetId, setTargetId] = useState('')
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
@@ -143,13 +144,7 @@ export function Runtime() {
       {message && <p role="status">{message}</p>}
     </section>
     <section className="panel"><PlannedWork record={decomposition.record} error={decomposition.error} hasExecution={Boolean(coordination.record)}/><CoordinatedWork record={coordination.record} error={coordination.error}/></section>
-    <section className="panel"><h2>Runtime history</h2><button className="secondary" disabled={!actorId || runtime.loading} onClick={() => void refreshRuntime()}>Refresh runtime</button>
-      {runtime.error && <p role="alert">{runtime.error}</p>}
-      {!actorId && <p>Select a local identity to read authorized history.</p>}
-      {runs.map(run => <article className="runtime-result" key={run.specification.run_id}><h3>{run.specification.requested_operation}</h3><Status value={run.state}/><p>{run.status_detail}</p>{run.state==='paused'&&<p>Execution is paused for operator review. Inspect the result or failure code before deciding on further work.</p>}<p>{run.attempt_count} attempt(s) · <code>{run.specification.run_id}</code></p><button className="secondary" onClick={() => selectTask(run.specification.task_id)}>Open task</button></article>)}
-      {actorId && !runtime.loading && !runtime.error && !runs.length && <p>No authorized runs in this selection.</p>}
-      {runtime.nextOffset !== null && <p>Showing the first 50 runs. Select a task to narrow history.</p>}
-    </section>
+    <RuntimeRunHistory/>
     <section className="panel"><h2>Persisted model results</h2>{!taskId && <p>Select a task to inspect its results.</p>}
       {executions.map(execution => <article className="runtime-result" key={execution.executionId}><h3>{execution.result?.summary ?? 'Execution in progress'}</h3><Status value={execution.stage}/><p>{execution.provider ?? 'Provider pending'} · {execution.model ?? 'Model pending'} · {execution.requestCount} request(s)</p><code>{execution.executionId}</code>
         {execution.failureCode && <p role="status">{execution.failureCode}</p>}

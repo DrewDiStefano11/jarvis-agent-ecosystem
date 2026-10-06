@@ -16,6 +16,17 @@ export interface RuntimeRun {
   specification: { run_id: string; task_id: string; agent_id: string; requested_operation: string; autonomous_execution: { execution_type: string; context_assembly_id: string } | null }
   state: string
   version: number
+  event_sequence_number: number
+  created_at: string
+  completed_at: string | null
+  started_at: string | null
+  last_heartbeat_at: string | null
+  latest_checkpoint_id: string | null
+  terminal_outcome: string | null
+  recovery_status: string
+  failure: { category: string; detail: string; timestamp: string; attempt_id: string | null } | null
+  blocking_reason: { code: string; detail: string; timestamp: string; related_reference: string | null; resume_state: string } | null
+  pause_reason: { code: string; detail: string; timestamp: string; requested_by: string | null; resume_state: string } | null
   attempt_count: number
   status_detail: string | null
   active_attempt_id: string | null
