@@ -34,6 +34,71 @@ def grant_system(app, actor):
     return scope
 
 
+@pytest.mark.parametrize("native_stop", [False, True])
+def test_remote_agent_transitions_survive_reload_and_restart(remote_http, native_stop):
+    from app.main import create_app
+
+    app, actor, client, headers = remote_http
+    grant_system(app, actor)
+    agent = next(iter(app.state.repository.agents.values()))
+    agent.status = "thinking"
+    agent.previousStatus = None
+    app.state.repository.persist()
+    if native_stop:
+        client.portal.call(app.state.simulator.emergency_stop)
+    else:
+        # The API projection can lag behind durable worker updates. Stop must
+        # derive agent transitions from the fenced database, not this cache.
+        agent.status = "idle"
+        assert client.post("/api/remote/system/emergency-stop", headers=headers).status_code == 200
+    app.state.repository.reload()
+    assert app.state.repository.agents[agent.id].status == "paused"
+    assert app.state.repository.agents[agent.id].previousStatus == "thinking"
+    assert client.post("/api/remote/system/resume", headers=headers).status_code == 200
+    app.state.repository.reload()
+    assert not app.state.repository.system_control_snapshot().emergencyStop
+    assert app.state.repository.agents[agent.id].status == "thinking"
+    assert app.state.repository.agents[agent.id].previousStatus is None
+    restarted = create_app(
+        database_url=app.state.settings.database_url, recover_interrupted_workflow=False
+    )
+    assert not restarted.state.repository.system_control_snapshot().emergencyStop
+    assert restarted.state.repository.agents[agent.id].status == "thinking"
+
+
+def test_remote_stop_checkpoint_uses_fenced_agent_and_task_projections(remote_http):
+    app, actor, client, headers = remote_http
+    grant_system(app, actor)
+    repository = app.state.repository
+    created = client.post(
+        "/api/remote/goals",
+        json={
+            "title": "Checkpoint projection",
+            "description": "Preserve leased task in checkpoint",
+        },
+        headers=headers | {"Idempotency-Key": "checkpoint-projection-1"},
+    )
+    assert created.status_code == 201
+    task_id = created.json()["data"]["id"]
+    agent = next(iter(repository.agents.values()))
+    agent.status = "thinking"
+    repository.create_workflow_run("run-remote-projection", 30)
+    client.portal.call(app.state.broker.emit, "system.simulator.started", {"step": 0})
+    worker = app.state.task_leases.register_worker("Checkpoint fixture", "checkpoint-fixture", 60)
+    acquired = app.state.task_leases.acquire_task(worker.id, task_id=task_id)
+    assert acquired is not None
+    repository.agents[agent.id].status = "idle"
+    repository.tasks[task_id].status = "queued"
+    app.state.simulator.run_id = "run-remote-projection"
+    app.state.simulator.control.state = "paused"
+    assert client.post("/api/remote/system/emergency-stop", headers=headers).status_code == 200
+    workflow = repository.active_workflow()
+    checkpoint = repository.load_checkpoint(workflow.checkpoint_id)
+    assert checkpoint["agentStatuses"][agent.id] == "paused"
+    assert checkpoint["taskStatuses"][task_id] == "in_progress"
+    assert repository.get_task_durable(task_id).status == "in_progress"
+
+
 def test_remote_stop_fences_worker_and_does_not_flush_stale_task_cache(remote_http):
     app, actor, client, headers = remote_http
     assert client.post("/api/remote/system/emergency-stop", headers=headers).status_code == 403

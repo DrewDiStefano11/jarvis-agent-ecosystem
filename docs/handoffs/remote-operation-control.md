@@ -7,14 +7,17 @@ gates run. PR #63 belongs to a separate session and must not be touched.
 ## State
 
 - Branch/worktree: `codex/remote-operation-control`, `.worktrees/remote-operation-control`.
-- Reconciled base: main `ff11aba814b8caf67ca5b8f2af415e827e6ec63b`, including merged #68.
-- Remote PR creation follows this validated commit; record its URL/exact SHA in PR comments.
-- No unmerged #69/#63 dependency; migration head is `20261002_si`.
-- #69 pushed repair `5332b819ad0c09e9b8fd7e890510775441bcffbc` rechecks native RBAC
-  inside task completion after review at prior head 91da926 found a late denial
-  race. Its 142 affected tests pass; full coverage accounts for 1,430 passes and
-  two existing skips after five stale wrappers were repaired without assertion
-  changes. Fresh exact-SHA review requested in issuecomment-6001790447.
+- Reconciled base: main `ee0dd09bf1825ab635e7a61d8fe2ae192f6e0444`, including #68/coordinator.
+- PR #70: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/70.
+  Exact candidate SHA and fresh review requests are recorded in PR comments.
+- No unmerged #69/#63 dependency; single migration head `20260907_11`.
+- Latest persistence repair full backend: 1,501 passed/two existing skips in
+  1,049.25 seconds. Ruff API/scripts and frontend typecheck/ESLint/104 Vitest
+  tests/build pass. Earlier checkpoints below are validation history.
+- #69's cancellation/blank-deliverable repairs are pushed at `47ce8d4` with clean
+  exact-head review. Backend is running; browser/frontend/integrity passed.
+- #71 at `808bc03` has clean exact-head review and three passed gates; hosted
+  backend runner-allocation failure was rerun. Do not add code workarounds.
 
 ## Implemented and exercised
 
@@ -59,6 +62,17 @@ single process only.
   short `$env:TEMP` directory via `--basetemp`; do not skip tests or change behavior.
 
 ## Next work
+
+Fresh review of `22ac979` found agent stop/resume transitions were only in memory.
+Both reproductions failed before repair: stop restored thinking after reload;
+resume of native-stopped agents restored paused after restart. The current repair
+reads native agent rows under the same write fence and updates control fields with
+the flag/audit/outbox transaction. Memory adopts committed projections only after
+commit. Existing leased task state is never flushed from API cache. A pending stop
+checkpoint records current fenced agent/task projections rather than stale cache.
+112 affected native HTTP/system/TLS/API/persistence/lease tests pass; the added
+checkpoint projection case passes. Full backend passes 1,501 tests/two existing
+skips at `.local/durable-controls-full-backend.log`; publish and request fresh gates.
 
 Latest review repairs are implemented: both direct body-bound errors carry
 no-store; desired-state resume equality is checked inside the simulator lock;

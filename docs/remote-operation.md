@@ -97,6 +97,10 @@ not automatically resume simulation or forge worker acknowledgement. Duplicate
 desired-state system controls return current status. A committed stop survives
 lost acknowledgement, and retries do not duplicate its event. Desired-state
 checks run under the simulator lock, including overlapping resume requests.
+Affected agent projections commit atomically with the flag and native event,
+surviving reload and restart. The write reads current database projections;
+stale task caches cannot overwrite worker task or lease state. Stop checkpoints
+also record those fenced agent/task projections.
 Rejected resume commits restore paused agent memory; committed resumes survive
 lost acknowledgement without restoring the pre-resume state. Runtime controls
 retain native version/CAS and idempotent command replay.
