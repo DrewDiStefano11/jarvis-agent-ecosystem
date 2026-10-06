@@ -1,0 +1,148 @@
+# Improvement backlog implementation checkpoint
+
+October 6 sharded-CI reconciliation: main
+`05d7628b15b7665927584a7349ac3c1af9cf247c` includes merged #82 and #73.
+The merge is conflict-free and preserves native backlog/failed-task recovery
+behavior plus main's correction/coordinator verification. The added backlog test
+file is explicitly assigned to the models shard. Collection coverage passes for
+all 1,692 cases; blank SQLite upgrade/downgrade/re-upgrade passes. Focused native
+backlog/task/HTTP/correction/coordinator integration passes 167 tests (134.03s).
+API/scripts Ruff and frontend typecheck/ESLint/104 tests/build pass. Old monolithic
+backend runs are superseded. Require fresh exact-head sharded CI and review;
+current user instruction prohibits automatic merging.
+
+October 6 fresh-review repairs preserve failed tasks with remaining operator
+retries in active-scope deduplication and capacity accounting, including the
+native admission transaction. Retry-exhausted failures remain terminal. OpenAPI
+now advertises both 200 and 201 with the same typed response envelope.
+Both findings first failed reproduction; the final backlog/self-improvement/
+task-lease/HTTP integration passes 130 tests. API/scripts Ruff and frontend
+typecheck/ESLint/104 tests/build pass. Request fresh exact-head CI and review.
+
+The next review exposed native pause/resume reviving failed scopes after their
+retry allowance was exhausted. Failed tasks are now non-pausable; only the
+existing explicit retry action can recover them with remaining allowance.
+Two native HTTP cases first returned 200 incorrectly; after repair they preserve
+failed status, retry count and event sequence while pause/resume return 409.
+Final affected backlog/self-improvement/lease/HTTP validation passes 132 tests;
+API/scripts Ruff and frontend typecheck/ESLint/104 tests/build pass. Fresh
+exact-head CI and review must precede merge.
+
+PR #71 is reconciled with merged #69/main
+`9d5eab1c5e169f7c99f3cf1e9e2ecafa3a725fdf`. The original `808bc03` head passed all
+four PR-event CI gates and clean exact-head review. The combined backlog/evidence/
+verifier/worker/migration integration passes 230 tests (137.55 seconds), with
+Ruff clean. Fresh exact-head CI/review are required after publication; no merge
+has been attempted. Existing admission, RBAC, scope deduplication, capacity,
+audit/outbox and native task boundaries are preserved.
+
+Branch `codex/improvement-backlog` starts from freshly fetched main
+`ff11aba814b8caf67ca5b8f2af415e827e6ec63b` after #68 merged. Other sessions and
+PR #63 remain untouched. This is the next independent Self-Build prerequisite;
+#69 and remote-control gates take priority when actionable.
+
+## Intended vertical slice
+
+Select the next bounded eligible proposal from persisted native Improvement Lab
+analyses, using their recorded critical/high/medium/low priority and evidence
+confidence rather than inventing a numeric quality score. Persist its immutable
+baseline/proposal/weakness/evidence references and experiment criteria, create a
+native queued task, and emit native audit/outbox in the same transaction. Expose
+an operable local operator command and native authorized read projection.
+
+Selection is not approval of the proposed change. It does not admit a model run,
+execute source edits, widen filesystem scopes, invoke Codex/computer/shell, grant
+permissions, or create an execution ledger. The existing worker/runtime/tool
+approval paths remain authoritative. Missing evidence creates evidence-gathering
+work; it must never be relabeled as a validated experiment. Preserve protected
+under-review tasks and checkpoint recovery semantics.
+
+## Design constraints to resolve in implementation
+
+- Use existing ImprovementRecordRow append-only storage for bounded selection
+  provenance and native TaskRow lifecycle. No competing migration is needed.
+- Reuse native task creation/idempotency/SystemState write fence/outbox helpers.
+  Add a narrow same-session integration point if required; SQL stays in repositories.
+- Explicit local actor identity and native RBAC are required at selection and
+  commitment. Emergency stop must deny admission within the write fence.
+- Stable semantic weakness identity must suppress duplicate active work across
+  repeated/new baselines. Terminal work may be reconsidered only with fresh evidence.
+- Bound every scan and output; retain deterministic tie-breaking and reasons.
+  Empty, incomplete, rejected and blocked candidates have explicit outcomes.
+- Test real SQLite/RBAC/task/outbox, concurrency, uncertain acknowledgement,
+  restart, protected/terminal tasks, revoked permission, emergency stop, invalid
+  lineage and immutable criteria. Do not claim an autonomous coding executor.
+
+## Current implementation state
+
+The vertical slice is implemented on this isolated branch. The selector orders
+native recorded priority/confidence/impact/frequency and stable IDs; incomplete
+evidence selects evidence gathering. Append-only ImprovementRecordRow admission
+links to native TaskRow; read projection uses actual task status. Native broker
+and repository accept a narrow same-session authorization callback, including
+empty/blocked idempotency receipts. Registry audit identity is preserved without
+putting it in the simulated-agent foreign key.
+
+The loopback API and explicit operator CLI are documented in
+[improvement backlog](../improvement-backlog.md). Grants are native
+`select_improvement` and separate `read_improvement` on
+`administrative_function/improvement_backlog`. No runtime execution or proposal
+approval is admitted. SQLite fencing remains explicit and scans fail closed.
+
+Validation: 20 targeted tests pass, covering fresh CLI/native HTTP admission,
+idempotent replay after lost acknowledgement, two concurrent independent native
+repositories, protected/terminal tasks, starvation prevention, commit-time
+deny/suspension/stop, empty receipt permission revocation and altered immutable
+lineage and capacity consumed after selection but before fenced commitment.
+Full backend: 1,385 passed/two existing skips in 609.83 seconds before the final
+capacity guard. Final backlog/self-improvement/persistence package: 136 passed.
+Reconciled main `ee0dd09`: backlog/self-improvement/persistence/coordination migration
+integration package passes 139 tests. Frontend typecheck/ESLint/104 Vitest tests/build
+pass after reconciliation. API Ruff and script Ruff pass. Inherited migration head
+is `20260907_11`; no new migration/dependency. Use fresh
+validated short Windows temp roots for full pytest. No relevant tests are skipped.
+
+Freshly fetched main `ee0dd09bf1825ab635e7a61d8fe2ae192f6e0444` is reconciled.
+Push/open/attach a dedicated PR, request fresh exact-head
+review and required CI, then select useful independent work while gates run.
+Record final SHA in PR comments rather than creating a self-referential commit.
+
+Shared callback/RBAC changes in remote-control and #69 are not imported as
+unmerged dependencies. Reconcile native integration if either merges. #69 has a
+new locally reproduced cancellation/completion race under repair; #70's default
+HTTPS authority normalization fix is pushed at `50fd6deb` and awaiting fresh gates.
+Do not touch #63. Adaptive executable-node work remains dependent on its own
+prerequisites. Continuous development does not end at this checkpoint.
+
+## 2026-10-06 sharded-main reconciliation and local review repair
+
+Main `05d7628b15b7665927584a7349ac3c1af9cf247c` includes merged #82.
+The branch inherits its six backend CI jobs and registers backlog tests in the
+models shard. Independent review of reconciled head `6870562` found that capture
+aliases could bypass duplicate active-work protection. Four native regression
+cases reproduced that finding before the repair.
+
+Canonical v2 scope uses defect dimensions rather than capture aliases. Selection
+and fenced admission derive active scopes from immutable native analysis lineage,
+including historical v1 entries, without rewriting append-only records. Two legacy
+compatibility cases verify this protection and unchanged historical entries.
+
+Final affected validation: 138 tests passed in 76.60 seconds. Complete shard
+collection: 1,698 tests; Ruff and formatting pass. Frontend typecheck, ESLint,
+104 Vitest tests and production build pass. Blank database migration upgrade,
+downgrade and re-upgrade passed during reconciliation; this repair changes no schema.
+Fresh independent exact-head review and sharded CI are required after publishing
+this repair. Record the final SHA and review in the PR. Do not merge automatically.
+If only external CI remains, stop execution as the operator requested.
+
+## 2026-10-06 task-graph main conflict resolution
+
+Reconciled main `7b761b1cf6a4aac6fd689b2699a6dfc9db6a4f46` after #80 merged.
+Resolve the shard manifest conflict by retaining backlog tests in models while
+inheriting main's moves of autonomous-runtime admission to autonomy and independent
+verification to system. Native backlog deduplication and immutable lineage repair
+are unchanged; preserve all imported task-graph behavior and the portal-loop stop
+test. Ruff/format and complete 1,698-test collection pass. Focused backend: 74
+passed. Frontend typecheck, ESLint, 111 Vitest tests and production build pass.
+Publish this head and record fresh independent review. Stop while hosted CI waits;
+do not merge automatically.

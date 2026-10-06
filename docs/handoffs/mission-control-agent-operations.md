@@ -1,5 +1,18 @@
 # Mission Control: registered agent operations
 
+## Requested merge-conflict repair
+
+The user explicitly requested repairs for #78 and #79. PR #78 was repaired in
+an isolated checkout, leaving the original agent-operations worktree untouched.
+Latest main `4758891354e69c54d2765623aed5234672d4543a` is incorporated. The sole
+conflict was the shard manifest: retain main's improvement-backlog assignment
+alongside the existing balanced shards. No frontend/application conflict occurred.
+Ruff check/format pass; actual shard collection covers 1736 tests; 74 focused
+CI/planning-correction/backlog cases pass. Frontend typecheck, ESLint, 168 Vitest
+tests and build pass. Removed an inherited trailing blank line from the main smoke
+script and verified its syntax. The repair is pushed without force to the existing
+PR branch; no automatic merge or CI waiting is performed.
+
 ## Publication and ownership
 
 This milestone uses merged `main` at `9d5eab1c5e169f7c99f3cf1e9e2ecafa3a725fdf`.

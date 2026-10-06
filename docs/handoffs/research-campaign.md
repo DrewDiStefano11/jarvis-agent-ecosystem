@@ -1,5 +1,33 @@
 # Autonomous research campaign handoff
 
+## Retrieval timestamp review repair
+
+Follow-up independent review found the same sub-minute timezone serialization
+defect as search in both RetrievedText and RetrievalFailure. Six rejection
+regressions reproduced it before repair. Both validators now reject non-minute
+offsets rather than silently shifting observed/failure instants during JSON
+storage. Six positive UTC/positive/negative minute-offset cases round-trip.
+Earlier no-findings review of f3d26f1 is superseded; fresh exact-head review is
+required after publishing this correction and propagating it into #77.
+
+## Sharded CI reconciliation — 2026-10-06
+
+PR #82 was confirmed merged. This branch incorporates main
+`05d7628b15b7665927584a7349ac3c1af9cf247c` without conflicts. Its research test
+file is explicitly assigned to the models shard. Actual `backend_ci.py check`
+passes with 1693 collected tests; 131 focused CI/research cases pass using
+a fresh short temporary directory. Ruff check/format and frontend typecheck,
+ESLint, 104 Vitest tests and build pass. The ignored test environment now includes
+main's declared pytest-timeout dependency. Default pytest temporary-directory
+permission failures were resolved by the isolated rerun without skipping tests.
+
+Only exact-head sharded CI is authoritative after this reconciliation:
+backend-static, backend-migrations, backend-tests-runtime, backend-tests-autonomy,
+backend-tests-models and backend-tests-system, plus the existing aggregate backend
+gate. Old monolithic runs do not establish readiness. Hosted Codex review quota
+is unavailable; the user authorized an independent local exact-head review.
+The PR body/review record identifies the final SHA and external gate outcomes.
+
 ## Campaign audit — 2026-10-06
 
 Base: `9d5eab1c5e169f7c99f3cf1e9e2ecafa3a725fdf` (main, PR #69 merged).
@@ -48,21 +76,49 @@ in database/async tests; the same tests progress with normal filesystem access.
 Retrieval contracts: `codex/research-retrieval-contracts`, worktree
 `C:/Users/DDistefano/Documents/jarvis-agent-ecosystem/.worktrees/research-retrieval-contracts`.
 New strict/frozen `app.models.research_retrieval` records and tests, plus
-`docs/research-retrieval-contracts.md`. Depends on destination policy. Focused
-26 tests pass using the pending policy dependency; complete branch validation is
-required after stacking the committed dependency. Not published yet.
+`docs/research-retrieval-contracts.md`. Depends on PR #74 at policy repair head
+`0d0c2e5f4541e0b1a9c01f5eab2c5bb108edfb6c`. All 98 combined policy/contract
+tests pass (26 contract cases plus 72 policy cases). Backend Ruff check/format
+pass. Frontend typecheck, ESLint, 104 Vitest tests and build pass.
+The full backend run passed 1573 tests with two skips but had 48 diagnostics
+fixture-copy errors from Windows MAX_PATH in the deep local basetemp. Every
+diagnostics/report test was rerun in a short isolated temp directory: 52 passed,
+188.93 seconds. No test was skipped to work around the errors and no production
+change was needed. PR: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/76.
+Validated implementation commit: `963302750c57d495c77dc8a19eb3d44b6b86f4b2`.
+Hosted CI and exact-head review are pending; the PR body records the current head
+including handoff-only publication updates. This PR is stacked on #74.
 
 Pinned transport: `codex/research-pinned-transport`, worktree
 `C:/Users/DDistefano/Documents/jarvis-agent-ecosystem/.worktrees/research-pinned-transport`.
 New internal `app.research_transport`, explicit HTTPCore dependency, 25 passing
 deterministic transport tests, plus `docs/research-transport.md`. Depends on both
-prior slices; complete branch validation is required after stacking dependencies.
+prior slices. An exact contract-file snapshot was used during validation; replace
+it with the committed contract branch before publication. Full backend run:
+1600 passed, two skips, 46 Windows MAX_PATH diagnostics setup errors. All
+diagnostics/report tests passed under a short isolated basetemp: 52 passed in
+189.52 seconds. All 123 affected policy/contract/transport tests pass after the
+policy repair. Ruff and all frontend gates pass. Inspect final dependency diff
+before publication; no native admission/persistence/recovery is claimed.
 Disabled by default, empty origin scope, no runtime/model registration. Not
 published yet. No native admission, durable artifact storage or recovery is claimed.
 An actual bounded public GET of `https://example.com/` on 2026-10-06 at 14:00:07
 UTC returned 577 bytes of HTML through the default pinned backend and verified
 TLS; digest and timestamp were printed without retaining the page. This is
 transport smoke evidence, not end-to-end autonomous research acceptance.
+
+Search contract preparation: `codex/research-search-contract`, worktree
+`C:/Users/DDistefano/Documents/jarvis-agent-ecosystem/.worktrees/research-search-contract`.
+Provider-neutral discovery models, pure normalization/deduplication, stable identity
+and digest validation, and an adapter protocol; no provider or dispatcher activated.
+26 focused search tests and 72 policy cases pass. Ruff and all frontend gates pass;
+full backend validation is in progress. Source/snippet text remains untrusted and
+search results are discovery leads rather than retrieved evidence.
+
+New mission-control-shell and mission-control-agent-operations worktrees were
+observed during the later overlap audit. Their frontend files are untouched.
+Native execution integration will touch files active in #70/#73; defer that
+integration while continuing independent source/search foundations.
 
 ## Next dependency
 
@@ -77,3 +133,16 @@ transport smoke evidence, not end-to-end autonomous research acceptance.
 Fetch current main and inspect open PRs again at each branch boundary. Do not merge,
 force-reset, delete branches or modify other sessions' worktrees. The campaign
 request authorizes feature pushes, PR publication and exact-head Codex review.
+
+## Main reconciliation checkpoint
+
+The human merged #74 and #73. Current main is
+`1ee7a3cd72ec78a5765a9529a1c0faa26fefcfcb`. Retrieval contracts were reconciled
+with this main without conflicts. All 133 affected policy/contract and newly merged
+planning-correction/coordination-verification tests pass in 60.31 seconds. Backend
+Ruff and frontend typecheck, ESLint, 104 Vitest tests and build pass. PR #76 is
+retargeted to main; transport #77 must consume this reconciled contract head.
+Provenance implementation is checkpointed locally at `c152afe` in its dedicated
+source worktree, with full backend 1675 passing plus 106 affected reset cases;
+it must consume the reconciled transport before publication. No merge into main
+or feature-branch deletion was performed by this session.

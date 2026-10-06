@@ -83,6 +83,7 @@ class EventBroker:
         created_task: Task | None = None,
         created_context: tuple[ContextAssembly, Task] | None = None,
         updated_task: Task | None = None,
+        authorize=None,
     ) -> EventEnvelope:
         if not self.repository:
             self.sequence += 1
@@ -103,20 +104,21 @@ class EventBroker:
             if audit:
                 envelope["_audit"] = audit
             try:
+                guarded = {"authorize": authorize} if authorize is not None else {}
                 if created_task is not None:
                     committed = self.repository.enqueue_event(
-                        envelope, idempotency, created_task=created_task
+                        envelope, idempotency, created_task=created_task, **guarded
                     )
                 elif created_context is not None:
                     committed = self.repository.enqueue_event(
-                        envelope, idempotency, created_context=created_context
+                        envelope, idempotency, created_context=created_context, **guarded
                     )
                 elif updated_task is not None:
                     committed = self.repository.enqueue_event(
-                        envelope, idempotency, updated_task=updated_task
+                        envelope, idempotency, updated_task=updated_task, **guarded
                     )
                 else:
-                    committed = self.repository.enqueue_event(envelope, idempotency)
+                    committed = self.repository.enqueue_event(envelope, idempotency, **guarded)
                 if committed is not None:
                     envelope = committed
                 event = EventEnvelope.model_validate(envelope)
