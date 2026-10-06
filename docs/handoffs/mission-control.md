@@ -125,3 +125,10 @@ Independent agent operations PR #78: https://github.com/DrewDiStefano11/jarvis-a
 ### Accessible approval count repair
 
 Review of repair head `2f6de2d` found that the desktop link's aria-label hid its badge count from screen readers. Desktop and mobile Approvals links now announce the pending count in their accessible names. Added regression coverage; typecheck/lint/116 tests/build and real API five-width smoke pass (`jarvis-mission-control-1mev5x`). At this checkpoint that prior head's frontend, repository-integrity and runtime-browser CI are green; backend CI is still running. Republish and review the new exact head. No merge attempted.
+
+
+### Main reconciliation — 2026-10-06 11:25 ET
+
+Merged main `1ee7a3cd72ec78a5765a9529a1c0faa26fefcfcb` into this feature branch after #73/#74 merged. Resolved the sole app.test.tsx hook conflict by preserving main's lazy Office preload and shell's confirmation stub. Typecheck/ESLint/116 tests/build and backend Ruff/5 isolated System API tests pass; real API five-viewport smoke passes (`jarvis-mission-control-dOswiR`). No product changes in the resolution. Review requests remain blocked by the GitHub Codex review allowance; no approval claimed.
+
+Other published campaign heads: #78 `153ec31e3839cffe6dd85651c0b60f56d24dc895`; #80 `8da37fb4fe0f2c8eb0d6d45cb417965c03500a2b`; System #81 `2e8d39e8d09d18cdb626807af9de531942d01f47`. Next independent work is approval decision clarity from newly merged main.

@@ -1,7 +1,7 @@
 import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
-import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import App from '../src/App'
 import { AppStoreProvider } from '../src/state/AppStore'
 import type { Agent, Approval, Artifact, AuditEvent, Department, Notification, SystemStatus, Task } from '../src/types/contracts'
@@ -22,6 +22,9 @@ endpointData['/api/office'] = { serverTime: now, catalog: officeCatalog, placeme
 class FakeWebSocket {static instances:FakeWebSocket[]=[];static CONNECTING=0;static OPEN=1;readyState=1;sent:string[]=[];onopen:(()=>void)|null=null;onmessage:((event:{data:string})=>void)|null=null;onerror:(()=>void)|null=null;onclose:(()=>void)|null=null;constructor(public url:string){FakeWebSocket.instances.push(this);queueMicrotask(()=>this.onopen?.())}close(){}send(value:string){this.sent.push(value)}emit(event:unknown){this.onmessage?.({data:JSON.stringify(event)})}emitRaw(value:string){this.onmessage?.({data:value})}}
 
 function renderApp(){return render(<BrowserRouter><AppStoreProvider><App/></AppStoreProvider></BrowserRouter>)}
+// Resolve the real lazy module before interaction checks. Cold Vite transforms
+// on CI can outlast a DOM query; interaction assertions keep their normal bound.
+beforeAll(async () => { await import('../src/pages/Office') })
 beforeEach(() => { localStorage.clear(); vi.spyOn(window, 'confirm').mockReturnValue(true) })
 beforeEach(()=>{window.history.pushState({},'', '/');FakeWebSocket.instances=[];vi.stubGlobal('WebSocket',FakeWebSocket);vi.stubGlobal('fetch',vi.fn(async(input:string|URL|Request,init?:RequestInit)=>{const path=new URL(typeof input==='string'?input:input instanceof URL?input.href:input.url).pathname;const data=endpointData[path]??((path.endsWith('/decomposition') || path.endsWith('/coordination'))?null:init?.method==='POST'?{}:[]);return {ok:true,status:200,json:async()=>({data,meta:{schemaVersion:'1.0'}})} as Response}))})
 
