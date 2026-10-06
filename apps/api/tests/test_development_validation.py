@@ -63,7 +63,9 @@ def test_backend_iteration_uses_explicit_affected_tests_but_publication_requires
     )
     assert {g.gate for g in published.gates} == set(PUBLICATION)
     assert all(not g.targets for g in published.gates)
-    assert not assess_validation(code, published, evidence(focused)).ready
+    assert not assess_validation(
+        code, published, evidence(focused), affected_backend_tests=("apps/api/tests/test_api.py",)
+    ).ready
 
 
 def test_ui_source_automatically_requires_browser_acceptance():
@@ -276,4 +278,61 @@ def test_order_independence_and_changed_targets_cannot_share_evidence():
     before = plan_validation(first, affected_backend_tests=("apps/api/tests/test_api.py",))
     assert before == plan_validation(second, affected_backend_tests=("apps/api/tests/test_api.py",))
     after = plan_validation(second, affected_backend_tests=("apps/api/tests/test_persistence.py",))
-    assert "backend_tests" in assess_validation(second, after, evidence(before)).missing
+    assert (
+        "backend_tests"
+        in assess_validation(
+            second,
+            after,
+            evidence(before),
+            affected_backend_tests=("apps/api/tests/test_persistence.py",),
+        ).missing
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "backups/jarvis-20260101T000000.sqlite3",
+        "data/runtime.sqlite3-wal",
+        "data/runtime.sqlite3-shm",
+        "data/runtime.sqlite3-journal",
+        "data/runtime.sqlite",
+        "data/unknown-wal",
+    ],
+)
+def test_all_sqlite_backups_and_sidecars_block_publication(path):
+    code = state(path)
+    plan = plan_validation(code, boundary="publication")
+    assert plan.blocked_paths == (path,)
+    assert not assess_validation(code, plan, evidence(plan)).ready
+
+
+@pytest.mark.parametrize("mutation", ["targets", "browser"])
+def test_self_rehashed_derivation_cannot_replace_trusted_policy(mutation):
+    code = state("apps/api/app/main.py")
+    trusted_targets = ("apps/api/tests/test_api.py",)
+    trusted = plan_validation(code, affected_backend_tests=trusted_targets, browser_required=True)
+    assert assess_validation(
+        code,
+        trusted,
+        evidence(trusted),
+        affected_backend_tests=trusted_targets,
+        browser_required=True,
+    ).ready
+    replacement = plan_validation(
+        code,
+        affected_backend_tests=("apps/api/tests/test_diagnostics.py",)
+        if mutation == "targets"
+        else trusted_targets,
+        browser_required=mutation != "browser",
+    )
+    with pytest.raises(ValueError):
+        assess_validation(
+            code,
+            replacement,
+            evidence(replacement),
+            affected_backend_tests=trusted_targets,
+            browser_required=True,
+        )
+    with pytest.raises(ValueError):
+        assess_validation(code, trusted, evidence(trusted))

@@ -53,3 +53,15 @@ Changed HEAD/base/repository, relevant source, target suite or policy invalidate
 reuse. Assessment handles at most 512 observations and reports missing, failed,
 stale and blocked requirements separately. It grants no merge/command authority
 and accepts no implicit infrastructure waiver.
+
+
+Assessment requires the same independently trusted `affected_backend_tests` and
+`browser_required` derivation inputs as planning. These bounded inputs are also
+stored in the immutable plan and included in its hash. Assessment rederives the
+complete gate/target set from the caller's trusted inputs and rejects any mismatch;
+it never treats a rehashed candidate plan's own inputs as policy authority. A future
+durable workflow must persist the operator/policy-derived inputs separately from
+untrusted candidate plans and pass them to both calls. Defaults are broad tests and
+no optional browser request; omitting inputs for a focused/explicit-browser plan
+fails closed. Database blocking includes `.sqlite`, `.sqlite3` and generic WAL,
+SHM and journal sidecars, including supervisor backup formats.

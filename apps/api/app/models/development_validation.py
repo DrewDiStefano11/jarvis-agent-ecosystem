@@ -105,11 +105,22 @@ class ValidationGate(Contract):
         return tuple(sorted(set(values)))
 
 
+class ValidationDerivation(Contract):
+    affected_backend_tests: tuple[str, ...] = Field(default=(), max_length=128)
+    browser_required: bool = Field(default=False, strict=True)
+
+    @field_validator("affected_backend_tests")
+    @classmethod
+    def bounded_targets(cls, values):
+        return ValidationGate.bounded_targets(values)
+
+
 class ValidationPlan(Contract):
     schema_version: Literal["1.0"] = "1.0"
     policy_digest: Digest
     code_state_hash: Digest
     boundary: Literal["iteration", "publication"]
+    derivation: ValidationDerivation
     gates: tuple[ValidationGate, ...] = Field(min_length=1, max_length=9)
     blocked_paths: tuple[str, ...] = Field(default=(), max_length=512)
     plan_hash: Digest

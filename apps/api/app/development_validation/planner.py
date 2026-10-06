@@ -8,6 +8,7 @@ from pathlib import Path
 from app.models import development_validation as validation_contracts
 from app.models.development_validation import (
     ValidationAssessment,
+    ValidationDerivation,
     ValidationGate,
     ValidationPlan,
     checked_path,
@@ -114,7 +115,11 @@ def plan_validation(
         raise ValueError("invalid validation boundary")
     if type(browser_required) is not bool:
         raise ValueError("browser requirement must be explicit boolean")
-    targets = tuple(sorted(set(affected_backend_tests)))
+    derivation = ValidationDerivation(
+        affected_backend_tests=tuple(islice(affected_backend_tests, 129)),
+        browser_required=browser_required,
+    )
+    targets = derivation.affected_backend_tests
     if len(targets) > 128:
         raise ValueError("too many test targets")
     for target in targets:
@@ -130,7 +135,9 @@ def plan_validation(
             or (part.casefold().startswith(".env") and part.casefold() != ".env.example")
             for part in path.split("/")
         )
-        or path.casefold().endswith((".db", ".db-wal", ".db-shm", ".pem", ".pfx", ".kdbx"))
+        or path.casefold().endswith(
+            (".db", ".sqlite", ".sqlite3", "-wal", "-shm", "-journal", ".pem", ".pfx", ".kdbx")
+        )
         or path.startswith(("apps/web/dist/", "apps/web/coverage/"))
     )
     gates = {"repository_integrity"}
@@ -176,13 +183,14 @@ def plan_validation(
         policy_digest=POLICY_DIGEST,
         code_state_hash=code_hash,
         boundary=boundary,
+        derivation=derivation.model_dump(mode="json"),
         gates=[gate.model_dump(mode="json") for gate in requirements],
         blocked_paths=blocked,
     )
     return ValidationPlan(**payload, plan_hash=digest(payload))
 
 
-def assess_validation(state, plan, evidence):
+def assess_validation(state, plan, evidence, *, affected_backend_tests=(), browser_required=False):
     """Assess trusted persisted journal observations; newest relevant result wins.
 
     Evidence from other states is never a pass for publication. Iteration may reuse
@@ -195,21 +203,16 @@ def assess_validation(state, plan, evidence):
     payload = plan.model_dump(mode="json", exclude={"plan_hash"})
     if plan.policy_digest != POLICY_DIGEST or digest(payload) != plan.plan_hash:
         raise ValueError("invalid or changed validation policy/plan")
-    minimum = plan_validation(state, boundary=plan.boundary)
-    required = {gate.gate for gate in minimum.gates}
-    actual = {gate.gate for gate in plan.gates}
-    if (
-        plan.code_state_hash != minimum.code_state_hash
-        or plan.blocked_paths != minimum.blocked_paths
-        or not required <= actual
-        or len(actual) != len(plan.gates)
-    ):
+    minimum = plan_validation(
+        state,
+        boundary=plan.boundary,
+        affected_backend_tests=affected_backend_tests,
+        browser_required=browser_required,
+    )
+    # Rehashing candidate fields is not policy authority. The trusted caller's
+    # derivation inputs must reproduce the entire immutable current plan.
+    if plan != minimum:
         raise ValueError("plan does not satisfy current code-state requirements")
-    for requirement in plan.gates:
-        if requirement.scope_fingerprint != fingerprint(
-            state, requirement.gate, requirement.targets
-        ) or (plan.boundary == "publication" and requirement.targets):
-            raise ValueError("validation scope changed")
     missing, failed, stale = [], [], []
     for requirement in plan.gates:
         observations = [
