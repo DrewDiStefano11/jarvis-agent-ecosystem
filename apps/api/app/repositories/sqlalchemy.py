@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -447,11 +448,17 @@ class SqlAlchemyRepository:
         existing = set(session.scalars(select(AuditEventRow.id)))
         for item in self.audit:
             if item.id not in existing:
+                verified_actor = (
+                    item.payload.get("verifiedActorId") if isinstance(item.payload, dict) else None
+                )
+                actor = item.actorAgentId or (
+                    verified_actor if isinstance(verified_actor, str) else None
+                )
                 session.add(
                     AuditEventRow(
                         id=item.id,
                         event_type=item.eventType,
-                        actor="system" if item.actorAgentId is None else item.actorAgentId,
+                        actor=actor or "system",
                         agent_id=item.actorAgentId,
                         task_id=item.taskId,
                         approval_id=item.approvalId,
@@ -546,10 +553,21 @@ class SqlAlchemyRepository:
             self._audit_session_ids[item.id] = event_session_id
         return item
 
-    def complete_idempotency(self, result: IdempotencyResult) -> None:
+    def complete_idempotency(
+        self, result: IdempotencyResult, *, authorize: Callable[[Session], None] | None = None
+    ) -> None:
         try:
             with UnitOfWork(self.session_factory) as uow:
                 assert uow.session is not None
+                if authorize is not None:
+                    if uow.session.bind and uow.session.bind.dialect.name == "sqlite":
+                        uow.session.execute(text("BEGIN IMMEDIATE"))
+                    uow.session.execute(
+                        update(SystemStateRow)
+                        .where(SystemStateRow.id == 1)
+                        .values(updated_at=datetime.now(UTC))
+                    )
+                    authorize(uow.session)
                 self._store_idempotency(uow.session, result)
         except Exception:
             self.reload()
@@ -563,6 +581,7 @@ class SqlAlchemyRepository:
         created_task: Task | None = None,
         created_context: tuple[ContextAssembly, Task] | None = None,
         updated_task: Task | None = None,
+        authorize: Callable[[Session], None] | None = None,
     ) -> dict[str, Any]:
         audit = envelope.pop("_audit", None)
         persist_cache = created_task is None and created_context is None and updated_task is None
@@ -587,6 +606,8 @@ class SqlAlchemyRepository:
                 if cursor is None:
                     raise RuntimeError("System state is unavailable.")
                 event_session_id, sequence_number = cursor
+                if authorize is not None:
+                    authorize(session)
                 envelope.update(
                     {
                         "eventSessionId": event_session_id,

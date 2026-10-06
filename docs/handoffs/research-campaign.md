@@ -1,5 +1,18 @@
 # Autonomous research campaign handoff
 
+## PR #79 merge-conflict repair
+
+At the user's request, reconciled latest main
+`4758891354e69c54d2765623aed5234672d4543a`. The shard conflict retains both
+retrieval-contract and search test assignments plus main's backlog assignment
+and shard balancing. Handoff conflicts preserve the search and retrieval repair
+sections and the newer completed publication history rather than older pending
+snapshots. No application-code conflict occurred or feature behavior was dropped.
+Ruff check/format pass; actual shard collection covers 1775 tests; 182 focused
+CI/search/retrieval/policy cases pass. Frontend typecheck, ESLint, 164 Vitest tests
+and build pass on the reconciled tree. The current pushed SHA and fresh CI run are
+recorded on the PR. No automatic merge or CI waiting is performed.
+
 ## Search timestamp review repair
 
 An unresolved hosted P2 on the earlier search head identified accepted timezone
@@ -13,12 +26,23 @@ review missed the defect; fresh review of the repaired published head is require
 Actual shard collection now includes 1706 cases; final affected validation and
 exact-head review/CI results are recorded on the PR.
 
+## Retrieval timestamp review repair
+
+Follow-up independent review found the same sub-minute timezone serialization
+defect as search in both RetrievedText and RetrievalFailure. Six rejection
+regressions reproduced it before repair. Both validators now reject non-minute
+offsets rather than silently shifting observed/failure instants during JSON
+storage. Six positive UTC/positive/negative minute-offset cases round-trip.
+Earlier no-findings review of f3d26f1 is superseded; fresh exact-head review is
+required after publishing this correction and propagating it into #77.
+
 ## Sharded CI reconciliation — 2026-10-06
 
 PR #82 was confirmed merged. This branch incorporates main
 `05d7628b15b7665927584a7349ac3c1af9cf247c` without conflicts. Its research test
 file is explicitly assigned to the models shard. Actual `backend_ci.py check`
-passes with 1697 collected tests; 135 focused CI/research cases pass using
+previously passed on search with 1697 collected tests and 135 focused cases,
+and on retrieval contracts with 1693 collected tests and 131 focused cases, using
 a fresh short temporary directory. Ruff check/format and frontend typecheck,
 ESLint, 104 Vitest tests and build pass. The ignored test environment now includes
 main's declared pytest-timeout dependency. Default pytest temporary-directory
@@ -170,3 +194,15 @@ typecheck, ESLint, 104 Vitest tests and build pass on the reconciled source.
 PR #79 is retargeted to main; no merge into main or branch deletion was performed
 by this session. Native retrieval admission/journal and actual provider dispatch
 remain separate pending integration requirements.
+
+### Retrieval reconciliation at the same historical main
+
+`1ee7a3cd72ec78a5765a9529a1c0faa26fefcfcb`. Retrieval contracts were reconciled
+with this main without conflicts. All 133 affected policy/contract and newly merged
+planning-correction/coordination-verification tests pass in 60.31 seconds. Backend
+Ruff and frontend typecheck, ESLint, 104 Vitest tests and build pass. PR #76 is
+retargeted to main; transport #77 must consume this reconciled contract head.
+Provenance implementation is checkpointed locally at `c152afe` in its dedicated
+source worktree, with full backend 1675 passing plus 106 affected reset cases;
+it must consume the reconciled transport before publication. No merge into main
+or feature-branch deletion was performed by this session.
