@@ -229,7 +229,10 @@ async def test_operator_control_blocks_correction_dispatch(tmp_path, control):
         service = app.state.autonomous_worker_service
         assert (await service.run_once(worker.id)).failureCode == "review_revision_requested"
         if control == "stop":
-            await app.state.simulator.emergency_stop()
+            # The TestClient portal owns the simulator and broker event loop.
+            # Exercise the real operator route rather than crossing asyncio locks.
+            response = client.post("/api/system/emergency-stop")
+            assert response.status_code == 200
             with pytest.raises(AutonomousWorkerError) as stopped:
                 await service.run_once(worker.id)
             assert stopped.value.code == "EXECUTION_EMERGENCY_STOPPED"
