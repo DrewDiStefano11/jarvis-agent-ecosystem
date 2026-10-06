@@ -33,3 +33,8 @@ Actual API smoke creates 52 isolated task requests, observes durable sequence re
 ## Overlap and continuation
 
 Current main excludes Mission Control PRs above; no unmerged product code/contracts imported. Active backend/research #70/#71/#72/#76/#77/#79 and CI scalability #82 remain independent. This branch avoids App/Tasks/Details/Runtime/Workforce/AppStore and core backend files. Next priorities: reconcile any newly merged main/review findings; history/task operations via actual task records and explicit recovery authority; Talk to Jarvis/search after shell integration. The campaign remains active until the human stops or no safe independent work remains.
+
+
+## Independent local review repair after #82 reconciliation
+
+User-authorized independent local review reproduced partial credential disclosure when a quoted password value crossed the 1,000-character summary or 2,000-character evidence limit. Bounded redaction now treats an unterminated recognized quoted assignment as sensitive through the end of the bounded input. Both quote styles and both bounds have regression coverage, including displayed/copied evidence. Processing stays bounded; no unrestricted scan or raw evidence export was added. All 121 frontend tests, typecheck, ESLint and build pass. Review must cover the final exact repaired SHA after common CI repair.

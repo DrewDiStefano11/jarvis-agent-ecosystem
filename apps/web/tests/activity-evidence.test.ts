@@ -28,3 +28,22 @@ describe('bounded displayed evidence',()=>{
   expect(result.redacted).toBe(true)
  })
 })
+
+test('quoted secrets crossing summary and evidence truncation boundaries stay redacted', () => {
+ for (const quote of ['"', "'"]) {
+  for (const limit of [1000, 2000]) {
+   const source = 'x'.repeat(limit - 30) + ` {${quote}password${quote}:${quote}boundary-secret extra text extending beyond the limit${quote}}`
+   const summary = redactEvidenceText(source, limit)
+   expect(summary.redacted).toBe(true)
+   expect(summary.truncated).toBe(true)
+   expect(summary.text).not.toContain('boundary-secret')
+   expect(summary.text).toContain('[redacted]')
+   if (limit === 2000) {
+    const evidence = displayedEvidence({message: source})
+    expect(evidence.redacted).toBe(true)
+    expect(evidence.truncated).toBe(true)
+    expect(evidence.text).not.toContain('boundary-secret')
+   }
+  }
+ }
+})

@@ -9,7 +9,7 @@ export function redactEvidenceText(value: string, limit = 1000) {
     .replace(/\b(?:sk-[\w-]{8,}|gh[pousr]_[\w]{8,}|AKIA[A-Z0-9]{16})\b/g, '[redacted credential]')
     .replace(/-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*/g, '[redacted private key]')
     .replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[redacted]@')
-    .replace(/\b(password|passwd|secret|token|api[-_]?key|authorization|credential|cookie)["']?\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s,;&"']+)/gi, '$1=[redacted]')
+    .replace(/\b(password|passwd|secret|token|api[-_]?key|authorization|credential|cookie)["']?\s*[:=]\s*(?:"[^"]*(?:"|$)|'[^']*(?:'|$)|[^\s,;&"']+)/gi, '$1=[redacted]')
   return { text: text + (value.length > limit ? '… [truncated]' : ''), redacted: text !== bounded, truncated: value.length > limit }
 }
 
