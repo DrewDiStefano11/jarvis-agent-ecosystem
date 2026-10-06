@@ -48,21 +48,46 @@ in database/async tests; the same tests progress with normal filesystem access.
 Retrieval contracts: `codex/research-retrieval-contracts`, worktree
 `C:/Users/DDistefano/Documents/jarvis-agent-ecosystem/.worktrees/research-retrieval-contracts`.
 New strict/frozen `app.models.research_retrieval` records and tests, plus
-`docs/research-retrieval-contracts.md`. Depends on destination policy. Focused
-26 tests pass using the pending policy dependency; complete branch validation is
-required after stacking the committed dependency. Not published yet.
+`docs/research-retrieval-contracts.md`. Depends on PR #74 at policy repair head
+`0d0c2e5f4541e0b1a9c01f5eab2c5bb108edfb6c`. All 98 combined policy/contract
+tests pass (26 contract cases plus 72 policy cases). Backend Ruff check/format
+pass. Frontend typecheck, ESLint, 104 Vitest tests and build pass.
+The full backend run passed 1573 tests with two skips but had 48 diagnostics
+fixture-copy errors from Windows MAX_PATH in the deep local basetemp. Every
+diagnostics/report test was rerun in a short isolated temp directory: 52 passed,
+188.93 seconds. No test was skipped to work around the errors and no production
+change was needed. Publication is the next step; the PR body records exact head.
 
 Pinned transport: `codex/research-pinned-transport`, worktree
 `C:/Users/DDistefano/Documents/jarvis-agent-ecosystem/.worktrees/research-pinned-transport`.
 New internal `app.research_transport`, explicit HTTPCore dependency, 25 passing
 deterministic transport tests, plus `docs/research-transport.md`. Depends on both
-prior slices; complete branch validation is required after stacking dependencies.
+prior slices. An exact contract-file snapshot was used during validation; replace
+it with the committed contract branch before publication. Full backend run:
+1600 passed, two skips, 46 Windows MAX_PATH diagnostics setup errors. All
+diagnostics/report tests passed under a short isolated basetemp: 52 passed in
+189.52 seconds. All 123 affected policy/contract/transport tests pass after the
+policy repair. Ruff and all frontend gates pass. Inspect final dependency diff
+before publication; no native admission/persistence/recovery is claimed.
 Disabled by default, empty origin scope, no runtime/model registration. Not
 published yet. No native admission, durable artifact storage or recovery is claimed.
 An actual bounded public GET of `https://example.com/` on 2026-10-06 at 14:00:07
 UTC returned 577 bytes of HTML through the default pinned backend and verified
 TLS; digest and timestamp were printed without retaining the page. This is
 transport smoke evidence, not end-to-end autonomous research acceptance.
+
+Search contract preparation: `codex/research-search-contract`, worktree
+`C:/Users/DDistefano/Documents/jarvis-agent-ecosystem/.worktrees/research-search-contract`.
+Provider-neutral discovery models, pure normalization/deduplication, stable identity
+and digest validation, and an adapter protocol; no provider or dispatcher activated.
+26 focused search tests and 72 policy cases pass. Ruff and all frontend gates pass;
+full backend validation is in progress. Source/snippet text remains untrusted and
+search results are discovery leads rather than retrieved evidence.
+
+New mission-control-shell and mission-control-agent-operations worktrees were
+observed during the later overlap audit. Their frontend files are untouched.
+Native execution integration will touch files active in #70/#73; defer that
+integration while continuing independent source/search foundations.
 
 ## Next dependency
 
