@@ -56,6 +56,11 @@ work can be reconsidered only through a new baseline/proposal. A blocked
 high-priority candidate does not starve independent lower-priority work.
 Failed tasks cannot bypass native retry limits through pause/resume; the explicit
 retry action is their recovery path when allowance remains.
+Active work identity uses defect category, stage, role, model, provider, metric
+and inference mode, rather than capture aliases or evidence-set membership.
+Renaming or adding equivalent captures cannot create duplicate protected work.
+Legacy entry hashes remain immutable provenance; admission derives the current
+semantic identity from their persisted analyses inside the native transaction.
 Concurrent selectors use the native SQLite write fence. The entry, queued task,
 audit, outbox and actor-scoped idempotency receipt commit together. Retrying after
 acknowledgement loss returns the original entry without creating a second task.

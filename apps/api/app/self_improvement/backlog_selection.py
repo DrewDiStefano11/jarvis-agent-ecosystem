@@ -31,8 +31,7 @@ def scope_key(analysis: Analysis, proposal: Proposal) -> str:
     observations = {item.id: item for item in analysis.baseline.observations}
     identities = {
         (
-            item.source_type,
-            item.source_id,
+            item.category,
             item.stage,
             item.role,
             item.model,
@@ -43,7 +42,7 @@ def scope_key(analysis: Analysis, proposal: Proposal) -> str:
         for reference in proposal.evidence_ids
         for item in [observations[reference]]
     }
-    return digest(["improvement-work-scope-v1", proposal.category, sorted(identities)])
+    return digest(["improvement-work-scope-v2", proposal.category, sorted(identities)])
 
 
 def ordered_candidates(analyses: list[Analysis]) -> list[BacklogCandidate]:

@@ -113,3 +113,24 @@ new locally reproduced cancellation/completion race under repair; #70's default
 HTTPS authority normalization fix is pushed at `50fd6deb` and awaiting fresh gates.
 Do not touch #63. Adaptive executable-node work remains dependent on its own
 prerequisites. Continuous development does not end at this checkpoint.
+
+## 2026-10-06 sharded-main reconciliation and local review repair
+
+Main `05d7628b15b7665927584a7349ac3c1af9cf247c` includes merged #82.
+The branch inherits its six backend CI jobs and registers backlog tests in the
+models shard. Independent review of reconciled head `6870562` found that capture
+aliases could bypass duplicate active-work protection. Four native regression
+cases reproduced that finding before the repair.
+
+Canonical v2 scope uses defect dimensions rather than capture aliases. Selection
+and fenced admission derive active scopes from immutable native analysis lineage,
+including historical v1 entries, without rewriting append-only records. Two legacy
+compatibility cases verify this protection and unchanged historical entries.
+
+Final affected validation: 138 tests passed in 76.60 seconds. Complete shard
+collection: 1,698 tests; Ruff and formatting pass. Frontend typecheck, ESLint,
+104 Vitest tests and production build pass. Blank database migration upgrade,
+downgrade and re-upgrade passed during reconciliation; this repair changes no schema.
+Fresh independent exact-head review and sharded CI are required after publishing
+this repair. Record the final SHA and review in the PR. Do not merge automatically.
+If only external CI remains, stop execution as the operator requested.

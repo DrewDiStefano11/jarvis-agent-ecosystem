@@ -64,29 +64,46 @@ class ImprovementBacklogRepository:
             admitted = {
                 ImprovementBacklogEntry.model_validate(row.payload).proposal_id for row in rows
             }
-            active_rows = session.execute(
-                select(ImprovementRecordRow, TaskRow.status)
-                .outerjoin(
-                    TaskRow, TaskRow.id == ImprovementRecordRow.payload["task_id"].as_string()
-                )
-                .where(
-                    ImprovementRecordRow.kind == ENTRY_KIND,
-                    active_task_scope() | TaskRow.id.is_(None),
-                )
-                .limit(MAX_ACTIVE_BACKLOG + 1)
-            ).all()
-            if len(active_rows) > MAX_ACTIVE_BACKLOG:
-                raise DomainError(
-                    "IMPROVEMENT_BACKLOG_SCAN_LIMIT", "Active backlog exceeds its bound.", 409
-                )
-            scopes = set()
-            for row, task_state in active_rows:
-                if task_state is None:
-                    raise DomainError(
-                        "IMPROVEMENT_BACKLOG_TASK_MISSING", "An admitted task is missing.", 409
-                    )
-                scopes.add(ImprovementBacklogEntry.model_validate(row.payload).scope_key)
+            _, scopes = self.active_scopes_in_session(session)
             return admitted, scopes
+
+    @staticmethod
+    def active_scopes_in_session(session):
+        rows = session.execute(
+            select(ImprovementRecordRow, TaskRow.status)
+            .outerjoin(TaskRow, TaskRow.id == ImprovementRecordRow.payload["task_id"].as_string())
+            .where(
+                ImprovementRecordRow.kind == ENTRY_KIND, active_task_scope() | TaskRow.id.is_(None)
+            )
+            .limit(MAX_ACTIVE_BACKLOG + 1)
+        ).all()
+        if len(rows) > MAX_ACTIVE_BACKLOG:
+            raise DomainError(
+                "IMPROVEMENT_BACKLOG_SCAN_LIMIT", "Active backlog exceeds its bound.", 409
+            )
+        scopes, analyses = set(), {}
+        for row, task_state in rows:
+            if task_state is None:
+                raise DomainError(
+                    "IMPROVEMENT_BACKLOG_TASK_MISSING", "An admitted task is missing.", 409
+                )
+            entry = ImprovementBacklogEntry.model_validate(row.payload)
+            if entry.baseline_id not in analyses:
+                analyses[entry.baseline_id] = ImprovementBacklogRepository.analysis_in_session(
+                    session, entry.baseline_id
+                )
+            analysis = analyses[entry.baseline_id]
+            proposal = next(
+                (item for item in analysis.proposals if item.id == entry.proposal_id), None
+            )
+            if proposal is None:
+                raise DomainError(
+                    "IMPROVEMENT_BACKLOG_LINEAGE_INVALID", "Admission evidence changed.", 409
+                )
+            # Derive current semantic identity from immutable evidence. Older
+            # entry hashes remain historical provenance and are never rewritten.
+            scopes.add(scope_key(analysis, proposal))
+        return len(rows), scopes
 
     @staticmethod
     def admit_in_session(session, entry):
@@ -122,35 +139,15 @@ class ImprovementBacklogRepository:
             raise DomainError(
                 "IMPROVEMENT_BACKLOG_LINEAGE_INVALID", "Admission evidence changed.", 409
             )
-        active = session.scalar(
-            select(ImprovementRecordRow.id)
-            .join(TaskRow, TaskRow.id == ImprovementRecordRow.payload["task_id"].as_string())
-            .where(
-                ImprovementRecordRow.kind == ENTRY_KIND,
-                ImprovementRecordRow.payload["scope_key"].as_string() == entry.scope_key,
-                active_task_scope(),
-            )
-            .limit(1)
-        )
-        if active is not None or session.get(ImprovementRecordRow, entry.id) is not None:
+        active_count, active_scopes = ImprovementBacklogRepository.active_scopes_in_session(session)
+        if (
+            entry.scope_key in active_scopes
+            or session.get(ImprovementRecordRow, entry.id) is not None
+        ):
             raise DomainError(
                 "IMPROVEMENT_WORK_ALREADY_ADMITTED", "Matching work is already admitted.", 409
             )
-        active_tasks = session.execute(
-            select(TaskRow.status)
-            .select_from(ImprovementRecordRow)
-            .outerjoin(TaskRow, TaskRow.id == ImprovementRecordRow.payload["task_id"].as_string())
-            .where(
-                ImprovementRecordRow.kind == ENTRY_KIND,
-                active_task_scope() | TaskRow.id.is_(None),
-            )
-            .limit(MAX_ACTIVE_BACKLOG + 1)
-        ).all()
-        if any(status is None for (status,) in active_tasks):
-            raise DomainError(
-                "IMPROVEMENT_BACKLOG_TASK_MISSING", "An admitted task is missing.", 409
-            )
-        if len(active_tasks) >= MAX_ACTIVE_BACKLOG:
+        if active_count >= MAX_ACTIVE_BACKLOG:
             raise DomainError(
                 "IMPROVEMENT_BACKLOG_SCAN_LIMIT", "Active backlog admission bound reached.", 409
             )

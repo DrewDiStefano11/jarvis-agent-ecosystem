@@ -214,6 +214,90 @@ def test_fresh_observations_keep_same_active_work_scope():
     )
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("capture", ["rename", "extend"])
+@pytest.mark.parametrize("bypass_projection", [False, True])
+async def test_capture_aliases_cannot_duplicate_protected_work(
+    backlog_app, monkeypatch, capture, bypass_projection
+):
+    from app.models.improvement_backlog import SelectImprovementRequest
+    from app.self_improvement.engine import create_baseline
+    from app.self_improvement.repository import ImprovementRepository
+
+    app, actor, service, original, request, _ = backlog_app
+    admitted = await service.select(actor, request, "original-capture")
+    app.state.repository.tasks[admitted.entry.task_id].status = "under_review"
+    app.state.repository.persist()
+    later = baseline(values=(0, 0), provenance=source(source_id="new-capture-alias"))
+    if capture == "extend":
+        later = create_baseline(
+            repo_sha=later.repo_sha,
+            configuration_fingerprint=later.configuration_fingerprint,
+            safety_fingerprint=later.safety_fingerprint,
+            sources=original.baseline.sources + later.sources,
+            observations=original.baseline.observations + later.observations,
+        )
+    saved = ImprovementRepository(app.state.repository.session_factory).save_analysis(
+        analyze(later)
+    )
+    if bypass_projection:
+        monkeypatch.setattr(service.backlog, "admission_state", lambda ids: (set(), set()))
+    result = await service.select(
+        actor, SelectImprovementRequest(baseline_ids=(saved.baseline.id,)), "new-capture"
+    )
+    assert result.outcome == "blocked"
+    assert len(service.backlog.entries()) == 1
+    assert app.state.repository.get_task_durable(admitted.entry.task_id).status == "under_review"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bypass_projection", [False, True])
+async def test_legacy_scope_entries_reserve_work_without_rewriting_history(
+    backlog_app, monkeypatch, bypass_projection
+):
+    from app.models.improvement_backlog import SelectImprovementRequest
+    from app.self_improvement import backlog_repository, backlog_selection
+    from app.self_improvement.engine import digest
+    from app.self_improvement.repository import ImprovementRepository
+
+    def legacy_scope(analysis, proposal):
+        observations = {item.id: item for item in analysis.baseline.observations}
+        identities = {
+            (
+                item.source_type,
+                item.source_id,
+                item.stage,
+                item.role,
+                item.model,
+                item.provider,
+                item.metric,
+                item.inference_mode,
+            )
+            for reference in proposal.evidence_ids
+            for item in [observations[reference]]
+        }
+        return digest(["improvement-work-scope-v1", proposal.category, sorted(identities)])
+
+    app, actor, service, _, request, _ = backlog_app
+    with monkeypatch.context() as historical:
+        historical.setattr(backlog_selection, "scope_key", legacy_scope)
+        historical.setattr(backlog_repository, "scope_key", legacy_scope)
+        selected = await service.select(actor, request, "legacy-admission")
+    original = service.backlog.entries()
+    assert original[0].scope_key == selected.entry.scope_key
+    later = ImprovementRepository(app.state.repository.session_factory).save_analysis(
+        analyze(baseline(values=(0, 0), provenance=source(source_id="new-alias")))
+    )
+    assert scope_key(later, later.proposals[0]) != original[0].scope_key
+    if bypass_projection:
+        monkeypatch.setattr(service.backlog, "admission_state", lambda ids: (set(), set()))
+    result = await service.select(
+        actor, SelectImprovementRequest(baseline_ids=(later.baseline.id,)), "after-legacy"
+    )
+    assert result.outcome == "blocked"
+    assert service.backlog.entries() == original
+
+
 def test_selection_is_bounded_and_invalid_lineage_fails_closed():
     analysis = analyze(baseline())
     with pytest.raises(ValueError, match="eight"):
