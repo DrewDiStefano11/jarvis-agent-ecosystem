@@ -53,6 +53,7 @@
     "tests/test_office.py",
     "tests/test_outbox_ordering.py",
     "tests/test_research_retrieval_contracts.py",
+    "tests/test_research_search.py",
     "tests/test_research_url_policy.py",
     "tests/test_remote_control_access.py",
     "tests/test_remote_tls.py",
