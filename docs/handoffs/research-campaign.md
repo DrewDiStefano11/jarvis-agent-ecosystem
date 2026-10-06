@@ -80,8 +80,11 @@ A final cancellation audit added explicit stream cleanup when TLS initialization
 is interrupted before the HTTP layer owns the connection. Its dedicated
 regression passes along with all transport cases. The temporary dependency
 snapshots were verified byte-identical before removal and are not committed.
-Disabled by default, empty origin scope, no runtime/model registration. Not
-published yet. No native admission, durable artifact storage or recovery is claimed.
+PR: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/77.
+Validated implementation commit: `28c7eaff25b04cb0bc5e19b1c1444d6895395e1f`.
+Disabled by default, empty origin scope, no runtime/model registration. Hosted CI
+and exact-head review are pending; the PR body records the current publication
+head. No native admission, durable artifact storage or recovery is claimed.
 An actual bounded public GET of `https://example.com/` on 2026-10-06 at 14:00:07
 UTC returned 577 bytes of HTML through the default pinned backend and verified
 TLS; digest and timestamp were printed without retaining the page. This is
