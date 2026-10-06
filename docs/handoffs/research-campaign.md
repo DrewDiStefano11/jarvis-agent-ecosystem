@@ -129,3 +129,13 @@ integration while continuing independent source/search foundations.
 Fetch current main and inspect open PRs again at each branch boundary. Do not merge,
 force-reset, delete branches or modify other sessions' worktrees. The campaign
 request authorizes feature pushes, PR publication and exact-head Codex review.
+
+## Main reconciliation checkpoint
+
+The human merged #74 and #73. Current main is
+`1ee7a3cd72ec78a5765a9529a1c0faa26fefcfcb`. Search contracts were reconciled
+without conflicts. All 102 affected policy/search cases, backend Ruff and frontend
+typecheck, ESLint, 104 Vitest tests and build pass on the reconciled source.
+PR #79 is retargeted to main; no merge into main or branch deletion was performed
+by this session. Native retrieval admission/journal and actual provider dispatch
+remain separate pending integration requirements.
