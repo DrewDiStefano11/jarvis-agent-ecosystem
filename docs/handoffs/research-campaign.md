@@ -63,15 +63,23 @@ including handoff-only publication updates. This PR is stacked on #74.
 
 Pinned transport: `codex/research-pinned-transport`, worktree
 `C:/Users/DDistefano/Documents/jarvis-agent-ecosystem/.worktrees/research-pinned-transport`.
-New internal `app.research_transport`, explicit HTTPCore dependency, 25 passing
+New internal `app.research_transport`, explicit HTTPCore dependency, 26 passing
 deterministic transport tests, plus `docs/research-transport.md`. Depends on both
-prior slices. An exact contract-file snapshot was used during validation; replace
-it with the committed contract branch before publication. Full backend run:
+prior slices. The three byte-identical contract-file snapshots used during
+validation were removed and replaced by the committed dependency #76 at
+`0eb663091c33483da78fe9f5f77fbcd81f3aefea`. Full backend run:
 1600 passed, two skips, 46 Windows MAX_PATH diagnostics setup errors. All
 diagnostics/report tests passed under a short isolated basetemp: 52 passed in
-189.52 seconds. All 123 affected policy/contract/transport tests pass after the
+189.52 seconds. All 124 affected policy/contract/transport tests pass after the
 policy repair. Ruff and all frontend gates pass. Inspect final dependency diff
 before publication; no native admission/persistence/recovery is claimed.
+Final dependency inspection and the 124-case affected suite pass on the actual
+stacked branch. Only transport module/tests, explicit HTTPCore dependency,
+transport documentation and this handoff are part of the transport diff.
+A final cancellation audit added explicit stream cleanup when TLS initialization
+is interrupted before the HTTP layer owns the connection. Its dedicated
+regression passes along with all transport cases. The temporary dependency
+snapshots were verified byte-identical before removal and are not committed.
 Disabled by default, empty origin scope, no runtime/model registration. Not
 published yet. No native admission, durable artifact storage or recovery is claimed.
 An actual bounded public GET of `https://example.com/` on 2026-10-06 at 14:00:07
