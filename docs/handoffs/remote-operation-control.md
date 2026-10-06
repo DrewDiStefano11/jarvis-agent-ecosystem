@@ -129,3 +129,14 @@ Current main remains ee0dd09; no new migration or dependency. Single head2026090
 4. Build on merged #68 evidence/diagnosis/planning toward durable task selection,
    delegation, Git lifecycle or unattended recovery; none is already executed by
    its advisory foundation.
+
+## 2026-10-06 task-graph main conflict resolution
+
+Reconciled main `7b761b1cf6a4aac6fd689b2699a6dfc9db6a4f46` after #80 merged.
+Both sides fixed the emergency-stop test's cross-loop lock access. Preserve this
+branch's real HTTP call via asyncio.to_thread, keeping the TestClient portal as
+simulator/broker owner. All assertions remain. Retain main's shard redistribution
+and all seven remote-control test registrations. No runtime behavior is dropped.
+Ruff/format and complete 1,727-test collection pass. Focused backend: 54 passed.
+Frontend typecheck, ESLint, 111 Vitest tests and production build pass. Publish
+this reconciled head, record fresh independent review, and stop during hosted CI.

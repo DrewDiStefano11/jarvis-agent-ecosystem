@@ -1,6 +1,7 @@
 export interface Coordination {
   id: string
   taskId: string
+  decompositionId: string
   status: 'active' | 'blocked' | 'synthesizing' | 'completing' | 'completed' | 'failed'
   blockedReason: string | null
   nodes: {
