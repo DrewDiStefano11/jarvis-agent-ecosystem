@@ -1,8 +1,9 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useAppStore } from '../state/AppStore'
 import type { IdentityRegistration, RuntimeIdentity } from '../types/runtime'
 import { Status } from './Status'
+import { IdentityOperations } from './IdentityOperations'
 import '../styles/workforce.css'
 
 const agentTypes = ['worker', 'specialist', 'reviewer', 'coordinator', 'supervisor', 'monitor', 'system']
@@ -70,7 +71,7 @@ function IdentityCard({ identity, capability }: { identity: RuntimeIdentity; cap
       ...(description !== identity.description ? { description } : {}),
     }), 'Profile saved.')
   }
-  return <article className="identity-card" aria-label={`Identity ${identity.display_name}`}>
+  return <article id={`identity-profile-${identity.id}`} tabIndex={-1} className="identity-card" aria-label={`Identity ${identity.display_name}`}>
     <div className="identity-heading"><div><h3>{identity.display_name}</h3><code>{identity.stable_key}</code></div><Status value={identity.lifecycle_state} /></div>
     <p className="muted">{identity.agent_type} · {identity.is_enabled ? 'Enabled' : 'Disabled'} · {identity.operational_status}</p>
     <p className="identity-copy">{identity.description || 'No description provided.'}</p>
@@ -103,6 +104,9 @@ export function IdentityWorkforce() {
     capabilityMembers, loadCapabilityMembers } = runtime
   const [creating, setCreating] = useState(false)
   const [search, setSearch] = useState('')
+  const [lifecycle, setLifecycle] = useState('')
+  const [availability, setAvailability] = useState('')
+  const profilesRef = useRef<HTMLDetailsElement>(null)
   const [capability, setCapability] = useState('')
   const [capabilityError, setCapabilityError] = useState('')
   const [message, setMessage] = useState('')
@@ -117,20 +121,30 @@ export function IdentityWorkforce() {
     return () => { active = false }
   }, [capability, loadCapabilityMembers])
   const visible = identities.filter(identity => `${identity.display_name} ${identity.stable_key}`.toLowerCase().includes(search.toLowerCase())
+    && (!lifecycle || identity.lifecycle_state === lifecycle)
+    && (!availability || identity.is_enabled === (availability === 'enabled'))
     && (!capability || capabilityMembers[capability]?.includes(identity.id)))
   const selectedCapability = capabilities.find(item => item.stable_key === capability)
   return <section className="panel workforce" aria-labelledby="workforce-title">
     <div className="panel-heading"><div><h2 id="workforce-title">Registered identities</h2><p>Durable identities shared with Planning and the office.</p></div><button className="primary" disabled={creating} onClick={() => { setCreating(true); setMessage('') }}>Register identity</button></div>
     <p>{identities.filter(identity => identity.lifecycle_state === 'active' && identity.is_enabled).length} active and enabled · {identities.length} registered</p>
-    <p className="muted">Activation makes an identity available for assignment. It grants no execution permissions. Capabilities describe effective assignments; tool and task access are authorized separately.</p>
+
     {message && <p role="status" className="callout success">{message}</p>}
-    {creating && <RegistrationForm onClose={() => setCreating(false)} onComplete={value => { setMessage(value); setCreating(false) }}/>}
-    <div className="filters"><label>Find an identity<input value={search} onChange={event => setSearch(event.target.value)} placeholder="Name or stable key"/></label>
+    {creating && <RegistrationForm onClose={() => setCreating(false)} onComplete={value => { setMessage(value); setCreating(false); if (profilesRef.current) profilesRef.current.open = true }}/>}
+    <div className="filters identity-filters"><label>Find an identity<input value={search} onChange={event => setSearch(event.target.value)} placeholder="Name or stable key"/></label>
+      <label>Lifecycle<select aria-label="Lifecycle" value={lifecycle} onChange={event => setLifecycle(event.target.value)}><option value="">All states</option>{[...new Set(identities.map(identity => identity.lifecycle_state))].sort().map(state => <option key={state} value={state}>{state}</option>)}</select></label><label>Availability<select aria-label="Availability" value={availability} onChange={event => setAvailability(event.target.value)}><option value="">All identities</option><option value="enabled">Enabled</option><option value="disabled">Disabled</option></select></label>
       <label>Effective capability<select value={capability} onChange={event => { setCapability(event.target.value); setCapabilityError('') }}><option value="">All identities</option>{capabilities.filter(item => item.is_enabled).map(item => <option key={item.id} value={item.stable_key}>{item.display_name}</option>)}</select></label>
       <button className="secondary" disabled={identityLoading} onClick={() => { void loadIdentities().catch(() => undefined); if (capability) void loadCapabilityMembers(capability).catch(caught => setCapabilityError(caught instanceof Error ? caught.message : 'Cannot load assignments')) }}>{identityLoading ? 'Refreshing…' : 'Refresh identities'}</button></div>
     {identityError && <p role="alert" className="callout danger">{identityError}. Previously loaded identities may be stale.</p>}
     {capabilityError && <p role="alert">{capabilityError}</p>}
-    <div className="identity-grid">{visible.map(identity => <IdentityCard key={identity.id} identity={identity} capability={selectedCapability?.display_name}/>)}</div>
+    <p className="muted identity-result-count">Showing {visible.length} of {identities.length} registered identities. Registry status; inspect Planning for current task and model evidence.</p>
+    {visible.length > 0 && <IdentityOperations identities={visible} onInspect={identity => {
+      if (profilesRef.current) profilesRef.current.open = true
+      const profile = document.getElementById(`identity-profile-${identity.id}`)
+      profile?.focus()
+      profile?.scrollIntoView?.({ block: 'nearest' })
+    }}/> }
+    <details ref={profilesRef} className="identity-profiles"><summary>Manage identity profiles</summary><p className="muted">Activation makes an identity available for assignment. It grants no execution permissions. Capabilities describe effective assignments; tool and task access are authorized separately.</p><div className="identity-grid">{visible.map(identity => <IdentityCard key={identity.id} identity={identity} capability={selectedCapability?.display_name}/>)}</div></details>
     {!identityLoading && !identityError && !visible.length && <p>{identities.length ? 'No identities match this selection.' : 'No identities registered yet. Register one to build your workforce.'}</p>}
   </section>
 }
