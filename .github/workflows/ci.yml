@@ -4,37 +4,96 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
-  backend:
+  backend-static:
     runs-on: windows-latest
-    # The expanded SQLite/recovery suite exceeded30 minutes on the hosted Windows
-    # runner with735 passing tests and no failures. Keep every test enabled.
-    timeout-minutes: 60
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: {python-version: '3.12'}
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e ".[dev]"
-        working-directory: apps/api
-      - name: Upgrade a blank SQLite database
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - run: python -m pip install -e './apps/api[dev]'
+      - run: python -m ruff format apps/api scripts --check
+      - run: python -m ruff check apps/api scripts
+      - name: Prove backend shard coverage against full pytest collection
+        run: python scripts/backend_ci.py check --artifacts "${{ runner.temp }}/backend-check"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-collection
+          path: ${{ runner.temp }}/backend-check
+          retention-days: 7
+          if-no-files-found: warn
+
+  backend-migrations:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - run: python -m pip install -e './apps/api[dev]'
+      - name: Timed blank SQLite upgrade, downgrade, and re-upgrade
+        run: python scripts/backend_ci.py migrations --artifacts "${{ runner.temp }}/backend-migrations"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-migrations
+          path: ${{ runner.temp }}/backend-migrations
+          retention-days: 7
+          if-no-files-found: warn
+
+  backend-tests:
+    name: backend-tests-${{ matrix.shard }}
+    runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [runtime, autonomy, models, system]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: apps/api/pyproject.toml
+      - run: python -m pip install -e './apps/api[dev]'
+      - name: Serial pytest shard with timings and hang diagnostics
+        run: python scripts/backend_ci.py ${{ matrix.shard }} --artifacts "${{ runner.temp }}/backend-${{ matrix.shard }}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-${{ matrix.shard }}
+          path: ${{ runner.temp }}/backend-${{ matrix.shard }}
+          retention-days: 7
+          if-no-files-found: warn
+
+  # Preserve the existing required status context while gating every backend job.
+  backend:
+    if: always()
+    needs: [backend-static, backend-migrations, backend-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require all backend checks
+        env:
+          BACKEND_RESULTS: ${{ toJSON(needs) }}
         run: |
-          $databasePath = Join-Path $env:RUNNER_TEMP "jarvis-ci.db"
-          $normalizedPath = $databasePath.Replace('\','/')
-          $env:JARVIS_DATABASE_URL = "sqlite:///$normalizedPath"
-          $parsedPath = python -c "import os; from sqlalchemy.engine import make_url; print(make_url(os.environ['JARVIS_DATABASE_URL']).database)"
-          if ($parsedPath -ne $normalizedPath) { throw "SQLite URL did not preserve the Windows absolute path." }
-          python -m alembic upgrade head
-          python -m alembic current
-          python -m alembic history
-          python -m alembic downgrade 20260729_04
-          python -m alembic upgrade head
-        working-directory: apps/api
-      - run: ruff format . --check
-        working-directory: apps/api
-      - run: ruff check .
-        working-directory: apps/api
-      - run: python -m pytest -q
-        working-directory: apps/api
+          python -c "import json, os; results = json.loads(os.environ['BACKEND_RESULTS']); assert all(job['result'] == 'success' for job in results.values()), results"
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: backend-*
+          path: backend-evidence
+      - name: Require exact collected-test union across shards
+        run: python scripts/backend_ci.py verify --artifacts backend-evidence
+
   frontend:
     runs-on: windows-latest
     timeout-minutes: 30
