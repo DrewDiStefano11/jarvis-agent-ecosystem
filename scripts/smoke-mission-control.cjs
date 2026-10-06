@@ -160,4 +160,3 @@ async function stop(child) {
     for (const child of processes.reverse()) await stop(child)
   }
 })().catch(error => { console.error(error); process.exitCode=1 })
-

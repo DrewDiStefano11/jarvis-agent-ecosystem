@@ -1,0 +1,44 @@
+.identity-filters { flex-wrap:wrap; align-items:end; gap:12px }
+.identity-filters label { flex:1 1 140px; min-width:0 }
+.identity-filters label:first-child { flex-grow:2 }
+.identity-filters .secondary { min-height:44px }
+.identity-result-count { font-size:.8rem; margin:8px 0 14px }
+.identity-operations { width:100%; border-collapse:separate; border-spacing:0; border:1px solid var(--line); border-radius:8px; overflow:hidden; font-size:.8rem; text-align:left; background:var(--bg) }
+.identity-operations th, .identity-operations td { padding:12px; border-bottom:1px solid var(--line); overflow-wrap:anywhere }
+.identity-operations thead th { background:var(--surface-2); color:var(--muted); font-size:.72rem; font-weight:500 }
+.identity-operations tbody th { font-weight:500; max-width:260px }
+.identity-operations tbody strong { display:block; font-weight:600 }
+.identity-operations code { display:block; font-size:.72rem; color:var(--muted); margin-top:4px }
+.identity-operations tbody tr:last-child>* { border-bottom:0 }
+.identity-operations tbody tr:hover { background:var(--surface-2) }
+.identity-operations .status { white-space:normal }
+.identity-inspect { text-align:right }
+.identity-inspect button { min-height:44px; font-size:.78rem }
+.identity-profiles { margin-top:20px; padding:16px; border:1px solid var(--line); border-radius:8px }
+.identity-profiles summary { cursor:pointer; min-height:28px; font-weight:600 }
+.identity-profiles[open] summary { margin-bottom:16px }
+.identity-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0 }
+@media(max-width:1100px) { .identity-operations th,.identity-operations td { padding:10px 8px } }
+@media(max-width:760px) {
+  .identity-operations, .identity-operations tbody { display:block }
+  .identity-operations thead { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%) }
+  .identity-operations tbody tr { display:grid; grid-template-columns:minmax(0,1fr) auto; padding:12px; border-bottom:1px solid var(--line); gap:6px 12px }
+  .identity-operations tbody tr:last-child { border-bottom:0 }
+  .identity-operations tbody th { grid-column:1; border:0; padding:0; max-width:none }
+  .identity-operations td { padding:0; border:0; grid-column:1; display:flex; gap:8px }
+  .identity-operations td[data-label]::before { content:attr(data-label) ':'; color:var(--muted); font-size:.72rem }
+  .identity-operations td.identity-inspect { grid-column:2; grid-row:1 / 6; display:flex; align-items:start; text-align:left }
+  .identity-profiles { padding:12px }
+}
+
+/* Keep this native registry surface coherent before/after the independent shell merge. */
+.panel.workforce { font-family:'Segoe UI',Arial,sans-serif; color:#eeeef6; background:#191a23; --bg:#101116; --surface-2:#222330; --line:#30313f; --muted:#adafc3; --text:#eeeef6; --accent:#b299ff; --accent-dim:#2c2542; --warning:#efc474; border-color:var(--line) }
+.workforce .status { font:500 .72rem 'Segoe UI',Arial,sans-serif; text-transform:none; color:#c2c3d2 }
+.workforce .status-provisioned, .workforce .status-suspended { color:#efc474 }
+.workforce .status-active { color:#b299ff }
+.workforce .identity-form input,.workforce .identity-form select,.workforce .identity-form textarea,.workforce .identity-filters input,.workforce .identity-filters select { background:#12131b }
+.workforce .primary { background:#ad8cf9; border-color:#ad8cf9; color:#171121 }
+.workforce .secondary { background:#222330; color:#eeeef6 }
+.workforce :focus-visible { outline:3px solid #c4b4ff; outline-offset:3px }
+.identity-operations td .status { flex-shrink:0; white-space:nowrap }
+@media(max-width:760px) { .identity-operations td[data-label] { flex-wrap:wrap }.identity-operations td[data-label="Type"] { display:none } }

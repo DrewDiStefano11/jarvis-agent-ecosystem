@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter, Link, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
@@ -17,7 +17,9 @@ function SharedTargets() {
   return <><h1>Planning targets</h1><select aria-label="Shared planning targets">{runtime.identities.filter(row => row.is_enabled && row.lifecycle_state === 'active').map(row => <option key={row.id}>{row.display_name}</option>)}</select><Link to="/agents">Return to Agents</Link></>
 }
 function renderWorkforce() {
-  return render(<BrowserRouter><AppStoreProvider><Routes><Route path="/agents" element={<Agents/>}/><Route path="/runtime" element={<SharedTargets/>}/></Routes></AppStoreProvider></BrowserRouter>)
+  const view = render(<BrowserRouter><AppStoreProvider><Routes><Route path="/agents" element={<Agents/>}/><Route path="/runtime" element={<SharedTargets/>}/></Routes></AppStoreProvider></BrowserRouter>)
+  fireEvent.click(screen.getByText('Manage identity profiles'))
+  return view
 }
 beforeEach(() => {
   rows = [{ ...first }]; failure = 'none'
@@ -167,4 +169,68 @@ describe('durable workforce', () => {
     await act(async () => resolve(reply([{ ...first }])))
     expect(card.getByText('active')).toBeInTheDocument()
   })
+})
+
+
+test('operations filters retain the authoritative registry and disclose filtered scope', async () => {
+  rows = [
+    { ...first, lifecycle_state: 'active', operational_status: 'idle' },
+    { ...first, id: 'identity-disabled', stable_key: 'disabled', display_name: 'Disabled reviewer', lifecycle_state: 'suspended', is_enabled: false },
+    { ...first, id: 'identity-reviewer', stable_key: 'reviewer', display_name: 'Reviewer', agent_type: 'reviewer', lifecycle_state: 'active' },
+  ]
+  renderWorkforce()
+  const table = within(await screen.findByRole('table', { name: 'Registered identity operations' }))
+  await screen.findByRole('article', { name: 'Identity Disabled reviewer' })
+  expect(table.getAllByRole('row')).toHaveLength(4)
+  await userEvent.selectOptions(screen.getByLabelText('Lifecycle', { exact: true }), 'active')
+  expect(table.getAllByRole('row')).toHaveLength(3)
+  expect(screen.getByText(/Showing 2 of 3 registered identities/)).toBeInTheDocument()
+  await userEvent.selectOptions(screen.getByLabelText('Availability', { exact: true }), 'disabled')
+  expect(screen.getByText('No identities match this selection.')).toBeInTheDocument()
+  await userEvent.selectOptions(screen.getByLabelText('Lifecycle', { exact: true }), '')
+  expect(within(screen.getByRole('table')).getAllByRole('row')).toHaveLength(2)
+  expect(rows).toHaveLength(3)
+  expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === 'POST' || init?.method === 'PATCH')).toBe(false)
+})
+
+test('inspect opens and focuses the existing profile controls without issuing commands', async () => {
+  renderWorkforce()
+  await screen.findByRole('article', { name: 'Identity Researcher' })
+  await userEvent.click(screen.getByText('Manage identity profiles'))
+  await userEvent.click(screen.getByRole('button', { name: 'Inspect identity Researcher' }))
+  const profile = screen.getByRole('article', { name: 'Identity Researcher' })
+  expect(profile).toHaveFocus()
+  expect(profile.closest('details')).toHaveAttribute('open')
+  expect(within(profile).getByRole('button', { name: 'Activate identity' })).toBeInTheDocument()
+  expect(vi.mocked(fetch).mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+})
+
+test('lifecycle selection remains representable after its last identity transitions', async () => {
+  rows = [{ ...first, lifecycle_state: 'suspended' }]
+  renderWorkforce()
+  await screen.findByRole('article', { name: 'Identity Researcher' })
+  await userEvent.selectOptions(screen.getByLabelText('Lifecycle', { exact: true }), 'suspended')
+  await userEvent.click(screen.getByRole('button', { name: 'Reactivate identity' }))
+  await screen.findByText('No identities match this selection.')
+  expect(screen.getByLabelText('Lifecycle', { exact: true })).toHaveValue('suspended')
+  expect(screen.getByRole('option', { name: 'suspended' })).toBeInTheDocument()
+  expect(screen.getByRole('status')).toHaveTextContent('Researcher: Identity activated')
+})
+test('acknowledgement survives an identity leaving availability or search filters', async () => {
+  rows = [{ ...first, stable_key: 'native-agent', lifecycle_state: 'active' }]
+  renderWorkforce()
+  await screen.findByRole('article', { name: 'Identity Researcher' })
+  await userEvent.selectOptions(screen.getByLabelText('Availability', { exact: true }), 'enabled')
+  await userEvent.click(screen.getByRole('button', { name: 'Disable identity' }))
+  expect(await screen.findByRole('status')).toHaveTextContent('Researcher: Identity disabled.')
+  expect(screen.queryByRole('article', { name: 'Identity Researcher' })).not.toBeInTheDocument()
+  await userEvent.selectOptions(screen.getByLabelText('Availability', { exact: true }), '')
+  await userEvent.type(screen.getByLabelText('Find an identity'), 'Researcher')
+  const card = within(await screen.findByRole('article', { name: 'Identity Researcher' }))
+  await userEvent.click(card.getByRole('button', { name: 'Edit profile' }))
+  await userEvent.clear(card.getByLabelText('Display name'))
+  await userEvent.type(card.getByLabelText('Display name'), 'Analyst')
+  await userEvent.click(card.getByRole('button', { name: 'Save profile' }))
+  expect(await screen.findByRole('status')).toHaveTextContent('Researcher: Profile saved.')
+  expect(screen.queryByRole('article', { name: 'Identity Analyst' })).not.toBeInTheDocument()
 })

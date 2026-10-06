@@ -47,3 +47,21 @@ processes started by the script are stopped on completion. Set
 `JARVIS_SMOKE_PYTHON` to another installed backend virtual environment's Python
 executable when testing from a separate worktree. Inference is disabled during this
 acceptance run; the script verifies workforce controls, not autonomous execution.
+
+## Mission Control operations table
+
+Registered identities default to a compact operations table. Combine the name,
+lifecycle, enablement, and existing effective-capability filters to find an identity.
+Counts distinguish the current filtered result from the full loaded registry.
+Operational status is registry metadata; inspect Planning for authorized current
+run/task/model evidence. The table does not infer execution authority or workload.
+
+Select **Inspect** to open and focus the existing profile controls under
+**Manage identity profiles**. Registration acknowledgement recovery, profile edits,
+activation, suspension and enablement retain their original backend semantics.
+On phones, the table becomes labeled records; type and technical identifiers remain
+available in profile detail. Existing demonstration agents remain separate.
+
+The workforce browser harness also verifies combined filters, profile focus and
+320px/390px layout. Section and full-page screenshots remain in its temporary
+evidence directory. No model execution is queued by table inspection or filtering.
