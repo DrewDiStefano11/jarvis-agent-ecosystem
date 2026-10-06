@@ -8,6 +8,15 @@ Both findings first failed reproduction; the final backlog/self-improvement/
 task-lease/HTTP integration passes 130 tests. API/scripts Ruff and frontend
 typecheck/ESLint/104 tests/build pass. Request fresh exact-head CI and review.
 
+The next review exposed native pause/resume reviving failed scopes after their
+retry allowance was exhausted. Failed tasks are now non-pausable; only the
+existing explicit retry action can recover them with remaining allowance.
+Two native HTTP cases first returned 200 incorrectly; after repair they preserve
+failed status, retry count and event sequence while pause/resume return 409.
+Final affected backlog/self-improvement/lease/HTTP validation passes 132 tests;
+API/scripts Ruff and frontend typecheck/ESLint/104 tests/build pass. Fresh
+exact-head CI and review must precede merge.
+
 PR #71 is reconciled with merged #69/main
 `9d5eab1c5e169f7c99f3cf1e9e2ecafa3a725fdf`. The original `808bc03` head passed all
 four PR-event CI gates and clean exact-head review. The combined backlog/evidence/

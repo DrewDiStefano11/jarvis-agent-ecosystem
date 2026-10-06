@@ -54,6 +54,8 @@ across later captures, including protected tasks under review and failed tasks
 with operator retries remaining. Completed, cancelled or retry-exhausted failed
 work can be reconsidered only through a new baseline/proposal. A blocked
 high-priority candidate does not starve independent lower-priority work.
+Failed tasks cannot bypass native retry limits through pause/resume; the explicit
+retry action is their recovery path when allowance remains.
 Concurrent selectors use the native SQLite write fence. The entry, queued task,
 audit, outbox and actor-scoped idempotency receipt commit together. Retrying after
 acknowledgement loss returns the original entry without creating a second task.
