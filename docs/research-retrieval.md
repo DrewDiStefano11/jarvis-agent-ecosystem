@@ -16,6 +16,8 @@ Every DNS answer must be a public unicast address. Empty, oversized (over 32),
 malformed, private, reserved, multicast, metadata, shared-space and mixed-safe/unsafe
 answers fail closed. IPv4-mapped IPv6, NAT64, 6to4, Teredo and other conservative
 special-purpose exclusions are rejected consistently across Python versions.
+The documentation prefix `3fff::/20` is excluded explicitly because older
+supported standard-library releases can incorrectly classify it as public.
 No private-address exception is supported in this initial campaign.
 
 Redirects are bounded to three by default (hard maximum five); every Location is

@@ -21,19 +21,24 @@ Branch: `codex/research-retrieval-policy`.
 Worktree: `C:/Users/DDistefano/Documents/jarvis-agent-ecosystem/.worktrees/research-retrieval-policy`.
 PR: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/74.
 Validated implementation commit: `19f5a9b7290e822ad5f8b5b42caee498ebda714c`.
-Hosted CI and exact-head Codex review are pending. The PR body and review request
+The initial exact-head review at `f3bed23567a5338511fe031049b992904c1e56ce`
+found P2 documentation-prefix classification drift for `3fff::/20` on older
+supported Python releases. An emulated older-classifier regression reproduced
+acceptance before repair. The explicit exclusion now rejects the prefix without
+relying on the standard-library classification; 72 focused tests pass.
+Fresh hosted CI and exact-head Codex review are pending. The PR body and review request
 record the current publication head, including subsequent handoff-only commits.
 
 Additive pure URL, public-address, DNS-answer and redirect policy. No networking,
 HTTP route, model tool, database migration or execution authorization was added.
 See `docs/research-retrieval.md` for the transport requirements and deliberate limits.
 Focused adversarial tests found and fixed port-zero fallback and cover malformed
-bracketed authority suffixes and empty fragments. All 70 focused tests pass,
+bracketed authority suffixes and empty fragments. All 72 focused tests pass,
 including suppression of unsafe parser exception chains.
 Backend Ruff check and format check pass. Frontend typecheck, ESLint, 104 Vitest
 tests and production build pass. Full backend validation passed: 1593 tests,
 two existing skips, two dependency deprecation warnings, 866.14 seconds. The final
-parser-chain/empty-fragment additions also passed the 70-case focused suite.
+parser-chain/empty-fragment and review repair additions also passed the focused suite.
 The shared Python environment lacked psutil; validation uses this worktree's
 isolated `.venv` with declared dependencies. Windows sandbox execution stalled
 in database/async tests; the same tests progress with normal filesystem access.

@@ -1,3 +1,4 @@
+import ipaddress
 import traceback
 
 import pytest
@@ -90,6 +91,7 @@ def test_invalid_urls_are_sanitized(url):
         "2002:7f00:1::",
         "2001::1",
         "2001:db8::1",
+        "3fff::1",
         "8.8.8.8%zone",
         "invalid",
     ],
@@ -150,3 +152,10 @@ def test_parser_exception_chain_does_not_leak_input():
     with pytest.raises(DomainError) as caught:
         normalize_url(value)
     assert "secret-value" not in "".join(traceback.format_exception(caught.value))
+
+
+def test_documentation_prefix_denied_when_older_python_classifies_it_public(monkeypatch):
+    monkeypatch.setattr(ipaddress.IPv6Address, "is_global", property(lambda self: True))
+    monkeypatch.setattr(ipaddress.IPv6Address, "is_reserved", property(lambda self: False))
+    with pytest.raises(DomainError):
+        public_address("3fff::1")
