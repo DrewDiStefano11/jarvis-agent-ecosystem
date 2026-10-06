@@ -1,5 +1,16 @@
 # Improvement backlog implementation checkpoint
 
+October 6 sharded-CI reconciliation: main
+`05d7628b15b7665927584a7349ac3c1af9cf247c` includes merged #82 and #73.
+The merge is conflict-free and preserves native backlog/failed-task recovery
+behavior plus main's correction/coordinator verification. The added backlog test
+file is explicitly assigned to the models shard. Collection coverage passes for
+all 1,692 cases; blank SQLite upgrade/downgrade/re-upgrade passes. Focused native
+backlog/task/HTTP/correction/coordinator integration passes 167 tests (134.03s).
+API/scripts Ruff and frontend typecheck/ESLint/104 tests/build pass. Old monolithic
+backend runs are superseded. Require fresh exact-head sharded CI and review;
+current user instruction prohibits automatic merging.
+
 October 6 fresh-review repairs preserve failed tasks with remaining operator
 retries in active-scope deduplication and capacity accounting, including the
 native admission transaction. Retry-exhausted failures remain terminal. OpenAPI

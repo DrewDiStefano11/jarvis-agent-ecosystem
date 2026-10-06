@@ -560,6 +560,32 @@ class ModelExecutionRepository:
 
     def completion_guard(self, session, execution_id, worker_id, lease_token, policy_check):
         """Fence task completion against the current runtime and target identity."""
+        self._task_transition_guard(
+            session,
+            execution_id,
+            worker_id,
+            lease_token,
+            policy_check,
+            {ModelExecutionStage.FINALIZATION_PENDING.value},
+        )
+
+    def revision_guard(self, session, execution_id, worker_id, lease_token, policy_check):
+        """Fence correction admission using the native task transaction."""
+        self._task_transition_guard(
+            session,
+            execution_id,
+            worker_id,
+            lease_token,
+            policy_check,
+            {
+                ModelExecutionStage.RESULT_PERSISTED.value,
+                ModelExecutionStage.FINALIZATION_PENDING.value,
+            },
+        )
+
+    def _task_transition_guard(
+        self, session, execution_id, worker_id, lease_token, policy_check, allowed_stages
+    ):
         row = self._require_row(session, execution_id)
         runtime = session.get(AgentRuntimeRunRow, row.runtime_run_id)
         snapshot = (
@@ -580,7 +606,7 @@ class ModelExecutionRepository:
             or snapshot.active_attempt_id != row.runtime_attempt_id
             or snapshot.specification.task_id != row.task_id
             or snapshot.specification.agent_id != row.target_agent_id
-            or row.stage != ModelExecutionStage.FINALIZATION_PENDING.value
+            or row.stage not in allowed_stages
         ):
             raise AutonomousWorkerError("EXECUTION_COMPLETION_BLOCKED")
 
