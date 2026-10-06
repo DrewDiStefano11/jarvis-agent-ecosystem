@@ -13,7 +13,7 @@ export function Tasks() {
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState('all')
   const [priority, setPriority] = useState('all')
-  const [creating, setCreating] = useState(false)
+  const [creating, setCreating] = useState(searchParams.get('create') === '1')
   const [createdId, setCreatedId] = useState('')
   const [warning, setWarning] = useState('')
   const roots = tasks.filter(task => !task.parentTaskId && task.title.toLowerCase().includes(search.toLowerCase())

@@ -1,0 +1,131 @@
+/* Mission Control tokens and shell. Legacy views keep their existing component contracts. */
+:root { color-scheme: dark; font-family: 'Segoe UI', Arial, sans-serif; color: #eeeef6; background: #101116; --bg:#101116; --surface:#191a23; --surface-1:#191a23; --surface-2:#222330; --line:#30313f; --border:#30313f; --muted:#adafc3; --text:#eeeef6; --accent:#b299ff; --accent-dim:#2c2542; --danger:#ff918a; --warning:#efc474; --sidebar:208px }
+body { background:var(--bg); line-height:1.5 }
+:focus-visible { outline:3px solid #c4b4ff; outline-offset:3px }
+a, button { -webkit-tap-highlight-color:transparent }
+button, .primary, .secondary { min-height:44px }
+.primary { background:#ad8cf9; border-color:#ad8cf9; color:#171121; text-decoration:none; display:inline-flex; align-items:center; justify-content:center; gap:8px; font-weight:600 }
+.primary:hover { background:#bfa5ff }
+.secondary { background:var(--surface-2); text-decoration:none; display:inline-flex; align-items:center; justify-content:center; gap:8px }
+input, select, textarea { background:#12131b }
+.panel, .task-card, .agent-card, .approval-card { background:var(--surface) }
+.panel h2, .mc-panel h2 { font-size:1.08rem; font-weight:600 }
+.panel, .task-card, .agent-card, .approval-card, .mc-panel { border-radius:8px }
+.resource-grid div, .agent-strip>div { background:#14151d; border-color:var(--line) }
+.approval-details div, .details-grid div, .compact-timeline li { border-color:var(--line) }
+.drawer { background:#191a23 }
+.callout { background:#242032; border-color:#5c4d7a }
+.chips span { background:var(--accent-dim); color:#c4b4ff }
+.event-detail pre { background:#11121a; color:#d4c6ff }
+.progress-wrap progress, progress::-webkit-progress-bar { background:#323341 }
+.status { color:#c2c3d2; font:500 .72rem 'Segoe UI', Arial, sans-serif; text-transform:none; gap:7px }
+.status-healthy, .status-current, .status-clear, .status-ready, .status-succeeded, .status-completed { color:#8bdea5 }
+.status-healthy span, .status-current span, .status-clear span, .status-ready span, .status-succeeded span, .status-connected span, .status-completed span { color:#8bdea5 }
+.status-degraded, .status-stale, .status-exhausted, .status-blocked, .status-timed_out, .status-unavailable { color:#ffb094 }
+.status-degraded span, .status-stale span, .status-exhausted span, .status-blocked span, .status-timed_out span, .status-unavailable span { color:#ffb094 }
+.status-disabled span { color:#adafc3 }
+.status-failed, .status-error, .status-offline { color:var(--danger) }
+.mission-shell .sidebar { background:#14151c; padding:20px 12px }
+.mission-shell .brand { margin:0 8px 28px; gap:10px; justify-content:space-between }
+.brand strong { font-size:1.22rem; letter-spacing:.02em }
+.brand small { font-size:.8rem }
+.collapse-button { color:var(--muted); border:1px solid var(--line); border-radius:7px; background:transparent; min-width:32px; padding:5px; display:grid; place-items:center }
+.mission-shell .sidebar nav { gap:6px }
+.mission-shell .sidebar nav a { padding:10px 12px; min-height:44px; color:#c4c5d6; gap:12px; font-size:.83rem }
+.mission-shell .sidebar nav a.active { background:var(--accent-dim); color:#e4daff; box-shadow:none }
+.nav-count { margin-left:auto; background:#433653; color:#f2d6ff; border-radius:4px; padding:1px 5px; font-size:.68rem }
+.sidebar-foot { border-top:1px solid var(--line); font-size:.78rem }
+.sidebar-foot small { margin-top:5px; font-size:.7rem }
+.mission-shell .topbar { background:#111219f5; height:58px; padding:0 28px }
+.emergency { background:transparent; border-color:#a35757; color:#ffaaa4; min-height:36px; font-size:.76rem }
+.mission-shell .content { max-width:1900px; padding:26px 28px 50px; min-width:0 }
+.mission-shell .page-title { margin-bottom:20px; gap:16px }
+.mission-shell .page-title h1 { font-size:clamp(1.6rem,2.3vw,2rem); letter-spacing:-.025em; margin:0 0 4px; line-height:1.2 }
+.mission-shell .page-title p { font-size:.88rem }
+.skip-link { position:fixed; top:8px; left:230px; transform:translateY(-150%); z-index:100; padding:8px 14px; color:var(--text); background:var(--accent-dim) }
+.skip-link:focus { transform:none }
+.sidebar-collapsed { --sidebar:76px }
+.sidebar-collapsed .brand { flex-direction:column; margin-inline:0 }
+.sidebar-collapsed .brand strong { font-size:.68rem }
+.sidebar-collapsed .brand small, .sidebar-collapsed .nav-label, .sidebar-collapsed .sidebar-foot { display:none }
+.sidebar-collapsed .sidebar nav a { justify-content:center; padding:10px 5px; position:relative }
+.sidebar-collapsed .nav-count { position:absolute; top:0; right:0; font-size:.6rem }
+.sidebar-collapsed .collapse-button svg { transform:rotate(180deg) }
+.sync-banner { display:flex; gap:16px; align-items:center; justify-content:space-between; margin-bottom:20px; padding:14px 16px; border:1px solid #675438; border-radius:8px; background:#27221b; color:#eed6ae; font-size:.82rem }
+.sync-banner p { margin:4px 0 0; overflow-wrap:anywhere }
+.sync-banner button { flex-shrink:0 }
+.mc-panel { border:1px solid var(--line); padding:18px; background:var(--surface); min-width:0 }
+.mc-panel h2 { margin:0 }
+.attention-panel { display:flex; align-items:flex-start; gap:16px; margin-bottom:16px; background:linear-gradient(110deg,#211e2e,#191a23 60%) }
+.attention-panel>svg { box-sizing:content-box; padding:14px; width:24px; height:24px; color:var(--accent); border-radius:50%; background:#322746; flex-shrink:0 }
+.attention-panel p { margin:3px 0; font-size:.86rem }
+.attention-panel .mc-note { margin-top:8px; font-size:.76rem }
+.attention-needed { border-color:#75613d }
+.attention-list { margin:8px 0; padding:0; list-style:none; display:grid; gap:10px }
+.attention-list small { display:block; color:var(--muted); font-size:.76rem }
+.attention-list a { color:var(--warning); font-weight:600 }
+.mission-grid { display:grid; grid-template-columns:minmax(0,1.8fr) minmax(280px,1fr); gap:16px; align-items:stretch }
+.mc-heading { display:flex; align-items:center; justify-content:space-between; gap:12px }
+.mc-heading>a { font-size:.76rem; white-space:nowrap; text-decoration:none }
+.mc-note { font-size:.76rem; color:var(--muted); margin:6px 0 12px }
+.runtime-panel .mc-heading { border-bottom:1px solid var(--line); padding-bottom:12px }
+.runtime-empty { min-height:220px; padding:28px 12px; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; gap:10px }
+.runtime-empty>svg { width:28px; height:28px; box-sizing:content-box; padding:16px; border-radius:50%; background:var(--surface-2); color:#d1c4f5 }
+.runtime-empty strong { font-size:.92rem; font-weight:600 }
+.runtime-empty p { margin:0 0 10px; color:var(--muted); font-size:.82rem; max-width:460px }
+.runtime-empty .primary { font-size:.8rem }
+.mc-health { margin:12px 0 }
+.mc-health>div { display:flex; justify-content:space-between; gap:14px; padding:11px 12px; background:#16171f; border:1px solid var(--line); border-bottom:0; font-size:.8rem }
+.mc-health>div:first-child { border-radius:6px 6px 0 0 }
+.mc-health>div:last-child { border-bottom:1px solid var(--line); border-radius:0 0 6px 6px }
+.mc-health dd { margin:0; text-align:right }
+.mc-wide { display:flex; width:100%; font-size:.8rem }
+.mc-records, .mc-activity { list-style:none; padding:0; margin:12px 0 0 }
+.mc-records { border:1px solid var(--line); border-radius:6px; overflow:hidden }
+.mc-records li+li { border-top:1px solid var(--line) }
+.mc-records button, .mc-records a { width:100%; background:#16171f; border:0; padding:12px; display:flex; align-items:center; gap:12px; text-align:left; color:var(--text); text-decoration:none }
+.mc-records button:hover, .mc-records a:hover { background:#232332 }
+.mc-records svg { flex-shrink:0 }
+.mc-records button>span:first-of-type, .mc-records a>span:first-of-type { flex:1; min-width:0 }
+.mc-records strong { display:block; font-size:.82rem; font-weight:500; overflow-wrap:anywhere }
+.mc-records small { display:block; color:var(--muted); font-size:.72rem; margin-top:3px; overflow-wrap:anywhere }
+.mc-activity li { display:flex; gap:12px; padding:12px 0; border-bottom:1px solid var(--line) }
+.mc-activity svg { flex-shrink:0; margin-top:3px; color:var(--muted) }
+.mc-activity strong { font-weight:500; font-size:.8rem; display:block; overflow-wrap:anywhere }
+.mc-activity time { display:block; color:var(--muted); font-size:.7rem; margin-top:4px }
+.demo-disclosure { margin-top:16px; padding:14px 18px; font-size:.82rem }
+.demo-disclosure summary { cursor:pointer; min-height:24px }
+.demo-disclosure summary span { color:var(--muted); margin-left:12px; font-size:.76rem }
+@media(min-width:1800px) { .mission-grid { grid-template-columns:minmax(0,2.2fr) minmax(340px,1fr) }.mc-records button, .mc-records a { padding:16px }.runtime-empty { min-height:240px } }
+@media(min-width:761px) and (max-width:1100px) { .mission-shell { --sidebar:76px }.mission-shell .brand { flex-direction:column; margin-inline:0 }.mission-shell .brand strong { font-size:.68rem }.mission-shell .brand small,.mission-shell .nav-label,.mission-shell .sidebar-foot,.mission-shell .collapse-button { display:none }.mission-shell .sidebar nav a { justify-content:center; padding:10px 5px; position:relative }.mission-shell .nav-count { position:absolute; right:0; top:0 }.mission-shell .content { padding:22px }.mission-grid { grid-template-columns:minmax(0,1.5fr) minmax(260px,1fr) } }
+@media(max-width:760px) {
+  .mission-shell .workspace { margin-left:0 }
+  .mission-shell .sidebar { display:none }
+  .mission-shell .topbar { height:58px; padding:0 16px }
+  .mission-shell .content { padding:20px 16px 104px }
+  .mission-shell .page-title { flex-direction:row; align-items:flex-start }
+  .mission-shell .page-title h1 { font-size:1.6rem }
+  .mission-shell .page-title p { font-size:.8rem }
+  .mission-shell .page-title>.primary { font-size:.76rem; white-space:nowrap; width:auto; padding:9px 10px }
+  .mission-grid { grid-template-columns:minmax(0,1fr) }
+  .health-panel { grid-row:2 }
+  .mc-panel { padding:16px }
+  .attention-panel { gap:10px }
+  .attention-panel>svg { padding:10px; width:20px; height:20px }
+  .runtime-empty { min-height:180px; padding:20px 0 }
+  .demo-disclosure summary span { display:block; margin:5px 0 0 16px }
+  .mission-shell .mobile-nav { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); height:70px; padding-bottom:env(safe-area-inset-bottom); background:#16171ff5; overflow:visible }
+  .mission-shell .mobile-nav a, .mobile-more { min-width:0; min-height:64px; color:var(--muted); gap:4px }
+  .mission-shell .mobile-nav a.active { color:#c5afff }
+  .mission-shell .mobile-nav small { font-size:.67rem }
+  .mission-shell .mobile-extra-link { display:none }
+  .mobile-more { display:grid; place-items:center; align-content:center; background:transparent; border:0; font:inherit }
+  .mobile-more>span { font-size:1.15rem; line-height:20px }
+  .mission-shell .mobile-nav-expanded { height:auto; box-shadow:0 -12px 40px #0006 }
+  .mission-shell .mobile-nav-expanded .mobile-extra-link { display:grid; grid-row:1; border-bottom:1px solid var(--line) }
+  .mission-shell .mobile-nav-expanded .mobile-main-link, .mission-shell .mobile-nav-expanded .mobile-more { grid-row:2 }
+  .sync-banner { flex-direction:column; align-items:stretch }
+  .skip-link { left:16px }
+}
+@media(max-width:390px) { .mc-records button, .mc-records a { flex-wrap:wrap; gap:8px }.mc-records .status { margin-left:28px }.mc-records button>span:first-of-type,.mc-records a>span:first-of-type { flex-basis:calc(100% - 44px) }.mission-shell .page-title { gap:8px }.mission-shell .page-title h1 { font-size:1.4rem } }
+.content a.primary { color:#171121 }
