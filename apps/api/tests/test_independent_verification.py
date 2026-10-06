@@ -23,6 +23,108 @@ SEMANTIC = CompletionCriterion(
 )
 
 
+def deny_completion(app, actor_id, task_id):
+    from app.models.identity import AssignPermissionRequest
+
+    permission = next(
+        item
+        for item in app.state.identity_service.list_definitions("permission", 0, 100)
+        if item.stable_key == "runtime.complete"
+    )
+    app.state.identity_service.assign_permission(
+        actor_id,
+        AssignPermissionRequest(
+            permission_id=permission.id,
+            effect="deny",
+            resource_type="task",
+            resource_id=task_id,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "field,attribute",
+    [
+        ("assumptions", None),
+        ("recommendations", "title"),
+        ("recommendations", "description"),
+        ("risks", "description"),
+        ("risks", "mitigation"),
+    ],
+)
+@pytest.mark.parametrize("empty", [" ", "\t\n", "\u2003"])
+def test_nonempty_collection_requires_meaningful_entries(field, attribute, empty):
+    from copy import deepcopy
+
+    body = deepcopy(VALID_RESULT)
+    if attribute is None:
+        body[field] = [empty]
+    else:
+        body[field][0][attribute] = empty
+    result = PlanningReviewResult.model_validate(body)
+    criterion = CompletionCriterion(
+        id="deliverable",
+        description="Deliver substantive entries",
+        mode="field_nonempty",
+        field=field,
+    )
+    assert deterministic_checks((criterion,), result, "result:1")[0].outcome == "needs_correction"
+
+
+@pytest.mark.asyncio
+async def test_cancellation_recovery_does_not_require_completion_permission(tmp_path, monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import update
+
+    from app.db.models import TaskLeaseRow
+    from app.models.agent_runtime import RequestCancellationCommand
+
+    router = CriticRouter()
+    app, client, actor_id, worker = worker_fixture(
+        tmp_path, router=router, verification_criteria=(SEMANTIC,)
+    )
+    try:
+        service = app.state.autonomous_worker_service
+        complete = app.state.task_leases.complete_task
+
+        def crash(*args, **kwargs):
+            raise RuntimeError("before task completion")
+
+        monkeypatch.setattr(app.state.task_leases, "complete_task", crash)
+        with pytest.raises(RuntimeError, match="before task completion"):
+            await service.run_once(worker.id)
+        monkeypatch.setattr(app.state.task_leases, "complete_task", complete)
+        snapshot = service.runtime.repository.load_run("run-autonomous-1")
+        service.runtime.handle_authorized(
+            RequestCancellationCommand(
+                run_id=snapshot.specification.run_id,
+                command_id="cancel-crashed-completion",
+                expected_run_version=snapshot.version,
+                timestamp=datetime.now(UTC),
+                reason_code="operator_cancelled",
+                requester_reference=actor_id,
+                detail="Cancel after persisted passing verification",
+            ),
+            service.runtime.authenticate_actor(actor_id),
+        )
+        deny_completion(app, actor_id, "task-demo")
+        with app.state.repository.session_factory.begin() as session:
+            session.execute(
+                update(TaskLeaseRow)
+                .where(TaskLeaseRow.task_id == "task-demo")
+                .values(expires_at=datetime.now(UTC) - timedelta(seconds=1))
+            )
+        app.state.task_leases.recover_expired_leases()
+        assert await service.run_once(worker.id) is None
+        assert service.runtime.repository.load_run("run-autonomous-1").state.value == "cancelled"
+        assert app.state.task_leases.task_status("task-demo") == "cancelled"
+        assert app.state.model_execution_repository.get_by_run("run-autonomous-1").stage == "failed"
+        assert len(router.requests) == len(router.critic_requests) == 1
+    finally:
+        client.__exit__(None, None, None)
+
+
 def reviewer(outcome="passed", evidence="result:model-execution-placeholder"):
     return json.dumps(
         {
@@ -456,7 +558,7 @@ async def test_completion_rechecks_live_authority_inside_task_transaction(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("change", ["cancel", "pause", "target_suspended"])
+@pytest.mark.parametrize("change", ["cancel", "cancel_and_revoke", "pause", "target_suspended"])
 async def test_task_completion_fences_late_native_runtime_change(tmp_path, monkeypatch, change):
     from datetime import UTC, datetime
 
@@ -475,19 +577,22 @@ async def test_task_completion_fences_late_native_runtime_change(tmp_path, monke
             if change == "target_suspended":
                 app.state.identity_service.transition(snapshot.specification.agent_id, "suspended")
                 return complete(task_id, *args, **kwargs)
-            command = RequestCancellationCommand if change == "cancel" else RequestPauseCommand
+            cancelling = change in {"cancel", "cancel_and_revoke"}
+            command = RequestCancellationCommand if cancelling else RequestPauseCommand
             service.runtime.handle_authorized(
                 command(
                     run_id=snapshot.specification.run_id,
                     command_id="cancel-at-task-completion",
                     expected_run_version=snapshot.version,
                     timestamp=datetime.now(UTC),
-                    reason_code="operator_cancelled" if change == "cancel" else "operator_pause",
-                    **({"requester_reference": actor_id} if change == "cancel" else {}),
+                    reason_code="operator_cancelled" if cancelling else "operator_pause",
+                    **({"requester_reference": actor_id} if cancelling else {}),
                     detail="Cancel after completion precheck",
                 ),
                 service.runtime.authenticate_actor(actor_id),
             )
+            if change == "cancel_and_revoke":
+                deny_completion(app, actor_id, task_id)
             try:
                 return complete(task_id, *args, **kwargs)
             except AutonomousWorkerError:
@@ -501,16 +606,18 @@ async def test_task_completion_fences_late_native_runtime_change(tmp_path, monke
             await service.run_once(worker.id)
         assert error.value.code == (
             "EXECUTION_CANCELLED"
-            if change == "cancel"
+            if change in {"cancel", "cancel_and_revoke"}
             else "EXECUTION_AUTHORIZATION_REVOKED"
             if change == "target_suspended"
             else "EXECUTION_COMPLETION_BLOCKED"
         )
         assert app.state.task_leases.task_status("task-demo") == (
-            "cancelled" if change == "cancel" else "in_progress"
+            "cancelled" if change in {"cancel", "cancel_and_revoke"} else "in_progress"
         )
         execution = app.state.model_execution_repository.get_by_run("run-autonomous-1")
-        assert execution.stage == ("failed" if change == "cancel" else "finalization_pending")
+        assert execution.stage == (
+            "failed" if change in {"cancel", "cancel_and_revoke"} else "finalization_pending"
+        )
         assert len(router.requests) == len(router.critic_requests) == 1
     finally:
         client.__exit__(None, None, None)

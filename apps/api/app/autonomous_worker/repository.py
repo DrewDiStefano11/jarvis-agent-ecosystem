@@ -567,14 +567,14 @@ class ModelExecutionRepository:
         )
         if snapshot is None:
             raise AutonomousWorkerError("EXECUTION_COMPLETION_BLOCKED")
-        policy_check(snapshot)
-        self._require_fence(session, row, worker_id, lease_token, datetime.now(UTC))
         if snapshot.state in {
             AgentRunState.CANCEL_REQUESTED,
             AgentRunState.CANCELLING,
             AgentRunState.CANCELLED,
         }:
             raise AutonomousWorkerError("EXECUTION_CANCELLED")
+        policy_check(snapshot)
+        self._require_fence(session, row, worker_id, lease_token, datetime.now(UTC))
         if (
             snapshot.state != AgentRunState.RUNNING
             or snapshot.active_attempt_id != row.runtime_attempt_id

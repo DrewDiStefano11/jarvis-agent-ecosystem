@@ -43,6 +43,17 @@ continues to report revoked authorization. New races use actual native commands.
 
 ## Validation for the pending transaction repair
 
+- Latest review repairs: cancellation precedes completion-only RBAC both in the
+  task transaction and finalization recovery; collection criteria reject blank
+  entries. All 162 verifier/worker/authorization/review tests pass (182.15 seconds).
+  The reconciled full backend checkpoint below remains valid for unchanged paths.
+- Remote review repairs now cover resume rollback, no-store body errors and
+  concurrent desired-state control. Preserve its separate worktree and PR #70.
+- PR #71 exact-head review of `808bc03f15` has no findings. The failed backend
+  job never acquired a hosted runner; only that job was rerun. Other PR-event
+  frontend, integrity and runtime-browser gates passed. No code workaround.
+- CI evidence's full backend passes: 1,460 tests and two existing skips.
+
 - Final reconciled full backend: 1,508 passed/two existing skips in 856.53 seconds.
   Frontend typecheck/ESLint/104 Vitest tests/build and API/script Ruff pass.
   Earlier checkpoints below are history superseded by this full run.

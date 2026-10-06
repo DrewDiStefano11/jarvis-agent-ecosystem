@@ -9,7 +9,7 @@ import asyncio
 import json
 from datetime import UTC, datetime
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from app.agent_runtime.repository import RuntimeExecutionFence
 from app.autonomous_worker.errors import AutonomousWorkerError
@@ -49,7 +49,7 @@ def deterministic_checks(criteria, result, evidence_id):
             continue
         value = getattr(result, criterion.field)
         passed = (
-            (bool(value.strip()) if isinstance(value, str) else bool(value))
+            meaningful_deliverable(value)
             if criterion.mode == "field_nonempty"
             else criterion.expected in value
         )
@@ -64,6 +64,18 @@ def deterministic_checks(criteria, result, evidence_id):
             )
         )
     return checks
+
+
+def meaningful_deliverable(value):
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, BaseModel):
+        return meaningful_deliverable(value.model_dump())
+    if isinstance(value, dict):
+        return bool(value) and all(meaningful_deliverable(item) for item in value.values())
+    if isinstance(value, list):
+        return bool(value) and all(meaningful_deliverable(item) for item in value)
+    return bool(value)
 
 
 def parse_review(content, criteria, evidence_ids):

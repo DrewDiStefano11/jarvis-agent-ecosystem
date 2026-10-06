@@ -77,6 +77,10 @@ That transaction also reads the current native runtime snapshot and checks the
 active attempt, task/target lineage and target lifecycle. A late cancellation
 rolls back completion before native cancellation reconciliation; a late pause
 returns `EXECUTION_COMPLETION_BLOCKED` while retaining the persisted result.
+Cancellation is detected before completion-only permission checks, including
+recovery after lease expiry. Revoking completion permission cannot prevent an
+otherwise authorized cancellation. Nonempty collection criteria require meaningful
+text in every assumption, recommendation and risk entry; whitespace alone fails.
 
 `GET /api/model-executions/{executionId}/verification` exposes the verdict using
 the same runtime read authorization as the result. It returns `null` before a
@@ -99,7 +103,7 @@ mock router responses to inject malformed output and safety races.
 These prove execution and persistence of the verifier, not model judgment quality
 on arbitrary tasks. Real model inference needs a configured running local model;
 none is downloaded or provisioned by this milestone. Software test/build evidence
-and coordinator node execution are not implemented on current main. This verifier
+are unavailable to this verifier without an execution journal. This verifier
 integrates the coordinator and self-improvement foundation already merged into main.
 Later node-level independent verification must preserve
 the same authoritative result binding and frozen criterion policy.

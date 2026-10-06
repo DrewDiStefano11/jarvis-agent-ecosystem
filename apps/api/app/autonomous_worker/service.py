@@ -1716,6 +1716,17 @@ class AutonomousWorkerService:
         task_state = self.task_leases.task_recovery_state(execution.taskId)
         task_status = None if task_state is None else task_state[0]
         review = None
+        if snapshot.state in {
+            AgentRunState.CANCEL_REQUESTED,
+            AgentRunState.CANCELLING,
+            AgentRunState.CANCELLED,
+        }:
+            # Cancellation is its own terminal action. Completion-only permission
+            # must not prevent cancellation reconciliation after a crash.
+            self._authorize_recovery_action(snapshot, actor, "confirm_cancellation")
+            if self._best_effort_cancel(snapshot, actor):
+                self.executions.mark_failed(execution.executionId, "execution_cancelled")
+            return None
         if task_status == "cancelled":
             self._authorize_recovery_action(snapshot, actor, "confirm_cancellation")
         elif (
