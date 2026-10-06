@@ -1,5 +1,15 @@
 # Autonomous research campaign handoff
 
+## Retrieval timestamp review repair
+
+Follow-up independent review found the same sub-minute timezone serialization
+defect as search in both RetrievedText and RetrievalFailure. Six rejection
+regressions reproduced it before repair. Both validators now reject non-minute
+offsets rather than silently shifting observed/failure instants during JSON
+storage. Six positive UTC/positive/negative minute-offset cases round-trip.
+Earlier no-findings review of f3d26f1 is superseded; fresh exact-head review is
+required after publishing this correction and propagating it into #77.
+
 ## Sharded CI reconciliation — 2026-10-06
 
 PR #82 was confirmed merged. This branch incorporates main

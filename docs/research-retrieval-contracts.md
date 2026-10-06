@@ -20,6 +20,8 @@ normalized final URL, an aware retrieval timestamp, media type/encoding, SHA-256
 byte count, bounded redirect history and an artifact identity. Raw page content
 is not a field in durable metadata. External content carries an explicit
 `untrusted_external_content` trust tag that cannot be replaced with system policy.
+Retrieval and failure timestamps require whole-minute timezone offsets so JSON
+storage preserves the represented instant. Sub-minute offsets are rejected.
 
 Redirect history must begin at the normalized source, remain contiguous, avoid
 cycles and HTTPS downgrade, and finish at the final URL. Failure records permit

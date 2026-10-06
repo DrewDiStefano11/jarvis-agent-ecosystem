@@ -1,6 +1,6 @@
 """Bounded transport contracts. These records do not grant network authority."""
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -85,8 +85,11 @@ class RetrievedText(RetrievalContract):
     @field_validator("retrievedAt")
     @classmethod
     def aware_timestamp(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
+        offset = value.utcoffset()
+        if value.tzinfo is None or offset is None:
             raise ValueError("retrieval timestamp must include a timezone")
+        if offset % timedelta(minutes=1) != timedelta(0):
+            raise ValueError("retrieval timestamp offset must use whole minutes")
         return value
 
     @model_validator(mode="after")
@@ -132,6 +135,9 @@ class RetrievalFailure(RetrievalContract):
     @field_validator("failedAt")
     @classmethod
     def aware_timestamp(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
+        offset = value.utcoffset()
+        if value.tzinfo is None or offset is None:
             raise ValueError("failure timestamp must include a timezone")
+        if offset % timedelta(minutes=1) != timedelta(0):
+            raise ValueError("failure timestamp offset must use whole minutes")
         return value
