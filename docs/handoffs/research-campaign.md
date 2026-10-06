@@ -102,7 +102,11 @@ dependency was updated during the running suite). The final current-source
 fresh short isolated basetemp in 191.73 seconds. Future full runs should use
 short external temp paths and avoid changing source files while tests run.
 Source/snippet text remains untrusted and search results are discovery leads
-rather than retrieved evidence. Publication is the next step.
+rather than retrieved evidence.
+PR: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/79.
+Validated implementation commit: `1a7a5974f6e19ce3302a12bc6f0165265e5b5692`.
+Hosted CI and exact-head review are pending; current publication head is in the
+PR body. This PR depends only on #74 and can proceed independently of #76/#77.
 
 New mission-control-shell (#75) and mission-control-agent-operations (#78) worktrees were
 observed during the later overlap audit. Their frontend files are untouched.
