@@ -75,3 +75,44 @@ command journal and cannot prove autonomous software validation.
 Other pre-existing worktrees and the primary checkout's untracked `validation-pr63/`
 are untouched. Never commit runtime databases, sidecars, dependencies, build outputs
 or configuration secrets. Do not mark the campaign complete at the first PR.
+
+
+## Independent review repair checkpoint
+
+PR #89 at `dd03958eeacb90ba5f5acac1f297b98c940dd13b` received two P1 findings:
+missing durable operator plan approval and missing runtime executor/lease-holder
+binding. Both are being repaired on its original feature branch before proceeding
+with Git capabilities. The repair uses the authenticated remote operator boundary
+and native append-only audit/outbox, an exact-plan expiring approval reference and
+claimed/active-attempt executor fencing. No changed-head review is claimed yet.
+
+PR #90 (validation planning) is published at
+`03456e79809d7e5309ff8b48899aef0a086005a2`; 46 planner cases plus repaired doctor
+pass (47 total), full baseline 1,896 passes/two existing skips/one inherited doctor
+failure, now repaired by the unchanged #88 prerequisite. All frontend/static,
+collection and migration gates pass locally. Hosted review requested; exact-head
+CI pending. It is independent of #89 and supplies no commands or durable evidence.
+
+Next dependent worktree exists at
+`C:/Users/DDistefano/.codex/worktrees/self-build-git-worktrees/jarvis-agent-ecosystem`,
+branch `codex/self-build-git-inspection`, based on the original #89 head. It contains
+no new source yet; incorporate the reviewed authority repair before implementation.
+No campaign PR is merged. No merge readiness or infrastructure waiver is inferred.
+
+
+PR #88 exact-head gate update: `f8bee73da3d79db5f9f54b2cb3b7c08b514b7bc5`
+is mergeable and independently reviewed clean. Authoritative workflow
+`37524486449` passed every backend/frontend/migration/integrity/browser gate and
+backend aggregate. The superseded cancelled workflow is not authoritative. This
+prerequisite is merge-ready for human consideration; no merge attempted.
+
+
+A1 review repair local validation: 38 final workspace cases pass; workspace plus
+existing authenticated remote package passed 65 cases before the three final
+lineage-tampering regressions. Full backend ran 1,889 cases: 1,885 passed, two
+existing environment skips, two active-attempt fixture version failures (1,022.45s).
+That run collected the fixture before its correction to use the returned native
+version. Both corrected cases pass in the final 38-case package. This remains
+composite evidence; exact changed-head CI must pass and no failed gate is waived.
+Ruff format/check, frontend typecheck/ESLint/194 tests/build, 1,892-case shard
+coverage and blank migration roundtrip pass. Hosted re-review is still required.

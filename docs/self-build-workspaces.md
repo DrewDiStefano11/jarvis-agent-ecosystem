@@ -22,7 +22,7 @@ The typed loopback HTTP API reuses `X-Jarvis-Actor-Id` and the existing envelope
   operator-attested exact base SHA produce a bounded plan. The plan exposes a
   generated branch/key and policy digest, never absolute paths.
 - `POST /api/self-build/workspaces/reserve`: the same intent plus
-  `expected_plan_hash`, owning `worker_id` and the live `lease_token` reserve one
+  `expected_plan_hash`, durable `approval_id`, owning `worker_id` and the live `lease_token` reserve one
   workspace. A read-only runtime grant cannot authorize this mutation; explicit
   task-scoped `self_build.workspace` and `runtime.execute` permissions are also required. The hash confirms
   the exact preview, including repository identity, task/run, base and root policy.
@@ -32,8 +32,19 @@ The typed loopback HTTP API reuses `X-Jarvis-Actor-Id` and the existing envelope
   expected version record abandonment. This never deletes files or a branch,
   revokes a lease, resumes a run or approves subsequent tools.
 
+Operator approval is issued only by `POST /api/remote/self-build/workspaces/approve`
+on the existing authenticated HTTPS operator surface. Configure that surface using
+the remote-control documentation. The bearer credential identifies the configured
+operator; a loopback actor header cannot approve a plan. The operator requires live
+`remote.control` and task-scoped runtime/workspace permissions, and must differ from
+the runtime agent and reserving actor. An append-only audit/outbox approval binds
+the exact plan/run, expires within one hour, and is referenced by the reservation.
+Reservation rechecks expiry, configured operator identity and current permissions.
+The preview hash alone cannot grant authority. Approval covers reservation metadata
+only; it does not authorize later Git/filesystem/command operations.
+
 Mutation authorization, emergency stop, current runtime/task lineage and native
-lease fencing are evaluated under the existing SQLite `BEGIN IMMEDIATE` boundary.
+lease fencing (including the runtime claim or active attempt executor) are evaluated under the existing SQLite `BEGIN IMMEDIATE` boundary.
 One transaction stores the reservation, append-only audit and transactional outbox
 using the existing event-session sequence. Exact repeat/concurrent reservation
 converges to one record/event. Conflicting base/policy or abandoned ownership cannot

@@ -1,16 +1,19 @@
 """Explicitly approved workspace intent. No filesystem mutation or Git invocation."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+
+from sqlalchemy import select
 
 from app.core.errors import DomainError
-from app.db.models import DevelopmentWorkspaceRow, SystemStateRow, TaskRow
-from app.models.self_build import WorkspacePlan
+from app.db.models import AuditEventRow, DevelopmentWorkspaceRow, SystemStateRow, TaskRow
+from app.models.self_build import WorkspaceApproval, WorkspacePlan
 from app.self_build.policy import RepositoryPolicies, digest
 from app.self_build.repository import ACTIVE_RUNTIME_STATES, WorkspaceRepository
 
 
 class WorkspaceService:
     def __init__(self, app):
+        self.app = app
         self.settings = app.state.settings
         self.identity = app.state.identity_service
         self.runtime_authorizer = app.state.agent_runtime_service.authorizer
@@ -69,6 +72,85 @@ class WorkspaceService:
         with self.repository.sessions() as session:
             return self.plan_in_session(actor, intent, session)
 
+    def approve(self, actor, request):
+        # Only the authenticated operator router exposes this service action.
+        access = getattr(self.app.state, "remote_control_service", None)
+        if access is None:
+            raise DomainError(
+                "SELF_BUILD_APPROVAL_UNAVAILABLE", "Configure authenticated operator access.", 409
+            )
+        with self.repository.leases._write() as session:
+            access.access.authorize_in_session(actor, "control", session)
+            plan = self.plan_in_session(actor, request, session)
+            self.authorize(actor, plan.task_id, session, write=True)
+            run = self.repository.runtime(session, plan.runtime_run_id)
+            if actor.actor_id == run.agent_id:
+                raise DomainError(
+                    "SELF_BUILD_SELF_APPROVAL_DENIED",
+                    "The runtime agent cannot approve its workspace.",
+                    403,
+                )
+            if request.expected_plan_hash != plan.plan_hash:
+                raise DomainError(
+                    "SELF_BUILD_PLAN_CHANGED", "Approve the exact current workspace plan.", 409
+                )
+            expires = datetime.now(UTC) + timedelta(seconds=request.valid_for_seconds)
+            self.repository.leases._add_event(
+                session,
+                "self_build.workspace.approved",
+                "Operator approved workspace reservation",
+                task_id=plan.task_id,
+                actor_identity_id=actor.actor_id,
+                payload={
+                    "planHash": plan.plan_hash,
+                    "runtimeRunId": plan.runtime_run_id,
+                    "expiresAt": expires.isoformat(),
+                },
+            )
+            session.flush()
+            state = session.get(SystemStateRow, 1)
+            event = session.scalar(
+                select(AuditEventRow).where(
+                    AuditEventRow.event_session_id == state.event_session_id,
+                    AuditEventRow.sequence_number == state.current_sequence_number,
+                )
+            )
+            result = WorkspaceApproval(
+                approval_id=event.id, plan=plan, approved_by=actor.actor_id, expires_at=expires
+            )
+        self.repository.leases.repository.refresh_event_cursor()
+        return result
+
+    def require_approval(self, actor, request, plan, run, session):
+        event = session.get(AuditEventRow, request.approval_id)
+        access = getattr(self.app.state, "remote_control_service", None)
+        try:
+            payload = event.payload["payload"] if event is not None else {}
+            expires = datetime.fromisoformat(payload["expiresAt"])
+            valid = (
+                event.event_type == "self_build.workspace.approved"
+                and event.task_id == plan.task_id
+                and payload["planHash"] == plan.plan_hash
+                and payload["runtimeRunId"] == run.run_id
+                and event.actor != actor.actor_id
+                and event.actor != run.agent_id
+                and expires.tzinfo is not None
+                and expires > datetime.now(UTC)
+                and access is not None
+                and access.access.actor_id == event.actor
+            )
+        except (KeyError, ValueError, TypeError):
+            valid = False
+        if not valid:
+            raise DomainError(
+                "SELF_BUILD_APPROVAL_REQUIRED",
+                "A current operator approval of this exact plan is required.",
+                403,
+            )
+        operator = self.runtime_authorizer.authenticate(event.actor)
+        access.access.authorize_in_session(operator, "control", session)
+        self.authorize(operator, plan.task_id, session, write=True)
+
     def reserve(self, actor, request):
         with self.repository.leases._write() as session:
             plan = self.plan_in_session(actor, request, session)
@@ -78,6 +160,7 @@ class WorkspaceService:
                     "SELF_BUILD_PLAN_CHANGED", "Approve the exact current workspace plan.", 409
                 )
             run = self.repository.runtime(session, plan.runtime_run_id)
+            self.require_approval(actor, request, plan, run, session)
             task = session.get(TaskRow, plan.task_id)
             if (
                 run.state not in ACTIVE_RUNTIME_STATES
@@ -92,6 +175,12 @@ class WorkspaceService:
             self.repository.leases._require_lease(
                 session, plan.task_id, request.worker_id, request.lease_token, datetime.now(UTC)
             )
+            if self.repository.executor(session, run) != request.worker_id:
+                raise DomainError(
+                    "SELF_BUILD_EXECUTOR_MISMATCH",
+                    "Task lease holder must match the runtime executor.",
+                    409,
+                )
             row = session.get(DevelopmentWorkspaceRow, plan.worktree_key)
             if row is not None:
                 existing = self.repository.contract(row)
@@ -120,6 +209,7 @@ class WorkspaceService:
                 task_id=plan.task_id,
                 actor_id=actor.actor_id,
                 worker_id=request.worker_id,
+                approval_id=request.approval_id,
                 lease_fingerprint=digest(request.lease_token),
                 plan_json=plan.model_dump(mode="json"),
                 state="reserved",

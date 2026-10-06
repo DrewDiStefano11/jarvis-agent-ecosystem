@@ -26,6 +26,7 @@ def upgrade():
         sa.Column("task_id", sa.String(80), sa.ForeignKey("tasks.id"), nullable=False),
         sa.Column("actor_id", sa.String(160), sa.ForeignKey("identity_agents.id"), nullable=False),
         sa.Column("worker_id", sa.String(80), sa.ForeignKey("workers.id"), nullable=False),
+        sa.Column("approval_id", sa.String(80), sa.ForeignKey("audit_events.id"), nullable=False),
         sa.Column("lease_fingerprint", sa.String(64), nullable=False),
         sa.Column("plan_json", sa.JSON(), nullable=False),
         sa.Column("state", sa.String(30), nullable=False),

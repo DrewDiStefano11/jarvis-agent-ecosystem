@@ -36,6 +36,7 @@ class WorkspacePlan(Contract):
 
 class ReserveWorkspaceRequest(WorkspaceIntent):
     expected_plan_hash: Digest
+    approval_id: Identifier
     worker_id: Identifier
     lease_token: str = Field(min_length=1, max_length=200, repr=False)
 
@@ -47,6 +48,7 @@ class WorkspaceReservation(Contract):
     state: Literal["reserved", "abandoned"]
     recovery_required: bool
     recovery_reason: Literal["lease_lost", "runtime_inactive", "policy_changed"] | None = None
+    approval_id: str
     created_by: str
     worker_id: str
     created_at: datetime
@@ -58,3 +60,15 @@ class WorkspaceReservation(Contract):
 
 class AbandonWorkspaceRequest(Contract):
     expected_version: int = Field(ge=1)
+
+
+class ApproveWorkspaceRequest(WorkspaceIntent):
+    expected_plan_hash: Digest
+    valid_for_seconds: int = Field(default=900, ge=1, le=3600)
+
+
+class WorkspaceApproval(Contract):
+    approval_id: Identifier
+    plan: WorkspacePlan
+    approved_by: Identifier
+    expires_at: datetime

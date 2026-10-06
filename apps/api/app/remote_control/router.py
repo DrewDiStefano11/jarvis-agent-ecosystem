@@ -22,6 +22,7 @@ from app.models.remote_control import (
     RemoteRuntimeCommand,
     RemoteSystemStatus,
 )
+from app.models.self_build import ApproveWorkspaceRequest, WorkspaceApproval
 from app.remote_control.service import RemoteControlService
 
 router = APIRouter(prefix="/api/remote", tags=["authenticated remote operation"])
@@ -165,4 +166,11 @@ def active_agents(
 ):
     return TypedApiResponse(
         data=service(request).active_agents(principal, offset=offset, limit=limit)
+    )
+
+
+@router.post("/self-build/workspaces/approve", response_model=TypedApiResponse[WorkspaceApproval])
+def approve_workspace(body: ApproveWorkspaceRequest, request: Request, principal: Actor):
+    return TypedApiResponse(
+        data=request.app.state.self_build_workspace_service.approve(principal, body)
     )

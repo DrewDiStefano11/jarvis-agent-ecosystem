@@ -19,7 +19,12 @@ from app.models.agent_runtime import (
     QueueAgentRunCommand,
 )
 from app.models.identity import AssignPermissionRequest, CreatePermissionRequest
-from app.models.self_build import AbandonWorkspaceRequest, ReserveWorkspaceRequest, WorkspaceIntent
+from app.models.self_build import (
+    AbandonWorkspaceRequest,
+    ApproveWorkspaceRequest,
+    ReserveWorkspaceRequest,
+    WorkspaceIntent,
+)
 from app.self_build.service import WorkspaceService
 from tests.agent_runtime_testkit import make_spec, ts
 from tests.test_agent_runtime_sql_control_plane import grant_runtime_permissions
@@ -90,9 +95,66 @@ def workspace(tmp_path):
     service = app.state.self_build_workspace_service
     intent = WorkspaceIntent(repository_id="jarvis", runtime_run_id="run-1", base_sha="a" * 40)
     plan = service.preview(actor, intent)
+    from types import SimpleNamespace
+
+    from pydantic import SecretStr
+
+    from app.db.models import IdentityPermissionRow
+    from app.remote_control.access import RemoteControlAccess
+    from tests.test_agent_runtime_authorization import create_actor
+
+    operator_id = create_actor(app, "workspace-operator")
+    with app.state.repository.session_factory() as session:
+        permissions = list(
+            session.scalars(
+                select(IdentityPermissionRow).where(
+                    IdentityPermissionRow.stable_key.in_(
+                        ["runtime.read", "runtime.execute", "self_build.workspace"]
+                    )
+                )
+            )
+        )
+    for permission in permissions:
+        app.state.identity_service.assign_permission(
+            operator_id,
+            AssignPermissionRequest(
+                permission_id=permission.id,
+                effect="allow",
+                resource_type="task",
+                resource_id="task-demo",
+            ),
+        )
+    remote_permission = app.state.identity_service.create_definition(
+        "permission",
+        CreatePermissionRequest(
+            stable_key="remote.control",
+            display_name="Operator control",
+            resource_type="administrative_function",
+            action="control",
+        ),
+    )
+    app.state.identity_service.assign_permission(
+        operator_id,
+        AssignPermissionRequest(
+            permission_id=remote_permission.id,
+            effect="allow",
+            resource_type="administrative_function",
+            resource_id="remote_control",
+        ),
+    )
+    access = RemoteControlAccess(app.state.identity_service, operator_id, SecretStr("x" * 48))
+    app.state.remote_control_service = SimpleNamespace(access=access)
+    operator = access.authenticate("Bearer " + "x" * 48, secure_transport=True)
+    approval = service.approve(
+        operator,
+        ApproveWorkspaceRequest(
+            **intent.model_dump(), expected_plan_hash=plan.plan_hash, valid_for_seconds=3600
+        ),
+    )
     request = ReserveWorkspaceRequest(
         **intent.model_dump(),
         expected_plan_hash=plan.plan_hash,
+        approval_id=approval.approval_id,
         worker_id=worker.id,
         lease_token=lease[1].leaseToken,
     )
@@ -296,6 +358,19 @@ def test_real_application_restart_preserves_workspace_and_does_not_create_files(
             restarted.state.self_build_workspace_service.read(actor, reservation.workspace_id)
             == reservation
         )
+        from types import SimpleNamespace
+
+        from pydantic import SecretStr
+
+        from app.remote_control.access import RemoteControlAccess
+
+        restarted.state.remote_control_service = SimpleNamespace(
+            access=RemoteControlAccess(
+                restarted.state.identity_service,
+                app.state.remote_control_service.access.actor_id,
+                SecretStr("x" * 48),
+            )
+        )
         assert restarted.state.self_build_workspace_service.reserve(actor, request) == reservation
     finally:
         restarted.state.engine.dispose()
@@ -340,7 +415,7 @@ def test_successor_lease_cannot_replay_old_workspace_authority(workspace):
     )
     with pytest.raises(DomainError) as error:
         service.reserve(actor, retry)
-    assert error.value.code == "SELF_BUILD_RECOVERY_REQUIRED"
+    assert error.value.code == "SELF_BUILD_EXECUTOR_MISMATCH"
     assert service.read(actor, reservation.workspace_id).plan == reservation.plan
 
 
@@ -408,3 +483,190 @@ def test_registered_junction_or_symlink_root_is_rejected(workspace, tmp_path):
     with pytest.raises(DomainError) as error:
         service.preview(actor, request)
     assert error.value.code == "SELF_BUILD_POLICY_INVALID"
+
+
+@pytest.mark.parametrize("boundary", ["missing", "expired", "wrong_plan", "revoked", "worker"])
+def test_operator_approval_is_durable_exact_and_live(workspace, boundary):
+    app, actor, service, request, _, _ = workspace
+    if boundary == "missing":
+        request = request.model_copy(update={"approval_id": "audit-missing"})
+    elif boundary in {"expired", "wrong_plan"}:
+        with app.state.task_leases._write() as session:
+            row = session.get(AuditEventRow, request.approval_id)
+            payload = row.payload["payload"] | (
+                {"expiresAt": (datetime.now(UTC) - timedelta(seconds=1)).isoformat()}
+                if boundary == "expired"
+                else {"planHash": "0" * 64}
+            )
+            # Deliberate corruption fixture; production history remains append-only.
+            row.payload = row.payload | {"payload": payload}
+    elif boundary == "revoked":
+        app.state.identity_service.transition(
+            app.state.remote_control_service.access.actor_id, "suspended"
+        )
+    else:
+        with pytest.raises(DomainError):
+            service.approve(
+                actor,
+                ApproveWorkspaceRequest(
+                    **request.model_dump(
+                        include={
+                            "repository_id",
+                            "runtime_run_id",
+                            "base_sha",
+                            "expected_plan_hash",
+                        }
+                    )
+                ),
+            )
+        request = request.model_copy(update={"approval_id": "audit-missing"})
+    with pytest.raises((DomainError, AgentRuntimeError)):
+        service.reserve(actor, request)
+    with app.state.repository.session_factory() as session:
+        assert session.scalar(select(DevelopmentWorkspaceRow)) is None
+        assert (
+            session.scalar(
+                select(OutboxEventRow).where(
+                    OutboxEventRow.event_type == "self_build.workspace.reserved"
+                )
+            )
+            is None
+        )
+
+
+def test_successor_lease_cannot_create_first_reservation_for_old_runtime(workspace):
+    app, actor, service, request, _, _ = workspace
+    with app.state.task_leases._write() as session:
+        session.get(TaskLeaseRow, "task-demo").expires_at = datetime.now(UTC) - timedelta(seconds=1)
+    app.state.task_leases.recover_expired_leases()
+    worker = app.state.task_leases.register_worker("new", "new", lease_seconds=3600)
+    lease = app.state.task_leases.acquire_task(worker.id, task_id="task-demo", lease_seconds=3600)
+    assert lease is not None
+    with pytest.raises(DomainError) as failure:
+        service.reserve(
+            actor,
+            request.model_copy(update={"worker_id": worker.id, "lease_token": lease[1].leaseToken}),
+        )
+    assert failure.value.code == "SELF_BUILD_EXECUTOR_MISMATCH"
+
+
+def test_operator_approval_http_requires_bearer_not_actor_header(workspace):
+    from app.remote_control.router import router
+
+    app, actor, _, request, _, _ = workspace
+    app.include_router(router)
+    body = ApproveWorkspaceRequest(
+        **request.model_dump(
+            include={"repository_id", "runtime_run_id", "base_sha", "expected_plan_hash"}
+        )
+    ).model_dump(mode="json")
+    with TestClient(app, base_url="https://testserver") as client:
+        path = "/api/remote/self-build/workspaces/approve"
+        assert (
+            client.post(
+                path,
+                json=body,
+                headers={"X-Jarvis-Actor-Id": app.state.remote_control_service.access.actor_id},
+            ).status_code
+            == 401
+        )
+        response = client.post(path, json=body, headers={"Authorization": "Bearer " + "x" * 48})
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["approved_by"] != actor.actor_id
+        assert client.post(
+            "/api/self-build/workspaces/approve",
+            json=body,
+            headers={"X-Jarvis-Actor-Id": actor.actor_id},
+        ).status_code in {404, 405}
+
+
+@pytest.mark.parametrize("mismatch", [False, True])
+def test_active_attempt_executor_owns_workspace(workspace, mismatch):
+    from app.models.agent_runtime import BeginAttemptCommand, StartAttemptCommand
+
+    app, actor, service, request, _, _ = workspace
+    runtime = app.state.agent_runtime_service
+    result = runtime.handle_authorized(
+        BeginAttemptCommand(
+            run_id="run-1",
+            command_id="begin",
+            expected_run_version=3,
+            timestamp=ts(3),
+            executor_reference="other-worker" if mismatch else request.worker_id,
+        ),
+        actor,
+    )
+    runtime.handle_authorized(
+        StartAttemptCommand(
+            run_id="run-1",
+            command_id="start",
+            expected_run_version=result.snapshot.version,
+            timestamp=ts(4),
+            attempt_id=result.snapshot.active_attempt_id,
+        ),
+        actor,
+    )
+    if mismatch:
+        with pytest.raises(DomainError) as failure:
+            service.reserve(actor, request)
+        assert failure.value.code == "SELF_BUILD_EXECUTOR_MISMATCH"
+    else:
+        assert not service.reserve(actor, request).recovery_required
+
+
+def test_configured_runtime_agent_cannot_self_approve(workspace):
+    from types import SimpleNamespace
+
+    from pydantic import SecretStr
+
+    from app.db.models import IdentityPermissionRow
+    from app.remote_control.access import RemoteControlAccess
+
+    app, actor, service, request, _, _ = workspace
+    with app.state.repository.session_factory() as session:
+        permission = session.scalar(
+            select(IdentityPermissionRow).where(
+                IdentityPermissionRow.stable_key == "remote.control"
+            )
+        )
+    app.state.identity_service.assign_permission(
+        actor.actor_id,
+        AssignPermissionRequest(
+            permission_id=permission.id,
+            effect="allow",
+            resource_type="administrative_function",
+            resource_id="remote_control",
+        ),
+    )
+    app.state.remote_control_service = SimpleNamespace(
+        access=RemoteControlAccess(app.state.identity_service, actor.actor_id, SecretStr("x" * 48))
+    )
+    with pytest.raises(DomainError) as failure:
+        service.approve(
+            actor,
+            ApproveWorkspaceRequest(
+                **request.model_dump(
+                    include={"repository_id", "runtime_run_id", "base_sha", "expected_plan_hash"}
+                )
+            ),
+        )
+    assert failure.value.code == "SELF_BUILD_SELF_APPROVAL_DENIED"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("event_sequence_number", 2),
+        ("active_attempt_id", "unrelated-attempt"),
+        ("agent_id", "different-agent"),
+    ],
+)
+def test_runtime_ownership_lineage_tampering_fails_closed(workspace, field, value):
+    from app.db.models import AgentRuntimeRunRow
+
+    app, actor, service, request, _, _ = workspace
+    with app.state.task_leases._write() as session:
+        setattr(session.get(AgentRuntimeRunRow, "run-1"), field, value)
+    with pytest.raises(DomainError) as failure:
+        service.reserve(actor, request)
+    assert failure.value.code == "SELF_BUILD_LINEAGE_INVALID"

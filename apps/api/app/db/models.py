@@ -944,6 +944,7 @@ class DevelopmentWorkspaceRow(Base):
     task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), index=True)
     actor_id: Mapped[str] = mapped_column(ForeignKey("identity_agents.id"))
     worker_id: Mapped[str] = mapped_column(ForeignKey("workers.id"))
+    approval_id: Mapped[str] = mapped_column(ForeignKey("audit_events.id"))
     lease_fingerprint: Mapped[str] = mapped_column(String(64))
     plan_json: Mapped[dict[str, Any]] = mapped_column(JSON)
     state: Mapped[str] = mapped_column(String(30))
