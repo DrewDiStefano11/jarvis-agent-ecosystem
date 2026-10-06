@@ -7,17 +7,26 @@ gates run. PR #63 belongs to a separate session and must not be touched.
 ## State
 
 - Branch/worktree: `codex/remote-operation-control`, `.worktrees/remote-operation-control`.
-- Reconciled base: main `ee0dd09bf1825ab635e7a61d8fe2ae192f6e0444`, including #68/coordinator.
+- Reconciled base: main `9d5eab1c5e169f7c99f3cf1e9e2ecafa3a725fdf`, including merged #69.
 - PR #70: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/70.
   Exact candidate SHA and fresh review requests are recorded in PR comments.
 - No unmerged #69/#63 dependency; single migration head `20260907_11`.
 - Latest persistence repair full backend: 1,501 passed/two existing skips in
   1,049.25 seconds. Ruff API/scripts and frontend typecheck/ESLint/104 Vitest
   tests/build pass. Earlier checkpoints below are validation history.
-- #69's cancellation/blank-deliverable repairs are pushed at `47ce8d4` with clean
-  exact-head review. Backend is running; browser/frontend/integrity passed.
-- #71 at `808bc03` has clean exact-head review and three passed gates; hosted
-  backend runner-allocation failure was rerun. Do not add code workarounds.
+- #69 merged after clean exact-head CI/review. The authorization conflict retains
+  task-scoped `authorize_task` and the session-aware runtime authorizer protocol;
+  documentation retains both remote-operation and verifier contracts.
+- The latest P2 was reproduced on both remote/native stop paths: restored active
+  status retained `Paused by emergency stop`. Resume now atomically persists
+  `Resumed after emergency stop`; both reload/restart assertions pass. The affected
+  controls/HTTP/persistence suite passes 76 tests. Combined full backend passes
+  1,585 tests with two existing skips (841.04 seconds).
+- #71 at `808bc03` has clean exact-head review and all four passed PR-event gates.
+  It is being reconciled against merged #69. No runner-allocation code workaround.
+- #73 frontend lazy-import failures were reproduced and repaired; node-verifier
+  head `6d600a1` is pushed with full backend 1,555 passed/two existing skips,
+  frontend104 and fresh gates. Reassignment/replanning remains unfinished.
 
 ## Implemented and exercised
 

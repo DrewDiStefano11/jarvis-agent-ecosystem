@@ -87,6 +87,7 @@ class RuntimeAuthorizer(Protocol):
         *,
         specification: AgentRunSpecification | None = None,
         snapshot: AgentRunSnapshot | None = None,
+        session: Session | None = None,
     ) -> RuntimeAuthorizationContext: ...
 
 

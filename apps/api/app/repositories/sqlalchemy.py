@@ -773,6 +773,7 @@ class SqlAlchemyRepository:
             elif not stop and agent.status == "paused" and agent.previousStatus:
                 agent.status = agent.previousStatus
                 agent.previousStatus = None
+                agent.statusMessage = "Resumed after emergency stop"
                 changed = True
             if changed:
                 row.status = agent.status

@@ -59,11 +59,15 @@ def test_remote_agent_transitions_survive_reload_and_restart(remote_http, native
     assert not app.state.repository.system_control_snapshot().emergencyStop
     assert app.state.repository.agents[agent.id].status == "thinking"
     assert app.state.repository.agents[agent.id].previousStatus is None
+    assert app.state.repository.agents[agent.id].statusMessage == "Resumed after emergency stop"
     restarted = create_app(
         database_url=app.state.settings.database_url, recover_interrupted_workflow=False
     )
     assert not restarted.state.repository.system_control_snapshot().emergencyStop
     assert restarted.state.repository.agents[agent.id].status == "thinking"
+    assert (
+        restarted.state.repository.agents[agent.id].statusMessage == "Resumed after emergency stop"
+    )
 
 
 def test_remote_stop_checkpoint_uses_fenced_agent_and_task_projections(remote_http):

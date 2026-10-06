@@ -374,6 +374,7 @@ class RecordingRuntimeAuthorizer:
         *,
         specification: Any | None = None,
         snapshot: Any | None = None,
+        session: Any | None = None,
     ) -> RuntimeAuthorizationContext:
         target = specification or (snapshot.specification if snapshot is not None else None)
         resource_id = target.task_id if target is not None else "unknown"

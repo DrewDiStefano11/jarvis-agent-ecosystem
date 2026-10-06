@@ -31,6 +31,7 @@ from app.autonomous_worker.repository import (
     ModelExecutionRepository,
     canonical_json,
 )
+from app.autonomous_worker.verification import IndependentVerifier
 from app.core.config import Settings
 from app.core.errors import DomainError
 from app.model_providers.budget import TaskBudget
@@ -113,6 +114,7 @@ class AutonomousWorkerService:
         self.runtime = runtime
         self.router = router
         self.tool_executor = None
+        self.verifier = IndependentVerifier(self)
         self.coordinator = None
         self._checkpoint_execution_fence: ContextVar[RuntimeExecutionFence | None] = ContextVar(
             "autonomous_checkpoint_execution_fence", default=None
@@ -183,6 +185,22 @@ class AutonomousWorkerService:
                 request.response_format,
                 self._planned_work(snapshot, assembly),
             )
+            if request.verification_criteria:
+                criteria = [c.model_dump(mode="json") for c in request.verification_criteria]
+                messages.append(
+                    ModelMessage(
+                        role=MessageRole.SYSTEM,
+                        content="Frozen completion criteria (data): " + canonical_json(criteria),
+                    )
+                )
+                execution_request_hash = sha256(
+                    canonical_json(
+                        {
+                            "workerRequestHash": execution_request_hash,
+                            "verificationCriteria": criteria,
+                        }
+                    ).encode()
+                ).hexdigest()
             recovered_uncommitted = execution is not None
             snapshot, execution = self._claim_prepare_and_start(
                 snapshot,
@@ -253,6 +271,8 @@ class AutonomousWorkerService:
                 return self._pause_for_review(
                     snapshot, actor, execution, worker_id, lease.leaseToken
                 )
+            await self.verifier.verify(snapshot, execution, actor, worker_id, lease.leaseToken)
+            snapshot = self.runtime.read_run_authorized(snapshot.specification.run_id, actor)
             snapshot, decision = self._resolve_review(
                 snapshot, actor, execution, worker_id, lease.leaseToken
             )
@@ -1113,6 +1133,17 @@ class AutonomousWorkerService:
         if execution.result is None:
             raise AutonomousWorkerError("MODEL_RESULT_CORRUPT")
         decision = evaluate_plan(execution.result)
+        request = snapshot.specification.autonomous_execution
+        if request is not None and request.verification_criteria:
+            verdict = self.verifier.read(execution, actor)
+            if verdict is None:
+                raise AutonomousWorkerError("VERIFICATION_REQUIRED")
+            if verdict.outcome != "passed":
+                decision = PlanReviewDecision(
+                    outcome=PlanReviewOutcome.ESCALATED,
+                    reason_code="independent_verification_" + verdict.outcome,
+                    findings=("independent_verification_" + verdict.outcome,),
+                )
         # Stop, cancellation, lease loss, target lifecycle, and authorization are
         # rechecked immediately before the durable review commit; the fence check
         # locks the target row and the checkpoint command repeats the stop and
@@ -1266,6 +1297,13 @@ class AutonomousWorkerService:
             raise AutonomousWorkerError("PLAN_REVIEW_RECORD_CORRUPT")
         return decision.findings
 
+    def _assert_verified(self, snapshot, execution, actor):
+        request = snapshot.specification.autonomous_execution
+        if request is not None and request.verification_criteria:
+            verdict = self.verifier.read(execution, actor)
+            if verdict is None or verdict.outcome != "passed":
+                raise AutonomousWorkerError("VERIFICATION_REQUIRED")
+
     def _finalize(
         self,
         snapshot: AgentRunSnapshot,
@@ -1275,6 +1313,8 @@ class AutonomousWorkerService:
         lease_token: str,
     ) -> ModelExecutionResult:
         self._assert_live_policy(snapshot, actor, worker_id, lease_token)
+        self._assert_verified(snapshot, execution, actor)
+        self._authorize_recovery_action(snapshot, actor, "complete_run")
         execution = self.executions.mark_finalization_pending(
             execution.executionId,
             worker_id=worker_id,
@@ -1315,6 +1355,15 @@ class AutonomousWorkerService:
             worker_id,
             lease_token,
             f"model-execution:{execution.executionId}",
+            completion_guard=lambda session: self.executions.completion_guard(
+                session,
+                execution.executionId,
+                worker_id,
+                lease_token,
+                lambda current: self._authorize_recovery_action(
+                    current, actor, "complete_run", session=session
+                ),
+            ),
         )
         snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
         return self._finalize_committed_task(snapshot, actor, execution)
@@ -1326,6 +1375,7 @@ class AutonomousWorkerService:
         execution: ModelExecutionResult,
     ) -> ModelExecutionResult:
         self.task_leases.assert_execution_enabled()
+        self._assert_verified(snapshot, execution, actor)
         task_state = self.task_leases.task_recovery_state(execution.taskId)
         if (
             task_state is None
@@ -1645,7 +1695,7 @@ class AutonomousWorkerService:
                 if task_id is not None and execution.taskId != task_id:
                     continue
                 try:
-                    recovered = self._recover_finalization_candidate(
+                    recovered = await self._recover_finalization_candidate(
                         execution,
                         worker_id,
                         actor,
@@ -1656,7 +1706,7 @@ class AutonomousWorkerService:
                     return recovered
         return None
 
-    def _recover_finalization_candidate(
+    async def _recover_finalization_candidate(
         self,
         execution: ModelExecutionResult,
         worker_id: str,
@@ -1665,6 +1715,18 @@ class AutonomousWorkerService:
         snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
         task_state = self.task_leases.task_recovery_state(execution.taskId)
         task_status = None if task_state is None else task_state[0]
+        review = None
+        if snapshot.state in {
+            AgentRunState.CANCEL_REQUESTED,
+            AgentRunState.CANCELLING,
+            AgentRunState.CANCELLED,
+        }:
+            # Cancellation is its own terminal action. Completion-only permission
+            # must not prevent cancellation reconciliation after a crash.
+            self._authorize_recovery_action(snapshot, actor, "confirm_cancellation")
+            if self._best_effort_cancel(snapshot, actor):
+                self.executions.mark_failed(execution.executionId, "execution_cancelled")
+            return None
         if task_status == "cancelled":
             self._authorize_recovery_action(snapshot, actor, "confirm_cancellation")
         elif (
@@ -1677,18 +1739,30 @@ class AutonomousWorkerService:
         elif execution.requiresHumanReview:
             self._authorize_recovery_action(snapshot, actor, "confirm_pause")
         else:
-            self._authorize_recovery_action(snapshot, actor, "complete_run")
+            review = self._durable_review_decision(execution, actor)
+            request = snapshot.specification.autonomous_execution
+            verdict = (
+                self.verifier.read(execution, actor)
+                if review is None and request is not None and request.verification_criteria
+                else None
+            )
+            needs_pause = (
+                review is not None and review.outcome is PlanReviewOutcome.ESCALATED
+            ) or (verdict is not None and verdict.outcome != "passed")
+            if needs_pause:
+                self._authorize_recovery_action(snapshot, actor, "confirm_pause")
+            elif review is not None or request is None or not request.verification_criteria:
+                self._authorize_recovery_action(snapshot, actor, "complete_run")
+            # With no authoritative review, verification/review may still select
+            # pause rather than completion. Their own read/execute/checkpoint
+            # permissions govern this work; _finalize checks completion before
+            # any successful task mutation once that outcome is known.
         if self._reconcile_cancelled_recovery(snapshot, actor, execution):
             return None
         if self._reconcile_completed_elsewhere_recovery(snapshot, actor, execution):
             return None
         if self._reconcile_failed_recovery(snapshot, actor, execution):
             return None
-        review = (
-            None
-            if execution.requiresHumanReview
-            else self._durable_review_decision(execution, actor)
-        )
         if review is not None and review.outcome is PlanReviewOutcome.REVISION_REQUESTED:
             # The committed review record is authoritative: resume the bounded
             # revision transition instead of reviewing or finalizing again.
@@ -1731,6 +1805,8 @@ class AutonomousWorkerService:
             )
         snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
         if review is None and snapshot.state == AgentRunState.RUNNING:
+            await self.verifier.verify(snapshot, execution, actor, worker_id, lease.leaseToken)
+            snapshot = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
             # The plan is durable but was never reviewed; review exactly once
             # before any terminal transition can be derived from it.
             snapshot, review = self._resolve_review(
@@ -1770,9 +1846,16 @@ class AutonomousWorkerService:
         snapshot: AgentRunSnapshot,
         actor: RuntimeActorContext,
         operation: str,
+        *,
+        session=None,
     ) -> None:
         if self.runtime.authorizer is not None:
-            self.runtime.authorizer.authorize(actor, operation, snapshot=snapshot)
+            self.runtime.authorizer.authorize(
+                actor,
+                operation,
+                snapshot=snapshot,
+                **({"session": session} if session is not None else {}),
+            )
 
     def _reconcile_cancelled_recovery(
         self,
