@@ -198,6 +198,15 @@ class AutonomousWorkerService:
                         {
                             "workerRequestHash": execution_request_hash,
                             "verificationCriteria": criteria,
+                            **(
+                                {
+                                    "correctionPolicy": request.correction_policy.model_dump(
+                                        mode="json"
+                                    )
+                                }
+                                if request.correction_policy is not None
+                                else {}
+                            ),
                         }
                     ).encode()
                 ).hexdigest()
@@ -913,10 +922,8 @@ class AutonomousWorkerService:
             maximum_requests=1,
             maximum_output_tokens=request.maximum_output_tokens,
         )
-        timeout = min(
-            request.maximum_execution_seconds,
-            self.settings.autonomous_worker_max_execution_seconds,
-        )
+        timeout = self.execution_timeout(snapshot)
+        request_payload = request_payload.model_copy(update={"timeout_seconds": timeout})
         heartbeat = asyncio.create_task(
             self._lease_heartbeat(
                 snapshot.specification.task_id,
@@ -987,6 +994,16 @@ class AutonomousWorkerService:
             AgentRunState.CANCELLED,
         }:
             raise AutonomousWorkerError("EXECUTION_CANCELLED")
+        request = current.specification.autonomous_execution
+        if (
+            request is not None
+            and request.correction_policy is not None
+            and (
+                current.specification.deadline is None
+                or current.specification.deadline <= datetime.now(UTC)
+            )
+        ):
+            raise AutonomousWorkerError("MODEL_EXECUTION_TIMEOUT")
         if self.runtime.authorizer is not None:
             self.runtime.authorizer.authorize(actor, "start_attempt", snapshot=current)
         self.task_leases.assert_current(
@@ -1077,6 +1094,16 @@ class AutonomousWorkerService:
                         "reasonCode": decision.reason_code,
                         "findings": list(decision.findings),
                         "policyVersion": PLAN_REVIEW_POLICY_VERSION,
+                        **(
+                            {"verificationDigest": decision.verification_digest}
+                            if decision.verification_digest is not None
+                            else {}
+                        ),
+                        **(
+                            {"correctionPolicyDigest": decision.correction_policy_digest}
+                            if decision.correction_policy_digest is not None
+                            else {}
+                        ),
                     }
                 ).encode()
             ).hexdigest()
@@ -1110,6 +1137,19 @@ class AutonomousWorkerService:
                 raise AutonomousWorkerError("PLAN_REVIEW_RECORD_CORRUPT") from exc
             if checkpoint.integrity_digest != self._review_digest(execution, name, decision):
                 raise AutonomousWorkerError("PLAN_REVIEW_RECORD_CORRUPT")
+            if decision.correction_policy_digest is not None:
+                current = self.runtime.read_run_authorized(execution.runtimeRunId, actor)
+                request = current.specification.autonomous_execution
+                policy = None if request is None else request.correction_policy
+                if (
+                    policy is None
+                    or self._correction_policy_digest(policy) != decision.correction_policy_digest
+                ):
+                    raise AutonomousWorkerError("PLAN_REVIEW_RECORD_CORRUPT")
+            if decision.verification_digest is not None:
+                verdict = self.verifier.read(execution, actor)
+                if verdict is None or verdict.digest != decision.verification_digest:
+                    raise AutonomousWorkerError("PLAN_REVIEW_RECORD_CORRUPT")
             return decision
         return None
 
@@ -1139,11 +1179,59 @@ class AutonomousWorkerService:
             if verdict is None:
                 raise AutonomousWorkerError("VERIFICATION_REQUIRED")
             if verdict.outcome != "passed":
-                decision = PlanReviewDecision(
-                    outcome=PlanReviewOutcome.ESCALATED,
-                    reason_code="independent_verification_" + verdict.outcome,
-                    findings=("independent_verification_" + verdict.outcome,),
+                policy = request.correction_policy
+                can_correct = (
+                    policy is not None
+                    and verdict.outcome in {"failed", "needs_correction"}
+                    and decision.outcome != PlanReviewOutcome.ESCALATED
+                    and self._attempt_cycle(execution.runtimeAttemptId) < policy.maximum_corrections
                 )
+                decision = PlanReviewDecision(
+                    outcome=PlanReviewOutcome.REVISION_REQUESTED
+                    if can_correct
+                    else PlanReviewOutcome.ESCALATED,
+                    reason_code="independent_verification_" + verdict.outcome,
+                    findings=tuple(
+                        "criterion:" + check.criterionId + ":" + check.outcome
+                        for check in verdict.checks
+                        if check.outcome != "passed"
+                    )
+                    if policy is not None
+                    else ("independent_verification_" + verdict.outcome,),
+                    verification_digest=verdict.digest if policy is not None else None,
+                    correction_policy_digest=self._correction_policy_digest(policy)
+                    if policy is not None
+                    else None,
+                )
+        if (
+            request is not None
+            and request.correction_policy is not None
+            and decision.outcome == PlanReviewOutcome.REVISION_REQUESTED
+            and decision.correction_policy_digest is None
+        ):
+            verdict = self.verifier.read(execution, actor)
+            if verdict is None:
+                raise AutonomousWorkerError("VERIFICATION_REQUIRED")
+            decision = PlanReviewDecision(
+                outcome=decision.outcome,
+                reason_code=decision.reason_code,
+                findings=decision.findings,
+                verification_digest=verdict.digest,
+                correction_policy_digest=self._correction_policy_digest(request.correction_policy),
+            )
+        if (
+            request is not None
+            and request.correction_policy is not None
+            and decision.outcome == PlanReviewOutcome.REVISION_REQUESTED
+            and self._attempt_cycle(execution.runtimeAttemptId)
+            >= request.correction_policy.maximum_corrections
+        ):
+            decision = PlanReviewDecision(
+                outcome=PlanReviewOutcome.ESCALATED,
+                reason_code="planning_correction_limit_reached",
+                findings=decision.findings,
+                correction_policy_digest=self._correction_policy_digest(request.correction_policy),
+            )
         # Stop, cancellation, lease loss, target lifecycle, and authorization are
         # rechecked immediately before the durable review commit; the fence check
         # locks the target row and the checkpoint command repeats the stop and
@@ -1163,6 +1251,25 @@ class AutonomousWorkerService:
             lease_token,
         )
         return snapshot, decision
+
+    @staticmethod
+    def _correction_policy_digest(policy):
+        return sha256(canonical_json(policy.model_dump(mode="json")).encode()).hexdigest()
+
+    def execution_timeout(self, snapshot):
+        request = snapshot.specification.autonomous_execution
+        assert request is not None
+        timeout = min(
+            request.maximum_execution_seconds, self.settings.autonomous_worker_max_execution_seconds
+        )
+        if request.correction_policy is not None:
+            deadline = snapshot.specification.deadline
+            if deadline is None:
+                raise AutonomousWorkerError("MODEL_EXECUTION_TIMEOUT")
+            timeout = min(timeout, (deadline - datetime.now(UTC)).total_seconds())
+            if timeout <= 0:
+                raise AutonomousWorkerError("MODEL_EXECUTION_TIMEOUT")
+        return timeout
 
     def _record_review_checkpoint(
         self,
@@ -1238,6 +1345,19 @@ class AutonomousWorkerService:
                 worker_id=worker_id,
                 lease_token=lease_token,
             )
+            failure_options = {}
+            if specification.autonomous_execution.correction_policy is not None:
+                action = "fail_run" if exhausted else "fail_attempt"
+                self._authorize_recovery_action(current, actor, action)
+                failure_options["failure_guard"] = lambda session: self.executions.revision_guard(
+                    session,
+                    execution.executionId,
+                    worker_id,
+                    lease_token,
+                    lambda live: self._authorize_recovery_action(
+                        live, actor, action, session=session
+                    ),
+                )
             task = self.task_leases.fail_task(
                 execution.taskId,
                 worker_id,
@@ -1250,6 +1370,7 @@ class AutonomousWorkerService:
                     "findings": list(decision.findings),
                 },
                 retryable=not exhausted,
+                **failure_options,
             )
             task_status = task.status
         if task_status == "failed":

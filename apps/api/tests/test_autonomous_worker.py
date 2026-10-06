@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -305,6 +306,7 @@ def create_assembly_and_runtime(
     target_agent_id: str | None = None,
     response_format: str | None = None,
     verification_criteria: tuple = (),
+    correction_policy=None,
 ) -> str:
     assembly_response = client.post(
         "/api/context/assemblies",
@@ -322,6 +324,7 @@ def create_assembly_and_runtime(
         target_agent_id=target_agent_id,
         response_format=response_format,
         verification_criteria=verification_criteria,
+        correction_policy=correction_policy,
     )
     return assembly["id"]
 
@@ -336,6 +339,7 @@ def queue_autonomous_runtime(
     target_agent_id: str | None = None,
     response_format: str | None = None,
     verification_criteria: tuple = (),
+    correction_policy=None,
 ) -> None:
     specification = make_spec(
         run_id=run_id,
@@ -354,16 +358,27 @@ def queue_autonomous_runtime(
                 maximum_output_tokens=1024,
                 maximum_execution_seconds=60,
                 verification_criteria=verification_criteria,
+                correction_policy=correction_policy,
             )
         }
     )
     runtime = app.state.agent_runtime_service
+    timestamp = ts(0)
+    if correction_policy is not None:
+        timestamp = datetime.now(UTC)
+        specification = specification.model_copy(
+            update={
+                "created_at": timestamp,
+                "deadline": timestamp
+                + timedelta(seconds=correction_policy.maximum_elapsed_seconds),
+            }
+        )
     actor = runtime.authenticate_actor(actor_id)
     created = runtime.handle_authorized(
         CreateAgentRunCommand(
             specification=specification,
             command_id=f"create-{run_id}",
-            timestamp=ts(0),
+            timestamp=timestamp,
             actor_reference=actor_id,
         ),
         actor,
@@ -374,7 +389,7 @@ def queue_autonomous_runtime(
             run_id=run_id,
             command_id=f"queue-{run_id}",
             expected_run_version=created.snapshot.version,
-            timestamp=ts(1),
+            timestamp=datetime.now(UTC) if correction_policy is not None else ts(1),
             actor_reference=actor_id,
         ),
         actor,
@@ -390,6 +405,7 @@ def worker_fixture(
     assembly_content: str = "Approved planning facts.",
     response_format: str | None = None,
     verification_criteria: tuple = (),
+    correction_policy=None,
 ):
     app = create_app(delay_ms=1, database_url=database_url(tmp_path / f"{run_id}.db"))
     client = TestClient(app)
@@ -405,6 +421,7 @@ def worker_fixture(
         assembly_content=assembly_content,
         response_format=response_format,
         verification_criteria=verification_criteria,
+        correction_policy=correction_policy,
     )
     worker = app.state.task_leases.register_worker(
         "phase-2c-test-worker",

@@ -344,10 +344,7 @@ class IndependentVerifier:
                     )
                     try:
                         self.worker._assert_live_policy(snapshot, actor, worker_id, lease_token)
-                        timeout = min(
-                            request.maximum_execution_seconds,
-                            self.worker.settings.autonomous_worker_max_execution_seconds,
-                        )
+                        timeout = self.worker.execution_timeout(snapshot)
                         async with asyncio.timeout(timeout):
                             response = await self.worker.router.execute(
                                 request=ModelExecutionRequest(

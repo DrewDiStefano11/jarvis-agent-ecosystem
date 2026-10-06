@@ -175,3 +175,13 @@ for operator review. Errors `VERIFICATION_PROVENANCE_MISMATCH`,
 `VERIFICATION_RECORD_CORRUPT`, `VERIFICATION_REQUIRED`, and
 `VERIFICATION_IN_PROGRESS` fail closed. See [independent verification](independent-verification.md)
 for evidence, recovery, request budgets and acceptance boundaries.
+
+An optional frozen `correction_policy` enables one same-specialist planning
+correction for failed/needs-correction results using native retries. It requires
+explicit verification criteria and a frozen run deadline bounded by the policy.
+Absent policy is omitted from legacy serialization. Fixed limits are one retry,
+eight planning/critic dispatches across two cycles and 1–3600 elapsed seconds.
+Native review checkpoints bind verifier/policy digests; model text grants no
+authority. Unverifiable, human-review-required and exhausted correction pause for
+operator review. See [planning correction](planning-correction.md). Node-level
+reassignment/replanning remains unavailable.
