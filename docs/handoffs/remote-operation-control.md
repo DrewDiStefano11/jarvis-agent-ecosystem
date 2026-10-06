@@ -1,5 +1,22 @@
 # Remote operation/control development checkpoint
 
+October 6 sharded-CI reconciliation: main
+`05d7628b15b7665927584a7349ac3c1af9cf247c` includes merged #82/#73. The merge
+is conflict-free and preserves remote authority/cancellation and main's native
+correction failure guards. Seven remote test files are assigned exactly once
+across the four shards; full collection coverage passes for 1,727 cases. Blank
+SQLite upgrade/downgrade/re-upgrade passes. Final focused native remote/TLS/
+correction/coordinator/CI package passes 132 tests (125.52s).
+An initial mixed-loop test stalled; narrowed faulthandler/timeout evidence isolated
+the correction emergency-stop call made on pytest's loop while TestClient owns
+the app lifecycle. Sending that operator action through the native HTTP route
+preserves stop/no-extra-dispatch assertions and passes the original reproduction.
+The 13-case narrowed package passes (22.19s). No production timeout or safety
+guard was weakened. API/scripts Ruff and frontend typecheck/ESLint/104 tests/build
+pass. Old monolithic backend runs are superseded. Require exact-head sharded CI
+and independent local review if hosted quota remains exhausted. Do not merge
+automatically under the current user instruction.
+
 The continuous-development instruction supersedes rigid sequencing and artificial
 milestone stops. Preserve this work and pursue useful independent tasks while
 gates run. PR #63 belongs to a separate session and must not be touched.

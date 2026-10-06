@@ -688,6 +688,8 @@ class TaskLeaseRepository:
         lease_token: str,
         error: dict[str, Any],
         retryable: bool,
+        *,
+        failure_guard: Callable[[Session], None] | None = None,
     ) -> Task:
         now = datetime.now(UTC)
         with self._write() as session:
@@ -695,6 +697,8 @@ class TaskLeaseRepository:
             task = session.get(TaskRow, task_id)
             assert task is not None
             self._require_execution_enabled(session)
+            if failure_guard is not None:
+                failure_guard(session)
             can_retry = retryable and lease.attempt_number <= task.maximum_retries
             new_status = "retrying" if can_retry else "failed"
             outcome = "retry" if can_retry else "failed"
