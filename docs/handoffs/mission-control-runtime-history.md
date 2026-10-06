@@ -56,3 +56,7 @@ Final visual QA inspected the concept and latest history-1536.png and history-39
 Above-fold copy comparison: Runtime history; Authorized runs loaded for this identity. Loaded records are not a complete history total.; Search runs; View; All; Active; Needs attention; Finished; Status; All statuses; Refresh runtime are retained. Reading identity/task scope and actual matching/loaded count are added for authorization clarity. The footer adds loaded-only filters, oldest-first ordering and explicit paging bounds. Technical snapshot labels replace concept timeline labels for contract accuracy. No raster UI is shipped.
 
 Reconciliation of eight previously published PRs is recorded separately in mission-control-reconciliation.md. Hosted review quota is exhausted; independent local review must identify the committed exact head. No automatic merge is authorized.
+
+## Latest main conflict reconciliation — 2026-10-06
+
+Reconciled with main 971b1d0 (merged shell #75, graph #80 and Approvals #83). Preserved feature work plus main's shell/navigation, task creation query state, task execution graph contracts and approval synchronization. Integration selectors reflect actual merged markup. Full frontend typecheck, ESLint, Vitest and production build pass; backend Ruff plus 41 isolated CI/authorization tests pass on the identical inherited backend. No backend or workflow divergence from main. Independent exact-head local re-review follows; hosted CI remains a gate. No merge is authorized and no CI waiting is planned.
