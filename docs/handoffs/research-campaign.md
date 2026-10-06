@@ -1,5 +1,15 @@
 # Autonomous research campaign handoff
 
+## Transport timestamp dependency repair
+
+Transport now consumes repaired contracts `e99ab1c09bd1ae748c646fa591cea4320e9a106e`.
+The only merge conflict was the handoff's parallel additions; both checkpoint
+sections were retained. No main or transport behavior was dropped. Final affected
+CI/policy/contracts/transport tests: 174 passed in 16.18 seconds. Actual shard
+collection: 1736 tests. Ruff check/format pass; frontend implementation is unchanged
+from this reconciliation's passing typecheck, ESLint, 104 tests and build.
+The prior 9b852 review/run is superseded by the repaired final head's review/CI.
+
 ## Transport sharded CI checkpoint
 
 Transport #77 incorporates reconciled contracts #76 at
@@ -16,6 +26,16 @@ User-authorized independent local exact-head review replaces unavailable hosted
 Codex review quota. Review and CI results are recorded in the PR on its final SHA.
 Only new sharded exact-head runs establish hosted readiness; old monolithic
 backend runs are superseded. No automatic merge is authorized or performed.
+
+## Retrieval timestamp review repair
+
+Follow-up independent review found the same sub-minute timezone serialization
+defect as search in both RetrievedText and RetrievalFailure. Six rejection
+regressions reproduced it before repair. Both validators now reject non-minute
+offsets rather than silently shifting observed/failure instants during JSON
+storage. Six positive UTC/positive/negative minute-offset cases round-trip.
+Earlier no-findings review of f3d26f1 is superseded; fresh exact-head review is
+required after publishing this correction and propagating it into #77.
 
 ## Sharded CI reconciliation — 2026-10-06
 

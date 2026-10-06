@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -132,3 +132,31 @@ def test_failure_cannot_retain_remote_errors_or_secrets():
             RetrievalFailure(**(data | {key: "secret"}))
     with pytest.raises(ValidationError):
         RetrievalFailure(**(data | {"failedAt": datetime(2026, 10, 6)}))
+
+
+def timestamp_record(kind, observed):
+    data = result_data()
+    if kind == "result":
+        return RetrievedText(**(data | {"retrievedAt": observed}))
+    return RetrievalFailure(
+        **{key: data[key] for key in ("requestId", "resultId", "taskId", "runtimeRunId")},
+        failedAt=observed,
+        code="RESEARCH_TIMEOUT",
+    )
+
+
+@pytest.mark.parametrize("kind", ["result", "failure"])
+@pytest.mark.parametrize("seconds", [30, -30, 0.5])
+def test_timestamps_reject_offsets_that_lose_represented_instants(kind, seconds):
+    observed = datetime(2026, 10, 6, tzinfo=timezone(timedelta(seconds=seconds)))
+    with pytest.raises(ValidationError):
+        timestamp_record(kind, observed)
+
+
+@pytest.mark.parametrize("kind", ["result", "failure"])
+@pytest.mark.parametrize("minutes", [0, 330, -210])
+def test_minute_offset_timestamps_preserve_instant_after_json_storage(kind, minutes):
+    observed = datetime(2026, 10, 6, tzinfo=timezone(timedelta(minutes=minutes)))
+    record = timestamp_record(kind, observed)
+    restored = type(record).model_validate_json(record.model_dump_json())
+    assert restored == record
