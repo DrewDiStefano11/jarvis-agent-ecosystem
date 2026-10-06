@@ -105,3 +105,16 @@ integration while continuing independent source/search foundations.
 Fetch current main and inspect open PRs again at each branch boundary. Do not merge,
 force-reset, delete branches or modify other sessions' worktrees. The campaign
 request authorizes feature pushes, PR publication and exact-head Codex review.
+
+## Main reconciliation checkpoint
+
+The human merged #74 and #73. Current main is
+`1ee7a3cd72ec78a5765a9529a1c0faa26fefcfcb`. Retrieval contracts were reconciled
+with this main without conflicts. All 133 affected policy/contract and newly merged
+planning-correction/coordination-verification tests pass in 60.31 seconds. Backend
+Ruff and frontend typecheck, ESLint, 104 Vitest tests and build pass. PR #76 is
+retargeted to main; transport #77 must consume this reconciled contract head.
+Provenance implementation is checkpointed locally at `c152afe` in its dedicated
+source worktree, with full backend 1675 passing plus 106 affected reset cases;
+it must consume the reconciled transport before publication. No merge into main
+or feature-branch deletion was performed by this session.
