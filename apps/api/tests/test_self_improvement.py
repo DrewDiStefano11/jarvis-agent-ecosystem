@@ -363,7 +363,7 @@ def test_concurrent_analysis_converges(database):
 
 def test_migration_one_head_populated_upgrade_guarded_downgrade_reupgrade(database):
     sessions, config, _ = database
-    assert ScriptDirectory.from_config(config).get_heads() == ["20260907_11"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["20261006_12"]
     command.downgrade(config, "20260906_10")
     # Preserve a durable runtime row while upgrading the populated predecessor.
     with sessions.begin() as session:
