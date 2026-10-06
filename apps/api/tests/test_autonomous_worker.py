@@ -340,6 +340,7 @@ def queue_autonomous_runtime(
     response_format: str | None = None,
     verification_criteria: tuple = (),
     correction_policy=None,
+    coordinator_verification=None,
 ) -> None:
     specification = make_spec(
         run_id=run_id,
@@ -359,18 +360,24 @@ def queue_autonomous_runtime(
                 maximum_execution_seconds=60,
                 verification_criteria=verification_criteria,
                 correction_policy=correction_policy,
+                coordinator_verification=coordinator_verification,
             )
         }
     )
     runtime = app.state.agent_runtime_service
     timestamp = ts(0)
-    if correction_policy is not None:
+    enabled_policies = [
+        policy for policy in (correction_policy, coordinator_verification) if policy is not None
+    ]
+    if enabled_policies:
         timestamp = datetime.now(UTC)
         specification = specification.model_copy(
             update={
                 "created_at": timestamp,
                 "deadline": timestamp
-                + timedelta(seconds=correction_policy.maximum_elapsed_seconds),
+                + timedelta(
+                    seconds=min(policy.maximum_elapsed_seconds for policy in enabled_policies)
+                ),
             }
         )
     actor = runtime.authenticate_actor(actor_id)
@@ -389,7 +396,7 @@ def queue_autonomous_runtime(
             run_id=run_id,
             command_id=f"queue-{run_id}",
             expected_run_version=created.snapshot.version,
-            timestamp=datetime.now(UTC) if correction_policy is not None else ts(1),
+            timestamp=datetime.now(UTC) if enabled_policies else ts(1),
             actor_reference=actor_id,
         ),
         actor,

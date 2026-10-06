@@ -54,10 +54,10 @@ invented evidence refusal, lease takeover without repeat inference, native succe
 enforcement against service bypass, deadline/clamping, and resealed foreign task,
 criterion or false passing verdict rejection, concurrent critic ownership, unknown
 response recovery and late stop/revocation/suspension. Initial recovery testing caught and
-fixed datetime serialization changing the sealed verdict digest. Full integration
-and concurrency/control-plane adversarial checks remain required before committing
-this slice. Coordinator/planning integration passes 97 tests; full backend is
-running on the combined node-verification candidate. No reassignment or versioned
+fixed datetime serialization changing the sealed verdict digest. Coordinator/planning
+integration passes 97 tests. The final full backend passes 1,555 tests with two
+existing skips (877.19 seconds); frontend typecheck/ESLint/104 tests/build pass.
+Concurrency and native control-plane adversarial checks pass. No reassignment or versioned
 replan/reuse has been added yet.
 
 PR #73 frontend failures were cold lazy Office imports exceeding DOM query bounds:

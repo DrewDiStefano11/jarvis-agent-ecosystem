@@ -19,7 +19,7 @@ from pydantic import (
 )
 
 from app.models.constraints import MAX_CORRELATION_ID_LENGTH as _MAX_CORRELATION_ID_LENGTH
-from app.models.correction import PlanningCorrectionPolicy
+from app.models.correction import CoordinatorVerificationPolicy, PlanningCorrectionPolicy
 from app.models.verification import CompletionCriterion
 
 MAX_IDENTIFIER_LENGTH = 120
@@ -525,6 +525,7 @@ class AutonomousExecutionSpecification(RuntimeContract):
         description="Planning completion criteria; artifact mode is unavailable until post-tool verification exists.",
     )
     correction_policy: PlanningCorrectionPolicy | None = None
+    coordinator_verification: CoordinatorVerificationPolicy | None = None
 
     @model_serializer(mode="wrap")
     def preserve_legacy_serialization(self, handler):
@@ -537,6 +538,8 @@ class AutonomousExecutionSpecification(RuntimeContract):
             value.pop("verification_criteria", None)
         if self.correction_policy is None:
             value.pop("correction_policy", None)
+        if self.coordinator_verification is None:
+            value.pop("coordinator_verification", None)
         return value
 
     @field_validator("model_name")
@@ -548,6 +551,11 @@ class AutonomousExecutionSpecification(RuntimeContract):
 
     @model_validator(mode="after")
     def _validate_request_budget(self) -> AutonomousExecutionSpecification:
+        if (
+            self.coordinator_verification is not None
+            and self.execution_type != AutonomousExecutionType.PLANNING_REVIEW
+        ):
+            raise ValueError("coordinator verification requires planning_review execution")
         if self.correction_policy is not None and (
             not self.verification_criteria
             or self.execution_type != AutonomousExecutionType.PLANNING_REVIEW
@@ -635,13 +643,20 @@ class AgentRunSpecification(RuntimeContract):
         if self.deadline is not None and self.deadline <= self.created_at:
             raise ValueError("deadline must be later than created_at")
         request = self.autonomous_execution
-        if request is not None and request.correction_policy is not None:
+        policies = (
+            () if request is None else (request.correction_policy, request.coordinator_verification)
+        )
+        for policy in policies:
+            if policy is None:
+                continue
             if (
                 self.deadline is None
                 or (self.deadline - self.created_at).total_seconds()
-                > request.correction_policy.maximum_elapsed_seconds
+                > policy.maximum_elapsed_seconds
             ):
-                raise ValueError("planning correction requires a frozen bounded run deadline")
+                raise ValueError(
+                    "autonomous verification/correction requires a frozen bounded run deadline"
+                )
         validate_run_created_payload_size(self.model_dump(mode="json"))
         return self
 

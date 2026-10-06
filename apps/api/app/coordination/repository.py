@@ -10,6 +10,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.agent_runtime.repository import RuntimeExecutionFence
+from app.coordination.verification import require_node_verdict
 from app.core.errors import DomainError
 from app.db.models import (
     AgentRuntimeRunRow,
@@ -299,7 +300,7 @@ class CoordinationRepository:
     ) -> CoordinationRecord:
         with self._write() as session:
             row, record = self._record(session, record_id)
-            self._live_record(session, record, fence, validate_live)
+            _, _, parent, _ = self._live_record(session, record, fence, validate_live)
             node = self._node(record, subtask_id, runtime_attempt_id)
             if node.status == "succeeded":
                 return record
@@ -318,6 +319,11 @@ class CoordinationRepository:
                 session.get(TaskDecompositionRow, record.decompositionId).payload
             )
             planned = next(item for item in graph.subtasks if item.id == subtask_id)
+            policy = parent.specification.autonomous_execution.coordinator_verification
+            if policy is not None:
+                require_node_verdict(
+                    session, record, node, graph, planned, checkpoint_id, result_digest, policy
+                )
             if (
                 validated.subtaskId != subtask_id
                 or validated.evidence != evidence
@@ -604,6 +610,10 @@ class CoordinationRepository:
             graph = DecompositionRecord.model_validate(
                 session.get(TaskDecompositionRow, record.decompositionId).payload
             )
+            parent = AgentRunSnapshot.model_validate_json(
+                session.get(AgentRuntimeRunRow, record.runtimeRunId).snapshot_json
+            )
+            policy = parent.specification.autonomous_execution.coordinator_verification
             for node in record.nodes:
                 result = self._require_checkpoint(
                     session,
@@ -615,6 +625,17 @@ class CoordinationRepository:
                     SpecialistResult,
                 )
                 planned = next(item for item in graph.subtasks if item.id == node.subtaskId)
+                if policy is not None:
+                    require_node_verdict(
+                        session,
+                        record,
+                        node,
+                        graph,
+                        planned,
+                        node.checkpointId,
+                        node.resultDigest,
+                        policy,
+                    )
                 if (
                     result.subtaskId != node.subtaskId
                     or result.evidence != node.evidence

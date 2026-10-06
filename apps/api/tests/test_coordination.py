@@ -26,6 +26,7 @@ from app.db.models import (
     TaskRow,
 )
 from app.models.coordination import SpecialistResult, SynthesisResult, execution_ready_keys
+from app.models.correction import CoordinatorVerificationPolicy
 from tests.test_agent_runtime_sql_control_plane import grant_runtime_permissions
 from tests.test_autonomous_worker import queue_autonomous_runtime
 from tests.test_task_decomposition import app as decomposition_app
@@ -91,7 +92,8 @@ def app(tmp_path, monkeypatch):
 @pytest.fixture
 def prepared(app, request):
     subtasks = [node("a"), node("b"), node("c", deps=["a", "b"])]
-    if hasattr(request, "param"):
+    verify = isinstance(getattr(request, "param", None), dict) and request.param.get("verify")
+    if hasattr(request, "param") and not isinstance(request.param, dict):
         subtasks[0]["completionCriteria"] = request.param
     task_id, assembly_id, _ = setup(app, proposal(subtasks), auto=True)
     graph = service(app).current(task_id)
@@ -109,6 +111,7 @@ def prepared(app, request):
         run_id="coord-parent",
         task_id=task_id,
         target_agent_id=task.teamSelection.managerId,
+        coordinator_verification=CoordinatorVerificationPolicy() if verify else None,
     )
     coordinator = CoordinatorService(
         app.state.repository,

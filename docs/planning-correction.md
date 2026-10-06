@@ -37,6 +37,8 @@ a third cycle. Local autonomous execution remains disabled by default.
 
 Tests exercise the production worker, SQLite, RBAC, task leases and checkpoints
 using deterministic inference fixtures. They do not prove arbitrary model quality.
-Specialist reassignment, node-level independent verification, versioned replanning
-and reuse of verified results across graph versions remain unimplemented. This
+Opt-in coordinator node verification is being integrated with native runtime
+checkpoints and the existing aggregate dispatch budget. Specialist reassignment,
+versioned replanning and reuse of verified results across graph versions remain
+unimplemented. This
 dependent branch is preparation for the adaptive milestone, not its completion.
