@@ -3,7 +3,7 @@
 import hashlib
 import json
 import unicodedata
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -88,8 +88,13 @@ class SearchLead(SearchCandidate):
     @field_validator("retrievedAt")
     @classmethod
     def aware_timestamp(cls, value: datetime) -> datetime:
-        if value.tzinfo is None or value.utcoffset() is None:
+        offset = value.utcoffset()
+        if value.tzinfo is None or offset is None:
             raise ValueError("search timestamp must include a timezone")
+        # Pydantic's JSON datetime representation retains minute-level offsets.
+        # Reject finer offsets rather than accepting a digest that changes on storage.
+        if offset % timedelta(minutes=1) != timedelta(0):
+            raise ValueError("search timestamp offset must use whole minutes")
         return value
 
     @model_validator(mode="after")

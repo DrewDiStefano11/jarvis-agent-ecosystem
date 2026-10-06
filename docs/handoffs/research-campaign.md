@@ -1,5 +1,18 @@
 # Autonomous research campaign handoff
 
+## Search timestamp review repair
+
+An unresolved hosted P2 on the earlier search head identified accepted timezone
+offsets containing seconds that Pydantic serializes at minute precision. Six
+regression cases reproduced the missing rejection on empty/nonempty batches for
+positive, negative and fractional-second offsets. The shared lead/batch timestamp
+validator now rejects offsets that are not whole minutes. Three positive minute
+offset cases retain identical snapshot digests through JSON serialization.
+This changes no existing valid minute-offset digest format. The earlier local
+review missed the defect; fresh review of the repaired published head is required.
+Actual shard collection now includes 1706 cases; final affected validation and
+exact-head review/CI results are recorded on the PR.
+
 ## Sharded CI reconciliation — 2026-10-06
 
 PR #82 was confirmed merged. This branch incorporates main

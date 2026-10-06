@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -152,6 +152,23 @@ def test_empty_result_retains_aware_timestamp():
     assert empty.leads == () and empty.retrievedAt == NOW
     with pytest.raises(ValidationError):
         batch([], timestamp=NOW.replace(tzinfo=None))
+
+
+@pytest.mark.parametrize("seconds", [30, -30, 0.5])
+@pytest.mark.parametrize("empty", [False, True])
+def test_timestamps_reject_offsets_that_cannot_round_trip_json(seconds, empty):
+    observed = datetime(2026, 10, 6, tzinfo=timezone(timedelta(seconds=seconds)))
+    with pytest.raises(ValidationError):
+        batch([] if empty else [candidate()], timestamp=observed)
+
+
+@pytest.mark.parametrize("minutes", [0, 330, -210])
+def test_minute_offset_timestamps_preserve_snapshot_digest_on_json_round_trip(minutes):
+    observed = datetime(2026, 10, 6, tzinfo=timezone(timedelta(minutes=minutes)))
+    result = batch(timestamp=observed)
+    restored = SearchBatch.model_validate_json(result.model_dump_json())
+    assert restored == result
+    assert restored.leads[0].resultDigest == result.leads[0].resultDigest
 
 
 def test_provider_credentials_are_not_fields_in_discovery_contracts():

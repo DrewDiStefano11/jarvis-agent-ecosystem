@@ -28,6 +28,9 @@ identity hashes query/provider/URL; snapshot digest additionally hashes rank,
 title, snippet and retrieval time. Stored records revalidate both hashes, chain
 their query/provider/rank/timestamp to the containing batch, and survive JSON
 serialization/revalidation. Empty results still retain their retrieval timestamp.
+Timestamps must have whole-minute timezone offsets. Sub-minute offsets are rejected
+because JSON serialization cannot preserve their offset precision; accepting them
+would change snapshot hashes and represented instants after durable storage.
 
 Every lead is explicitly `discovery_lead` and `untrusted_external_content`.
 Snippets can suggest where to look; they cannot become retrieved sources,
