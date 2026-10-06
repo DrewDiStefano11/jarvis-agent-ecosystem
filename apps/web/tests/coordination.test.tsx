@@ -5,7 +5,7 @@ import { useCoordinationState } from '../src/state/useCoordinationState'
 import type { Coordination } from '../src/types/coordination'
 
 const record: Coordination = {
-  id: 'coord-one', taskId: 'task-one', status: 'blocked', blockedReason: 'specialist_suspended',
+  id: 'coord-one', taskId: 'task-one', decompositionId: 'dec-one', status: 'blocked', blockedReason: 'specialist_suspended',
   nodes: [{ subtaskId: 'sub-one', key: 'research', assignedAgentId: 'specialist-one', status: 'succeeded', attemptCount: 2, retryEligibleAt: null, resultSummary: 'Preserved research', failureDetail: null, provider: 'local', model: 'installed-model' },
     { subtaskId: 'sub-two', key: 'analysis', assignedAgentId: 'specialist-two', status: 'blocked', attemptCount: 0, retryEligibleAt: null, resultSummary: null, failureDetail: 'Upstream blocked', provider: null, model: null }],
   synthesis: { status: 'pending', attemptCount: 0, summary: null, failureDetail: null, retryEligibleAt: null, inputSubtaskIds: [] },
