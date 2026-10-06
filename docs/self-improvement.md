@@ -13,6 +13,27 @@ work and supports durable replay. Selection does not approve or execute a change
 
 ## Evidence and baseline
 
+The existing evidence CLI also accepts `ci_run:alias:path` from an operator export:
+
+```powershell
+gh run view <run-id> --json databaseId,headSha,status,conclusion,updatedAt,jobs > ci-run.json
+python scripts/jarvis_self_improve.py analyze --evidence ci_run:control-plane-ci:ci-run.json --repo-sha <exported-head-sha> --configuration-fingerprint <digest> --safety-fingerprint <digest> --json
+```
+
+The export is bounded to 256 jobs and the existing two-megabyte file limit. Only
+job identity/name/status/conclusion and run identity/head/observation time are
+projected; steps, commands, URLs and logs are discarded. Success/failure/timeout/
+startup failure are job outcomes. Cancellation, skipped/neutral/action-required/
+stale jobs and pending work are unmeasured, never zero performance or regressions.
+The imported head must match the baseline SHA. No GitHub integration runs inside
+the application. Retain the exported artifact in controlled storage.
+
+Job outcomes do not establish test counts, failed assertions, root cause or real
+model quality. Their original suite/policy/configuration provenance is incomplete;
+CI proposals remain `needs_evidence` and request bounded cause/provenance evidence
+before choosing an implementation. They cannot establish a comparable experiment
+or authorize a change merely because a later CI run is green.
+
 `app.models.self_improvement` defines bounded frozen contracts. The independent
 `app.self_improvement` package uses the #64 acceptance/model-evaluation artifacts,
 #66 qualification profiles, #65 Runtime Doctor JSON, and existing durable task,
@@ -179,7 +200,7 @@ python scripts/jarvis_self_improve.py compare <before-id> <after-id> `
 Jarvis Settings supply the URL. `analyze --runtime-start <ISO-time>` and
 `--runtime-end <ISO-time>` include bounded durable history. Supported artifact
 kinds: `autonomy_acceptance`, `model_evaluation`, `model_qualification`,
-`runtime_doctor`. CLI fingerprints are digests, not raw configuration JSON.
+`runtime_doctor`, `ci_run`. CLI fingerprints are digests, not raw configuration JSON.
 `analyze` writes only analysis records. It never migrates or starts the runtime.
 
 The candidate attestation file has the exact fields:

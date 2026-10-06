@@ -12,6 +12,10 @@ class ImprovementService:
         provenance, observations = [], []
         for source in sources:
             record, items = source.collect()
+            if record.source_type == "ci_run" and record.repo_sha != repo_sha:
+                raise ValueError(
+                    "CI evidence head differs from the requested baseline repository SHA"
+                )
             provenance.append(record)
             observations.extend(items)
             if len(observations) > 4096:

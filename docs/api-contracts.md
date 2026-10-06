@@ -1,5 +1,12 @@
 # HTTP contracts
 
+Improvement Lab `SourceProvenance.source_type` also accepts `ci_run`. Its bounded
+`CIRunEvidence`/`CIJobEvidence` import contracts project an operator-exported
+GitHub Actions JSON run. CI source provenance stays incomplete; job conclusions
+do not establish test quality, root cause or comparable experiment definitions.
+The existing analysis read envelopes and route permissions remain unchanged.
+See [evidence import](self-improvement.md) for the exact CLI export/import commands.
+
 ## Improvement backlog
 
 OpenAPI defines `SelectImprovementRequest`, `ImprovementBacklogSelection` and
