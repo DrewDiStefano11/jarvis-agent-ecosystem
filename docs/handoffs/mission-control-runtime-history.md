@@ -60,3 +60,5 @@ Reconciliation of eight previously published PRs is recorded separately in missi
 ## Latest main conflict reconciliation — 2026-10-06
 
 Reconciled with main 971b1d0 (merged shell #75, graph #80 and Approvals #83). Preserved feature work plus main's shell/navigation, task creation query state, task execution graph contracts and approval synchronization. Integration selectors reflect actual merged markup. Full frontend typecheck, ESLint, Vitest and production build pass; backend Ruff plus 41 isolated CI/authorization tests pass on the identical inherited backend. No backend or workflow divergence from main. Independent exact-head local re-review follows; hosted CI remains a gate. No merge is authorized and no CI waiting is planned.
+
+Independent reconciliation review identified stale overview copy after history paging. Replaced the inherited 50-run claim with Loaded authorized runs only. All 144 frontend tests and typecheck/lint/build pass after the copy correction.
