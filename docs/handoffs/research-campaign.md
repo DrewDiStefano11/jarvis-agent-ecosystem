@@ -1,5 +1,40 @@
 # Autonomous research campaign handoff
 
+## Transport sharded CI checkpoint
+
+Transport #77 incorporates reconciled contracts #76 at
+`f3d26f135a8481c18877d86863d78e2effeddde0`, and latest main
+`05d7628b15b7665927584a7349ac3c1af9cf247c` (#82 confirmed merged).
+No conflicts occurred; both the transport dependency and new main behavior remain.
+Transport tests are assigned once to the models shard. Actual shard collection
+check passes with 1724 tests. Focused CI/policy/contracts/transport coverage passes
+162 tests in 13.88 seconds. Ruff check/format and frontend typecheck, ESLint,
+104 Vitest tests and build pass. The following inherited reconciliation section
+describes contracts validation; these counts describe the transport branch.
+
+User-authorized independent local exact-head review replaces unavailable hosted
+Codex review quota. Review and CI results are recorded in the PR on its final SHA.
+Only new sharded exact-head runs establish hosted readiness; old monolithic
+backend runs are superseded. No automatic merge is authorized or performed.
+
+## Sharded CI reconciliation — 2026-10-06
+
+PR #82 was confirmed merged. This branch incorporates main
+`05d7628b15b7665927584a7349ac3c1af9cf247c` without conflicts. Its research test
+file is explicitly assigned to the models shard. Actual `backend_ci.py check`
+passes with 1693 collected tests; 131 focused CI/research cases pass using
+a fresh short temporary directory. Ruff check/format and frontend typecheck,
+ESLint, 104 Vitest tests and build pass. The ignored test environment now includes
+main's declared pytest-timeout dependency. Default pytest temporary-directory
+permission failures were resolved by the isolated rerun without skipping tests.
+
+Only exact-head sharded CI is authoritative after this reconciliation:
+backend-static, backend-migrations, backend-tests-runtime, backend-tests-autonomy,
+backend-tests-models and backend-tests-system, plus the existing aggregate backend
+gate. Old monolithic runs do not establish readiness. Hosted Codex review quota
+is unavailable; the user authorized an independent local exact-head review.
+The PR body/review record identifies the final SHA and external gate outcomes.
+
 ## Campaign audit — 2026-10-06
 
 Base: `9d5eab1c5e169f7c99f3cf1e9e2ecafa3a725fdf` (main, PR #69 merged).
