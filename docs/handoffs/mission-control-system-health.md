@@ -39,3 +39,5 @@ User explicitly authorized local independent exact-head review because hosted Co
 ## Latest main conflict reconciliation — 2026-10-06
 
 Reconciled with main 971b1d0 (merged shell #75, graph #80 and Approvals #83). Preserved feature work plus main's shell/navigation, task creation query state, task execution graph contracts and approval synchronization. Integration selectors reflect actual merged markup. Full frontend typecheck, ESLint, Vitest and production build pass; backend Ruff plus 41 isolated CI/authorization tests pass on the identical inherited backend. No backend or workflow divergence from main. Independent exact-head local re-review follows; hosted CI remains a gate. No merge is authorized and no CI waiting is planned.
+
+Independent reconciliation review found the newly merged shell could bypass the existing stale-resume guard. The shell now disables stale Resume and guards its handler, while Emergency stop remains available. Regression covers failed reads, resynchronization, reconnecting, emergency stop and reconciled resume. All 146 frontend tests and other frontend checks pass.

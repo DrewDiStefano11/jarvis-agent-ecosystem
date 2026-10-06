@@ -46,6 +46,7 @@ export default function App() {
   if (loading) return <main className="center-state" aria-live="polite"><div className="loader"/><h1>Synchronizing Jarvis</h1><p>Loading the latest Hub state…</p></main>
   const control = async () => {
     const resume = system?.emergencyStop
+    if (!system || controlBusy || (resume && stale)) return
     if (!window.confirm(resume ? 'Resume the system? Existing backend authorization and recovery rules still apply.' : 'Stop the system? This interrupts active work and office movement. Review recovery before resuming.')) return
     setControlBusy(true)
     setControlError('')
@@ -61,7 +62,7 @@ export default function App() {
       <div className="sidebar-foot"><strong>Local AI Hub</strong><small>Local execution is opt-in.</small></div>
     </aside>
     <div className="workspace"><RouteTitle/>
-      <header className="topbar"><div className="system-summary"><Status value={connection}/><span className="desktop-only">{stale ? 'Last-known state' : 'Event stream connected'}</span></div><div className="top-actions"><button className="emergency" disabled={controlBusy || !system} onClick={() => void control()}>{controlBusy ? 'Awaiting acknowledgement…' : system?.emergencyStop ? 'Resume system' : 'Emergency stop'}</button></div></header>
+      <header className="topbar"><div className="system-summary"><Status value={connection}/><span className="desktop-only">{stale ? 'Last-known state' : 'Event stream connected'}</span></div><div className="top-actions"><button className="emergency" disabled={controlBusy || !system || Boolean(system.emergencyStop && stale)} onClick={() => void control()}>{controlBusy ? 'Awaiting acknowledgement…' : system?.emergencyStop ? 'Resume system' : 'Emergency stop'}</button></div></header>
       <main id="main-content" className="content" tabIndex={-1}>
         {stale && <div className="sync-banner" role="status"><div><strong>Data may be stale</strong><p>{error ?? (resyncRequired ? 'Reconciling an event sequence gap.' : 'The event stream is disconnected; HTTP refresh remains available.')} Last synchronized: {lastSync ? new Date(lastSync).toLocaleString() : 'never'}.</p></div><button className="secondary" disabled={refreshing} onClick={async () => { setRefreshing(true); try { await refresh() } finally { setRefreshing(false) } }}>{refreshing ? 'Refreshing…' : 'Refresh state'}</button></div>}
         {controlError && <p role="alert">{controlError}</p>}
