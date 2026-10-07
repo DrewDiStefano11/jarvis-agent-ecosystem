@@ -37,3 +37,12 @@ control-plane regression covers that exact trigger. New-head checks/review requi
 Final review-repair validation: 76 workspace/CI cases pass, Ruff lint/format and
 1,897-case collection coverage pass. Frontend and migration inputs are unchanged
 from passing local gates. New exact-head hosted CI/re-review remain required.
+
+
+Human merges #90 and #92 advanced main to de18e2aafd56eda98cd794b3883098cadd0be4c5.
+The integrated cherry-picked CI history caused actual conflicts in workflow,
+CI helper tests and backend CI documentation. Retained the feature's identical
+reviewed CI content plus its step-budget repair, preserving all human-merged
+validation planner files and combined shard assignments. Main/workspace/CI
+integration: 168 tests pass, Ruff lint/format and 1,989-case collection coverage
+pass. No merge into main was performed; new-head hosted checks required.
