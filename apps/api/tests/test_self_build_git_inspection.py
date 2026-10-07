@@ -1,5 +1,6 @@
 """Native production-path approval, lease, outbox and read-only Git acceptance."""
 
+import os
 import shutil
 import subprocess
 from datetime import UTC, datetime, timedelta
@@ -25,6 +26,12 @@ def git_workspace(workspace):
     app, actor, workspace_service, reservation_request, _, policy = workspace
     root = Path(policy["primary_root"])
     executable = shutil.which("git")
+    if executable and os.name == "nt" and Path(executable).parent.name.casefold() == "cmd":
+        installation = Path(executable).parent.parent
+        implementations = [
+            installation / family / "bin/git.exe" for family in ("mingw64", "mingw32")
+        ]
+        executable = str(next(path for path in implementations if path.is_file()))
     assert executable, "Native Git is required for repository acceptance"
 
     def git(*args):

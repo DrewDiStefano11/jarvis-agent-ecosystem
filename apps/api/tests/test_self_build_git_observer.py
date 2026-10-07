@@ -16,6 +16,12 @@ from app.self_build.policy import RepositoryPolicy
 @pytest.fixture
 def repository(tmp_path):
     executable = shutil.which("git")
+    if executable and os.name == "nt" and Path(executable).parent.name.casefold() == "cmd":
+        installation = Path(executable).parent.parent
+        implementations = [
+            installation / family / "bin/git.exe" for family in ("mingw64", "mingw32")
+        ]
+        executable = str(next(path for path in implementations if path.is_file()))
     assert executable, "Git is required for the native repository acceptance tests"
     root, worktrees = tmp_path / "repository", tmp_path / "worktrees"
     root.mkdir()
@@ -337,3 +343,64 @@ def test_replacement_refs_cannot_change_the_approved_base_tree(repository):
     assert measured["base_tree_sha"] == expected["base_tree_sha"]
     assert measured["inventory_digest"] == expected["inventory_digest"]
     assert measured["file_count"] == 1
+
+
+@pytest.mark.parametrize(
+    "configured,accepted",
+    [
+        ("C:/Program Files/Git/cmd/git.exe", False),
+        ("C:/Program Files/Git/bin/git.exe", False),
+        ("C:/Tools/git.exe", False),
+        ("C:/Program Files/Git/mingw64/bin/git.exe", True),
+        ("C:/Program Files/Git/mingw32/bin/git.exe", True),
+    ],
+)
+def test_windows_tool_policy_requires_actual_pinned_implementation(configured, accepted):
+    from pathlib import PureWindowsPath
+
+    from app.self_build.git_observer import windows_implementation_path
+
+    assert windows_implementation_path(PureWindowsPath(configured)) == accepted
+
+
+def test_windows_wrapper_configuration_is_rejected_without_starting_it(repository, monkeypatch):
+    from app.self_build import git_observer
+
+    _, policy, observer, head, _ = repository
+
+    def forbidden_start(*args, **kwargs):
+        pytest.fail("a configured Windows wrapper must not start")
+
+    if os.name == "nt":
+        wrapper = observer.executable.parents[2] / "cmd/git.exe"
+        assert wrapper.is_file()
+        monkeypatch.setattr(git_observer.subprocess, "Popen", forbidden_start)
+        with pytest.raises(DomainError) as error:
+            GitObserver(str(wrapper), sha256(wrapper.read_bytes()).hexdigest())
+        assert error.value.code == "SELF_BUILD_GIT_TOOL_INVALID"
+    else:
+        # Windows layout policy is exercised above on every platform. Native POSIX
+        # direct implementation retains its independently approved content pin.
+        assert observer._tool(policy) == str(observer.executable.resolve())
+
+
+def test_actual_implementation_change_invalidates_its_content_pin(
+    repository, tmp_path, monkeypatch
+):
+    from app.self_build import git_observer
+
+    _, policy, observer, _, _ = repository
+    actual = tmp_path / "external-installation/mingw64/bin/git.exe"
+    actual.parent.mkdir(parents=True)
+    actual.write_bytes(observer.executable.read_bytes())
+    pinned = GitObserver(str(actual), sha256(actual.read_bytes()).hexdigest())
+    assert pinned._tool(policy) == str(actual.resolve())
+    actual.write_bytes(actual.read_bytes() + b"unapproved implementation change")
+
+    def forbidden_start(*args, **kwargs):
+        pytest.fail("changed implementation must be rejected before execution")
+
+    monkeypatch.setattr(git_observer.subprocess, "Popen", forbidden_start)
+    with pytest.raises(DomainError) as error:
+        pinned._read(policy, "head", "a" * 40)
+    assert error.value.code == "SELF_BUILD_GIT_TOOL_INVALID"

@@ -80,3 +80,13 @@ Every read disables Git replacement-object semantics through both the global
 `--no-replace-objects` option and `GIT_NO_REPLACE_OBJECTS=1`. A repository's
 `refs/replace` cannot make an approved commit SHA describe a replacement tree.
 This policy change invalidates earlier inspection approvals.
+
+On Windows configure the actual `<Git>/mingw64/bin/git.exe` or
+`<Git>/mingw32/bin/git.exe` implementation and hash that file. `cmd/git.exe`,
+root/bin launchers and other wrapper layouts are rejected before approval or
+process start. The fixed built-in read families run directly in that pinned process,
+so authority/watchdog termination kills the actual operation and the approval binds
+the implementing executable. No wrapper can quietly select another implementation
+or widen PATH/HOME. This follows [Git for Windows' documented direct-binary path](https://gitforwindows.org/git-wrapper.html).
+Future Git mutation/command families that can spawn helpers additionally require
+process-tree containment; these read-only fixed built-ins expose no such family.

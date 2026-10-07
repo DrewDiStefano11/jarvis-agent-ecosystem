@@ -194,3 +194,39 @@ cases pass, one existing Windows symlink-privilege skip; Ruff format/lint and
 root hit the migration test's relative script location; rerunning from the supported
 apps/api directory passed without a test or application change. Latest delta remains
 focused evidence; new-head full CI and independent review are required.
+
+
+PR #89's main documentation conflict is resolved at `670c50f19bfc6f68c14b31ac407f6d9ec139706a`.
+The merge commit preserves the previous feature tree byte for byte. GitHub reports
+MERGEABLE; exact-head CI remains required. PR #91 integrates this repaired parent.
+
+PR #91 review findings `4207041304` and `4207041314` identified that Windows
+`cmd/git.exe` is a launcher rather than the process implementing Git. Configuration
+now rejects launchers and requires an explicitly approved and content-pinned
+`mingw32/bin/git.exe` or `mingw64/bin/git.exe`. Each fixed read checks that actual
+implementation's hash before launching it. Direct implementation execution also
+makes existing timeout/revocation cleanup target the real Git read process.
+This bounded read increment does not expose helpers, mutation or arbitrary commands;
+future mutation/command execution still requires process-tree containment.
+
+Windows wrapper rejection, cross-platform layout policy and actual implementation
+content-change regressions are added. The focused Git/workspace/filesystem package
+passed 139 cases with one existing Windows symlink-privilege skip; the additional
+actual-binary content-change regression passed separately. Final native Git
+observer/service rerun and changed-head CI/review are recorded in the PR.
+Ruff checks/format and 1,946-case collection coverage pass. Frontend and migration
+sources are unchanged from their passing local gates.
+
+The real-repository production-service probe was repeated with
+`C:/Program Files/Git/mingw64/bin/git.exe`, content SHA-256
+`77965c1ffd7d5d0f7d55ddbec10ad540efa61e58f36eae565cde0f36fab8fe53`.
+It measured the same 534-file base inventory and preserved the primary index;
+native readback matched persisted evidence. The approved historical base differs
+from local origin/main `1b02bcad77be35628b3850862c08c578753ac4d2`, and evidence
+correctly reports that difference. This remains a partial inspection probe with
+isolated temporary control-plane state, not end-to-end factory dogfood.
+
+PR #90 head `c87b1e501914bc704febb608171f71d217c5fd71` and PR #92 head
+`e3311b59b450162cc0a2fac469a5560a787e6826` have passing exact-head CI and clean
+independent reviews. Both are ready for human merge. No PR has been merged by
+this campaign.

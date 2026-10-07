@@ -61,6 +61,15 @@ def remote_identity(value):
         )
 
 
+def windows_implementation_path(path):
+    """Supported real Git for Windows locations; cmd/bin launchers are unavailable."""
+    return (
+        path.name.casefold() == "git.exe"
+        and path.parent.name.casefold() == "bin"
+        and path.parent.parent.name.casefold() in {"mingw32", "mingw64"}
+    )
+
+
 class GitObserver:
     def __init__(self, executable, executable_hash, *, inactivity_seconds=30, authority_check=None):
         self.executable = Path(executable)
@@ -71,8 +80,12 @@ class GitObserver:
             not self.executable.is_absolute()
             or self.executable.name.lower() not in {"git", "git.exe"}
             or not re.fullmatch(r"[a-f0-9]{64}", executable_hash)
+            or (os.name == "nt" and not windows_implementation_path(self.executable))
         ):
-            fail("SELF_BUILD_GIT_TOOL_INVALID", "Configure an absolute pinned Git executable.")
+            fail(
+                "SELF_BUILD_GIT_TOOL_INVALID",
+                "Configure an absolute pinned Git implementation; Windows requires mingw32/bin or mingw64/bin/git.exe.",
+            )
 
     def _tool(self, policy):
         try:
