@@ -404,8 +404,10 @@ def test_supervisor_stale_state_is_blocked(repository: Path, seeded_database: Pa
 
 
 def test_supervisor_not_running_is_degraded_not_blocked(
-    repository: Path, seeded_database: Path
+    repository: Path, seeded_database: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # The scripted frontend is offline; unrelated real listeners are not this scenario.
+    no_tcp(monkeypatch, connected=False)
     environment = base_environment(Path("/tmp"), repository, seeded_database)
     probe = ScriptedProbe({HEALTH_URL: HealthResult(True, "healthy", payload=api_health_payload())})
     report = run(repository, environment, probe).report
