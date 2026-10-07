@@ -69,9 +69,9 @@ def wait_for_descendants(processes: list, timeout: float = 5) -> None:
 
 
 def run_command(
-    command: list[str], *, env: dict[str, str], log: Path, timeout: float
+    command: list[str], *, env: dict[str, str], log: Path, inactivity_timeout: float
 ) -> int:
-    """Stream a durable log and bound the whole command, including interpreter shutdown.
+    """Stream a durable log and stop inactive commands, including interpreter shutdown.
 
     Track only this command's descendants, using psutil's PID-reuse protection.
     Clean up survivors after failure or success; never inspect unrelated runtimes.
@@ -79,6 +79,7 @@ def run_command(
     import psutil
 
     started = time.monotonic()
+    last_activity = started
     descendants: dict[int, psutil.Process] = {}
     timed_out = False
     with (
@@ -101,10 +102,14 @@ def run_command(
                     pass
                 chunk = reader.read()
                 if chunk:
+                    last_activity = time.monotonic()
                     print(chunk, end="", flush=True)
-                if time.monotonic() - started > timeout:
+                if time.monotonic() - last_activity > inactivity_timeout:
                     timed_out = True
-                    print(f"COMMAND TIMEOUT after {timeout}s: {command}", flush=True)
+                    print(
+                        f"COMMAND INACTIVITY TIMEOUT after {inactivity_timeout}s without output: {command}",
+                        flush=True,
+                    )
                     break
                 time.sleep(0.2)
         finally:
@@ -125,7 +130,10 @@ def run_command(
                     process.kill()
                 process.wait(timeout=10)
             wait_for_descendants(terminated)
-            print(reader.read(), end="", flush=True)
+            chunk = reader.read()
+            if chunk:
+                last_activity = time.monotonic()
+                print(chunk, end="", flush=True)
     elapsed = time.monotonic() - started
     print(
         f"COMMAND COMPLETE: {elapsed:.2f}s; exit={process.returncode}; timeout={timed_out}",
@@ -138,6 +146,9 @@ def run_command(
                 "elapsed": elapsed,
                 "exitstatus": process.returncode,
                 "timed_out": timed_out,
+                "timeout_kind": "inactivity" if timed_out else None,
+                "inactivity_timeout_seconds": inactivity_timeout,
+                "last_output_elapsed": last_activity - started,
             },
             indent=2,
         )
@@ -191,7 +202,7 @@ def migrations(artifacts: Path, env: dict[str, str]) -> int:
                 [sys.executable, "-m", "alembic", *args],
                 env=env,
                 log=artifacts / f"migration-{index}.log",
-                timeout=120,
+                inactivity_timeout=120,
             )
             if result:
                 return result
@@ -253,7 +264,9 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix=f"jarvis-ci-{args.shard}-") as directory:
         command = pytest_command(files, artifacts, collect=args.shard == "check")
         command.append(f"--basetemp={Path(directory) / 'pytest'}")
-        return run_command(command, env=env, log=artifacts / "pytest.log", timeout=1500)
+        return run_command(
+            command, env=env, log=artifacts / "pytest.log", inactivity_timeout=1500
+        )
 
 
 if __name__ == "__main__":
