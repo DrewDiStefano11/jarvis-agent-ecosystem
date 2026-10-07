@@ -5,7 +5,6 @@ import re
 import stat
 import subprocess
 from contextlib import ExitStack
-from hashlib import sha256
 from pathlib import Path
 from threading import Event, Lock, Thread
 from time import monotonic
@@ -104,11 +103,8 @@ class GitObserver:
                 for root in (policy.primary_root, policy.worktree_root)
             ):
                 raise ValueError("repository executable")
-            if (
-                resolved.stat().st_size > 64 * 1024 * 1024
-                or sha256(resolved.read_bytes()).hexdigest() != self.executable_hash
-            ):
-                raise ValueError("changed executable")
+            # Bytes are verified only through pinned_image's bounded non-following
+            # descriptor. A preliminary pathname read could block on a swapped FIFO.
         except (OSError, ValueError, DomainError):
             fail(
                 "SELF_BUILD_GIT_TOOL_INVALID",
@@ -119,9 +115,45 @@ class GitObserver:
     def _read(self, policy, operation, base_sha):
         if self.authority_check is not None:
             self.authority_check()
+        alternate_state = self._alternates_state(policy)
         executable = self._tool(policy)
         with pinned_image(executable, self.executable_hash) as launch:
-            return self._read_image(policy, operation, base_sha, executable, launch)
+            result = self._read_image(policy, operation, base_sha, executable, launch)
+        if self._alternates_state(policy) != alternate_state:
+            fail("SELF_BUILD_GIT_STATE_CHANGED", "Object-store metadata changed during the read.")
+        return result
+
+    def _alternates_state(self, policy):
+        # Check before and after every fixed read, including info directory change
+        # times so a transient create/read/remove does not disappear from coherence.
+        try:
+            with ExitStack() as stack:
+                path = Path(policy.primary_root) / ".git" / "objects" / "info"
+                directory = open_directory(stack, path, internal=True)
+                parent_info = os.fstat(directory.fd) if directory.fd is not None else path.lstat()
+                parent_state = (
+                    parent_info.st_dev,
+                    parent_info.st_ino,
+                    parent_info.st_mtime_ns,
+                    parent_info.st_ctime_ns,
+                )
+                try:
+                    info = os.stat(
+                        directory.name("alternates"), follow_symlinks=False, **directory.kwargs
+                    )
+                except FileNotFoundError:
+                    return parent_state, None
+                check_stat(info, internal=True)
+                if info.st_size:
+                    fail(
+                        "SELF_BUILD_GIT_METADATA_UNSAFE",
+                        "External Git object stores are unavailable.",
+                    )
+                return parent_state, (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns)
+        except OSError:
+            fail(
+                "SELF_BUILD_GIT_METADATA_INVALID", "Object-store metadata is unavailable or unsafe."
+            )
 
     def _read_image(self, policy, operation, base_sha, executable, launch):
         # Fixed built-in read families; no shell, aliases, status hooks, filters or transport.
