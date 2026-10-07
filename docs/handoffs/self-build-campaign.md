@@ -253,3 +253,7 @@ preserves primary index plus native evidence readback. A required Linux Git job
 now exercises sealed descriptor execution and both observer/service regressions;
 the aggregate backend gate depends on it. This supplies actual Linux evidence
 without installing a runtime on the operator's Windows computer.
+
+PR #91 integrates PR #89 reviewed-finding repairs at b41385690eaacee2d4bc7de3244d2c4e21ed2ff4.
+Final integrated Git plus parent regressions: 56 pass; Ruff format/lint and
+1,951-case collection coverage pass. Exact new-head CI/re-review remain required.

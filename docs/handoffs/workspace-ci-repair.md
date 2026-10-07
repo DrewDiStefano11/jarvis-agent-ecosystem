@@ -23,3 +23,17 @@ attempt. Operator approvals, original lease/attempt ownership, stop and native
 append-only audit/outbox behavior remain intact. #91 is stacked on #89 and should
 integrate this same reviewed infrastructure delta with a feature-branch merge so
 its PR diff remains scoped to native Git inspection. Never merge into main.
+
+
+Additional review repairs: `4207141494` adds individual checkout/setup/install/
+upload limits without imposing an accumulated-runtime deadline on supervised
+pytest. A workflow regression verifies every unguarded backend matrix step is
+bounded. `4207354287` changes reservation lookup to the authoritative uniqueness
+key (runtime run, repository alias). Fresh approval after an alias identity change
+now returns SELF_BUILD_WORKSPACE_CONFLICT instead of an unhandled IntegrityError,
+preserving the original single reservation and audit event. A native isolated
+control-plane regression covers that exact trigger. New-head checks/review required.
+
+Final review-repair validation: 76 workspace/CI cases pass, Ruff lint/format and
+1,897-case collection coverage pass. Frontend and migration inputs are unchanged
+from passing local gates. New exact-head hosted CI/re-review remain required.

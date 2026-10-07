@@ -418,3 +418,18 @@ def test_fast_exit_output_is_measured_in_final_drain(tmp_path, monkeypatch):
     assert log.read_text().strip() == "hello"
     assert 0 < record["last_output_elapsed"] <= record["elapsed"]
     assert not record["timed_out"] and record["timeout_kind"] is None
+
+
+def test_backend_workflow_bounds_steps_outside_pytest_supervision():
+    import yaml
+
+    job = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]["backend-tests"]
+    assert "timeout-minutes" not in job
+    supervised = []
+    for step in job["steps"]:
+        if "python scripts/backend_ci.py ${{ matrix.shard }}" in step.get("run", ""):
+            supervised.append(step)
+            assert "timeout-minutes" not in step
+        else:
+            assert 1 <= step["timeout-minutes"] <= 15
+    assert len(supervised) == 1

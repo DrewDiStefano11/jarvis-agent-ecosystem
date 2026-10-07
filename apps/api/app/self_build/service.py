@@ -181,7 +181,7 @@ class WorkspaceService:
                     "Task lease holder must match the runtime executor.",
                     409,
                 )
-            row = session.get(DevelopmentWorkspaceRow, plan.worktree_key)
+            row = self.repository.find(session, plan.runtime_run_id, plan.repository_id)
             if row is not None:
                 existing = self.repository.contract(row)
                 if existing.plan != plan or row.state != "reserved":
