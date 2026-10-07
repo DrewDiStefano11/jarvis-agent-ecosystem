@@ -90,3 +90,20 @@ the implementing executable. No wrapper can quietly select another implementatio
 or widen PATH/HOME. This follows [Git for Windows' documented direct-binary path](https://gitforwindows.org/git-wrapper.html).
 Future Git mutation/command families that can spawn helpers additionally require
 process-tree containment; these read-only fixed built-ins expose no such family.
+
+
+Execution binds the verified executable bytes across the launch boundary. On
+Windows, native read-only file sharing denies executable writes, rename/deletion
+and conflicting pre-existing writers; pinned directory handles deny ancestor
+replacement until process cleanup. The hash is measured from that locked handle.
+On Linux, the bounded verified image is copied into a sealed memfd, with write,
+growth, shrink and further-seal changes prohibited, and exec uses that descriptor.
+Unsupported platforms or missing immutable-execution facilities fail closed.
+Implementation-policy hashing includes this native image primitive, invalidating
+older operator approvals when it changes. See the native
+[Windows file-sharing contract](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-createfilew)
+and [Linux sealed memfd contract](https://man7.org/linux/man-pages/man2/memfd_create.2.html).
+
+The sanitized origin identity is repeated alongside HEAD and the local tracking
+ref before returning evidence. Any observed change rejects the mixed observation;
+this coherence check remains local evidence rather than a fresh remote fetch.

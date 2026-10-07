@@ -404,3 +404,84 @@ def test_actual_implementation_change_invalidates_its_content_pin(
     with pytest.raises(DomainError) as error:
         pinned._read(policy, "head", "a" * 40)
     assert error.value.code == "SELF_BUILD_GIT_TOOL_INVALID"
+
+
+def test_origin_change_during_inspection_is_not_reported_as_coherent(repository, monkeypatch):
+    _, policy, observer, head, git = repository
+    native_read = observer._read
+    changed = False
+
+    def changing_read(*args):
+        nonlocal changed
+        result = native_read(*args)
+        if args[1] == "remote" and not changed:
+            changed = True
+            git("remote", "set-url", "origin", "https://github.com/unrelated/repository.git")
+        return result
+
+    monkeypatch.setattr(observer, "_read", changing_read)
+    with pytest.raises(DomainError) as failure:
+        observer.inspect(policy, head)
+    assert failure.value.code == "SELF_BUILD_GIT_STATE_CHANGED"
+
+
+def test_change_between_path_hash_and_image_lock_never_starts_git(
+    repository, tmp_path, monkeypatch
+):
+    from app.self_build import git_observer
+
+    _, policy, observer, head, _ = repository
+    actual = tmp_path / "race-installation/mingw64/bin/git.exe"
+    actual.parent.mkdir(parents=True)
+    actual.write_bytes(observer.executable.read_bytes())
+    pinned = GitObserver(str(actual), sha256(actual.read_bytes()).hexdigest())
+    native_tool = pinned._tool
+
+    def replace_after_hash(policy):
+        result = native_tool(policy)
+        actual.write_bytes(b"unapproved executable")
+        return result
+
+    def forbidden_start(*args, **kwargs):
+        pytest.fail("replacement image must fail before execution")
+
+    monkeypatch.setattr(pinned, "_tool", replace_after_hash)
+    monkeypatch.setattr(git_observer.subprocess, "Popen", forbidden_start)
+    with pytest.raises(DomainError) as failure:
+        pinned._read(policy, "head", head)
+    assert failure.value.code == "SELF_BUILD_GIT_TOOL_INVALID"
+
+
+def test_approved_image_stays_immutable_across_launch_boundary(repository, tmp_path):
+    from app.self_build.git_image import pinned_image
+
+    _, _, observer, _, _ = repository
+    actual = tmp_path / "locked-installation/bin/git.exe"
+    actual.parent.mkdir(parents=True)
+    original = observer.executable.read_bytes()
+    actual.write_bytes(original)
+    replacement = actual.with_name("replacement.exe")
+    replacement.write_bytes(b"unapproved executable")
+    with pinned_image(actual, sha256(original).hexdigest()) as launch:
+        if os.name == "nt":
+            with pytest.raises(OSError):
+                actual.write_bytes(b"unapproved executable")
+            with pytest.raises(OSError):
+                os.replace(replacement, actual)
+            with pytest.raises(OSError):
+                actual.parent.rename(actual.parent.with_name("changed-parent"))
+            assert actual.read_bytes() == original
+        else:
+            import fcntl
+
+            fd = launch["pass_fds"][0]
+            with pytest.raises(OSError):
+                os.write(fd, b"unapproved executable")
+            assert fcntl.fcntl(fd, fcntl.F_GET_SEALS) & fcntl.F_SEAL_WRITE
+            os.replace(replacement, actual)
+            result = subprocess.run(
+                [str(actual), "--version"], **launch, capture_output=True, check=True
+            )
+            assert result.stdout.startswith(b"git version ")
+    # Windows cleanup releases locks; Linux source replacement was harmless.
+    actual.write_bytes(b"replacement after operation")

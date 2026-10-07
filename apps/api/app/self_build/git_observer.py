@@ -12,6 +12,7 @@ from time import monotonic
 from urllib.parse import urlsplit
 
 from app.core.errors import DomainError
+from app.self_build.git_image import pinned_image
 from app.self_build.policy import digest
 from app.tool_execution.filesystem import check_stat, open_directory, repository_parts
 
@@ -116,6 +117,13 @@ class GitObserver:
         return str(resolved)
 
     def _read(self, policy, operation, base_sha):
+        if self.authority_check is not None:
+            self.authority_check()
+        executable = self._tool(policy)
+        with pinned_image(executable, self.executable_hash) as launch:
+            return self._read_image(policy, operation, base_sha, executable, launch)
+
+    def _read_image(self, policy, operation, base_sha, executable, launch):
         # Fixed built-in read families; no shell, aliases, status hooks, filters or transport.
         commands = {
             "root": ["rev-parse", "--show-toplevel"],
@@ -133,7 +141,6 @@ class GitObserver:
         }
         if self.authority_check is not None:
             self.authority_check()
-        executable = self._tool(policy)
         environment = {
             key: os.environ[key]
             for key in ("SystemRoot", "WINDIR", "TEMP", "TMP")
@@ -169,6 +176,7 @@ class GitObserver:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                **launch,
             )
         except OSError:
             fail("SELF_BUILD_GIT_UNAVAILABLE", "The configured native Git tool could not start.")
@@ -354,7 +362,9 @@ class GitObserver:
                 entries.append([mode, blob, path])
             # Repeat volatile refs: never report a mixed observation as coherent.
             if (
-                commits["head"] != self._read(policy, "head", base_sha).decode("ascii").strip()
+                identity
+                != remote_identity(self._read(policy, "remote", base_sha).decode("utf-8").strip())
+                or commits["head"] != self._read(policy, "head", base_sha).decode("ascii").strip()
                 or commits["origin_tip"]
                 != self._read(policy, "origin_tip", base_sha).decode("ascii").strip()
             ):

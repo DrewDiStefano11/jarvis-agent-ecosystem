@@ -230,3 +230,26 @@ PR #90 head `c87b1e501914bc704febb608171f71d217c5fd71` and PR #92 head
 `e3311b59b450162cc0a2fac469a5560a787e6826` have passing exact-head CI and clean
 independent reviews. Both are ready for human merge. No PR has been merged by
 this campaign.
+
+
+Further #91 review findings `4207220369` and `4207220388` are repaired in the
+working increment: a pathname content hash alone did not bind the launched image,
+and the origin identity needed repetition at the final coherence fence. Windows
+now keeps the verified image and ancestors locked against replacement/writes
+through process cleanup. Linux exec uses a sealed copy of the verified image,
+passed by descriptor. Unsupported platforms fail closed. The approval policy hash
+includes the image primitive; no old approval silently adopts changed execution.
+Final sanitized origin identity must agree with the initial measured identity.
+New regressions cover replacement between preliminary hash and image acquisition,
+modification/replacement at the launch boundary, lock release, Linux sealed-image
+execution after source replacement, and an origin change during inspection.
+Linux execution requires exact-head hosted CI because this Windows host has no
+installed Linux/WSL runtime; no system installation or test waiver is introduced.
+
+Final immutable-image/origin repair: 54 native Git observer/service cases pass,
+Ruff format/lint and 1,949-case collection coverage pass. Real Jarvis inspection
+through production services passes using the locked actual implementation and
+preserves primary index plus native evidence readback. A required Linux Git job
+now exercises sealed descriptor execution and both observer/service regressions;
+the aggregate backend gate depends on it. This supplies actual Linux evidence
+without installing a runtime on the operator's Windows computer.
