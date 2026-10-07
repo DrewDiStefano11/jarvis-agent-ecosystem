@@ -130,7 +130,10 @@ def run_command(
                     process.kill()
                 process.wait(timeout=10)
             wait_for_descendants(terminated)
-            print(reader.read(), end="", flush=True)
+            chunk = reader.read()
+            if chunk:
+                last_activity = time.monotonic()
+                print(chunk, end="", flush=True)
     elapsed = time.monotonic() - started
     print(
         f"COMMAND COMPLETE: {elapsed:.2f}s; exit={process.returncode}; timeout={timed_out}",

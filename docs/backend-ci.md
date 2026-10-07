@@ -199,3 +199,6 @@ inactivity and per-test supervision govern that. GitHub still imposes its finite
 hosted execution limit ([official limits](https://docs.github.com/en/actions/reference/limits)).
 A workload exceeding that platform limit requires further decomposition rather than
 an unlimited timeout or a silent CI waiver.
+
+Final output drained after process exit also updates the measured output timestamp;
+short-lived commands cannot report no output activity when their log contains data.

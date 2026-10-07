@@ -393,3 +393,28 @@ def test_progress_then_stall_is_inactivity_not_total_runtime(tmp_path):
     assert record["timed_out"] and record["timeout_kind"] == "inactivity"
     assert record["last_output_elapsed"] > 0
     assert "phase-finished" in log.read_text()
+
+
+def test_fast_exit_output_is_measured_in_final_drain(tmp_path, monkeypatch):
+    original = ci.subprocess.Popen
+
+    def already_finished(*args, **kwargs):
+        process = original(*args, **kwargs)
+        process.wait(timeout=10)
+        return process
+
+    monkeypatch.setattr(ci.subprocess, "Popen", already_finished)
+    log = tmp_path / "fast.log"
+    assert (
+        ci.run_command(
+            [sys.executable, "-c", "print('hello', flush=True)"],
+            env=dict(os.environ),
+            log=log,
+            inactivity_timeout=10,
+        )
+        == 0
+    )
+    record = json.loads(log.with_suffix(".json").read_text())
+    assert log.read_text().strip() == "hello"
+    assert 0 < record["last_output_elapsed"] <= record["elapsed"]
+    assert not record["timed_out"] and record["timeout_kind"] is None
