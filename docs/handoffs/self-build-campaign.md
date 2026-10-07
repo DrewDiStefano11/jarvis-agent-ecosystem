@@ -116,3 +116,52 @@ version. Both corrected cases pass in the final 38-case package. This remains
 composite evidence; exact changed-head CI must pass and no failed gate is waived.
 Ruff format/check, frontend typecheck/ESLint/194 tests/build, 1,892-case shard
 coverage and blank migration roundtrip pass. Hosted re-review is still required.
+
+
+## October 7 publication-gate checkpoint
+
+- #89 head `1e45b8fa511a20fccee5d4e8c0048d3ad06affda` independently reviewed
+  clean. Exact-head CI `37529237604` passed every gate except autonomy/aggregate.
+  Autonomy was still passing at 97% when `backend_ci.py` killed it at the fixed
+  1,500-second command wall budget. Logs show no test assertion failure; classify
+  as CI watchdog infrastructure. No waiver/merge-ready claim. Repair separately.
+- CI infrastructure worktree:
+  `C:/Users/DDistefano/.codex/worktrees/backend-ci-inactivity/jarvis-agent-ecosystem`,
+  branch `codex/backend-ci-inactivity`, based on #88 head. Replace accumulated-runtime
+  failure with measured inactivity; preserve per-test guards, descendant cleanup,
+  isolation, all test assertions and exact collected-case coverage.
+- #90 head `ec14824c3f33ef1849320ca6b9450f7bbd8e1ec0` exact-head CI
+  `37529736570` passes every gate, but hosted review found two further P2s: Git mode
+  changes need representation/fingerprints and generated outputs need protection
+  across all repository directory segments. Both are being repaired on #90's branch;
+  final focused planner 66 cases pass. Changed-head CI/review are required again.
+- Active native Git inspection worktree now bases on #89's committed repair. Real
+  production service/HTTP metadata inspection, separate exact authenticated operator
+  approval, source-policy/tool fingerprints, native lease/attempt fencing, bounded
+  read-only process supervision and atomic audit/outbox are implemented. Current
+  full backend run is active; no PR/head or production factory dogfood claim yet.
+- Git metadata accepts ordinary tracked dotfiles (.gitignore/.github/.env.example)
+  through shared lexical validation with repository-specific protection. Original
+  report-workspace hidden/credential-file behavior remains intact. Final focused
+  native Git + original filesystem package: 94 passed/one existing symlink-privilege
+  skip. Source changes during the full run require final focused evidence and
+  changed-head CI, never silent waiver.
+
+
+Final native Git local backend baseline completed with 1,928 passed, two existing
+environment skips and no failures. Its long elapsed time includes an overnight
+host pause; it is not evidence of command inactivity. The final changed native
+Git/workspace/filesystem package subsequently passed 132 cases with one existing
+Windows symlink-privilege skip. Ruff format/lint pass. Final exact-head CI remains
+required because the bounded hidden-path refactor was made during the full run.
+
+A partial real-repository probe used production WorkspaceService and
+GitInspectionService with an isolated temporary control-plane database. It
+measured Jarvis base `7abb488d1b73dcfd4c990519ef1578c2906430db`, base tree
+`b4d574479b3a1900f12c2a4ddbe35c399b788fbb`, 534 ordinary tracked files, and
+inventory digest `031c4a73ed5270f088e1fb3034cb76e973fcae9a003d527d67778bae5492de3b`.
+The primary checkout HEAD remained `4758891354e69c54d2765623aed5234672d4543a`;
+its index hash was unchanged, and native audit readback matched the observation.
+The matching origin evidence is a local tracking ref, not a fresh GitHub fetch.
+This is read-only production-service evidence with fixture operator authority;
+it is not the required end-to-end factory dogfood or workspace materialization.
