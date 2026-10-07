@@ -8,6 +8,7 @@ from app.models.domain import TypedApiResponse
 from app.models.self_build import (
     AbandonWorkspaceRequest,
     ReserveWorkspaceRequest,
+    WorkspaceAbandonPlan,
     WorkspaceIntent,
     WorkspacePlan,
     WorkspaceReservation,
@@ -45,5 +46,16 @@ def abandon(
     return TypedApiResponse(
         data=request.app.state.self_build_workspace_service.abandon(
             runtime_actor, workspace_id, body
+        )
+    )
+
+
+@router.get(
+    "/{workspace_id}/abandon/preview", response_model=TypedApiResponse[WorkspaceAbandonPlan]
+)
+def preview_abandon(workspace_id: str, request: Request, runtime_actor: Actor):
+    return TypedApiResponse(
+        data=request.app.state.self_build_workspace_service.preview_abandon(
+            runtime_actor, workspace_id
         )
     )
