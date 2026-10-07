@@ -282,3 +282,12 @@ e206321, stacked on #91/#89; full frozen backend 2080 passed, two existing envir
 skips, frontend 194/static/build and migration/coverage gates pass. Hosted review
 requested. Actual checkout mutation remains the next milestone, in the separate
 self-build-native-checkout worktree. This is not end-to-end factory acceptance.
+
+Finding 4211821164 at #91 head 9f2f2ea identified Linux rename/restore of Git metadata.
+The repair retains a context-local initial primary/.git/objects namespace baseline
+and compares directory identity plus mtime/ctime before/after every command and
+at completion. Two real rename/restore cases cover .git and objects: Windows
+handles block the replacement; Linux must reject the restored-name attack. All
+59 native Git cases pass locally. Required exact-head Linux CI/re-review remain
+pending; earlier Linux success does not validate these new cases. Cancelled duplicate
+push runs 37684452831 and 37684038816 are not product test failures.

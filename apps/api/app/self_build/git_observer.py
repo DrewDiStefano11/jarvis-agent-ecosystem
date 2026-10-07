@@ -5,6 +5,7 @@ import re
 import stat
 import subprocess
 from contextlib import ExitStack
+from contextvars import ContextVar
 from pathlib import Path
 from threading import Event, Lock, Thread
 from time import monotonic
@@ -18,6 +19,7 @@ from app.tool_execution.filesystem import check_stat, open_directory, repository
 COMMIT = re.compile(r"[a-f0-9]{40}\Z")
 MAX_OUTPUT = 1024 * 1024
 MAX_FILES = 4096
+INSPECTION_METADATA = ContextVar("self_build_git_inspection_metadata", default=None)
 
 
 def fail(code, message):
@@ -115,13 +117,44 @@ class GitObserver:
     def _read(self, policy, operation, base_sha):
         if self.authority_check is not None:
             self.authority_check()
+        metadata_state = self._metadata_state(policy)
+        expected = INSPECTION_METADATA.get()
+        if (
+            expected is not None
+            and expected[0] == policy.primary_root
+            and metadata_state != expected[1]
+        ):
+            fail(
+                "SELF_BUILD_GIT_STATE_CHANGED",
+                "Repository metadata differs from the pinned inspection.",
+            )
         alternate_state = self._alternates_state(policy)
         executable = self._tool(policy)
         with pinned_image(executable, self.executable_hash) as launch:
             result = self._read_image(policy, operation, base_sha, executable, launch)
+        if self._metadata_state(policy) != metadata_state:
+            fail(
+                "SELF_BUILD_GIT_STATE_CHANGED",
+                "Repository metadata changed during the native read.",
+            )
         if self._alternates_state(policy) != alternate_state:
             fail("SELF_BUILD_GIT_STATE_CHANGED", "Object-store metadata changed during the read.")
         return result
+
+    def _metadata_state(self, policy):
+        # Linux directory descriptors do not deny rename. Check the original
+        # namespace identities AND change stamps around each command, retaining
+        # the whole inspection baseline even if names are restored afterwards.
+        try:
+            root = Path(policy.primary_root)
+            result = []
+            for path in (root, root / ".git", root / ".git" / "objects"):
+                info = path.lstat()
+                check_stat(info, directory=True, internal=True)
+                result.append((info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns))
+            return tuple(result)
+        except OSError:
+            fail("SELF_BUILD_GIT_METADATA_INVALID", "Pinned repository metadata is unavailable.")
 
     def _alternates_state(self, policy):
         # Check before and after every fixed read, including info directory change
@@ -285,6 +318,7 @@ class GitObserver:
                     open_directory(stack, path, internal=True)
                     info = path.stat()
                     pinned.append((path, info.st_dev, info.st_ino))
+                metadata_state = self._metadata_state(policy)
                 count = 0
 
                 def walk_error(error):
@@ -316,7 +350,16 @@ class GitObserver:
                                 "SELF_BUILD_GIT_METADATA_UNSAFE",
                                 "External Git object stores are unavailable.",
                             )
-                result = self._inspect(policy, base_sha)
+                token = INSPECTION_METADATA.set((policy.primary_root, metadata_state))
+                try:
+                    result = self._inspect(policy, base_sha)
+                    if self._metadata_state(policy) != metadata_state:
+                        fail(
+                            "SELF_BUILD_GIT_STATE_CHANGED",
+                            "Pinned repository namespace changed during inspection.",
+                        )
+                finally:
+                    INSPECTION_METADATA.reset(token)
                 for path, device, inode in pinned:
                     info = path.lstat()
                     check_stat(info, directory=True, internal=True)

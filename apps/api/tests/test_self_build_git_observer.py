@@ -535,3 +535,46 @@ def test_alternate_store_added_during_read_cannot_supply_approved_objects(
     with pytest.raises(DomainError) as failure:
         observer._read(policy, "base", head)
     assert failure.value.code in {"SELF_BUILD_GIT_METADATA_UNSAFE", "SELF_BUILD_GIT_STATE_CHANGED"}
+
+
+@pytest.mark.parametrize("directory", [".git", ".git/objects"])
+def test_transient_metadata_directory_replacement_is_blocked_or_rejected(
+    repository, tmp_path, monkeypatch, directory
+):
+    root, policy, observer, base, _ = repository
+    original = root / directory
+    parked = tmp_path / "parked-original"
+    external = tmp_path / "external-metadata"
+    shutil.copytree(original, external)
+    native = observer._read_image
+    attempted, blocked = [], []
+
+    def swapped(policy, operation, sha, executable, launch):
+        if operation != "base" or attempted:
+            return native(policy, operation, sha, executable, launch)
+        attempted.append(True)
+        try:
+            original.rename(parked)
+        except PermissionError:
+            # Windows inspection handles deny replacement; Linux must detect
+            # the real successful swap even after restoring every original name.
+            assert os.name == "nt"
+            blocked.append(True)
+            return native(policy, operation, sha, executable, launch)
+        shutil.copytree(external, original)
+        try:
+            return native(policy, operation, sha, executable, launch)
+        finally:
+            displaced = tmp_path / "displaced-copy"
+            original.rename(displaced)
+            parked.rename(original)
+
+    monkeypatch.setattr(observer, "_read_image", swapped)
+    if os.name == "nt":
+        result = observer.inspect(policy, base)
+        assert blocked and result["base_sha"] == base
+    else:
+        with pytest.raises(DomainError) as failure:
+            observer.inspect(policy, base)
+        assert failure.value.code == "SELF_BUILD_GIT_STATE_CHANGED"
+    assert attempted and original.is_dir() and not parked.exists()
