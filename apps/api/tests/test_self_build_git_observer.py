@@ -16,7 +16,17 @@ from app.self_build.policy import RepositoryPolicy
 @pytest.fixture
 def repository(tmp_path):
     executable = shutil.which("git")
-    if executable and os.name == "nt" and Path(executable).parent.name.casefold() in {"cmd", "bin"}:
+    if (
+        executable
+        and os.name == "nt"
+        and (
+            Path(executable).parent.name.casefold() == "cmd"
+            or (
+                Path(executable).parent.name.casefold() == "bin"
+                and Path(executable).parent.parent.name.casefold() not in {"mingw32", "mingw64"}
+            )
+        )
+    ):
         installation = Path(executable).parent.parent
         implementations = [
             installation / family / "bin/git.exe" for family in ("mingw64", "mingw32")
@@ -425,7 +435,7 @@ def test_origin_change_during_inspection_is_not_reported_as_coherent(repository,
     assert failure.value.code == "SELF_BUILD_GIT_STATE_CHANGED"
 
 
-def test_change_between_path_hash_and_image_lock_never_starts_git(
+def test_change_between_path_validation_and_image_lock_never_starts_git(
     repository, tmp_path, monkeypatch
 ):
     from app.self_build import git_observer
@@ -485,3 +495,43 @@ def test_approved_image_stays_immutable_across_launch_boundary(repository, tmp_p
             assert result.stdout.startswith(b"git version ")
     # Windows cleanup releases locks; Linux source replacement was harmless.
     actual.write_bytes(b"replacement after operation")
+
+
+def test_native_read_never_uses_unbounded_path_image_read(repository, monkeypatch):
+    _, policy, observer, head, _ = repository
+
+    def forbidden(self):
+        pytest.fail("executable bytes must come from a bounded non-following descriptor")
+
+    monkeypatch.setattr(Path, "read_bytes", forbidden)
+    assert observer._read(policy, "head", head).decode().strip() == head
+
+
+@pytest.mark.parametrize("remove_after_read", [False, True])
+def test_alternate_store_added_during_read_cannot_supply_approved_objects(
+    repository, tmp_path, monkeypatch, remove_after_read
+):
+    root, policy, observer, head, _ = repository
+    external = tmp_path / "outside-approved-repository"
+    external.mkdir()
+    for bucket in (root / ".git/objects").iterdir():
+        if len(bucket.name) == 2 and bucket.is_dir():
+            target = external / bucket.name
+            target.mkdir()
+            for blob in bucket.iterdir():
+                blob.replace(target / blob.name)
+    alternate = root / ".git/objects/info/alternates"
+    native = observer._read_image
+
+    def changed(policy, operation, base, executable, launch):
+        alternate.write_bytes(external.as_posix().encode() + b"\n")
+        try:
+            return native(policy, operation, base, executable, launch)
+        finally:
+            if remove_after_read:
+                alternate.unlink()
+
+    monkeypatch.setattr(observer, "_read_image", changed)
+    with pytest.raises(DomainError) as failure:
+        observer._read(policy, "base", head)
+    assert failure.value.code in {"SELF_BUILD_GIT_METADATA_UNSAFE", "SELF_BUILD_GIT_STATE_CHANGED"}

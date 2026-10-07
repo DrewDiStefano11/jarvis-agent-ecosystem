@@ -6,7 +6,12 @@ from sqlalchemy import select
 
 from app.core.errors import DomainError
 from app.db.models import AuditEventRow, DevelopmentWorkspaceRow, SystemStateRow, TaskRow
-from app.models.self_build import WorkspaceApproval, WorkspacePlan
+from app.models.self_build import (
+    WorkspaceAbandonApproval,
+    WorkspaceAbandonPlan,
+    WorkspaceApproval,
+    WorkspacePlan,
+)
 from app.self_build.policy import RepositoryPolicies, digest
 from app.self_build.repository import ACTIVE_RUNTIME_STATES, WorkspaceRepository
 
@@ -182,6 +187,13 @@ class WorkspaceService:
                     409,
                 )
             row = self.repository.find(session, plan.runtime_run_id, plan.repository_id)
+            key_owner = session.get(DevelopmentWorkspaceRow, plan.worktree_key)
+            if key_owner is not None and key_owner is not row:
+                raise DomainError(
+                    "SELF_BUILD_WORKSPACE_CONFLICT",
+                    "The generated namespace already belongs to another reservation.",
+                    409,
+                )
             if row is not None:
                 existing = self.repository.contract(row)
                 if existing.plan != plan or row.state != "reserved":
@@ -235,12 +247,124 @@ class WorkspaceService:
                 row, self.repository.reason(session, row, policy_digest)
             )
 
+    def abandon_plan(self, row):
+        reservation = self.repository.contract(row)
+        payload = dict(
+            workspace_id=row.id,
+            workspace_version=row.version if row.state == "reserved" else row.version - 1,
+            workspace=reservation.plan,
+            worker_id=row.worker_id,
+        )
+        provisional = WorkspaceAbandonPlan(**payload, plan_hash="0" * 64)
+        return provisional.model_copy(
+            update={"plan_hash": digest(provisional.model_dump(mode="json", exclude={"plan_hash"}))}
+        )
+
+    def preview_abandon(self, actor, workspace_id):
+        with self.repository.sessions() as session:
+            row = self.repository.lookup(session, workspace_id)
+            self.authorize(actor, row.task_id, session)
+            return self.abandon_plan(row)
+
+    def require_operator(self, actor, plan, session):
+        access = getattr(self.app.state, "remote_control_service", None)
+        if access is None:
+            raise DomainError(
+                "SELF_BUILD_APPROVAL_UNAVAILABLE", "Configure authenticated operator access.", 409
+            )
+        access.access.authorize_in_session(actor, "control", session)
+        self.authorize(actor, plan.task_id, session, write=True)
+        run = self.repository.runtime(session, plan.runtime_run_id)
+        if actor.actor_id == run.agent_id:
+            raise DomainError(
+                "SELF_BUILD_SELF_APPROVAL_DENIED",
+                "The runtime agent cannot approve its workspace.",
+                403,
+            )
+
+    def approve_abandon(self, actor, request):
+        with self.repository.leases._write() as session:
+            row = self.repository.lookup(session, request.workspace_id)
+            plan = self.abandon_plan(row)
+            self.require_operator(actor, plan.workspace, session)
+            if row.state != "reserved" or request.expected_plan_hash != plan.plan_hash:
+                raise DomainError(
+                    "SELF_BUILD_PLAN_CHANGED", "Approve the exact current abandonment plan.", 409
+                )
+            expires = datetime.now(UTC) + timedelta(seconds=request.valid_for_seconds)
+            self.repository.leases._add_event(
+                session,
+                "self_build.workspace_abandon.approved",
+                "Operator approved workspace abandonment",
+                task_id=row.task_id,
+                actor_identity_id=actor.actor_id,
+                payload={"plan": plan.model_dump(mode="json"), "expiresAt": expires.isoformat()},
+            )
+            session.flush()
+            state = session.get(SystemStateRow, 1)
+            event = session.scalar(
+                select(AuditEventRow).where(
+                    AuditEventRow.event_session_id == state.event_session_id,
+                    AuditEventRow.sequence_number == state.current_sequence_number,
+                )
+            )
+            result = WorkspaceAbandonApproval(
+                approval_id=event.id, plan=plan, approved_by=actor.actor_id, expires_at=expires
+            )
+        self.repository.leases.repository.refresh_event_cursor()
+        return result
+
     def abandon(self, actor, workspace_id, request):
         with self.repository.leases._write() as session:
             row = self.repository.lookup(session, workspace_id)
             self.authorize(actor, row.task_id, session, write=True)
             if row.version != request.expected_version:
                 raise DomainError("SELF_BUILD_VERSION_CONFLICT", "Workspace version changed.", 409)
+            plan = self.abandon_plan(row)
+            if plan.plan_hash != request.expected_plan_hash:
+                raise DomainError("SELF_BUILD_PLAN_CHANGED", "Abandonment plan changed.", 409)
+            run = self.repository.runtime(session, row.runtime_run_id)
+            self.repository.leases._require_lease(
+                session, row.task_id, request.worker_id, request.lease_token, datetime.now(UTC)
+            )
+            if (
+                request.worker_id != row.worker_id
+                or digest(request.lease_token) != row.lease_fingerprint
+                or run.state not in ACTIVE_RUNTIME_STATES
+                or self.repository.executor(session, run) != row.worker_id
+            ):
+                raise DomainError(
+                    "SELF_BUILD_RECOVERY_REQUIRED",
+                    "Abandonment requires the original live runtime owner.",
+                    409,
+                )
+            task = session.get(TaskRow, row.task_id)
+            if task is None or task.status != "in_progress":
+                raise DomainError(
+                    "SELF_BUILD_OWNER_INACTIVE", "Abandonment requires an active leased task.", 409
+                )
+            event = session.get(AuditEventRow, request.approval_id)
+            try:
+                payload = event.payload["payload"]
+                expires = datetime.fromisoformat(payload["expiresAt"])
+                valid = (
+                    event.event_type == "self_build.workspace_abandon.approved"
+                    and event.task_id == row.task_id
+                    and event.actor not in {actor.actor_id, run.agent_id}
+                    and WorkspaceAbandonPlan.model_validate(payload["plan"]) == plan
+                    and expires.tzinfo is not None
+                    and expires > datetime.now(UTC)
+                )
+            except (AttributeError, KeyError, TypeError, ValueError):
+                valid = False
+            if not valid:
+                raise DomainError(
+                    "SELF_BUILD_APPROVAL_REQUIRED",
+                    "Current exact operator abandonment approval is required.",
+                    403,
+                )
+            operator = self.runtime_authorizer.authenticate(event.actor)
+            self.require_operator(operator, plan.workspace, session)
             if row.state == "abandoned":
                 return self.repository.contract(row)
             # Abandonment never removes files or releases task/runtime ownership.

@@ -21,6 +21,7 @@ from app.models.agent_runtime import (
 from app.models.identity import AssignPermissionRequest, CreatePermissionRequest
 from app.models.self_build import (
     AbandonWorkspaceRequest,
+    ApproveWorkspaceAbandonRequest,
     ApproveWorkspaceRequest,
     ReserveWorkspaceRequest,
     WorkspaceIntent,
@@ -260,20 +261,19 @@ def test_abandon_is_versioned_and_does_not_touch_files_or_task_lease(workspace):
     file = unrelated / "important.txt"
     file.write_text("preserve")
     reservation = service.reserve(actor, request)
-    result = service.abandon(
-        actor, reservation.workspace_id, AbandonWorkspaceRequest(expected_version=1)
-    )
+    abandon_request = approved_abandon_request(workspace, reservation)
+    result = service.abandon(actor, reservation.workspace_id, abandon_request)
     assert result.state == "abandoned" and result.version == 2
     assert (
         service.abandon(
-            actor, reservation.workspace_id, AbandonWorkspaceRequest(expected_version=2)
+            actor,
+            reservation.workspace_id,
+            abandon_request.model_copy(update={"expected_version": 2}),
         )
         == result
     )
     with pytest.raises(DomainError) as error:
-        service.abandon(
-            actor, reservation.workspace_id, AbandonWorkspaceRequest(expected_version=1)
-        )
+        service.abandon(actor, reservation.workspace_id, abandon_request)
     assert error.value.code == "SELF_BUILD_VERSION_CONFLICT"
     assert file.read_text() == "preserve"
     with app.state.repository.session_factory() as session:
@@ -719,3 +719,179 @@ def test_fresh_identity_approval_conflicts_with_existing_uniqueness_owner(worksp
         )
         assert len(events) == 1
     assert list(__import__("pathlib").Path(policy["worktree_root"]).iterdir()) == []
+
+
+def approved_abandon_request(workspace, reservation):
+    app, actor, service, request, _, _ = workspace
+    operator = app.state.remote_control_service.access.authenticate(
+        "Bearer " + "x" * 48, secure_transport=True
+    )
+    plan = service.preview_abandon(actor, reservation.workspace_id)
+    approval = service.approve_abandon(
+        operator,
+        ApproveWorkspaceAbandonRequest(
+            workspace_id=reservation.workspace_id, expected_plan_hash=plan.plan_hash
+        ),
+    )
+    return AbandonWorkspaceRequest(
+        expected_version=1,
+        expected_plan_hash=plan.plan_hash,
+        approval_id=approval.approval_id,
+        worker_id=request.worker_id,
+        lease_token=request.lease_token,
+    )
+
+
+def test_fresh_alias_with_same_generated_key_conflicts_without_mutation(workspace):
+    app, actor, service, request, _, policy = workspace
+    reservation = service.reserve(actor, request)
+    app.state.settings.self_build_repositories_json = json.dumps({"renamed": policy})
+    intent = WorkspaceIntent(
+        repository_id="renamed", runtime_run_id=request.runtime_run_id, base_sha=request.base_sha
+    )
+    plan = service.preview(actor, intent)
+    assert plan.worktree_key == reservation.workspace_id
+    operator = app.state.remote_control_service.access.authenticate(
+        "Bearer " + "x" * 48, secure_transport=True
+    )
+    approval = service.approve(
+        operator, ApproveWorkspaceRequest(**intent.model_dump(), expected_plan_hash=plan.plan_hash)
+    )
+    with pytest.raises(DomainError) as failure:
+        service.reserve(
+            actor,
+            request.model_copy(
+                update={
+                    "repository_id": "renamed",
+                    "expected_plan_hash": plan.plan_hash,
+                    "approval_id": approval.approval_id,
+                }
+            ),
+        )
+    assert failure.value.code == "SELF_BUILD_WORKSPACE_CONFLICT"
+    with app.state.repository.session_factory() as session:
+        rows = list(session.scalars(select(DevelopmentWorkspaceRow)))
+        assert len(rows) == 1 and rows[0].id == reservation.workspace_id and rows[0].version == 1
+
+
+@pytest.mark.parametrize(
+    "boundary,code",
+    [
+        ("reservation_approval", "SELF_BUILD_APPROVAL_REQUIRED"),
+        ("hash", "SELF_BUILD_PLAN_CHANGED"),
+        ("lease", "TASK_LEASE_LOST"),
+        ("stop", "EMERGENCY_STOP_ACTIVE"),
+        ("expired", "SELF_BUILD_APPROVAL_REQUIRED"),
+    ],
+)
+def test_abandon_requires_exact_operator_approval_and_live_owner(
+    workspace, boundary, code, monkeypatch
+):
+    app, actor, service, request, _, _ = workspace
+    reservation = service.reserve(actor, request)
+    abandonment = approved_abandon_request(workspace, reservation)
+    if boundary == "reservation_approval":
+        abandonment = abandonment.model_copy(update={"approval_id": request.approval_id})
+    elif boundary == "hash":
+        abandonment = abandonment.model_copy(update={"expected_plan_hash": "0" * 64})
+    elif boundary == "lease":
+        abandonment = abandonment.model_copy(update={"lease_token": "wrong"})
+    elif boundary == "stop":
+        from app.db.models import SystemStateRow
+
+        with app.state.task_leases._write() as session:
+            session.get(SystemStateRow, 1).emergency_stop = True
+    else:
+        import app.self_build.service as module
+
+        class Future(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return datetime.now(tz) + timedelta(seconds=1000)
+
+        monkeypatch.setattr(module, "datetime", Future)
+    with pytest.raises(DomainError) as failure:
+        service.abandon(actor, reservation.workspace_id, abandonment)
+    assert failure.value.code == code
+    with app.state.repository.session_factory() as session:
+        row = session.get(DevelopmentWorkspaceRow, reservation.workspace_id)
+        assert row.state == "reserved" and row.version == 1
+        assert not list(
+            session.scalars(
+                select(AuditEventRow).where(
+                    AuditEventRow.event_type == "self_build.workspace.abandoned"
+                )
+            )
+        )
+
+
+def test_abandon_operator_route_and_version_only_request_cannot_grant_authority(workspace):
+    from app.remote_control.router import router
+
+    app, actor, service, request, _, _ = workspace
+    reservation = service.reserve(actor, request)
+    plan = service.preview_abandon(actor, reservation.workspace_id)
+    app.include_router(router)
+    body = ApproveWorkspaceAbandonRequest(
+        workspace_id=reservation.workspace_id, expected_plan_hash=plan.plan_hash
+    ).model_dump(mode="json")
+    operator_headers = {"X-Jarvis-Actor-Id": app.state.remote_control_service.access.actor_id}
+    actor_headers = {"X-Jarvis-Actor-Id": actor.actor_id}
+    path = "/api/remote/self-build/workspaces/abandon/approve"
+    with TestClient(app, base_url="https://testserver") as client:
+        assert client.post(path, json=body, headers=operator_headers).status_code == 401
+        response = client.post(path, json=body, headers={"Authorization": "Bearer " + "x" * 48})
+        assert response.status_code == 200, response.text
+        assert (
+            client.post(
+                f"/api/self-build/workspaces/{reservation.workspace_id}/abandon",
+                json={"expected_version": 1},
+                headers=actor_headers,
+            ).status_code
+            == 422
+        )
+        assert service.read(actor, reservation.workspace_id).state == "reserved"
+        approved = AbandonWorkspaceRequest(
+            expected_version=1,
+            expected_plan_hash=plan.plan_hash,
+            approval_id=response.json()["data"]["approval_id"],
+            worker_id=request.worker_id,
+            lease_token=request.lease_token,
+        )
+        response = client.post(
+            f"/api/self-build/workspaces/{reservation.workspace_id}/abandon",
+            json=approved.model_dump(mode="json"),
+            headers=actor_headers,
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["data"]["state"] == "abandoned"
+        assert (
+            client.post(
+                "http://testserver" + path,
+                json=body,
+                headers={"Authorization": "Bearer " + "x" * 48},
+            ).status_code
+            == 403
+        )
+
+
+def test_abandon_rechecks_operator_permissions(workspace):
+    from app.db.models import AgentPermissionAssignmentRow
+
+    app, actor, service, request, _, _ = workspace
+    reservation = service.reserve(actor, request)
+    approved = approved_abandon_request(workspace, reservation)
+    operator_id = app.state.remote_control_service.access.actor_id
+    with app.state.task_leases._write() as session:
+        assignments = list(
+            session.scalars(
+                select(AgentPermissionAssignmentRow).where(
+                    AgentPermissionAssignmentRow.agent_id == operator_id
+                )
+            )
+        )
+        for assignment in assignments:
+            assignment.revoked_at = datetime.now(UTC)
+    with pytest.raises(DomainError):
+        service.abandon(actor, reservation.workspace_id, approved)
+    assert service.read(actor, reservation.workspace_id).state == "reserved"

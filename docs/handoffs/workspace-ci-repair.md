@@ -46,3 +46,12 @@ reviewed CI content plus its step-budget repair, preserving all human-merged
 validation planner files and combined shard assignments. Main/workspace/CI
 integration: 168 tests pass, Ruff lint/format and 1,989-case collection coverage
 pass. No merge into main was performed; new-head hosted checks required.
+
+Additional findings 4207573276 and 4211289931: generated namespace ownership is
+checked independently of alias uniqueness; canonical-identity-preserving alias
+changes fail with SELF_BUILD_WORKSPACE_CONFLICT instead of a primary-key error.
+Abandonment now requires separate exact operator approval and the original live
+lease/runtime owner, with current RBAC, expiry, stop and version checks. Existing
+reservation approval and version-only requests cannot authorize abandonment.
+Public preview/approval contracts and docs advance together. New exact-head CI
+and independent re-review remain required; no merge-ready claim is made.

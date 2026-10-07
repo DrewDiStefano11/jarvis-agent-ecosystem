@@ -29,7 +29,9 @@ The typed loopback HTTP API reuses `X-Jarvis-Actor-Id` and the existing envelope
 - `GET /api/self-build/workspaces/{id}`: authorized durable ownership and recovery
   state, even if configuration later changes or disables Self-Build.
 - `POST /api/self-build/workspaces/{id}/abandon`: explicit workspace permission and
-  expected version record abandonment. This never deletes files or a branch,
+  expected version, exact abandonment-plan hash, separate operator approval and the
+  original live worker lease record abandonment. Version-only requests fail validation.
+  This never deletes files or a branch,
   revokes a lease, resumes a run or approves subsequent tools.
 
 Operator approval is issued only by `POST /api/remote/self-build/workspaces/approve`
@@ -64,3 +66,12 @@ verified repository/base identity, root marker/containment, uncertain-acknowledg
 recovery, current authority fencing and safe cleanup. Filesystem mutation remains
 unavailable until that path and its Windows regressions are implemented.
 
+
+Abandonment has its own immutable preview at `GET /api/self-build/workspaces/{id}/abandon/preview`
+and separate HTTPS bearer-authenticated approval at `POST /api/remote/self-build/workspaces/abandon/approve`.
+Reservation approval cannot authorize abandonment. Current operator permissions,
+expiry, exact stored plan/version, original lease fingerprint and live runtime executor
+are rechecked in the native transaction. Replaying the acknowledged tombstone requires
+the same approved intent and original live owner. No file deletion or lease release occurs.
+Reservation checks both the native (run, alias) uniqueness owner and generated namespace
+owner, so alias changes that preserve canonical identity return an explicit conflict.

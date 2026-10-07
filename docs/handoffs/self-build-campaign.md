@@ -267,3 +267,18 @@ both observer/service fixture failures locally with bin first on PATH, then fixe
 the fixture to select the actual installed binary for either standard launcher.
 Production configuration continues to reject both launchers; no security boundary
 or assertion is weakened. New exact-head CI required.
+
+October 7 additional #91 repairs: findings 4207424649, 4211193125 and 4211293743.
+Removed the preliminary unbounded image read; bounded immutable-image acquisition
+is the only executable-byte read. Fixed reads verify object-info/alternates before
+and after execution, detecting persistent and transient external-store injection.
+Both regressions reproduced unsafe acceptance on the old observer using actual Git.
+Windows fixture setup accepts an already-direct implementation path. Five targeted
+cases (including direct mingw64/bin PATH) and all 57 observer/service cases pass.
+New exact-head CI/re-review required. No threads are resolved on assumption.
+
+PR #93 contains internal durable creation intent/native checkpoint preparation at
+e206321, stacked on #91/#89; full frozen backend 2080 passed, two existing environment
+skips, frontend 194/static/build and migration/coverage gates pass. Hosted review
+requested. Actual checkout mutation remains the next milestone, in the separate
+self-build-native-checkout worktree. This is not end-to-end factory acceptance.

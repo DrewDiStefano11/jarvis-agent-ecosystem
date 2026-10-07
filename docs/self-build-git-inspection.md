@@ -107,3 +107,14 @@ and [Linux sealed memfd contract](https://man7.org/linux/man-pages/man2/memfd_cr
 The sanitized origin identity is repeated alongside HEAD and the local tracking
 ref before returning evidence. Any observed change rejects the mixed observation;
 this coherence check remains local evidence rather than a fresh remote fetch.
+
+Native executable bytes are read only through the bounded nonfollowing immutable-image
+primitive. Preliminary path validation never uses an unbounded `Path.read_bytes`.
+Every fixed Git read checks the pinned object-info directory and rejects nonempty
+alternates before and after execution. Directory identity/change stamps also detect
+an alternate file introduced and removed during a read; such evidence cannot be
+approved. Real regressions move required objects outside the registered repository
+and prove that persistent and transient alternate-store injection fail closed.
+Windows fixtures preserve an already-direct mingw32/bin or mingw64/bin executable;
+only standard cmd/bin launchers are translated for test setup. Production still
+requires the operator to configure and hash the actual native implementation.
