@@ -60,6 +60,36 @@ class WorkspaceReservation(Contract):
 
 class AbandonWorkspaceRequest(Contract):
     expected_version: int = Field(ge=1)
+    expected_plan_hash: Digest
+    approval_id: Identifier
+    worker_id: Identifier
+    lease_token: str = Field(min_length=1, max_length=200, repr=False)
+
+
+class WorkspaceAbandonPlan(Contract):
+    schema_version: Literal["1.0"] = "1.0"
+    operation: Literal["workspace.abandon"] = "workspace.abandon"
+    workspace_id: Identifier
+    workspace_version: int = Field(ge=1)
+    workspace: WorkspacePlan
+    worker_id: Identifier
+    # Tombstoning preserves files and task/runtime ownership.
+    removes_files: Literal[False] = False
+    releases_lease: Literal[False] = False
+    plan_hash: Digest
+
+
+class ApproveWorkspaceAbandonRequest(Contract):
+    workspace_id: Identifier
+    expected_plan_hash: Digest
+    valid_for_seconds: int = Field(default=900, ge=1, le=3600)
+
+
+class WorkspaceAbandonApproval(Contract):
+    approval_id: Identifier
+    plan: WorkspaceAbandonPlan
+    approved_by: Identifier
+    expires_at: datetime
 
 
 class ApproveWorkspaceRequest(WorkspaceIntent):

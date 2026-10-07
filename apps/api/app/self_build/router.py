@@ -13,6 +13,7 @@ from app.models.git_inspection import (
 from app.models.self_build import (
     AbandonWorkspaceRequest,
     ReserveWorkspaceRequest,
+    WorkspaceAbandonPlan,
     WorkspaceIntent,
     WorkspacePlan,
     WorkspaceReservation,
@@ -83,5 +84,16 @@ def read_inspection(workspace_id: str, inspection_id: str, request: Request, run
     return TypedApiResponse(
         data=request.app.state.self_build_git_service.read(
             runtime_actor, workspace_id, inspection_id
+        )
+    )
+
+
+@router.get(
+    "/{workspace_id}/abandon/preview", response_model=TypedApiResponse[WorkspaceAbandonPlan]
+)
+def preview_abandon(workspace_id: str, request: Request, runtime_actor: Actor):
+    return TypedApiResponse(
+        data=request.app.state.self_build_workspace_service.preview_abandon(
+            runtime_actor, workspace_id
         )
     )
