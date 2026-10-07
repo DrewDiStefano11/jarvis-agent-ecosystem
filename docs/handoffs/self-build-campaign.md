@@ -165,3 +165,32 @@ its index hash was unchanged, and native audit readback matched the observation.
 The matching origin evidence is a local tracking ref, not a fresh GitHub fetch.
 This is read-only production-service evidence with fixture operator authority;
 it is not the required end-to-end factory dogfood or workspace materialization.
+
+
+PR #91 published on branch `codex/self-build-git-inspection`, head
+`3e2abe60d569c2bb9d34ba63005cc3b060369ba0`, stacked on #89. Independent
+review found P1 `4206830985`: Git replacement refs could substitute an approved
+commit's tree. A real `git replace` regression reproduced this. Every fixed read
+now disables replacement objects through global argv and environment; implementation
+policy hashing invalidates earlier approvals. Targeted validation and changed-head
+review/CI are required before merge-ready handoff.
+
+PR #92 is the independent CI inactivity repair, initial head
+`7e2ad954b8fd318a49f1976336662d3adc6e89d9`; final-output timestamp review
+repair is underway. PR #90 advanced to `c87b1e501914bc704febb608171f71d217c5fd71`
+with complete packaged .gitignore output-policy parity and 92 passing regressions.
+Both exact-head CI and review remain required. #88 merged on main `1b02bca`.
+
+Next checkout worktree is attached at
+`C:/Users/DDistefano/.codex/worktrees/self-build-checkout/jarvis-agent-ecosystem`,
+branch `codex/self-build-checkout`, based on #91's initial head. No native creation
+capability is exposed yet. Its next action is integrating the reviewed object-identity
+fix before implementing durable creation intent, native checkpoints, namespace
+ownership, filter-free bounded blob materialization and crash-resume verification.
+
+Final #91 replacement-reference repair validation: 133 Git/workspace/filesystem
+cases pass, one existing Windows symlink-privilege skip; Ruff format/lint and
+1,936-case collection coverage pass. An initial focused invocation from repository
+root hit the migration test's relative script location; rerunning from the supported
+apps/api directory passed without a test or application change. Latest delta remains
+focused evidence; new-head full CI and independent review are required.

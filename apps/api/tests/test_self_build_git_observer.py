@@ -321,3 +321,19 @@ def test_committed_credentials_or_runtime_data_fail_inspection(repository, path)
     git("update-ref", "refs/remotes/origin/main", head)
     with pytest.raises(DomainError):
         observer.inspect(policy, head)
+
+
+def test_replacement_refs_cannot_change_the_approved_base_tree(repository):
+    root, policy, observer, base, git = repository
+    expected = observer.inspect(policy, base)
+    (root / "replacement.txt").write_text("unapproved replacement tree\n")
+    git("add", "replacement.txt")
+    git("commit", "-m", "replacement fixture")
+    replacement = git("rev-parse", "HEAD")
+    git("replace", base, replacement)
+    assert git("rev-parse", base + "^{tree}") != expected["base_tree_sha"]
+    measured = observer.inspect(policy, base)
+    assert measured["base_sha"] == base
+    assert measured["base_tree_sha"] == expected["base_tree_sha"]
+    assert measured["inventory_digest"] == expected["inventory_digest"]
+    assert measured["file_count"] == 1

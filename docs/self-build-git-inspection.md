@@ -75,3 +75,8 @@ This is an A/D inspection increment, not the complete development command journa
 Per-command measured artifacts, worktree creation intent/acknowledgement recovery,
 source edits, bounded test execution and native publication remain subsequent work.
 No production Self-Build dogfood/merge-ready factory claim is made yet.
+
+Every read disables Git replacement-object semantics through both the global
+`--no-replace-objects` option and `GIT_NO_REPLACE_OBJECTS=1`. A repository's
+`refs/replace` cannot make an approved commit SHA describe a replacement tree.
+This policy change invalidates earlier inspection approvals.

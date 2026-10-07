@@ -131,11 +131,13 @@ class GitObserver:
             GIT_CONFIG_GLOBAL=os.devnull,
             GIT_OPTIONAL_LOCKS="0",
             GIT_NO_LAZY_FETCH="1",
+            GIT_NO_REPLACE_OBJECTS="1",
             GIT_TERMINAL_PROMPT="0",
             LC_ALL="C",
         )
         argv = [
             executable,
+            "--no-replace-objects",
             "-c",
             "core.fsmonitor=false",
             "-c",
