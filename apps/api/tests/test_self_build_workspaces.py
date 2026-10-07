@@ -670,3 +670,49 @@ def test_runtime_ownership_lineage_tampering_fails_closed(workspace, field, valu
     with pytest.raises(DomainError) as failure:
         service.reserve(actor, request)
     assert failure.value.code == "SELF_BUILD_LINEAGE_INVALID"
+
+
+def test_fresh_identity_approval_conflicts_with_existing_uniqueness_owner(workspace):
+    app, actor, service, request, _, policy = workspace
+    reservation = service.reserve(actor, request)
+    app.state.settings.self_build_repositories_json = json.dumps(
+        {"jarvis": policy | {"repository_identity": "github.com/example/renamed"}}
+    )
+    intent = WorkspaceIntent(
+        repository_id=request.repository_id,
+        runtime_run_id=request.runtime_run_id,
+        base_sha=request.base_sha,
+    )
+    fresh = service.preview(actor, intent)
+    assert fresh.worktree_key != reservation.workspace_id
+    operator = app.state.remote_control_service.access.authenticate(
+        "Bearer " + "x" * 48, secure_transport=True
+    )
+    approval = service.approve(
+        operator,
+        ApproveWorkspaceRequest(
+            **intent.model_dump(),
+            expected_plan_hash=fresh.plan_hash,
+        ),
+    )
+    fresh_request = request.model_copy(
+        update={
+            "expected_plan_hash": fresh.plan_hash,
+            "approval_id": approval.approval_id,
+        }
+    )
+    with pytest.raises(DomainError) as failure:
+        service.reserve(actor, fresh_request)
+    assert failure.value.code == "SELF_BUILD_WORKSPACE_CONFLICT"
+    with app.state.repository.session_factory() as session:
+        rows = list(session.scalars(select(DevelopmentWorkspaceRow)))
+        assert len(rows) == 1 and rows[0].id == reservation.workspace_id
+        events = list(
+            session.scalars(
+                select(AuditEventRow).where(
+                    AuditEventRow.event_type == "self_build.workspace.reserved"
+                )
+            )
+        )
+        assert len(events) == 1
+    assert list(__import__("pathlib").Path(policy["worktree_root"]).iterdir()) == []
