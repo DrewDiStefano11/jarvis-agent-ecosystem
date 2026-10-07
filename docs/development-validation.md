@@ -65,3 +65,12 @@ untrusted candidate plans and pass them to both calls. Defaults are broad tests 
 no optional browser request; omitting inputs for a focused/explicit-browser plan
 fails closed. Database blocking includes `.sqlite`, `.sqlite3` and generic WAL,
 SHM and journal sidecars, including supervisor backup formats.
+
+
+Exact file changes also require before/after Git modes (`100644`, `100755`,
+`120000`, `160000`) paired with content presence. Equal blob bytes with changed
+mode are a real delta and change state/scope fingerprints. Unsupported symlink or
+Git-link transitions are representable but blocked; an observer must never omit
+them to claim an unchanged workspace. Generated `dist`, `build`, `coverage`, cache,
+dependency, backup and runtime-data directory segments are blocked across the
+repository, following the integrity gate rather than only the web output paths.

@@ -19,13 +19,21 @@ from app.models.development_validation import (
 )
 
 
+def file_change(**values):
+    return FileChange(
+        **values,
+        before_mode="100644" if values["before_hash"] is not None else None,
+        after_mode="100644" if values["after_hash"] is not None else None,
+    )
+
+
 def state(*paths, head="a", content="c"):
     return CodeState(
         repository_identity="github.com/example/jarvis",
         head_sha=head * 40,
         base_sha="b" * 40,
         changes=tuple(
-            FileChange(path=path, before_hash="d" * 64, after_hash=content * 64) for path in paths
+            file_change(path=path, before_hash="d" * 64, after_hash=content * 64) for path in paths
         ),
     )
 
@@ -113,7 +121,7 @@ def test_policy_or_unknown_code_changes_cannot_reuse_old_component_pass(path):
     before = plan_validation(old, boundary="publication")
     current = CodeState(
         **old.model_dump(exclude={"changes"}),
-        changes=(*old.changes, FileChange(path=path, before_hash=None, after_hash="f" * 64)),
+        changes=(*old.changes, file_change(path=path, before_hash=None, after_hash="f" * 64)),
     )
     after = plan_validation(current, boundary="publication")
     assert not assess_validation(current, after, evidence(before)).ready
@@ -126,7 +134,7 @@ def test_unrelated_backend_change_preserves_iteration_frontend_evidence_only():
         **old.model_dump(exclude={"changes"}),
         changes=(
             *old.changes,
-            FileChange(
+            file_change(
                 path="apps/api/app/services/tasks.py", before_hash=None, after_hash="f" * 64
             ),
         ),
@@ -239,8 +247,8 @@ def test_untracked_and_deleted_changes_and_case_collisions_are_explicit():
         head_sha="a" * 40,
         base_sha="b" * 40,
         changes=(
-            FileChange(path="new.py", before_hash=None, after_hash="c" * 64),
-            FileChange(path="old.py", before_hash="d" * 64, after_hash=None),
+            file_change(path="new.py", before_hash=None, after_hash="c" * 64),
+            file_change(path="old.py", before_hash="d" * 64, after_hash=None),
         ),
     )
     assert len(code.changes) == 2
@@ -336,3 +344,94 @@ def test_self_rehashed_derivation_cannot_replace_trusted_policy(mutation):
         )
     with pytest.raises(ValueError):
         assess_validation(code, trusted, evidence(trusted))
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "dist/bundle.js",
+        "coverage/report.json",
+        "apps/api/dist/package.whl",
+        "apps/api/build/generated.py",
+        "packages/example/coverage/report.json",
+        "package.egg-info/PKG-INFO",
+        "apps/api/__pycache__/cached.pyc",
+    ],
+)
+def test_generated_outputs_are_blocked_everywhere(path):
+    code = state(path)
+    plan = plan_validation(code, boundary="publication")
+    assert plan.blocked_paths == (path,)
+    assert not assess_validation(code, plan, evidence(plan)).ready
+
+
+def test_mode_only_change_is_exact_state_and_invalidates_scope_evidence():
+    content_hash = "c" * 64
+    old = CodeState(
+        repository_identity="github.com/example/jarvis",
+        head_sha="a" * 40,
+        base_sha="b" * 40,
+        changes=(
+            FileChange(
+                path="apps/api/app/main.py",
+                before_hash=content_hash,
+                after_hash=content_hash,
+                before_mode="100755",
+                after_mode="100644",
+            ),
+        ),
+    )
+    before = plan_validation(old)
+    mode_change = FileChange(
+        path="apps/api/app/main.py",
+        before_hash=content_hash,
+        after_hash=content_hash,
+        before_mode="100644",
+        after_mode="100755",
+    )
+    current = CodeState(**old.model_dump(exclude={"changes"}), changes=(mode_change,))
+    after = plan_validation(current)
+    assert mode_change.before_hash == mode_change.after_hash
+    assert after.code_state_hash != before.code_state_hash
+    assert "backend_tests" in assess_validation(current, after, evidence(before)).stale
+
+
+def test_same_blob_symlink_transition_is_represented_but_blocked():
+    content_hash = "c" * 64
+    change = FileChange(
+        path="apps/api/app/main.py",
+        before_hash=content_hash,
+        after_hash=content_hash,
+        before_mode="100644",
+        after_mode="120000",
+    )
+    code = CodeState(
+        repository_identity="github.com/example/jarvis",
+        head_sha="a" * 40,
+        base_sha="b" * 40,
+        changes=(change,),
+    )
+    plan = plan_validation(code, boundary="publication")
+    assert plan.blocked_paths == (change.path,)
+    assert not assess_validation(code, plan, evidence(plan)).ready
+
+
+@pytest.mark.parametrize(
+    "before_hash,before_mode,after_hash,after_mode",
+    [
+        (None, "100644", "c" * 64, "100644"),
+        ("c" * 64, None, None, None),
+        ("c" * 64, "100644", "c" * 64, "100644"),
+    ],
+)
+def test_mode_presence_and_unchanged_pairs_fail_closed(
+    before_hash, before_mode, after_hash, after_mode
+):
+    with pytest.raises(ValidationError):
+        FileChange(
+            path="example.py",
+            before_hash=before_hash,
+            before_mode=before_mode,
+            after_hash=after_hash,
+            after_mode=after_mode,
+        )

@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 Digest = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 Commit = Annotated[str, Field(pattern=r"^[a-f0-9]{40}$")]
+GitMode = Literal["100644", "100755", "120000", "160000"]
 Gate = Literal[
     "backend_ruff",
     "backend_tests",
@@ -60,13 +61,19 @@ class FileChange(Contract):
     path: str
     before_hash: Digest | None
     after_hash: Digest | None
+    before_mode: GitMode | None
+    after_mode: GitMode | None
 
     _path = field_validator("path", mode="before")(checked_path)
 
     @model_validator(mode="after")
     def actual_change(self):
-        if self.before_hash == self.after_hash:
-            raise ValueError("file change must have different before/after hashes")
+        if (self.before_hash is None) != (self.before_mode is None) or (
+            self.after_hash is None
+        ) != (self.after_mode is None):
+            raise ValueError("content and Git mode must agree on file presence")
+        if (self.before_hash, self.before_mode) == (self.after_hash, self.after_mode):
+            raise ValueError("file change must change content or Git mode")
         return self
 
 

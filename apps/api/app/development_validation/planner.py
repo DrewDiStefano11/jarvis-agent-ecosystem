@@ -131,14 +131,52 @@ def plan_validation(
         path
         for path in paths
         if any(
-            part.casefold() in {".git", ".aws", ".ssh", ".codex", ".venv", "node_modules"}
+            part.casefold()
+            in {
+                ".git",
+                ".aws",
+                ".ssh",
+                ".codex",
+                ".venv",
+                "node_modules",
+                "dist",
+                "build",
+                "coverage",
+                "data",
+                "__pycache__",
+                ".pytest_cache",
+                ".ruff_cache",
+                ".pnpm-store",
+                "runtime-supervisor",
+                "backups",
+            }
+            or part.casefold().endswith(".egg-info")
             or (part.casefold().startswith(".env") and part.casefold() != ".env.example")
             for part in path.split("/")
         )
         or path.casefold().endswith(
-            (".db", ".sqlite", ".sqlite3", "-wal", "-shm", "-journal", ".pem", ".pfx", ".kdbx")
+            (
+                ".db",
+                ".sqlite",
+                ".sqlite3",
+                "-wal",
+                "-shm",
+                "-journal",
+                ".pem",
+                ".pfx",
+                ".kdbx",
+                ".pyc",
+                ".tsbuildinfo",
+            )
         )
-        or path.startswith(("apps/web/dist/", "apps/web/coverage/"))
+        or any(
+            change.path == path
+            and (
+                change.before_mode in {"120000", "160000"}
+                or change.after_mode in {"120000", "160000"}
+            )
+            for change in state.changes
+        )
     )
     gates = {"repository_integrity"}
     if boundary == "publication":

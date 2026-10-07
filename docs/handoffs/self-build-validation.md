@@ -46,3 +46,24 @@ two existing environment skips (964.43 seconds). Ruff format/check, frontend
 typecheck/ESLint/194 Vitest tests/build, blank migration roundtrip and 1,908-case
 shard coverage pass. This supersedes the initial composite local baseline for the
 planner repair. Exact changed-head CI and hosted re-review remain required.
+
+
+## Second review repair — October 7, 2026
+
+PR #90 head `ec14824c3f33ef1849320ca6b9450f7bbd8e1ec0` passed all gates in
+CI run `37529736570`, but hosted review found two further P2 issues:
+`4200360497` (missing Git modes) and `4200360499` (generated outputs outside
+web paths). Those findings are repaired together: before/after content presence
+and Git modes are required, mode-only deltas change state and component
+fingerprints, and symlink/Git-link transitions block assessment. Generated build,
+coverage, dependency, cache, backup and runtime-data directories block publication
+wherever they occur in the repository.
+
+All 66 focused regressions pass, including an evidence-staleness scenario where
+only the modes differ between snapshots. Full isolated backend validation passed: 1,918 tests, two existing environment
+skips (926.36 seconds). Final Ruff format/lint and 1,920-case shard coverage pass;
+blank migrations pass. Changed-head CI and independent review are required before
+merge-ready handoff.
+The earlier green CI is evidence for its own head only. No merge attempted.
+
+Final frontend rerun: typecheck, ESLint, 194 Vitest tests and production build pass.
