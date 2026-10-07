@@ -37,7 +37,7 @@
     "tests/test_task_projects.py",
     "tests/test_tool_execution.py"
   ],
-  "models": [
+  "models": ["tests/test_development_validation.py",
     "tests/test_agent_runtime_checkpoints.py",
     "tests/test_agent_runtime_parent_authorization.py",
     "tests/test_agent_runtime_recovery.py",
