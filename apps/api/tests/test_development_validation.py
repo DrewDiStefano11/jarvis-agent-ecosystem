@@ -435,3 +435,93 @@ def test_mode_presence_and_unchanged_pairs_fail_closed(
             after_hash=after_hash,
             after_mode=after_mode,
         )
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".local/backend-ci/runtime/pytest.log",
+        "apps/api/.local/production-acceptance/results.json",
+        ".coverage",
+        "reports/worker.pid",
+        "reports/upload.partial",
+        "jarvis-diagnostic.json",
+        "jarvis-diagnostic.md",
+        "model-qualification.json",
+        "model-qualification-summary.md",
+        "reports/profile-runtime.json",
+        "apps/web/public/mockServiceWorker.js",
+        "apps/web/vite.config.js",
+        "apps/web/vite.config.d.ts",
+        "apps/web/public/assets/office/office-8192x5460.png",
+        "apps/web/public/assets/office/sprites/generated/agent-sheet-01.png",
+        "apps/web/public/assets/office/sprites/generated/agent-sheet-06.png",
+    ],
+)
+def test_repository_declared_generated_outputs_never_become_ready(path):
+    code = state(path)
+    plan = plan_validation(code, boundary="publication")
+    assert plan.blocked_paths == (path,)
+    assert not assess_validation(code, plan, evidence(plan)).ready
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".gitignore",
+        ".env.example",
+        "apps/web/vite.config.ts",
+        "apps/web/public/assets/office/sprites/generated/manifest.json",
+        "docs/model-qualification.md",
+    ],
+)
+def test_output_policy_keeps_legitimate_source_files_available(path):
+    assert plan_validation(state(path), boundary="publication").blocked_paths == ()
+
+
+def test_all_repository_ignore_rules_are_enforced():
+    from pathlib import Path
+
+    from app.development_validation.planner import IGNORE_PATTERNS, ignored_output
+
+    repository = Path(__file__).resolve().parents[3]
+    declared = tuple(
+        line.strip().casefold()
+        for line in (repository / ".gitignore").read_text().splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    )
+    assert IGNORE_PATTERNS == declared
+    for pattern in declared:
+        sample = pattern.replace("*", "sample").strip("/")
+        if pattern.endswith("/"):
+            sample += "/artifact.json"
+        assert ignored_output(sample), pattern
+        assert plan_validation(state(sample), boundary="publication").blocked_paths == (sample,)
+
+
+@pytest.mark.parametrize("rule", ["new-output/", "!dist/allowed.js", "**/output/", "bad\\rule"])
+def test_changed_or_unsupported_trusted_output_policy_cannot_reuse_evidence(tmp_path, rule):
+    import runpy
+    from pathlib import Path
+
+    from app.development_validation import planner
+
+    copied = tmp_path / "apps/api/app/development_validation/planner.py"
+    copied.parent.mkdir(parents=True)
+    copied.write_text(Path(planner.__file__).read_text())
+    original = runpy.run_path(str(copied))
+    assert original["POLICY_DIGEST"] == planner.POLICY_DIGEST
+    copied.write_text(
+        copied.read_text().replace("IGNORE_PATTERNS = (", f"IGNORE_PATTERNS = (\n    {rule!r},")
+    )
+    if rule == "new-output/":
+        changed = runpy.run_path(str(copied))
+        assert changed["POLICY_DIGEST"] != original["POLICY_DIGEST"]
+        assert changed["ignored_output"]("new-output/artifact.json")
+        code = state("apps/api/app/main.py")
+        previous = original["plan_validation"](code)
+        current = changed["plan_validation"](code)
+        assert not changed["assess_validation"](code, current, evidence(previous)).ready
+    else:
+        with pytest.raises(ValueError, match="output policy"):
+            runpy.run_path(str(copied))

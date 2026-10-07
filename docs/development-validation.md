@@ -74,3 +74,14 @@ Git-link transitions are representable but blocked; an observer must never omit
 them to claim an unchanged workspace. Generated `dist`, `build`, `coverage`, cache,
 dependency, backup and runtime-data directory segments are blocked across the
 repository, following the integrity gate rather than only the web output paths.
+
+The reviewed packaged policy mirrors every positive output rule in Jarvis's
+`.gitignore`; a regression requires exact parity. These rules are also enforced, including `.local` evidence, diagnostic/qualification files,
+PID/partial/profile outputs, generated Vite files and explicitly ignored office
+assets. They are included in the policy fingerprint; changing a packaged rule invalidates
+previous evidence. Editing `.gitignore` requires broad validation and the parity
+regression rejects policy drift. Candidate workspace/model content cannot supply
+these rules, and deployment does not require reading a checkout-root policy file.
+Matching preserves root-relative paths and basename/directory semantics without
+running Git; unsupported negation or recursive rules fail closed for review.
+Existing credential/database protection remains stricter than the ignore list.

@@ -67,3 +67,23 @@ merge-ready handoff.
 The earlier green CI is evidence for its own head only. No merge attempted.
 
 Final frontend rerun: typecheck, ESLint, 194 Vitest tests and production build pass.
+
+
+## Complete generated-output boundary repair
+
+Hosted review of `3429c6f7fcaabdbd20bed6cf655651eeb42d7d27` found P2
+`4206790287`: repository-declared `.local` evidence and explicitly ignored generated
+assets still escaped protection. The packaged positive output policy now mirrors
+every current `.gitignore` rule; a regression requires exact parity, and unsupported
+negation/recursive rules fail closed for explicit review. Basename/directory and
+root-relative semantics are preserved. Model/candidate workspace content cannot
+replace this definition. Policy changes invalidate evidence, while `.gitignore`
+edits require broad gates and cannot pass the parity test without a reviewed update.
+
+Final focused planner: 92 passed, including every declared output, legitimate source
+exceptions, changed-policy staleness and unsupported-rule rejection. Ruff format/lint
+and 1,946-case shard coverage pass. The prior mode-repair full local backend remains
+1,918 passed/two existing environment skips; latest delta is focused validation,
+not a new uninterrupted full run. Frontend 194 tests/typecheck/lint/build and blank
+migrations are unchanged and passed. New-head CI and independent review required;
+no merge-ready claim or waiver.

@@ -1,6 +1,7 @@
 """Jarvis repository validation policy. Never grant commands or waive a failed gate."""
 
 import json
+from fnmatch import fnmatchcase
 from hashlib import sha256
 from itertools import islice
 from pathlib import Path
@@ -13,6 +14,73 @@ from app.models.development_validation import (
     ValidationPlan,
     checked_path,
 )
+
+# Reviewed Jarvis output policy; regression tests enforce exact .gitignore parity.
+# Candidate workspaces and model payloads cannot replace this packaged definition.
+IGNORE_PATTERNS = (
+    ".env",
+    ".venv/",
+    ".local/",
+    "__pycache__/",
+    ".pytest_cache/",
+    ".ruff_cache/",
+    "*.pyc",
+    "*.db",
+    "*.db-shm",
+    "*.db-wal",
+    "data/",
+    "node_modules/",
+    ".pnpm-store/",
+    "*.egg-info/",
+    "*.tsbuildinfo",
+    "dist/",
+    "coverage/",
+    ".coverage",
+    "runtime-supervisor/",
+    "backups/",
+    "*.pid",
+    "*.partial",
+    "jarvis-diagnostic.json",
+    "jarvis-diagnostic.md",
+    "model-qualification.json",
+    "model-qualification-summary.md",
+    "profile-*.json",
+    "apps/web/public/mockserviceworker.js",
+    "apps/web/vite.config.js",
+    "apps/web/vite.config.d.ts",
+    "apps/web/public/assets/office/office-8192x5460.png",
+    "apps/web/public/assets/office/sprites/generated/agent-sheet-01.png",
+    "apps/web/public/assets/office/sprites/generated/agent-sheet-06.png",
+)
+if len(IGNORE_PATTERNS) > 128 or any(
+    pattern.startswith("!") or "\\" in pattern or "**" in pattern for pattern in IGNORE_PATTERNS
+):
+    raise ValueError("repository output policy needs explicit supported matching rules")
+
+
+def ignored_output(path):
+    """Match the repository's bounded positive ignore rules without running Git.
+
+    Basename rules apply at any depth; slash-containing rules are root-relative.
+    Directory matches protect descendants. Stars never cross directory segments.
+    Unsupported negation/recursive patterns fail closed at policy loading.
+    """
+    parts = path.casefold().split("/")
+    for pattern in IGNORE_PATTERNS:
+        directory = pattern.endswith("/")
+        rooted = pattern.startswith("/") or "/" in pattern.rstrip("/")
+        rule = pattern.strip("/").split("/")
+        candidates = parts[:-1] if directory else parts
+        if rooted:
+            if len(candidates) >= len(rule) and all(
+                fnmatchcase(value, matcher)
+                for value, matcher in zip(candidates, rule, strict=False)
+            ):
+                return True
+        elif any(fnmatchcase(part, rule[0]) for part in candidates):
+            return True
+    return False
+
 
 POLICY_VERSION = "jarvis-development-validation-v1"
 PUBLICATION = (
@@ -43,6 +111,7 @@ POLICY_DEFINITION = dict(
     publication=PUBLICATION,
     scopes=SCOPES,
     global_paths=sorted(GLOBAL_PATHS),
+    ignored_outputs=IGNORE_PATTERNS,
 )
 
 
@@ -130,7 +199,8 @@ def plan_validation(
     blocked = tuple(
         path
         for path in paths
-        if any(
+        if ignored_output(path)
+        or any(
             part.casefold()
             in {
                 ".git",
