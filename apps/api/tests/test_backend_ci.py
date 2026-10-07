@@ -75,7 +75,7 @@ def test_migration_gate_stops_at_first_failure(tmp_path, monkeypatch):
     assert ci.migrations(tmp_path, dict(os.environ)) == 7
     assert len(calls) == 1
     assert calls[0][0][-2:] == ["upgrade", "head"]
-    assert calls[0][1]["timeout"] == 120
+    assert calls[0][1]["inactivity_timeout"] == 120
     assert not Path(calls[0][1]["env"]["JARVIS_DATABASE_URL"].removeprefix("sqlite:///")).exists()
 
 
@@ -101,7 +101,7 @@ def test_command_preserves_failure_and_durable_output(tmp_path, capsys):
             [sys.executable, "-c", "print('diagnostic', flush=True); raise SystemExit(7)"],
             env=dict(os.environ),
             log=log,
-            timeout=10,
+            inactivity_timeout=10,
         )
         == 7
     )
@@ -109,7 +109,7 @@ def test_command_preserves_failure_and_durable_output(tmp_path, capsys):
     assert "diagnostic" in capsys.readouterr().out
 
 
-def test_command_deadline_cleans_its_child_tree(tmp_path):
+def test_command_inactivity_cleans_its_child_tree(tmp_path):
     pid_path = tmp_path / "child.pid"
     source = "import subprocess,sys,time; from pathlib import Path; child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)']); Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(60)"
     assert (
@@ -117,7 +117,7 @@ def test_command_deadline_cleans_its_child_tree(tmp_path):
             [sys.executable, "-c", source, str(pid_path)],
             env=dict(os.environ),
             log=tmp_path / "hang.log",
-            timeout=2,
+            inactivity_timeout=2,
         )
         == 124
     )
@@ -161,7 +161,7 @@ def test_pytest_watchdog_dumps_stack_and_aborts(tmp_path, phase):
             command,
             env=dict(os.environ, PYTHONUNBUFFERED="1", PYTHONIOENCODING="utf-8"),
             log=log,
-            timeout=20,
+            inactivity_timeout=20,
         )
         != 0
     )
@@ -179,7 +179,7 @@ def test_successful_command_cleans_surviving_child(tmp_path):
             [sys.executable, "-c", source, str(pid_path)],
             env=dict(os.environ),
             log=tmp_path / "success.log",
-            timeout=10,
+            inactivity_timeout=10,
         )
         == 0
     )
@@ -351,7 +351,70 @@ def test_cleanup_permission_failure_still_stops_owned_command(tmp_path, monkeypa
             [sys.executable, "-c", "import time; time.sleep(60)"],
             env=dict(os.environ),
             log=tmp_path / "denied.log",
-            timeout=0.1,
+            inactivity_timeout=0.1,
         )
     assert len(launched) == 1
     assert launched[0].poll() is not None
+
+
+def test_continuing_progress_outlives_inactivity_budget(tmp_path):
+    source = (
+        "import time; [(print('phase-progress', flush=True), time.sleep(0.5)) for _ in range(5)]"
+    )
+    log = tmp_path / "healthy.log"
+    assert (
+        ci.run_command(
+            [sys.executable, "-c", source],
+            env=dict(os.environ, PYTHONUNBUFFERED="1"),
+            log=log,
+            inactivity_timeout=2,
+        )
+        == 0
+    )
+    record = json.loads(log.with_suffix(".json").read_text())
+    assert record["elapsed"] > record["inactivity_timeout_seconds"]
+    assert not record["timed_out"] and record["timeout_kind"] is None
+    assert log.read_text().count("phase-progress") == 5
+
+
+def test_progress_then_stall_is_inactivity_not_total_runtime(tmp_path):
+    source = "import time; print('phase-finished', flush=True); time.sleep(60)"
+    log = tmp_path / "stalled.log"
+    assert (
+        ci.run_command(
+            [sys.executable, "-c", source],
+            env=dict(os.environ, PYTHONUNBUFFERED="1"),
+            log=log,
+            inactivity_timeout=1,
+        )
+        == 124
+    )
+    record = json.loads(log.with_suffix(".json").read_text())
+    assert record["timed_out"] and record["timeout_kind"] == "inactivity"
+    assert record["last_output_elapsed"] > 0
+    assert "phase-finished" in log.read_text()
+
+
+def test_fast_exit_output_is_measured_in_final_drain(tmp_path, monkeypatch):
+    original = ci.subprocess.Popen
+
+    def already_finished(*args, **kwargs):
+        process = original(*args, **kwargs)
+        process.wait(timeout=10)
+        return process
+
+    monkeypatch.setattr(ci.subprocess, "Popen", already_finished)
+    log = tmp_path / "fast.log"
+    assert (
+        ci.run_command(
+            [sys.executable, "-c", "print('hello', flush=True)"],
+            env=dict(os.environ),
+            log=log,
+            inactivity_timeout=10,
+        )
+        == 0
+    )
+    record = json.loads(log.with_suffix(".json").read_text())
+    assert log.read_text().strip() == "hello"
+    assert 0 < record["last_output_elapsed"] <= record["elapsed"]
+    assert not record["timed_out"] and record["timeout_kind"] is None

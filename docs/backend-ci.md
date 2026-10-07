@@ -174,3 +174,31 @@ blocked even though the test's HTTP provider was deliberately a fixture. This wa
 reproduced on current main and the workspace-reservation branch. All supervisor
 and overall-status assertions remain unchanged; production socket/readiness
 behavior is unchanged. No real listener is stopped to satisfy a unit test.
+
+
+## Inactivity supervision of healthy serial progress
+
+PR #89 workflow `37529237604`, autonomy job `112496470237`, reached 97% with
+passing tests when the helper's accumulated 1,500-second command deadline killed
+it. Logs show continued pass output through the final seconds and no assertion
+failure. This is a CI watchdog infrastructure defect, not a product regression.
+
+The command guard now measures time since the last received process log output.
+The existing 1,500-second shard limit and 120-second migration limits are inactivity
+windows, not overall runtime budgets. Continuing output resets the window; a
+silent/stalled command or interpreter shutdown still fails with 124 and cleans only
+its tracked identity-checked descendants. `timed_out` remains compatible; diagnostic
+JSON adds `timeout_kind`, `inactivity_timeout_seconds` and `last_output_elapsed`.
+Per-test 300-second thread guards, isolated databases, serial execution, test
+assertions and exact collected-case coverage remain intact. Output activity cannot
+bypass the independent per-test guard.
+
+Backend shard jobs use GitHub's 360-minute platform execution ceiling rather than
+a separate 30-minute overall job budget. It is not the hang detector: native
+inactivity and per-test supervision govern that. GitHub still imposes its finite
+hosted execution limit ([official limits](https://docs.github.com/en/actions/reference/limits)).
+A workload exceeding that platform limit requires further decomposition rather than
+an unlimited timeout or a silent CI waiver.
+
+Final output drained after process exit also updates the measured output timestamp;
+short-lived commands cannot report no output activity when their log contains data.

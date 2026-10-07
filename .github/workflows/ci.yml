@@ -51,7 +51,8 @@ jobs:
   backend-tests:
     name: backend-tests-${{ matrix.shard }}
     runs-on: windows-latest
-    timeout-minutes: 30
+    # Inactivity/per-test guards detect hangs. Use GitHub's default platform
+    # ceiling rather than an independent accumulated-runtime job deadline.
     strategy:
       fail-fast: false
       matrix:
