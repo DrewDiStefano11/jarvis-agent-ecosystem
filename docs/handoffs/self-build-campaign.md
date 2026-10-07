@@ -257,3 +257,13 @@ without installing a runtime on the operator's Windows computer.
 PR #91 integrates PR #89 reviewed-finding repairs at b41385690eaacee2d4bc7de3244d2c4e21ed2ff4.
 Final integrated Git plus parent regressions: 56 pass; Ruff format/lint and
 1,951-case collection coverage pass. Exact new-head CI/re-review remain required.
+
+
+CI run 37629824677 on #91 head 6ed1e03 passed required Linux native Git checks,
+static/migrations/frontend/runtime/model/autonomy but failed the Windows system
+shard during Git fixture construction. Hosted Windows puts bin/git.exe on PATH;
+the fixtures only selected the actual implementation for cmd/git.exe. Reproduced
+both observer/service fixture failures locally with bin first on PATH, then fixed
+the fixture to select the actual installed binary for either standard launcher.
+Production configuration continues to reject both launchers; no security boundary
+or assertion is weakened. New exact-head CI required.

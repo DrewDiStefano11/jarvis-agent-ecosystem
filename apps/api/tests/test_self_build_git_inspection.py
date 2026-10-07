@@ -26,7 +26,7 @@ def git_workspace(workspace):
     app, actor, workspace_service, reservation_request, _, policy = workspace
     root = Path(policy["primary_root"])
     executable = shutil.which("git")
-    if executable and os.name == "nt" and Path(executable).parent.name.casefold() == "cmd":
+    if executable and os.name == "nt" and Path(executable).parent.name.casefold() in {"cmd", "bin"}:
         installation = Path(executable).parent.parent
         implementations = [
             installation / family / "bin/git.exe" for family in ("mingw64", "mingw32")
