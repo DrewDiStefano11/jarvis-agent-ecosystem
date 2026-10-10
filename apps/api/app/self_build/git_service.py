@@ -16,9 +16,11 @@ from app.models.git_inspection import (
     RepositoryInspectionPlan,
     RepositoryObservation,
 )
+from app.runtime_supervisor import windows_job as job_module
 from app.self_build import git_image as image_module
 from app.self_build import git_namespace_watch as namespace_watch_module
 from app.self_build import git_observer as observer_module
+from app.self_build import git_process as process_module
 from app.self_build import policy as repository_policy_module
 from app.self_build.git_observer import GitObserver
 from app.self_build.policy import digest
@@ -28,6 +30,8 @@ INSPECTION_POLICY_DIGEST = sha256(
     Path(__file__).read_text(encoding="utf-8").encode()
     + Path(observer_module.__file__).read_text(encoding="utf-8").encode()
     + Path(namespace_watch_module.__file__).read_text(encoding="utf-8").encode()
+    + Path(process_module.__file__).read_text(encoding="utf-8").encode()
+    + Path(job_module.__file__).read_text(encoding="utf-8").encode()
     + Path(image_module.__file__).read_text(encoding="utf-8").encode()
     + Path(inspection_contracts.__file__).read_text(encoding="utf-8").encode()
     + Path(filesystem_module.__file__).read_text(encoding="utf-8").encode()
