@@ -7,3 +7,9 @@ Preview produces an immutable exact plan. A separately authenticated configured 
 Retries across intent/checkpoint/acknowledgement crash gaps reuse the same operation and private nonce. Tampered intent, mismatched native checkpoint, changed approval or successor owner fail closed. Historical reads remain available with mutation disabled. Migration 13 refuses downgrade while any creation intent is present.
 
 The internal namespace and native process cleanup primitives are tested foundations for the next checkout driver. Ownership markers and process cleanup grant no authority or arbitrary-code confinement. See [the implementation handoff](handoffs/self-build-checkout.md) for validation and remaining production work.
+
+Abandonment previews bind the digest of the complete current private creation
+projection. Creating intent or acknowledging its checkpoint invalidates older
+abandonment approvals without changing the reserved plan/version used by creation.
+Fresh operator approval can explicitly tombstone that exact prepared state while
+preserving its recovery evidence. The digest exposes no private nonce or lease token.

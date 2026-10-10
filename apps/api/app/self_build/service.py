@@ -254,6 +254,9 @@ class WorkspaceService:
             workspace_version=row.version if row.state == "reserved" else row.version - 1,
             workspace=reservation.plan,
             worker_id=row.worker_id,
+            creation_intent_digest=digest(row.creation_json)
+            if row.creation_json is not None
+            else None,
         )
         provisional = WorkspaceAbandonPlan(**payload, plan_hash="0" * 64)
         return provisional.model_copy(

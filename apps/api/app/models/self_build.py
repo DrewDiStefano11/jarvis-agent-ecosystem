@@ -73,6 +73,7 @@ class WorkspaceAbandonPlan(Contract):
     workspace_version: int = Field(ge=1)
     workspace: WorkspacePlan
     worker_id: Identifier
+    creation_intent_digest: Digest | None = None
     # Tombstoning preserves files and task/runtime ownership.
     removes_files: Literal[False] = False
     releases_lease: Literal[False] = False

@@ -4,9 +4,9 @@ This increment implements internal durable preparation, not a completed checkout
 
 ## State and dependencies
 
-Branch: `codex/self-build-checkout`. Worktree: `C:/Users/DDistefano/.codex/worktrees/self-build-checkout/jarvis-agent-ecosystem`. Parent: #91 at `e9796ab66d1392a661290a2052171025ee083393`, stacked on #89. Latest fetched main is `de18e2aafd56eda98cd794b3883098cadd0be4c5`; the human merged #90 validation planning and #92 inactivity supervision. No agent merged a PR. The later #92 branch step-budget delta is already in #89/#91; no replacement PR is needed.
+Branch: `codex/self-build-checkout`. Worktree: `C:/Users/DDistefano/.codex/worktrees/self-build-checkout/jarvis-agent-ecosystem`. Parent: #91 at `9f2f2ea`, stacked on #89. Latest fetched main is `de18e2aafd56eda98cd794b3883098cadd0be4c5`; the human merged #90 validation planning and #92 inactivity supervision. No agent merged a PR. The later #92 branch step-budget delta is already in #89/#91; no replacement PR is needed.
 
-#89 has additional exact abandonment approval/owner and alias collision repairs in progress. #91 has additional bounded image-read, alternate object-store coherence and Windows direct-executable fixture repairs in progress. Integrate those reviewed parent changes before claiming this increment merge-ready. Parent head CI/review evidence does not automatically cover this new increment.
+#89 abandonment approval/owner and alias collision repairs are pushed at `8a69b41`. #91 bounded image-read, alternate object-store coherence and Windows direct-executable fixture repairs are pushed at `9f2f2ea`. Those parent changes are integrated here at `560f219`; 118 combined creation preparation/workspace/inspection tests pass. Exact-head CI and independent re-review remain pending. Parent head CI/review evidence does not automatically cover this new increment.
 
 ## Implemented behavior
 
@@ -34,3 +34,18 @@ An earlier mixed-revision full run failed four assertions after source/migration
 4. Initialize only the dedicated worktree index with fixed structured Git operations. Verify files/modes/index/HEAD before persisting a validated native ready checkpoint and publishing ready state.
 5. Integrate repository editing with the existing approved tool journal/fences/provenance. Real development-code execution requires configured OS/container confinement; fixed command arguments alone are insufficient. This host has no installed WSL distribution or available Docker CLI.
 6. Continue validation execution, Git publication, independent review/CI repair and Mission Control using native durable state. Final acceptance still requires a useful real Jarvis improvement driven through the production Self-Build path, followed by an improvement audit. The campaign is not complete.
+
+Hosted finding 4211888591: creation intent/checkpoint preparation previously left
+an earlier abandonment approval valid. Abandonment preview now binds a digest of
+the complete private creation projection (hash only; no nonce/token disclosure).
+Both intent persistence and checkpoint acknowledgement change that digest, so a
+prior reservation-only approval fails SELF_BUILD_PLAN_CHANGED. Fresh exact
+operator abandonment remains possible and preserves all creation recovery history.
+Tests cover both the pre-checkpoint crash gap and acknowledged preparation.
+
+#91 adds another repair at 4b7dcea for per-command Linux metadata namespace
+replacement. Integrate it and validate the combined head before merge-ready claim.
+The next driver's draft is in self-build-native-checkout, with 31 native
+registration/preparation/process cases passing. It remains unexposed/uncommitted;
+Linux mutation pathname containment and durable registration checkpoint integration
+still require completion before any production entry point can be added.

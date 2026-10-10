@@ -274,3 +274,60 @@ def test_unacknowledged_native_checkpoint_mismatch_blocks_recovery(creation, mon
             ]
             == result.checkpoint_id
         )
+
+
+@pytest.mark.parametrize("gap", ["before_checkpoint", "acknowledged"])
+def test_preparation_invalidates_prior_abandonment_approval(creation, gap, monkeypatch):
+    from app.models.self_build import AbandonWorkspaceRequest, ApproveWorkspaceAbandonRequest
+
+    app, actor, operator, service, workspace_id, request, _ = creation
+    workspace = app.state.self_build_workspace_service
+    prior = workspace.preview_abandon(actor, workspace_id)
+    assert prior.creation_intent_digest is None
+    approval = workspace.approve_abandon(
+        operator,
+        ApproveWorkspaceAbandonRequest(
+            workspace_id=workspace_id, expected_plan_hash=prior.plan_hash
+        ),
+    )
+    abandonment = AbandonWorkspaceRequest(
+        expected_version=1,
+        expected_plan_hash=prior.plan_hash,
+        approval_id=approval.approval_id,
+        worker_id=request.worker_id,
+        lease_token=request.lease_token,
+    )
+    if gap == "before_checkpoint":
+
+        def crash(*args, **kwargs):
+            raise RuntimeError("crash before native checkpoint")
+
+        monkeypatch.setattr(service.runtime, "handle_authorized", crash)
+        with pytest.raises(RuntimeError, match="crash before native checkpoint"):
+            service.prepare(actor, workspace_id, request)
+    else:
+        service.prepare(actor, workspace_id, request)
+    current = workspace.preview_abandon(actor, workspace_id)
+    assert current.creation_intent_digest is not None and current.plan_hash != prior.plan_hash
+    with pytest.raises(DomainError) as failure:
+        workspace.abandon(actor, workspace_id, abandonment)
+    assert failure.value.code == "SELF_BUILD_PLAN_CHANGED"
+    assert workspace.read(actor, workspace_id).state == "reserved"
+    with app.state.repository.session_factory() as session:
+        private = session.get(DevelopmentWorkspaceRow, workspace_id).creation_json
+    fresh = workspace.approve_abandon(
+        operator,
+        ApproveWorkspaceAbandonRequest(
+            workspace_id=workspace_id, expected_plan_hash=current.plan_hash
+        ),
+    )
+    result = workspace.abandon(
+        actor,
+        workspace_id,
+        abandonment.model_copy(
+            update={"expected_plan_hash": current.plan_hash, "approval_id": fresh.approval_id}
+        ),
+    )
+    assert result.state == "abandoned"
+    with app.state.repository.session_factory() as session:
+        assert session.get(DevelopmentWorkspaceRow, workspace_id).creation_json == private
