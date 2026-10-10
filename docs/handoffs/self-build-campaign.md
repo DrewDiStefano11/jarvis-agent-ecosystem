@@ -1,4 +1,4 @@
-# Self-Build campaign — October 6, 2026
+# Self-Build campaign â€” October 6, 2026
 
 ## Authority and objective
 
@@ -15,7 +15,7 @@ Fetched `origin/main` at `7abb488d1b73dcfd4c990519ef1578c2906430db`.
 GitHub reported zero open PRs at campaign start. Recent merged work includes #68
 self-improvement, #69 independent verification, #70 remote controls, #71 backlog,
 #72 CI evidence, #73 planning correction, #74/#76/#77/#79 bounded research,
-#75/#78/#80/#81/#83–#87 Mission Control, and #82 backend CI scalability.
+#75/#78/#80/#81/#83â€“#87 Mission Control, and #82 backend CI scalability.
 Historical handoffs are provenance, not current PR/gate/merge authority.
 
 Read architecture/contributor/runtime/lease/recovery/RBAC/context/model-provider,
@@ -67,8 +67,8 @@ command journal and cannot prove autonomous software validation.
    reviewed plan authority, preserving primary and unrelated checkouts. Persist
    side-effect intent before Git. Validate Windows junction/path/race boundaries.
 3. B: bounded source patch/edit journal; C: reviewed command families and bounded
-   provenance; D–G: safe Git/PR lifecycle, exact-state validation and independent review.
-4. H–J: durable bounded repair orchestration using existing coordinator/team selection,
+   provenance; Dâ€“G: safe Git/PR lifecycle, exact-state validation and independent review.
+4. Hâ€“J: durable bounded repair orchestration using existing coordinator/team selection,
    high-level operator mission and truthful Mission Control state.
 5. Production-path real-repository dogfood cutover, then backlog-driven follow-ups.
 
@@ -291,3 +291,47 @@ handles block the replacement; Linux must reject the restored-name attack. All
 59 native Git cases pass locally. Required exact-head Linux CI/re-review remain
 pending; earlier Linux success does not validate these new cases. Cancelled duplicate
 push runs 37684452831 and 37684038816 are not product test failures.
+
+## October 9 resume: verify main reachability, not merged labels
+
+Fetched main is `2c9e0b33463e67deca1350867e458da2f746ff66`: human merge #89 at
+8a69b41. #91 was human-merged at `0df554896fcd57f724dee8f7bfc3d8cf96c902e8`
+into codex/self-build-workspaces, not main. Main therefore lacks native Git inspection.
+Reconciliation branch codex/self-build-inspection-reconcile starts at current main
+and imports the reviewed #91 head `4b7dceaa36c85f412302774647dd4e8ebba43ca2`.
+Its application tree matches that reviewed head exactly; main diff is the missing
+16-file inspection increment plus this current handoff. No unrelated functionality
+or primary checkout change is included. Open against main; human merge only.
+
+#91 exact-head CI 37686061289 succeeded including Linux metadata replacement tests;
+independent clean re-review is issue comment 6046818191, and all nine repaired
+threads are resolved. #89 exact-head CI 37684041812 and independent clean review
+6046530823 passed before the human merge; four remaining repaired threads resolved.
+These are inherited source evidence; new reconciliation exact-head gates/review
+are still required before its handoff.
+
+#93 is preserved in self-build-checkout. Local repair 0a596e2 binds abandonment
+approval to the complete private creation projection digest; two regressions cover
+intent-before-checkpoint and acknowledged preparation. Old approvals fail without
+stranding history; fresh exact operator approval preserves private intent. Latest
+reviewed parent is integrated at 0c7d7b5, and 122 combined preparation/workspace/Git
+cases pass. Retarget #93 to the reconciliation branch while dependent; after that
+PR is human-merged into main, retarget #93 to main before any human merge. Never
+merge dependent PRs into their feature-branch bases by accident.
+
+Actual checkout draft remains private/unexposed in self-build-native-checkout.
+11 native driver cases pass: exact generated no-checkout worktree creation/replay,
+primary preservation, collisions, pointer tampering, hooks exclusion, bounded
+process cleanup, unsupported-platform denial and target pinning before mutation.
+Initial mutation is Windows-only; Linux remains read-only until equivalent write
+containment exists. Durable registration acknowledgement, bounded raw-blob source
+materialization, dedicated index and native ready checkpoint are next.
+
+Audited all existing worktrees. Unrelated dirty watchdog/research/legacy validation
+worktrees and primary validation-pr63 artifacts are preserved; none are modified.
+One test run crossed a two-day system pause and ended with 62 passes/one setup error.
+Fresh rerun of that setup case plus the new approval regressions passed (3 cases);
+final combined 122-case run passed. No product/assertion change or test waiver was
+made for the interrupted run. The campaign remains incomplete: later editing,
+confined execution, publication, validation/review repair and real production
+Self-Build acceptance plus improvement audit are still required.
