@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from alembic import command
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.core.errors import DomainError
@@ -333,6 +334,160 @@ def test_preparation_invalidates_prior_abandonment_approval(creation, gap, monke
         assert session.get(DevelopmentWorkspaceRow, workspace_id).creation_json == private
 
 
+def test_native_creation_ready_checkpoints_and_replay_preserve_primary(creation):
+    app, actor, _, service, workspace_id, request, _ = creation
+    policy = service.workspace.policies.get("jarvis")
+    primary = Path(policy.primary_root)
+    index = (primary / ".git/index").read_bytes()
+    result = service.create(actor, workspace_id, request)
+    assert result.state == "ready"
+    assert result.completed_file_count == result.plan.file_count
+    assert result.registration_digest and result.source_digest and result.checkpoint_id
+    assert WorkspaceCreationService(app).read(actor, workspace_id) == result
+    assert WorkspaceCreationService(app).create(actor, workspace_id, request) == result
+    checkpoints = service.runtime.checkpoints_authorized("run-1", actor)
+    assert {item.resume_cursor for item in checkpoints} == {
+        "prepared",
+        "git_created",
+        "materializing-1",
+        "ready",
+    }
+    assert (primary / ".git/index").read_bytes() == index
+    target = Path(policy.worktree_root) / workspace_id
+    assert (target / "source.py").read_bytes() == b"value = 1\n"
+    assert (target / ".jarvis-workspace.json").is_file()
+
+
+@pytest.mark.parametrize("phase", ["git_created", "materializing-1", "ready"])
+def test_native_creation_checkpoint_crash_resumes_same_owned_effects(creation, monkeypatch, phase):
+    app, actor, _, service, workspace_id, request, _ = creation
+    native = service.runtime.handle_authorized
+
+    def crash(command, *args, **kwargs):
+        result = native(command, *args, **kwargs)
+        if getattr(command, "resume_cursor", None) == phase:
+            raise RuntimeError("after native phase before acknowledgement")
+        return result
+
+    monkeypatch.setattr(service.runtime, "handle_authorized", crash)
+    with pytest.raises(RuntimeError, match="before acknowledgement"):
+        service.create(actor, workspace_id, request)
+    pending = service.read(actor, workspace_id)
+    assert pending.checkpoint_id is None
+    original_operation = pending.operation_id
+    monkeypatch.setattr(service.runtime, "handle_authorized", native)
+    result = WorkspaceCreationService(app).create(actor, workspace_id, request)
+    assert result.state == "ready" and result.operation_id == original_operation
+    assert len(service.runtime.checkpoints_authorized("run-1", actor)) == 4
+
+
+def test_production_http_creation_requires_separate_operator_and_returns_native_ready(creation):
+    from app.self_build.git_operator_router import router
+
+    app, actor, _, _, workspace_id, request, _ = creation
+    # Fixture enables remote access after create_app; production startup registers
+    # this router only when remote_control_enabled is configured at startup.
+    app.include_router(router)
+    actor_headers = {"X-Jarvis-Actor-Id": actor.actor_id}
+    with TestClient(app, base_url="https://testserver") as client:
+        preview = client.post(
+            f"/api/self-build/workspaces/{workspace_id}/creation/preview",
+            headers=actor_headers,
+            json={"inspection_id": request.inspection_id},
+        )
+        assert preview.status_code == 200
+        approval_body = dict(
+            workspace_id=workspace_id,
+            inspection_id=request.inspection_id,
+            expected_plan_hash=preview.json()["data"]["plan_hash"],
+        )
+        denied = client.post(
+            "/api/remote/self-build/workspace-creation/approve",
+            headers=actor_headers,
+            json=approval_body,
+        )
+        assert denied.status_code == 401
+        approved = client.post(
+            "/api/remote/self-build/workspace-creation/approve",
+            headers={"Authorization": "Bearer " + "x" * 48},
+            json=approval_body,
+        )
+        assert approved.status_code == 200
+        current_request = request.model_copy(
+            update={"approval_id": approved.json()["data"]["approval_id"]}
+        )
+        result = client.post(
+            f"/api/self-build/workspaces/{workspace_id}/creation",
+            headers=actor_headers,
+            json=current_request.model_dump(mode="json"),
+        )
+        assert result.status_code == 200, result.text
+        assert result.json()["data"]["state"] == "ready"
+        observed = client.get(
+            f"/api/self-build/workspaces/{workspace_id}/creation", headers=actor_headers
+        )
+        assert observed.status_code == 200 and observed.json()["data"] == result.json()["data"]
+    schema = app.openapi()
+    assert "WorkspaceCreationPlan" in schema["components"]["schemas"]
+    assert "WorkspaceCreationRecord" in schema["components"]["schemas"]
+
+
+def test_legacy_prepared_projection_remains_readable_after_schema_extension(creation):
+    from app.self_build.creation_service import persisted_intent_digest
+    from app.self_build.policy import digest
+
+    _, actor, _, service, workspace_id, request, _ = creation
+    service.prepare(actor, workspace_id, request)
+    with service.repository.leases._write() as session:
+        row = session.get(DevelopmentWorkspaceRow, workspace_id)
+        private = dict(row.creation_json)
+        raw = dict(private["record"])
+        raw.pop("registration_digest")
+        raw.pop("source_digest")
+        raw["checkpoint_id"] = None
+        plan = dict(raw["plan"])
+        plan.pop("mutation_platform")
+        plan["plan_hash"] = digest(
+            {key: value for key, value in plan.items() if key != "plan_hash"}
+        )
+        raw["plan"] = plan
+        raw["ownership_digest"] = digest(
+            dict(
+                workspaceId=workspace_id,
+                operationId=raw["operation_id"],
+                planHash=plan["plan_hash"],
+                nonce=private["nonce"],
+            )
+        )
+        private.update(record=raw, digest=persisted_intent_digest(raw, private["nonce"]))
+        row.creation_json = private
+    historical = service.read(actor, workspace_id)
+    assert historical.state == "prepared" and historical.checkpoint_id is None
+    with pytest.raises(DomainError) as failure:
+        service.create(actor, workspace_id, request)
+    assert failure.value.code == "SELF_BUILD_CREATION_CONFLICT"
+
+
+def test_revocation_after_registration_preserves_effects_without_ready(creation, monkeypatch):
+    _, actor, _, service, workspace_id, request, _ = creation
+    transition = service.transition
+
+    def stopped(actor, workspace_id, request, previous, **changes):
+        if changes.get("state") == "git_created":
+            with service.repository.leases._write() as session:
+                session.get(SystemStateRow, 1).emergency_stop = True
+        return transition(actor, workspace_id, request, previous, **changes)
+
+    monkeypatch.setattr(service, "transition", stopped)
+    with pytest.raises(DomainError) as failure:
+        service.create(actor, workspace_id, request)
+    assert failure.value.code == "EMERGENCY_STOP_ACTIVE"
+    policy = service.workspace.policies.get("jarvis")
+    target = Path(policy.worktree_root) / workspace_id
+    assert (target / ".git").is_file() and not (target / "source.py").exists()
+    assert service.read(actor, workspace_id).state == "prepared"
+
+
 @pytest.mark.parametrize("after_native", [False, True])
 def test_renewed_exact_operator_approval_recovers_original_preparation(
     creation, monkeypatch, after_native
@@ -384,3 +539,77 @@ def test_renewed_exact_operator_approval_recovers_original_preparation(
         current = session.get(DevelopmentWorkspaceRow, workspace_id).creation_json
         assert current["digest"] == original_private["digest"]
         assert current["nonce"] == original_private["nonce"]
+
+
+@pytest.mark.parametrize("git_workspace", ["empty"], indirect=True)
+def test_native_empty_base_has_complete_verified_ready_checkpoint(creation):
+    _, actor, _, service, workspace_id, request, _ = creation
+    result = service.create(actor, workspace_id, request)
+    assert result.state == "ready" and result.completed_file_count == result.plan.file_count == 0
+    assert result.source_digest and result.registration_digest and result.checkpoint_id
+    assert {
+        item.resume_cursor for item in service.runtime.checkpoints_authorized("run-1", actor)
+    } == {"prepared", "git_created", "ready"}
+    policy = service.workspace.policies.get("jarvis")
+    assert {path.name for path in (Path(policy.worktree_root) / workspace_id).iterdir()} == {
+        ".git",
+        ".jarvis-workspace.json",
+    }
+
+
+def test_final_artifacts_remain_deny_write_pinned_through_native_ready_publication(
+    creation, monkeypatch
+):
+    _, actor, _, service, workspace_id, request, _ = creation
+    policy = service.workspace.policies.get("jarvis")
+    target = Path(policy.worktree_root) / workspace_id
+    index = Path(policy.primary_root) / ".git/worktrees" / workspace_id / "index"
+    owner = Path(policy.worktree_root) / (".jarvis-owner-" + workspace_id) / "owner.json"
+    native = service.runtime.handle_authorized
+    blocked = []
+
+    def guarded(command, *args, **kwargs):
+        if getattr(command, "resume_cursor", None) == "ready":
+            for path in (
+                target / "source.py",
+                target / ".git",
+                target / ".jarvis-workspace.json",
+                index,
+                owner,
+            ):
+                with pytest.raises(PermissionError):
+                    with path.open("r+b") as stream:
+                        stream.write(b"foreign")
+                blocked.append(path.name)
+        return native(command, *args, **kwargs)
+
+    monkeypatch.setattr(service.runtime, "handle_authorized", guarded)
+    result = service.create(actor, workspace_id, request)
+    assert result.state == "ready" and len(blocked) == 5
+    assert (target / "source.py").read_bytes() == b"value = 1\n"
+    # Publication releases every pin; later operator changes are separate effects.
+    with (target / "source.py").open("r+b") as stream:
+        stream.write(b"value = 2\n")
+
+
+def test_finalization_recovery_reverifies_files_before_acknowledging_ready(creation, monkeypatch):
+    _, actor, _, service, workspace_id, request, _ = creation
+    native = service.runtime.handle_authorized
+
+    def crash(command, *args, **kwargs):
+        result = native(command, *args, **kwargs)
+        if getattr(command, "resume_cursor", None) == "ready":
+            raise RuntimeError("native ready before projection ack")
+        return result
+
+    monkeypatch.setattr(service.runtime, "handle_authorized", crash)
+    with pytest.raises(RuntimeError, match="projection ack"):
+        service.create(actor, workspace_id, request)
+    target = Path(service.workspace.policies.get("jarvis").worktree_root) / workspace_id
+    (target / "source.py").write_bytes(b"value = 9\n")
+    monkeypatch.setattr(service.runtime, "handle_authorized", native)
+    with pytest.raises(DomainError) as failure:
+        service.create(actor, workspace_id, request)
+    assert failure.value.code == "SELF_BUILD_MATERIALIZATION_CONFLICT"
+    assert service.read(actor, workspace_id).state == "finalizing"
+    assert (target / "source.py").read_bytes() == b"value = 9\n"

@@ -1,4 +1,4 @@
-"""Internal durable creation preparation. No filesystem or Git mutation is exposed."""
+"""Durable approved native checkout creation using runtime checkpoints and fences."""
 
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -18,7 +18,7 @@ from app.models.workspace_creation import (
     WorkspaceCreationRecord,
 )
 from app.runtime_supervisor import windows_job
-from app.self_build import owned_process, workspace_namespace
+from app.self_build import checkout_driver, materialization, owned_process, workspace_namespace
 from app.self_build.git_service import INSPECTION_POLICY_DIGEST
 from app.self_build.policy import digest
 
@@ -27,6 +27,8 @@ CREATION_POLICY_DIGEST = sha256(
         Path(__file__).read_text(encoding="utf-8")
         + Path(contracts.__file__).read_text(encoding="utf-8")
         + Path(owned_process.__file__).read_text(encoding="utf-8")
+        + Path(checkout_driver.__file__).read_text(encoding="utf-8")
+        + Path(materialization.__file__).read_text(encoding="utf-8")
         + Path(workspace_namespace.__file__).read_text(encoding="utf-8")
         + Path(windows_job.__file__).read_text(encoding="utf-8")
         + INSPECTION_POLICY_DIGEST
@@ -48,12 +50,26 @@ def ownership(record, nonce):
 
 
 def intent_digest(record, nonce):
+    payload = record.model_dump(mode="json", exclude={"checkpoint_id", "updated_at"})
+    if payload["state"] == "finalizing":
+        payload["state"] = "ready"
     return digest(
         {
-            "record": record.model_dump(mode="json", exclude={"checkpoint_id", "updated_at"}),
+            "record": payload,
             "nonce": nonce,
         }
     )
+
+
+def persisted_intent_digest(payload, nonce):
+    # Preserve the original serialized prepared schema from #93. New optional
+    # fields/defaults must not invalidate historical records after an upgrade.
+    state = {
+        key: value for key, value in payload.items() if key not in {"checkpoint_id", "updated_at"}
+    }
+    if state["state"] == "finalizing":
+        state["state"] = "ready"
+    return digest(dict(record=state, nonce=nonce))
 
 
 class WorkspaceCreationService:
@@ -188,13 +204,17 @@ class WorkspaceCreationService:
                 or any(c not in "0123456789abcdef" for c in nonce)
                 or record.workspace_id != row.id
                 or record.worker_id != row.worker_id
-                or record.state != "prepared"
-                or record.completed_file_count != 0
                 or record.plan.workspace != self.repository.contract(row).plan
-                or digest(record.plan.model_dump(mode="json", exclude={"plan_hash"}))
+                or digest(
+                    {
+                        key: value
+                        for key, value in private["record"]["plan"].items()
+                        if key != "plan_hash"
+                    }
+                )
                 != record.plan.plan_hash
                 or record.ownership_digest != digest(ownership(record, nonce))
-                or private["digest"] != intent_digest(record, nonce)
+                or private["digest"] != persisted_intent_digest(private["record"], nonce)
             ):
                 raise ValueError("intent integrity failed")
             return record, nonce, private["digest"]
@@ -202,14 +222,24 @@ class WorkspaceCreationService:
             fail("SELF_BUILD_CREATION_RECORD_INVALID", "Private creation intent integrity failed.")
 
     def checkpoint(self, actor, record, expected_digest):
-        identifier = f"checkpoint-{record.operation_id}-prepared"
+        phase = "ready" if record.state == "finalizing" else record.state
+        cursor = (
+            f"materializing-{record.completed_file_count}" if phase == "materializing" else phase
+        )
+        identifier = f"checkpoint-{record.operation_id}-{cursor}"
         metadata = dict(
             workspaceId=record.workspace_id,
             operationId=record.operation_id,
             planHash=record.plan.plan_hash,
             ownershipDigest=record.ownership_digest,
-            phase="prepared",
+            phase=phase,
         )
+        if phase != "prepared":
+            metadata.update(
+                completedFileCount=record.completed_file_count,
+                registrationDigest=record.registration_digest,
+                sourceDigest=record.source_digest,
+            )
         matches = [
             item
             for item in self.runtime.checkpoints_authorized(
@@ -226,7 +256,7 @@ class WorkspaceCreationService:
             or checkpoint.attempt_id != record.attempt_id
             or checkpoint.integrity_digest != "sha256:" + expected_digest
             or checkpoint.state_reference != "workspace-creation:" + record.operation_id
-            or checkpoint.resume_cursor != "prepared"
+            or checkpoint.resume_cursor != cursor
             or checkpoint.metadata != metadata
         ):
             fail(
@@ -284,6 +314,12 @@ class WorkspaceCreationService:
                         "Recover the existing creation operation explicitly.",
                     )
         self.repository.leases.repository.refresh_event_cursor()
+        return self.acknowledge(actor, workspace_id, request, record, private_digest)
+
+    def acknowledge(
+        self, actor, workspace_id, request, record, private_digest, *, publication_guard=None
+    ):
+        plan = record.plan
         existing, identifier, metadata = self.checkpoint(actor, record, private_digest)
         if record.checkpoint_id is not None and (
             existing is None or record.checkpoint_id != identifier
@@ -296,6 +332,8 @@ class WorkspaceCreationService:
             snapshot = self.runtime.read_run_authorized(plan.workspace.runtime_run_id, actor)
 
             def guard(session):
+                if publication_guard is not None:
+                    publication_guard()
                 current, _, current_attempt = self.fence(actor, workspace_id, request, session)
                 current_record, _, current_digest = self.intent(current)
                 if (
@@ -311,14 +349,14 @@ class WorkspaceCreationService:
             self.runtime.handle_authorized(
                 RecordCheckpointCommand(
                     run_id=plan.workspace.runtime_run_id,
-                    command_id="prepare-" + record.operation_id,
+                    command_id="ack-" + identifier,
                     expected_run_version=snapshot.version,
                     timestamp=datetime.now(UTC),
                     checkpoint_id=identifier,
                     attempt_id=record.attempt_id,
                     state_reference="workspace-creation:" + record.operation_id,
                     integrity_digest="sha256:" + private_digest,
-                    resume_cursor="prepared",
+                    resume_cursor=identifier.removeprefix(f"checkpoint-{record.operation_id}-"),
                     checkpoint_metadata=metadata,
                 ),
                 actor,
@@ -345,7 +383,11 @@ class WorkspaceCreationService:
                 )
             if current.checkpoint_id is None:
                 current = current.model_copy(
-                    update={"checkpoint_id": identifier, "updated_at": datetime.now(UTC)}
+                    update={
+                        "checkpoint_id": identifier,
+                        "updated_at": datetime.now(UTC),
+                        "state": "ready" if current.state == "finalizing" else current.state,
+                    }
                 )
                 row.creation_json = {
                     "record": current.model_dump(mode="json"),
@@ -364,8 +406,155 @@ class WorkspaceCreationService:
                         "authorizationApprovalId": request.approval_id,
                     },
                 )
+            if publication_guard is not None:
+                publication_guard()
         self.repository.leases.repository.refresh_event_cursor()
         return current
+
+    def current(self, actor, workspace_id, request):
+        with self.repository.leases._write() as session:
+            row, plan, attempt = self.fence(actor, workspace_id, request, session)
+            record, nonce, private_digest = self.intent(row)
+            if (
+                record.plan != plan
+                or record.attempt_id != attempt
+                or record.worker_id != request.worker_id
+            ):
+                fail("SELF_BUILD_CREATION_CONFLICT", "Recover the original creation lineage.")
+        return record, nonce, private_digest
+
+    def transition(
+        self, actor, workspace_id, request, previous, *, publication_guard=None, **changes
+    ):
+        with self.repository.leases._write() as session:
+            row, _, attempt = self.fence(actor, workspace_id, request, session)
+            record, nonce, private_digest = self.intent(row)
+            if record != previous or record.attempt_id != attempt:
+                fail("SELF_BUILD_CREATION_CONFLICT", "Creation recovery position changed.")
+            payload = record.model_dump()
+            payload.update(changes, checkpoint_id=None, updated_at=datetime.now(UTC))
+            updated = WorkspaceCreationRecord.model_validate(payload)
+            updated_digest = intent_digest(updated, nonce)
+            row.creation_json = dict(
+                record=updated.model_dump(mode="json"), nonce=nonce, digest=updated_digest
+            )
+            self.git.event(
+                session,
+                row,
+                actor,
+                "self_build.workspace_creation.phase_recorded",
+                dict(
+                    record=updated.model_dump(mode="json"),
+                    intentDigest=updated_digest,
+                    authorizationApprovalId=request.approval_id,
+                ),
+            )
+        self.repository.leases.repository.refresh_event_cursor()
+        return self.acknowledge(
+            actor,
+            workspace_id,
+            request,
+            updated,
+            updated_digest,
+            publication_guard=publication_guard,
+        )
+
+    def create(self, actor, workspace_id, request):
+        if not checkout_driver.supports_mutation():
+            fail("SELF_BUILD_CHECKOUT_PLATFORM_UNAVAILABLE", "Native mutation requires Windows.")
+        with self.repository.sessions() as session:
+            row = self.repository.lookup(session, workspace_id)
+            self.workspace.authorize(actor, row.task_id, session)
+            absent = row.creation_json is None
+        if absent:
+            self.prepare(actor, workspace_id, request)
+        record, nonce, private_digest = self.current(actor, workspace_id, request)
+        if record.state != "finalizing":
+            record = self.acknowledge(actor, workspace_id, request, record, private_digest)
+
+        def authority_check():
+            # Short transactions revalidate operator/lease/runtime/stop; none spans Git I/O.
+            self.current(actor, workspace_id, request)
+
+        driver = checkout_driver.CheckoutDriver(self.git.tool(), authority_check)
+        policy = self.workspace.policies.get(record.plan.workspace.repository_id)
+        owner = ownership(record, nonce)
+        registration = driver.create(policy, record.plan, owner)
+        if record.state == "prepared":
+            record = self.transition(
+                actor,
+                workspace_id,
+                request,
+                record,
+                state="git_created",
+                registration_digest=registration["registration_digest"],
+            )
+        elif record.registration_digest != registration["registration_digest"]:
+            fail("SELF_BUILD_CREATION_CONFLICT", "Measured Git registration changed.")
+        if record.state == "ready":
+            # A ready replay verifies source/index again without advancing recovery.
+            expected = record.source_digest
+        else:
+            expected = None
+        recovery_count = record.completed_file_count
+        recovery_digest = record.source_digest
+
+        def acknowledge_file(count, source_digest):
+            nonlocal record
+            if count < recovery_count:
+                return
+            if count == recovery_count:
+                if source_digest != recovery_digest:
+                    fail("SELF_BUILD_CREATION_CONFLICT", "Acknowledged source prefix changed.")
+                return
+            if expected is not None or count != record.completed_file_count + 1:
+                fail("SELF_BUILD_CREATION_CONFLICT", "Materialization position is inconsistent.")
+            record = self.transition(
+                actor,
+                workspace_id,
+                request,
+                record,
+                state="materializing",
+                completed_file_count=count,
+                source_digest=source_digest,
+            )
+
+        def finalize(measured, publication_guard):
+            nonlocal record
+            if expected is not None:
+                if measured["source_digest"] != expected:
+                    fail("SELF_BUILD_CREATION_CONFLICT", "Ready source evidence changed.")
+                return record
+            if record.state == "finalizing":
+                if record.source_digest != measured["source_digest"]:
+                    fail("SELF_BUILD_CREATION_CONFLICT", "Finalization evidence changed.")
+                return self.acknowledge(
+                    actor,
+                    workspace_id,
+                    request,
+                    record,
+                    intent_digest(record, nonce),
+                    publication_guard=publication_guard,
+                )
+            return self.transition(
+                actor,
+                workspace_id,
+                request,
+                record,
+                state="finalizing",
+                completed_file_count=measured["completed_file_count"],
+                source_digest=measured["source_digest"],
+                publication_guard=publication_guard,
+            )
+
+        return materialization.materialize(
+            driver,
+            policy,
+            record.plan,
+            owner,
+            acknowledge=acknowledge_file,
+            finalize=finalize,
+        )
 
     def read(self, actor, workspace_id):
         with self.repository.sessions() as session:

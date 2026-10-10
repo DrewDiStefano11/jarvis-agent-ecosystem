@@ -158,6 +158,14 @@ def windows_final_path(fd):
     return buffer.value.removeprefix("\\\\?\\")
 
 
+def windows_native_path(path):
+    """Use extended Win32 syntax only for already validated absolute local paths."""
+    value = str(path)
+    if os.name == "nt" and Path(value).is_absolute() and not value.startswith("\\\\"):
+        return "\\\\?\\" + value
+    return value
+
+
 @contextmanager
 def windows_directory(path, *, internal=False):
     """Deny directory deletion/replacement while permitting ordinary child writes."""
@@ -178,12 +186,12 @@ def windows_directory(path, *, internal=False):
     close = kernel.CloseHandle
     close.argtypes = [wintypes.HANDLE]
     close.restype = wintypes.BOOL
-    handle = create(str(path), 0x80000000, 3, None, 3, 0x02200000, None)
+    handle = create(windows_native_path(path), 0x80000000, 3, None, 3, 0x02200000, None)
     if handle == ctypes.c_void_p(-1).value:
         raise OSError(ctypes.get_last_error(), "Cannot lock workspace directory")
     try:
         # The handle prevents replacement while this path-based metadata check runs.
-        check_stat(path.lstat(), directory=True, internal=internal)
+        check_stat(os.lstat(windows_native_path(path)), directory=True, internal=internal)
         yield
     finally:
         close(handle)
@@ -195,7 +203,7 @@ class Directory:
     fd: int | None
 
     def name(self, leaf):
-        return str(self.path / leaf) if self.fd is None else leaf
+        return windows_native_path(self.path / leaf) if self.fd is None else leaf
 
     @property
     def kwargs(self):

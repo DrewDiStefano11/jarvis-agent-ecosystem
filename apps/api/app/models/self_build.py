@@ -54,7 +54,7 @@ class WorkspaceReservation(Contract):
     created_at: datetime
     updated_at: datetime
     version: int = Field(ge=1)
-    # Unknown until a production Git observer supplies evidence.
+    # A reservation does not attest source bytes. Read native creation evidence.
     checkout_state: Literal["unobserved"] = "unobserved"
 
 

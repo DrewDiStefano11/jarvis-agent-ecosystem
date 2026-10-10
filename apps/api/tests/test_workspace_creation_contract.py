@@ -68,6 +68,8 @@ def test_ready_shape_requires_complete_inventory_and_checkpoint():
         state="ready",
         checkpoint_id="checkpoint",
         ownership_digest="5" * 64,
+        registration_digest="6" * 64,
+        source_digest="7" * 64,
         completed_file_count=2,
         created_at=now,
         updated_at=now,
@@ -75,8 +77,39 @@ def test_ready_shape_requires_complete_inventory_and_checkpoint():
     assert WorkspaceCreationRecord(**values).state == "ready"
     for changed in (
         {"checkpoint_id": None},
+        {"registration_digest": None},
+        {"source_digest": None},
         {"completed_file_count": 1},
         {"completed_file_count": 3},
     ):
         with pytest.raises(ValidationError):
             WorkspaceCreationRecord(**{**values, **changed})
+
+
+@pytest.mark.parametrize(
+    "state,count,source",
+    [
+        ("git_created", 1, "7" * 64),
+        ("materializing", 0, "7" * 64),
+        ("materializing", 1, None),
+    ],
+)
+def test_native_phase_cannot_claim_unmeasured_source(state, count, source):
+    now = datetime.now(UTC)
+    with pytest.raises(ValidationError):
+        WorkspaceCreationRecord(
+            operation_id="operation",
+            workspace_id=plan().workspace_id,
+            plan=plan(),
+            approval_id="approval",
+            worker_id="worker",
+            attempt_id="attempt",
+            state=state,
+            checkpoint_id=None,
+            ownership_digest="5" * 64,
+            registration_digest="6" * 64,
+            source_digest=source,
+            completed_file_count=count,
+            created_at=now,
+            updated_at=now,
+        )

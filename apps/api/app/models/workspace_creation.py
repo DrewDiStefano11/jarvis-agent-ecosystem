@@ -21,6 +21,7 @@ class WorkspaceCreationPlan(Contract):
     tool_identity_digest: Digest
     tool_sha256: Digest
     creation_policy_digest: Digest
+    mutation_platform: Literal["windows"] = "windows"
     maximum_file_bytes: Literal[8388608] = 8388608
     maximum_total_bytes: Literal[67108864] = 67108864
     # Initial creation registers reading only. Source writes need separate approval.
@@ -76,9 +77,11 @@ class WorkspaceCreationRecord(Contract):
     approval_id: Identifier
     worker_id: Identifier
     attempt_id: Identifier
-    state: Literal["prepared", "git_created", "materializing", "ready", "interrupted"]
+    state: Literal["prepared", "git_created", "materializing", "finalizing", "ready", "interrupted"]
     checkpoint_id: Identifier | None
     ownership_digest: Digest
+    registration_digest: Digest | None = None
+    source_digest: Digest | None = None
     completed_file_count: int = Field(ge=0, le=4096)
     created_at: datetime
     updated_at: datetime
@@ -89,6 +92,28 @@ class WorkspaceCreationRecord(Contract):
             raise ValueError("creation record must retain its original workspace")
         if self.completed_file_count > self.plan.file_count:
             raise ValueError("creation acknowledgement exceeds approved inventory")
+        if self.state == "prepared" and (
+            self.completed_file_count != 0
+            or self.registration_digest is not None
+            or self.source_digest is not None
+        ):
+            raise ValueError("preparation cannot acknowledge filesystem effects")
+        if self.state in {"git_created", "materializing", "finalizing", "ready"} and (
+            self.registration_digest is None
+        ):
+            raise ValueError("native phases require measured Git registration")
+        if self.state == "git_created" and (
+            self.completed_file_count != 0 or self.source_digest is not None
+        ):
+            raise ValueError("registration alone cannot acknowledge source content")
+        if self.state == "materializing" and (
+            self.completed_file_count == 0 or self.source_digest is None
+        ):
+            raise ValueError("materialization requires measured nonempty source prefix")
+        if self.state in {"finalizing", "ready"} and (
+            self.completed_file_count != self.plan.file_count or self.source_digest is None
+        ):
+            raise ValueError("finalization requires complete measured source evidence")
         if self.state == "ready" and (
             self.checkpoint_id is None or self.completed_file_count != self.plan.file_count
         ):
