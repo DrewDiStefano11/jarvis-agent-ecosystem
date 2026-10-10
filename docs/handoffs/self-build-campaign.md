@@ -384,3 +384,23 @@ no timestamp-restored in-place write can occur between baseline and acquisition.
 Native regressions verify config, HEAD and loose-ref writes are already denied
 at the first baseline call. Existing transient-name and clean readback regressions
 remain required. New exact-head review/CI must cover this parent before merge.
+
+
+## Native Git memory review repair (2026-10-10)
+
+Review 4235867408 on #94 identified compressed object inflation before output bounds.
+Fixed reads now own a native child with a 512 MiB hard memory boundary before Git
+starts: Windows suspended launch is assigned to a kill-on-close job with both
+process and job committed-memory limits before initial-thread resume; POSIX uses
+an isolated constant Python launcher to set hard RLIMIT_AS and disable core dumps
+before exec of the inherited sealed Git image. This avoids multithreaded preexec
+callbacks. Output/inactivity/live-authority supervision remains in place. Policy
+hashes include both launcher and job implementation. This is a resource boundary
+for fixed native Git, not permission to run development code or a code sandbox.
+
+Native observer/service/resource regression set: 70 passed; the additional real
+compressed 256 MiB commit case passed separately after correcting its fixture ref.
+A 128 MiB kernel limit denies inflation before Git output, and a direct allocator
+probe proves actual OS allocation denial. Linux CI now includes resource tests;
+local Windows checks cannot substitute for that job. Keep exact-head independent
+review and hosted CI pending after publication; do not merge or resolve P1 early.
