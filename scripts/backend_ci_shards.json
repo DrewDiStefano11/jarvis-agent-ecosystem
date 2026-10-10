@@ -60,7 +60,7 @@
     "tests/test_remote_tls.py",
     "tests/test_tool_filesystem.py"
   ],
-  "system": [
+  "system": ["tests/test_git_process.py",
     "tests/test_self_build_workspaces.py",
     "tests/test_self_build_git_observer.py",
     "tests/test_self_build_git_inspection.py",
