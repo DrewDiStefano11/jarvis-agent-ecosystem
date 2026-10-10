@@ -6,6 +6,7 @@
     "tests/test_autonomous_worker_migration.py",
     "tests/test_autonomy_harness.py",
     "tests/test_catalog.py",
+    "tests/test_catalog_audit.py",
     "tests/test_correction_review_guards.py",
     "tests/test_diagnostics.py",
     "tests/test_identity_rbac.py",

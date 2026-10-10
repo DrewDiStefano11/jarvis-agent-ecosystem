@@ -132,3 +132,108 @@ class CatalogSourceView(IdentityModel):
 class CapabilityView(IdentityModel):
     key: str
     parent: str | None
+
+
+class CatalogAuditSummaryCounts(IdentityModel):
+    total_entries: int = 0
+    agents: int = 0
+    skills: int = 0
+    discoveries: int = 0
+    sources: int = 0
+    revisions: int = 0
+
+
+class ActivationStateBreakdown(IdentityModel):
+    activated_entries: int = 0
+    active_and_enabled_identities: int = 0
+    inactive_or_suspended_identities: int = 0
+    updates_available: int = 0
+    enabled_entries: int = 0
+    disabled_entries: int = 0
+
+
+class StateBreakdown(IdentityModel):
+    review_status: dict[str, int] = Field(default_factory=dict)
+    trust_status: dict[str, int] = Field(default_factory=dict)
+    activation_status: ActivationStateBreakdown = Field(default_factory=ActivationStateBreakdown)
+
+
+class ProvenanceFinding(IdentityModel):
+    source_id: str
+    repository: str
+    commit: str
+    issue: str
+    details: str
+
+
+class DuplicateFinding(IdentityModel):
+    entry_id: str
+    stable_key: str
+    kind: CatalogKind
+    duplicate_of: str
+    canonical_stable_key: str | None = None
+    duplicate_key: str
+
+
+class CapabilityFinding(IdentityModel):
+    entry_id: str
+    stable_key: str
+    kind: CatalogKind
+    unmapped_tags: list[str] = Field(default_factory=list)
+    invalid_capabilities: list[str] = Field(default_factory=list)
+    missing_capabilities: bool = False
+
+
+class SecurityWarningFinding(IdentityModel):
+    entry_id: str
+    stable_key: str
+    kind: CatalogKind
+    warnings: list[str]
+
+
+class RevisionFinding(IdentityModel):
+    entry_id: str
+    stable_key: str
+    kind: CatalogKind
+    current_revision_id: str
+    active_revision_id: str | None = None
+    update_available: bool = False
+    superseded_revisions_count: int = 0
+
+
+class ActiveIdentityFinding(IdentityModel):
+    entry_id: str
+    stable_key: str
+    identity_id: str
+    display_name: str
+    role: str
+    lifecycle_state: str
+    operational_status: str
+    is_enabled: bool
+    is_system_agent: bool
+    agent_type: str
+    rank_id: str | None = None
+    capability_count: int = 0
+    permission_count: int = 0
+    role_assignment_count: int = 0
+    confirmed_unsafe: bool = False
+    unsafe_reasons: list[str] = Field(default_factory=list)
+
+
+class CategorizedFindings(IdentityModel):
+    confirmed_unsafe: list[str] = Field(default_factory=list)
+    informational_warnings: list[str] = Field(default_factory=list)
+
+
+class CatalogAuditReport(IdentityModel):
+    audit_timestamp: datetime
+    summary_counts: CatalogAuditSummaryCounts
+    state_breakdown: StateBreakdown
+    provenance_findings: list[ProvenanceFinding] = Field(default_factory=list)
+    duplicate_findings: list[DuplicateFinding] = Field(default_factory=list)
+    capability_findings: list[CapabilityFinding] = Field(default_factory=list)
+    security_warning_findings: list[SecurityWarningFinding] = Field(default_factory=list)
+    revision_findings: list[RevisionFinding] = Field(default_factory=list)
+    active_identity_findings: list[ActiveIdentityFinding] = Field(default_factory=list)
+    categorized_findings: CategorizedFindings = Field(default_factory=CategorizedFindings)
+    recommendations: list[str] = Field(default_factory=list)
