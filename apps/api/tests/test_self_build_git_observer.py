@@ -674,3 +674,28 @@ def test_absent_metadata_name_creation_cannot_be_hidden_by_restored_timestamps(
         observer.inspect(policy, base)
     assert failure.value.code == "SELF_BUILD_GIT_STATE_CHANGED"
     assert attempted and not path.exists() and path.parent.stat().st_mtime_ns == before.st_mtime_ns
+
+
+@pytest.mark.parametrize("relative", ["config", "HEAD", "refs/heads/main"])
+def test_first_metadata_baseline_is_recorded_only_after_existing_files_are_pinned(
+    repository, monkeypatch, relative
+):
+    root, policy, observer, base, _ = repository
+    path = root / ".git" / relative
+    content = path.read_bytes()
+    native = observer._metadata_state
+    attempted = []
+
+    def baseline(policy):
+        if os.name == "nt" and not attempted:
+            attempted.append(True)
+            with pytest.raises(PermissionError):
+                with path.open("r+b") as stream:
+                    stream.write(content)
+        return native(policy)
+
+    monkeypatch.setattr(observer, "_metadata_state", baseline)
+    assert observer.inspect(policy, base)["base_sha"] == base
+    if os.name == "nt":
+        assert attempted
+    assert path.read_bytes() == content

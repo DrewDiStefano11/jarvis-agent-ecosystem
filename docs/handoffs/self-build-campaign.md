@@ -372,3 +372,15 @@ Git reads with transient names. Ruff/format and frontend typecheck/lint/194 case
 build pass. Updated exact-head CI/review remains required. #93 additionally has
 P2 4235754777 renewed exact-approval recovery under repair; preserve its existing
 operation/approval evidence when a current operator authorizes the identical plan.
+
+
+## October 9 baseline acquisition ordering repair
+
+P1 4235798561 identified capture of the metadata baseline before all Windows
+file pins were acquired. The namespace watch now starts before enumeration,
+existing files are all deny-write/delete pinned, and only then is the first
+metadata baseline recorded. It therefore represents a coherent pinned snapshot;
+no timestamp-restored in-place write can occur between baseline and acquisition.
+Native regressions verify config, HEAD and loose-ref writes are already denied
+at the first baseline call. Existing transient-name and clean readback regressions
+remain required. New exact-head review/CI must cover this parent before merge.

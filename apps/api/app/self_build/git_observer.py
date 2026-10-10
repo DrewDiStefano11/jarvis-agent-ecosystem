@@ -396,7 +396,6 @@ class GitObserver:
                     info = path.stat()
                     pinned.append((path, info.st_dev, info.st_ino))
                 check_namespace = stack.enter_context(namespace_watch(root / ".git"))
-                metadata_state = self._metadata_state(policy)
                 count = 0
 
                 def walk_error(error):
@@ -430,11 +429,10 @@ class GitObserver:
                                 "SELF_BUILD_GIT_METADATA_UNSAFE",
                                 "External Git object stores are unavailable.",
                             )
-                if self._metadata_state(policy) != metadata_state:
-                    fail(
-                        "SELF_BUILD_GIT_STATE_CHANGED",
-                        "Metadata changed during handle acquisition.",
-                    )
+                # Establish the baseline after every existing Windows file has a
+                # deny-write/delete pin. The watch already covers absent names.
+                check_namespace()
+                metadata_state = self._metadata_state(policy)
                 token = INSPECTION_METADATA.set(
                     (policy.primary_root, metadata_state, check_namespace)
                 )
