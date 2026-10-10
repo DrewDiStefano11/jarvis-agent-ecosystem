@@ -37,7 +37,8 @@
     "tests/test_task_projects.py",
     "tests/test_tool_execution.py"
   ],
-  "models": ["tests/test_development_validation.py",
+  "models": [
+    "tests/test_development_validation.py",
     "tests/test_agent_runtime_checkpoints.py",
     "tests/test_agent_runtime_parent_authorization.py",
     "tests/test_agent_runtime_recovery.py",
@@ -59,7 +60,10 @@
     "tests/test_remote_tls.py",
     "tests/test_tool_filesystem.py"
   ],
-  "system": ["tests/test_git_process.py", "tests/test_self_build_workspaces.py", "tests/test_self_build_git_observer.py", "tests/test_self_build_git_inspection.py",
+  "system": ["tests/test_git_process.py", 
+    "tests/test_self_build_workspaces.py",
+    "tests/test_self_build_git_observer.py",
+    "tests/test_self_build_git_inspection.py",
     "tests/test_agent_runtime_authorization.py",
     "tests/test_agent_runtime_migration_downgrade.py",
     "tests/test_agent_runtime_repository.py",
@@ -74,6 +78,10 @@
     "tests/test_self_improvement.py",
     "tests/test_task_corrections.py",
     "tests/test_task_decomposition.py",
-    "tests/test_team_selection.py"
+    "tests/test_team_selection.py",
+    "tests/test_workspace_namespace.py",
+    "tests/test_workspace_creation_contract.py",
+    "tests/test_owned_process.py",
+    "tests/test_workspace_creation_service.py"
   ]
 }

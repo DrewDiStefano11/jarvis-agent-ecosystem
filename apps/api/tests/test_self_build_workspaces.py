@@ -342,6 +342,9 @@ def test_workspace_migration_empty_roundtrip_and_populated_guard(workspace, tmp_
     guarded = migration_config(__import__("pathlib").Path(app.state.engine.url.database))
     with pytest.raises(RuntimeError, match="Export development workspace history"):
         command.downgrade(guarded, "20260907_11")
+    # SQLite DDL from newer empty revisions can commit before an older populated
+    # downgrade guard rejects the chain. Restore head before using current ORM models.
+    command.upgrade(guarded, "head")
     assert service.read(actor, service.preview(actor, request).worktree_key).state == "reserved"
 
 
