@@ -1,10 +1,11 @@
 """Read-only native Git observation. No user/model command or executable arguments."""
 
+import ctypes
 import os
 import re
 import stat
 import subprocess
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from threading import Event, Lock, Thread
@@ -14,7 +15,12 @@ from urllib.parse import urlsplit
 from app.core.errors import DomainError
 from app.self_build.git_image import pinned_image
 from app.self_build.policy import digest
-from app.tool_execution.filesystem import check_stat, open_directory, repository_parts
+from app.tool_execution.filesystem import (
+    check_stat,
+    open_directory,
+    repository_parts,
+    windows_final_path,
+)
 
 COMMIT = re.compile(r"[a-f0-9]{40}\Z")
 MAX_OUTPUT = 1024 * 1024
@@ -70,6 +76,42 @@ def windows_implementation_path(path):
         and path.parent.name.casefold() == "bin"
         and path.parent.parent.name.casefold() in {"mingw32", "mingw64"}
     )
+
+
+@contextmanager
+def pinned_metadata_file(path):
+    """Windows locks exclude writes/deletion for the complete observation."""
+    import msvcrt
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    create.restype = wintypes.HANDLE
+    handle = create(str(path), 0x80000000, 1, None, 3, 0x00200000, None)
+    if handle == ctypes.c_void_p(-1).value:
+        raise OSError(ctypes.get_last_error(), "Cannot pin Git metadata file")
+    try:
+        fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    except BaseException:
+        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel.CloseHandle(handle)
+        raise
+    try:
+        check_stat(os.fstat(fd), internal=True)
+        if os.path.normcase(windows_final_path(fd)) != os.path.normcase(str(path)):
+            raise OSError("Metadata handle escaped its pinned path")
+        yield
+    finally:
+        os.close(fd)
 
 
 class GitObserver:
@@ -142,17 +184,42 @@ class GitObserver:
         return result
 
     def _metadata_state(self, policy):
-        # Linux directory descriptors do not deny rename. Check the original
-        # namespace identities AND change stamps around each command, retaining
-        # the whole inspection baseline even if names are restored afterwards.
+        # POSIX ctime detects in-place writes even when bytes/mtime are restored.
+        # Windows additionally retains deny-write handles throughout inspection.
         try:
             root = Path(policy.primary_root)
             result = []
-            for path in (root, root / ".git", root / ".git" / "objects"):
+
+            def observe(path, directory):
                 info = path.lstat()
-                check_stat(info, directory=True, internal=True)
-                result.append((info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns))
-            return tuple(result)
+                check_stat(info, directory=directory, internal=True)
+                result.append(
+                    (
+                        str(path.relative_to(root)),
+                        info.st_dev,
+                        info.st_ino,
+                        info.st_size if not directory else None,
+                        info.st_mtime_ns,
+                        info.st_ctime_ns,
+                    )
+                )
+                if len(result) > 16386:
+                    fail("SELF_BUILD_GIT_METADATA_LIMIT", "Git metadata exceeds inspection limits.")
+
+            def walk_error(error):
+                raise error
+
+            observe(root, True)
+            observe(root / ".git", True)
+            for directory, directories, files in os.walk(
+                root / ".git", followlinks=False, onerror=walk_error
+            ):
+                parent = Path(directory)
+                for name in sorted(directories):
+                    observe(parent / name, True)
+                for name in sorted(files):
+                    observe(parent / name, False)
+            return tuple(sorted(result))
         except OSError:
             fail("SELF_BUILD_GIT_METADATA_INVALID", "Pinned repository metadata is unavailable.")
 
@@ -342,6 +409,8 @@ class GitObserver:
                     for name in files:
                         path = parent / name
                         check_stat(path.lstat(), internal=True)
+                        if os.name == "nt":
+                            stack.enter_context(pinned_metadata_file(path))
                         if (
                             path == root / ".git" / "objects" / "info" / "alternates"
                             and path.stat().st_size
@@ -350,6 +419,11 @@ class GitObserver:
                                 "SELF_BUILD_GIT_METADATA_UNSAFE",
                                 "External Git object stores are unavailable.",
                             )
+                if self._metadata_state(policy) != metadata_state:
+                    fail(
+                        "SELF_BUILD_GIT_STATE_CHANGED",
+                        "Metadata changed during handle acquisition.",
+                    )
                 token = INSPECTION_METADATA.set((policy.primary_root, metadata_state))
                 try:
                     result = self._inspect(policy, base_sha)
