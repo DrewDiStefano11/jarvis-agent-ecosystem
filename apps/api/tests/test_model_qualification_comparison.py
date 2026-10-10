@@ -161,7 +161,9 @@ def test_comparison_unchanged():
 
 
 def test_comparison_missing_role():
-    b_prof = _make_profile(roles={"manager": _make_role_record("manager"), "planner": _make_role_record("planner")})
+    b_prof = _make_profile(
+        roles={"manager": _make_role_record("manager"), "planner": _make_role_record("planner")}
+    )
     t_prof = _make_profile(roles={"manager": _make_role_record("manager")})
 
     report = compare_qualification_artifacts(b_prof, t_prof)
@@ -221,7 +223,13 @@ def test_comparison_suite_digest_mismatch():
 
 
 def test_stable_output_ordering():
-    p1 = _make_profile(model="b_model", roles={"specialist": _make_role_record("specialist"), "decomposer": _make_role_record("decomposer")})
+    p1 = _make_profile(
+        model="b_model",
+        roles={
+            "specialist": _make_role_record("specialist"),
+            "decomposer": _make_role_record("decomposer"),
+        },
+    )
     p2 = _make_profile(model="a_model", roles={"manager": _make_role_record("manager")})
 
     report = compare_qualification_artifacts((p1, p2), (p1, p2))
@@ -268,7 +276,9 @@ def test_comparison_report_serialization(tmp_path: Path):
 
 def test_cli_comparison_execution(tmp_path: Path):
     p1 = _make_profile(model="qwen3:14b")
-    p2 = _make_profile(model="qwen3:14b", roles={"manager": _make_role_record("manager", score=0.95)})
+    p2 = _make_profile(
+        model="qwen3:14b", roles={"manager": _make_role_record("manager", score=0.95)}
+    )
 
     f1 = tmp_path / "b.json"
     f2 = tmp_path / "t.json"

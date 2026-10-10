@@ -94,7 +94,12 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Output directory for comparison evidence (default: {DEFAULT_OUT})",
     )
     parser.add_argument("--repo-sha", default=None)
-    parser.add_argument("--json", dest="json_output", action="store_true", help="Print JSON report to stdout")
+    parser.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Print JSON report to stdout",
+    )
     return parser
 
 
@@ -104,11 +109,17 @@ def main(argv: list[str] | None = None) -> int:
     target_path = Path(args.target_artifact)
 
     if not baseline_path.exists():
-        print(f"error: baseline artifact file does not exist: {baseline_path}", file=sys.stderr)
+        print(
+            f"error: baseline artifact file does not exist: {baseline_path}",
+            file=sys.stderr,
+        )
         return EXIT_INVALID_INPUT
 
     if not target_path.exists():
-        print(f"error: target artifact file does not exist: {target_path}", file=sys.stderr)
+        print(
+            f"error: target artifact file does not exist: {target_path}",
+            file=sys.stderr,
+        )
         return EXIT_INVALID_INPUT
 
     try:
@@ -130,7 +141,9 @@ def main(argv: list[str] | None = None) -> int:
             target_source_name=str(target_path),
         )
     except ValueError as exc:
-        print(f"error loading or parsing qualification artifact: {exc}", file=sys.stderr)
+        print(
+            f"error loading or parsing qualification artifact: {exc}", file=sys.stderr
+        )
         return EXIT_INVALID_INPUT
     except Exception as exc:  # noqa: BLE001
         print(f"unexpected error during comparison: {exc}", file=sys.stderr)
@@ -141,7 +154,9 @@ def main(argv: list[str] | None = None) -> int:
         out_dir = ROOT / out_dir
 
     json_path = write_comparison_json(out_dir / "qualification-comparison.json", report)
-    md_path = write_comparison_markdown(out_dir / "qualification-comparison-summary.md", report)
+    md_path = write_comparison_markdown(
+        out_dir / "qualification-comparison-summary.md", report
+    )
 
     if args.json_output:
         print(json.dumps(report.model_dump(mode="json"), indent=2, sort_keys=True))
@@ -154,10 +169,14 @@ def main(argv: list[str] | None = None) -> int:
         print()
         print("comparisons:")
         for c in report.comparisons:
-            b_score = f"{c.baseline_score:.3f}" if c.baseline_score is not None else "n/a"
+            b_score = (
+                f"{c.baseline_score:.3f}" if c.baseline_score is not None else "n/a"
+            )
             t_score = f"{c.target_score:.3f}" if c.target_score is not None else "n/a"
             delta = f"{c.score_delta:+.3f}" if c.score_delta is not None else "n/a"
-            print(f"  {c.model} ({c.provider}) [{c.role}]: {c.verdict} (scores: {b_score} -> {t_score}, delta: {delta})")
+            print(
+                f"  {c.model} ({c.provider}) [{c.role}]: {c.verdict} (scores: {b_score} -> {t_score}, delta: {delta})"
+            )
             print(f"    reason: {c.reason}")
 
     print(f"evidence written to {json_path}", file=sys.stderr)
@@ -171,5 +190,8 @@ if __name__ == "__main__":
     except SystemExit:
         raise
     except Exception as exc:  # noqa: BLE001
-        print(f"compare-model-qualification failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(
+            f"compare-model-qualification failed: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
         sys.exit(EXIT_ERROR)

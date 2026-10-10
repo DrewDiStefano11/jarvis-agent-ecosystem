@@ -10,6 +10,7 @@
     "tests/test_diagnostics.py",
     "tests/test_identity_rbac.py",
     "tests/test_model_qualification.py",
+    "tests/test_model_qualification_comparison.py",
     "tests/test_planning_correction.py",
     "tests/test_planning_output_options.py",
     "tests/test_remote_config.py",
@@ -37,7 +38,8 @@
     "tests/test_task_projects.py",
     "tests/test_tool_execution.py"
   ],
-  "models": ["tests/test_development_validation.py",
+  "models": [
+    "tests/test_development_validation.py",
     "tests/test_agent_runtime_checkpoints.py",
     "tests/test_agent_runtime_parent_authorization.py",
     "tests/test_agent_runtime_recovery.py",
@@ -59,7 +61,8 @@
     "tests/test_remote_tls.py",
     "tests/test_tool_filesystem.py"
   ],
-  "system": ["tests/test_self_build_workspaces.py",
+  "system": [
+    "tests/test_self_build_workspaces.py",
     "tests/test_agent_runtime_authorization.py",
     "tests/test_agent_runtime_migration_downgrade.py",
     "tests/test_agent_runtime_repository.py",

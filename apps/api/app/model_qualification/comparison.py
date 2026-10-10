@@ -106,7 +106,9 @@ class QualificationComparisonReport(BaseModel):
     notes: tuple[str, ...] = ()
 
 
-def load_qualification_artifact(source: str | Path | dict[str, Any] | list[Any] | ModelProfile | QualificationRun) -> tuple[ModelProfile, ...]:
+def load_qualification_artifact(
+    source: str | Path | dict[str, Any] | list[Any] | ModelProfile | QualificationRun,
+) -> tuple[ModelProfile, ...]:
     """Load and validate qualification artifact(s) from a file path, dict, list, or model object."""
     if isinstance(source, ModelProfile):
         return (source,)
@@ -118,7 +120,9 @@ def load_qualification_artifact(source: str | Path | dict[str, Any] | list[Any] 
         if not file_path.exists():
             raise ValueError(f"qualification artifact path does not exist: {file_path}")
         if file_path.is_file() and file_path.stat().st_size > MAX_ARTIFACT_SIZE_BYTES:
-            raise ValueError(f"qualification artifact exceeds maximum allowed size ({MAX_ARTIFACT_SIZE_BYTES} bytes): {file_path}")
+            raise ValueError(
+                f"qualification artifact exceeds maximum allowed size ({MAX_ARTIFACT_SIZE_BYTES} bytes): {file_path}"
+            )
 
         # Attempt reading as QualificationRun first, then ModelProfile
         try:
@@ -140,7 +144,9 @@ def load_qualification_artifact(source: str | Path | dict[str, Any] | list[Any] 
             if isinstance(raw_data, list):
                 return tuple(ModelProfile.model_validate(item) for item in raw_data)
         except Exception as exc:
-            raise ValueError(f"failed to parse qualification artifact at {file_path}: {exc}") from exc
+            raise ValueError(
+                f"failed to parse qualification artifact at {file_path}: {exc}"
+            ) from exc
 
         raise ValueError(f"unrecognized qualification artifact format at {file_path}")
 
@@ -175,7 +181,9 @@ def compare_qualification_artifacts(
     baseline_modes = tuple(sorted(set(p.inference_mode for p in baseline_profiles)))
     target_modes = tuple(sorted(set(p.inference_mode for p in target_profiles)))
 
-    b_map: dict[tuple[str, str], ModelProfile] = {(p.model, p.provider): p for p in baseline_profiles}
+    b_map: dict[tuple[str, str], ModelProfile] = {
+        (p.model, p.provider): p for p in baseline_profiles
+    }
     t_map: dict[tuple[str, str], ModelProfile] = {(p.model, p.provider): p for p in target_profiles}
 
     all_keys = sorted(set(b_map.keys()) | set(t_map.keys()))
@@ -212,7 +220,9 @@ def compare_qualification_artifacts(
                         target_qualification=t_role.qualification if t_role else None,
                         baseline_score=None,
                         target_score=t_role.score if t_role else None,
-                        missing_or_incomplete_evidence=(f"model '{model}' missing in baseline report",),
+                        missing_or_incomplete_evidence=(
+                            f"model '{model}' missing in baseline report",
+                        ),
                     )
                 )
             continue
@@ -237,7 +247,9 @@ def compare_qualification_artifacts(
                         target_qualification=None,
                         baseline_score=b_role.score if b_role else None,
                         target_score=None,
-                        missing_or_incomplete_evidence=(f"model '{model}' missing in target report",),
+                        missing_or_incomplete_evidence=(
+                            f"model '{model}' missing in target report",
+                        ),
                     )
                 )
             continue
@@ -314,7 +326,9 @@ def compare_qualification_artifacts(
                         target_qualification=t_role.qualification,
                         baseline_score=None,
                         target_score=t_role.score,
-                        missing_or_incomplete_evidence=(f"role '{role}' missing in baseline report",),
+                        missing_or_incomplete_evidence=(
+                            f"role '{role}' missing in baseline report",
+                        ),
                     )
                 )
                 continue
@@ -413,8 +427,12 @@ def compare_qualification_artifacts(
             if t_unavail:
                 evidence_issues.append(f"target unavailable cases: {t_unavail}")
 
-            b_unmeas_mand = [g.key for g in b_role.gates if g.mandatory and g.status == "not_evaluated"]
-            t_unmeas_mand = [g.key for g in t_role.gates if g.mandatory and g.status == "not_evaluated"]
+            b_unmeas_mand = [
+                g.key for g in b_role.gates if g.mandatory and g.status == "not_evaluated"
+            ]
+            t_unmeas_mand = [
+                g.key for g in t_role.gates if g.mandatory and g.status == "not_evaluated"
+            ]
             if b_unmeas_mand:
                 evidence_issues.append(f"baseline unmeasured mandatory gates: {b_unmeas_mand}")
             if t_unmeas_mand:
@@ -440,17 +458,29 @@ def compare_qualification_artifacts(
                 for k in newly_passing
             )
 
-            if t_rank > b_rank or failed_mand_regressed or (t_rank == b_rank and delta is not None and delta <= -SCORE_DELTA_THRESHOLD):
+            if (
+                t_rank > b_rank
+                or failed_mand_regressed
+                or (t_rank == b_rank and delta is not None and delta <= -SCORE_DELTA_THRESHOLD)
+            ):
                 verdict = VERDICT_REGRESSED
                 reasons = []
                 if t_rank > b_rank:
                     reasons.append(f"qualification level dropped from {b_level} to {t_level}")
                 if failed_mand_regressed:
-                    reasons.append(f"previously passing mandatory gate(s) failed: {previously_passing_failed}")
+                    reasons.append(
+                        f"previously passing mandatory gate(s) failed: {previously_passing_failed}"
+                    )
                 if t_rank == b_rank and delta is not None and delta <= -SCORE_DELTA_THRESHOLD:
-                    reasons.append(f"score decreased from {b_score:.3f} to {t_score:.3f} ({delta:+.3f})")
+                    reasons.append(
+                        f"score decreased from {b_score:.3f} to {t_score:.3f} ({delta:+.3f})"
+                    )
                 reason = "; ".join(reasons)
-            elif t_rank < b_rank or passed_mand_improved or (t_rank == b_rank and delta is not None and delta >= SCORE_DELTA_THRESHOLD):
+            elif (
+                t_rank < b_rank
+                or passed_mand_improved
+                or (t_rank == b_rank and delta is not None and delta >= SCORE_DELTA_THRESHOLD)
+            ):
                 verdict = VERDICT_IMPROVED
                 reasons = []
                 if t_rank < b_rank:
@@ -458,7 +488,9 @@ def compare_qualification_artifacts(
                 if passed_mand_improved:
                     reasons.append(f"newly passing mandatory gate(s): {newly_passing}")
                 if t_rank == b_rank and delta is not None and delta >= SCORE_DELTA_THRESHOLD:
-                    reasons.append(f"score increased from {b_score:.3f} to {t_score:.3f} ({delta:+.3f})")
+                    reasons.append(
+                        f"score increased from {b_score:.3f} to {t_score:.3f} ({delta:+.3f})"
+                    )
                 reason = "; ".join(reasons)
             else:
                 verdict = VERDICT_UNCHANGED
@@ -564,25 +596,37 @@ def render_comparison_markdown(report: QualificationComparisonReport) -> str:
 
     # Detailed gate and evidence diffs
     has_details = any(
-        c.mandatory_gate_changes or c.previously_passing_failed_gates or c.newly_passing_gates or c.missing_or_incomplete_evidence
+        c.mandatory_gate_changes
+        or c.previously_passing_failed_gates
+        or c.newly_passing_gates
+        or c.missing_or_incomplete_evidence
         for c in report.comparisons
     )
 
     if has_details:
         lines += ["## Detailed Gate & Evidence Changes", ""]
         for c in report.comparisons:
-            if not (c.mandatory_gate_changes or c.previously_passing_failed_gates or c.newly_passing_gates or c.missing_or_incomplete_evidence):
+            if not (
+                c.mandatory_gate_changes
+                or c.previously_passing_failed_gates
+                or c.newly_passing_gates
+                or c.missing_or_incomplete_evidence
+            ):
                 continue
             lines.append(f"### `{c.model}` (`{c.provider}`) — role `{c.role}` ({c.verdict})")
             lines.append("")
             if c.previously_passing_failed_gates:
-                lines.append(f"- **Previously passing gates that now fail**: {list(c.previously_passing_failed_gates)}")
+                lines.append(
+                    f"- **Previously passing gates that now fail**: {list(c.previously_passing_failed_gates)}"
+                )
             if c.newly_passing_gates:
                 lines.append(f"- **Newly passing gates**: {list(c.newly_passing_gates)}")
             if c.mandatory_gate_changes:
                 lines.append(f"- **Mandatory gate changes**: {list(c.mandatory_gate_changes)}")
             if c.missing_or_incomplete_evidence:
-                lines.append(f"- **Missing or incomplete evidence**: {list(c.missing_or_incomplete_evidence)}")
+                lines.append(
+                    f"- **Missing or incomplete evidence**: {list(c.missing_or_incomplete_evidence)}"
+                )
             lines.append("")
 
     return "\n".join(lines)
