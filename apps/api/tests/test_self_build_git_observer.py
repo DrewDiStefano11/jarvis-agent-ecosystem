@@ -631,3 +631,46 @@ def test_transient_in_place_metadata_write_is_blocked_or_rejected(
             observer.inspect(policy, base)
         assert failure.value.code == "SELF_BUILD_GIT_STATE_CHANGED"
     assert attempted and path.read_bytes() == original
+
+
+def test_bounded_metadata_pins_do_not_exhaust_crt_file_descriptors(repository):
+    root, policy, observer, base, _ = repository
+    metadata = root / ".git" / "inspection-metadata"
+    metadata.mkdir()
+    for number in range(700):
+        (metadata / f"ordinary-{number}").write_bytes(b"bounded")
+    assert observer.inspect(policy, base)["base_sha"] == base
+    # Successful post-operation writes verify every native pin was released.
+    (metadata / "ordinary-0").write_bytes(b"after inspection")
+
+
+@pytest.mark.parametrize("relative", ["objects/info/alternates", "refs/remotes/origin/main"])
+def test_absent_metadata_name_creation_cannot_be_hidden_by_restored_timestamps(
+    repository, monkeypatch, relative
+):
+    root, policy, observer, base, git = repository
+    path = root / ".git" / relative
+    if relative.startswith("refs/"):
+        git("pack-refs", "--all", "--prune")
+        path.parent.mkdir(parents=True, exist_ok=True)
+    assert not path.exists()
+    before = path.parent.stat()
+    native = observer._read_image
+    attempted = []
+
+    def changed(policy, operation, sha, executable, launch):
+        if operation != ("origin_tip" if relative.startswith("refs/") else "base") or attempted:
+            return native(policy, operation, sha, executable, launch)
+        attempted.append(True)
+        path.write_bytes((base + "\n").encode() if relative.startswith("refs/") else b"")
+        try:
+            return native(policy, operation, sha, executable, launch)
+        finally:
+            path.unlink()
+            os.utime(path.parent, ns=(before.st_atime_ns, before.st_mtime_ns))
+
+    monkeypatch.setattr(observer, "_read_image", changed)
+    with pytest.raises(DomainError) as failure:
+        observer.inspect(policy, base)
+    assert failure.value.code == "SELF_BUILD_GIT_STATE_CHANGED"
+    assert attempted and not path.exists() and path.parent.stat().st_mtime_ns == before.st_mtime_ns
