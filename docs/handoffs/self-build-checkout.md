@@ -49,3 +49,18 @@ The next driver's draft is in self-build-native-checkout, with 31 native
 registration/preparation/process cases passing. It remains unexposed/uncommitted;
 Linux mutation pathname containment and durable registration checkpoint integration
 still require completion before any production entry point can be added.
+
+
+## October 9 recovery review repair
+
+Current #93 is stacked on reconciliation #94. P2 4235754777 identified rejection
+of a renewed exact-plan approval after the original preparation approval expires
+inside a checkpoint crash gap. Preparation now accepts a fresh current configured
+operator approval validated by the existing full fence, while preserving the
+original record approval, operation, private nonce, integrity digest and checkpoint
+identity. The checkpoint acknowledgement audit event records the approval used
+for current authorization. Neither a successor lease/attempt nor a changed plan
+can be adopted. Native regressions exercise both intent-before-checkpoint and
+checkpoint-before-acknowledgement with expired original and fresh exact approval.
+Final #94 namespace-notification repair must also be integrated before re-review;
+no automatic merge or completed checkout/factory claim.

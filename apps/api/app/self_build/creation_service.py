@@ -276,7 +276,6 @@ class WorkspaceCreationService:
                 if (
                     record.plan != plan
                     or record.attempt_id != attempt
-                    or record.approval_id != request.approval_id
                     or record.worker_id != request.worker_id
                     or record.state != "prepared"
                 ):
@@ -362,6 +361,7 @@ class WorkspaceCreationService:
                         "operationId": current.operation_id,
                         "checkpointId": identifier,
                         "intentDigest": private_digest,
+                        "authorizationApprovalId": request.approval_id,
                     },
                 )
         self.repository.leases.repository.refresh_event_cursor()

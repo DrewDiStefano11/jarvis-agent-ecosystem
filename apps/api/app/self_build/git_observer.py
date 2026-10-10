@@ -14,12 +14,12 @@ from urllib.parse import urlsplit
 
 from app.core.errors import DomainError
 from app.self_build.git_image import pinned_image
+from app.self_build.git_namespace_watch import namespace_watch
 from app.self_build.policy import digest
 from app.tool_execution.filesystem import (
     check_stat,
     open_directory,
     repository_parts,
-    windows_final_path,
 )
 
 COMMIT = re.compile(r"[a-f0-9]{40}\Z")
@@ -81,7 +81,6 @@ def windows_implementation_path(path):
 @contextmanager
 def pinned_metadata_file(path):
     """Windows locks exclude writes/deletion for the complete observation."""
-    import msvcrt
     from ctypes import wintypes
 
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -96,22 +95,29 @@ def pinned_metadata_file(path):
         wintypes.HANDLE,
     ]
     create.restype = wintypes.HANDLE
+    close = kernel.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
     handle = create(str(path), 0x80000000, 1, None, 3, 0x00200000, None)
     if handle == ctypes.c_void_p(-1).value:
         raise OSError(ctypes.get_last_error(), "Cannot pin Git metadata file")
     try:
-        fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
-    except BaseException:
-        kernel.CloseHandle.argtypes = [wintypes.HANDLE]
-        kernel.CloseHandle(handle)
-        raise
-    try:
-        check_stat(os.fstat(fd), internal=True)
-        if os.path.normcase(windows_final_path(fd)) != os.path.normcase(str(path)):
+        # Keep native handles, avoiding the CRT descriptor ceiling for bounded
+        # repositories with many loose objects. Parents are already pinned.
+        final_path = kernel.GetFinalPathNameByHandleW
+        final_path.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
+        final_path.restype = wintypes.DWORD
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = final_path(handle, buffer, len(buffer), 0)
+        if not length or length >= len(buffer):
+            raise OSError("Cannot resolve metadata handle")
+        observed = buffer.value.removeprefix("\\\\?\\")
+        if os.path.normcase(observed) != os.path.normcase(str(path)):
             raise OSError("Metadata handle escaped its pinned path")
+        check_stat(path.lstat(), internal=True)
         yield
     finally:
-        os.close(fd)
+        close(handle)
 
 
 class GitObserver:
@@ -170,10 +176,14 @@ class GitObserver:
                 "SELF_BUILD_GIT_STATE_CHANGED",
                 "Repository metadata differs from the pinned inspection.",
             )
+        if expected is not None:
+            expected[2]()
         alternate_state = self._alternates_state(policy)
         executable = self._tool(policy)
         with pinned_image(executable, self.executable_hash) as launch:
             result = self._read_image(policy, operation, base_sha, executable, launch)
+        if expected is not None:
+            expected[2]()
         if self._metadata_state(policy) != metadata_state:
             fail(
                 "SELF_BUILD_GIT_STATE_CHANGED",
@@ -385,6 +395,7 @@ class GitObserver:
                     open_directory(stack, path, internal=True)
                     info = path.stat()
                     pinned.append((path, info.st_dev, info.st_ino))
+                check_namespace = stack.enter_context(namespace_watch(root / ".git"))
                 metadata_state = self._metadata_state(policy)
                 count = 0
 
@@ -424,9 +435,12 @@ class GitObserver:
                         "SELF_BUILD_GIT_STATE_CHANGED",
                         "Metadata changed during handle acquisition.",
                     )
-                token = INSPECTION_METADATA.set((policy.primary_root, metadata_state))
+                token = INSPECTION_METADATA.set(
+                    (policy.primary_root, metadata_state, check_namespace)
+                )
                 try:
                     result = self._inspect(policy, base_sha)
+                    check_namespace()
                     if self._metadata_state(policy) != metadata_state:
                         fail(
                             "SELF_BUILD_GIT_STATE_CHANGED",

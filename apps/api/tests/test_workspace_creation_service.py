@@ -331,3 +331,56 @@ def test_preparation_invalidates_prior_abandonment_approval(creation, gap, monke
     assert result.state == "abandoned"
     with app.state.repository.session_factory() as session:
         assert session.get(DevelopmentWorkspaceRow, workspace_id).creation_json == private
+
+
+@pytest.mark.parametrize("after_native", [False, True])
+def test_renewed_exact_operator_approval_recovers_original_preparation(
+    creation, monkeypatch, after_native
+):
+    from app.self_build import creation_service
+
+    _, actor, operator, service, workspace_id, request, _ = creation
+    native = service.runtime.handle_authorized
+
+    def crash(*args, **kwargs):
+        if after_native:
+            native(*args, **kwargs)
+        raise RuntimeError("checkpoint crash gap")
+
+    monkeypatch.setattr(service.runtime, "handle_authorized", crash)
+    with pytest.raises(RuntimeError, match="crash gap"):
+        service.prepare(actor, workspace_id, request)
+    pending = service.read(actor, workspace_id)
+    with service.repository.sessions() as session:
+        original_private = dict(session.get(DevelopmentWorkspaceRow, workspace_id).creation_json)
+
+    class ExpiredClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime.now(tz) + timedelta(seconds=1000)
+
+    monkeypatch.setattr(creation_service, "datetime", ExpiredClock)
+    with pytest.raises(DomainError) as failure:
+        service.prepare(actor, workspace_id, request)
+    assert failure.value.code == "SELF_BUILD_APPROVAL_REQUIRED"
+    renewed = service.approve(
+        operator,
+        ApproveWorkspaceCreation(
+            workspace_id=workspace_id,
+            inspection_id=request.inspection_id,
+            expected_plan_hash=request.expected_plan_hash,
+        ),
+    )
+    monkeypatch.setattr(service.runtime, "handle_authorized", native)
+    recovered = service.prepare(
+        actor, workspace_id, request.model_copy(update={"approval_id": renewed.approval_id})
+    )
+    assert recovered.operation_id == pending.operation_id
+    assert recovered.approval_id == pending.approval_id != renewed.approval_id
+    assert (
+        recovered.checkpoint_id and len(service.runtime.checkpoints_authorized("run-1", actor)) == 1
+    )
+    with service.repository.sessions() as session:
+        current = session.get(DevelopmentWorkspaceRow, workspace_id).creation_json
+        assert current["digest"] == original_private["digest"]
+        assert current["nonce"] == original_private["nonce"]

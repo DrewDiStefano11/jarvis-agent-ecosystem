@@ -350,3 +350,25 @@ bytes/times on POSIX and actual denied writes on Windows. Review 4235651527's
 handoff punctuation corruption is repaired without altering historical facts.
 New exact-head CI/review remains required after this repair; dependent #93 and
 native checkout work must integrate this parent before publication.
+
+
+## October 9 absent-name review repair
+
+P1 4235727363 demonstrated that absent Windows metadata names can be transiently
+created/read/deleted while directory timestamps are restored. Inspection now arms
+one native ReadDirectoryChangesW notification on the full Git metadata subtree
+before enumeration. It remains pending throughout all reads; any name notification,
+buffer overflow or watch failure invalidates evidence. Final cancellation is
+drained before native buffer/OVERLAPPED memory is released, and a notification
+winning the cancellation race also rejects the result. Existing files retain
+Windows deny-write/delete pins, now raw native handles rather than CRT descriptors
+so bounded repositories with many loose objects do not exhaust the descriptor
+ceiling. POSIX keeps complete identity/mtime/ctime baseline verification.
+
+Final inspection/service validation passes 65 cases, including temporary name
+creation with restored mtime and a 700-file native-handle resource regression.
+Actual origin loose-ref and alternates namespace regressions additionally exercise
+Git reads with transient names. Ruff/format and frontend typecheck/lint/194 cases/
+build pass. Updated exact-head CI/review remains required. #93 additionally has
+P2 4235754777 renewed exact-approval recovery under repair; preserve its existing
+operation/approval evidence when a current operator authorizes the identical plan.
