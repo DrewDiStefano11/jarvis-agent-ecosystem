@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('start', 'stop', 'restart', 'status', 'doctor', 'runtime-doctor', 'backup', 'autostart')]
+    [ValidateSet('start', 'stop', 'restart', 'status', 'doctor', 'runtime-doctor', 'backup', 'verify-backup', 'autostart')]
     [string]$Command = 'status',
 
     [Parameter(ValueFromRemainingArguments = $true)]
