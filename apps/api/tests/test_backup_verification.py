@@ -273,9 +273,7 @@ def test_cli_verify_backup_commands(
     manifest = create_backup(config)
 
     # CLI test single latest backup
-    exit_code = cli_main(
-        ["--repository", str(config.repository), "--json", "verify-backup"]
-    )
+    exit_code = cli_main(["--repository", str(config.repository), "--json", "verify-backup"])
     assert exit_code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["valid"] is True
@@ -306,9 +304,7 @@ def test_cli_verify_backup_commands(
     assert payload["valid"] is True
 
     # CLI test human readable text output
-    exit_code = cli_main(
-        ["--repository", str(config.repository), "verify-backup", "--all"]
-    )
+    exit_code = cli_main(["--repository", str(config.repository), "verify-backup", "--all"])
     assert exit_code == 0
     out = capsys.readouterr().out
     assert "Backup Verification Summary: valid=True" in out

@@ -285,7 +285,9 @@ def verify_all_backups(config: SupervisorConfig) -> dict[str, Any]:
     overall_valid = len(results) > 0 and invalid_count == 0
 
     return {
-        "status": STATUS_VALID if overall_valid else (STATUS_MISSING_BACKUP if not results else "verification_failed"),
+        "status": STATUS_VALID
+        if overall_valid
+        else (STATUS_MISSING_BACKUP if not results else "verification_failed"),
         "valid": overall_valid,
         "results": results,
         "totalCount": len(results),
