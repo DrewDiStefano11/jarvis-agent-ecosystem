@@ -241,23 +241,20 @@ def test_native_process_watchdog_uses_inactivity_and_kills_only_its_process(
 ):
     import sys
 
-    from app.self_build import git_observer
-
     _, policy, observer, head, _ = repository
     native_popen = subprocess.Popen
     children = []
 
     def controlled_process(*args, **kwargs):
+        kwargs.pop("executable", None)
         child = native_popen(
             [sys.executable, "-c", "import time; time.sleep(10)"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            **kwargs,
         )
         children.append(child)
         return child
 
-    monkeypatch.setattr(git_observer.subprocess, "Popen", controlled_process)
+    monkeypatch.setattr(subprocess, "Popen", controlled_process)
     observer.inactivity_seconds = 0.15
     with pytest.raises(DomainError) as failure:
         observer._read(policy, "head", head)
@@ -268,24 +265,21 @@ def test_native_process_watchdog_uses_inactivity_and_kills_only_its_process(
 def test_healthy_native_output_can_run_longer_than_inactivity_budget(repository, monkeypatch):
     import sys
 
-    from app.self_build import git_observer
-
     _, policy, observer, head, _ = repository
     native_popen = subprocess.Popen
 
     def controlled_process(*args, **kwargs):
+        kwargs.pop("executable", None)
         return native_popen(
             [
                 sys.executable,
                 "-c",
                 "import time; [(print('progress', flush=True), time.sleep(0.25)) for _ in range(6)]",
             ],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            **kwargs,
         )
 
-    monkeypatch.setattr(git_observer.subprocess, "Popen", controlled_process)
+    monkeypatch.setattr(subprocess, "Popen", controlled_process)
     observer.inactivity_seconds = 1
     assert observer._read(policy, "head", head).count(b"progress") == 6
 
@@ -299,14 +293,13 @@ def test_large_output_is_rejected_even_when_child_exits_immediately(repository, 
     native_popen = subprocess.Popen
 
     def controlled_process(*args, **kwargs):
+        kwargs.pop("executable", None)
         return native_popen(
             [sys.executable, "-c", "print('x' * 100000, flush=True)"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            **kwargs,
         )
 
-    monkeypatch.setattr(git_observer.subprocess, "Popen", controlled_process)
+    monkeypatch.setattr(subprocess, "Popen", controlled_process)
     monkeypatch.setattr(git_observer, "MAX_OUTPUT", 16)
     with pytest.raises(DomainError) as failure:
         observer._read(policy, "head", head)
@@ -379,7 +372,6 @@ def test_windows_tool_policy_requires_actual_pinned_implementation(configured, a
 
 
 def test_windows_wrapper_configuration_is_rejected_without_starting_it(repository, monkeypatch):
-    from app.self_build import git_observer
 
     _, policy, observer, head, _ = repository
 
@@ -389,7 +381,7 @@ def test_windows_wrapper_configuration_is_rejected_without_starting_it(repositor
     if os.name == "nt":
         wrapper = observer.executable.parents[2] / "cmd/git.exe"
         assert wrapper.is_file()
-        monkeypatch.setattr(git_observer.subprocess, "Popen", forbidden_start)
+        monkeypatch.setattr(subprocess, "Popen", forbidden_start)
         with pytest.raises(DomainError) as error:
             GitObserver(str(wrapper), sha256(wrapper.read_bytes()).hexdigest())
         assert error.value.code == "SELF_BUILD_GIT_TOOL_INVALID"
@@ -402,7 +394,6 @@ def test_windows_wrapper_configuration_is_rejected_without_starting_it(repositor
 def test_actual_implementation_change_invalidates_its_content_pin(
     repository, tmp_path, monkeypatch
 ):
-    from app.self_build import git_observer
 
     _, policy, observer, _, _ = repository
     actual = tmp_path / "external-installation/mingw64/bin/git.exe"
@@ -415,7 +406,7 @@ def test_actual_implementation_change_invalidates_its_content_pin(
     def forbidden_start(*args, **kwargs):
         pytest.fail("changed implementation must be rejected before execution")
 
-    monkeypatch.setattr(git_observer.subprocess, "Popen", forbidden_start)
+    monkeypatch.setattr(subprocess, "Popen", forbidden_start)
     with pytest.raises(DomainError) as error:
         pinned._read(policy, "head", "a" * 40)
     assert error.value.code == "SELF_BUILD_GIT_TOOL_INVALID"
@@ -450,7 +441,6 @@ def test_origin_change_during_inspection_is_not_reported_as_coherent(repository,
 def test_change_between_path_validation_and_image_lock_never_starts_git(
     repository, tmp_path, monkeypatch
 ):
-    from app.self_build import git_observer
 
     _, policy, observer, head, _ = repository
     actual = tmp_path / "race-installation/mingw64/bin/git.exe"
@@ -468,7 +458,7 @@ def test_change_between_path_validation_and_image_lock_never_starts_git(
         pytest.fail("replacement image must fail before execution")
 
     monkeypatch.setattr(pinned, "_tool", replace_after_hash)
-    monkeypatch.setattr(git_observer.subprocess, "Popen", forbidden_start)
+    monkeypatch.setattr(subprocess, "Popen", forbidden_start)
     with pytest.raises(DomainError) as failure:
         pinned._read(policy, "head", head)
     assert failure.value.code == "SELF_BUILD_GIT_TOOL_INVALID"
@@ -699,3 +689,40 @@ def test_first_metadata_baseline_is_recorded_only_after_existing_files_are_pinne
     if os.name == "nt":
         assert attempted
     assert path.read_bytes() == content
+
+
+def test_compressed_commit_inflation_is_bounded_before_git_output(repository, monkeypatch):
+    import zlib
+    from hashlib import sha1
+
+    from app.self_build import git_observer
+    from app.self_build.git_process import limited_process
+
+    root, policy, observer, _, git = repository
+    prefix = f"tree {git('rev-parse', 'HEAD^{tree}')}\n\n".encode()
+    chunk = b"x" * 1048576
+    size = len(prefix) + len(chunk) * 256
+    header = f"commit {size}\0".encode()
+    identifier = sha1(usedforsecurity=False)
+    compressor = zlib.compressobj()
+    temporary = root / "compressed-fixture"
+    with temporary.open("wb") as stream:
+        for part in (header, prefix):
+            identifier.update(part)
+            stream.write(compressor.compress(part))
+        for _ in range(256):
+            identifier.update(chunk)
+            stream.write(compressor.compress(chunk))
+        stream.write(compressor.flush())
+    base = identifier.hexdigest()
+    directory = root / ".git/objects" / base[:2]
+    directory.mkdir(exist_ok=True)
+    temporary.rename(directory / base[2:])
+
+    def bounded(*args, **kwargs):
+        return limited_process(*args, **kwargs, memory_bytes=134217728)
+
+    monkeypatch.setattr(git_observer, "limited_process", bounded)
+    with pytest.raises(DomainError) as failure:
+        observer._read(policy, "base", base)
+    assert failure.value.code == "SELF_BUILD_GIT_READ_FAILED"

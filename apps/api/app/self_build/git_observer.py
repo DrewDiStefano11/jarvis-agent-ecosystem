@@ -4,7 +4,6 @@ import ctypes
 import os
 import re
 import stat
-import subprocess
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from pathlib import Path
@@ -15,6 +14,7 @@ from urllib.parse import urlsplit
 from app.core.errors import DomainError
 from app.self_build.git_image import pinned_image
 from app.self_build.git_namespace_watch import namespace_watch
+from app.self_build.git_process import limited_process
 from app.self_build.policy import digest
 from app.tool_execution.filesystem import (
     check_stat,
@@ -308,17 +308,16 @@ class GitObserver:
             "protocol.allow=never",
             *commands[operation],
         ]
+        process_stack = ExitStack()
         try:
-            process = subprocess.Popen(
-                argv,
-                cwd=policy.primary_root,
-                env=environment,
-                shell=False,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                **launch,
+            process = process_stack.enter_context(
+                limited_process(
+                    argv,
+                    cwd=policy.primary_root,
+                    env=environment,
+                    authority_check=self.authority_check or (lambda: None),
+                    launch=launch,
+                )
             )
         except OSError:
             fail("SELF_BUILD_GIT_UNAVAILABLE", "The configured native Git tool could not start.")
@@ -375,6 +374,7 @@ class GitObserver:
                 process.wait(timeout=5)
             for thread in threads:
                 thread.join(timeout=1)
+            process_stack.close()
         if overflow.is_set():
             reason = "SELF_BUILD_GIT_OUTPUT_LIMIT"
         elif errors.is_set():
