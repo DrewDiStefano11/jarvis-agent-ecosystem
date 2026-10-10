@@ -13,6 +13,11 @@ from typing import Any
 
 from app.runtime_supervisor import autostart
 from app.runtime_supervisor.backup import create_backup
+from app.runtime_supervisor.backup_verification import (
+    verify_all_backups,
+    verify_backup,
+    verify_latest_backup,
+)
 from app.runtime_supervisor.config import (
     SupervisorConfig,
     SupervisorConfigurationError,
@@ -45,6 +50,21 @@ def parser() -> argparse.ArgumentParser:
     subcommands.add_parser("status", help="Show supervisor and process health")
     subcommands.add_parser("doctor", help="Validate prerequisites without changing the application")
     subcommands.add_parser("backup", help="Create a consistent SQLite backup")
+    verify_parser = subcommands.add_parser(
+        "verify-backup", help="Verify integrity of SQLite backup(s)"
+    )
+    verify_parser.add_argument(
+        "--all",
+        action="store_true",
+        dest="verify_all",
+        help="Verify all backups in runtime home",
+    )
+    verify_parser.add_argument(
+        "--target",
+        type=str,
+        default=None,
+        help="Target specific backup filename",
+    )
     auto = subcommands.add_parser("autostart", help="Manage current-user logon startup")
     auto.add_argument("operation", choices=("install", "uninstall", "status"))
     return result
@@ -112,6 +132,32 @@ def _emit(payload: dict[str, Any], *, as_json: bool) -> None:
         print(f"Last supervisor clean shutdown: {payload.get('lastCleanSupervisorShutdown')}")
         print(f"Logs: {payload.get('logsDirectory')}")
         print(f"Backups: {payload.get('backupsDirectory')}")
+        return
+    if "results" in payload and "totalCount" in payload:
+        print(
+            f"Backup Verification Summary: valid={payload.get('valid')} status={payload.get('status')}"
+        )
+        print(
+            f"Total: {payload.get('totalCount')} Valid: {payload.get('validCount')} Invalid: {payload.get('invalidCount')}"
+        )
+        for item in payload.get("results", []):
+            status_str = "VALID" if item.get("valid") else "FAILED"
+            print(
+                f"  [{status_str:6}] {item.get('backupFile')}: {item.get('detail')} ({item.get('status')})"
+            )
+        return
+    if "backupFile" in payload or "latest" in payload:
+        target_item = payload.get("latest") if "latest" in payload else payload
+        status_str = "VALID" if target_item.get("valid") else "FAILED"
+        print(f"Backup Verification: {status_str} ({target_item.get('status')})")
+        print(f"File: {target_item.get('backupFile')}")
+        print(f"Detail: {target_item.get('detail')}")
+        if target_item.get("sizeBytes") is not None:
+            print(f"Size: {target_item.get('sizeBytes')} bytes")
+        if target_item.get("sha256") is not None:
+            print(f"SHA-256: {target_item.get('sha256')}")
+        if target_item.get("alembicRevision") is not None:
+            print(f"Alembic Revision: {target_item.get('alembicRevision')}")
         return
     for key, value in payload.items():
         print(f"{key}: {value}")
@@ -267,14 +313,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "backup":
             ensure_runtime_home(config.runtime_home, config.repository)
             payload = {"result": "created", "backup": create_backup(config)}
+        elif args.command == "verify-backup":
+            ensure_runtime_home(config.runtime_home, config.repository)
+            if args.verify_all:
+                payload = verify_all_backups(config)
+            elif args.target:
+                payload = verify_backup(config, args.target)
+            else:
+                payload = verify_latest_backup(config)
         else:
             payload = _autostart(config, args.operation)
         _emit(payload, as_json=args.json_output)
-        if payload.get("status") == "fail" or payload.get("result") in {
-            "refused",
-            "start_pending",
-            "stop_pending",
-        }:
+        if (
+            payload.get("status") == "fail"
+            or payload.get("result")
+            in {
+                "refused",
+                "start_pending",
+                "stop_pending",
+            }
+            or payload.get("valid") is False
+        ):
             return 1
         return 0
     except (SupervisorConfigurationError, OSError, RuntimeError, sqlite3.Error) as exc:
