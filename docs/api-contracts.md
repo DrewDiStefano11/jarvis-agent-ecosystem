@@ -252,3 +252,35 @@ checkpoint inside their native transactions. Unknown critic outcomes never
 redispatch; unavailable/invented evidence fails closed. New inference is barred
 after the deadline; durable proof reconciliation retains live authority fences.
 This adds no permission, execution approval, reassignment or versioned replan.
+
+
+### Native workspace creation
+
+Self-Build remains disabled by default. On the configured Windows native mutation
+adapter, `POST /api/self-build/workspaces/{workspace_id}/creation/preview` accepts
+an existing measured `inspection_id` and returns the immutable creation plan.
+`POST /api/remote/self-build/workspace-creation/approve` requires the configured
+HTTPS bearer operator, workspace/inspection identifiers and exact plan hash.
+`POST /api/self-build/workspaces/{workspace_id}/creation` accepts that approval,
+original worker/lease and exact plan hash under the authenticated runtime actor.
+`GET` on the same creation path returns durable historical evidence. Responses
+retain the typed `data` envelope; SQL remains in services/repositories.
+
+The plan binds the exact generated branch/base/inventory, measured pinned Git,
+creation implementation policy, Windows platform, 4096 files, 8 MiB per file and
+64 MiB total. No checkout filters/hooks or arbitrary commands execute. Ready
+requires verified raw file bytes, the dedicated index and registration digest,
+complete source digest and a native final checkpoint. Intermediate phases retain
+checkpoint crash gaps; only the original live lease/attempt and current separate
+operator approval can resume. Foreign/uncertain files are preserved. Initial
+workspace markers permit bounded list/read only; editing, code execution and
+publication need later separately approved capabilities. POSIX mutation returns
+`SELF_BUILD_CHECKOUT_PLATFORM_UNAVAILABLE` before filesystem effects.
+
+
+The reservation's compatible `checkout_state=unobserved` field does not attest
+source bytes; use the creation record for measured native readiness. Configure
+`self_build.workspace.materialize` task permissions for both the runtime actor
+and the separate authenticated operator through the existing identity/RBAC service.
+Historical evidence remains readable after execution is disabled; changed policy,
+expired/revoked approval or a successor lease cannot silently resume mutation.

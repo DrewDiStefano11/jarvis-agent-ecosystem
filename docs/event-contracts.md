@@ -27,3 +27,14 @@ Frontend duplicate detection is scoped to `eventSessionId`. A session change res
 Reset records its audit as the final monotonically increasing sequence in the old event session, then atomically rotates the active session and resets its counter to zero. The first subsequent event in the new session starts at sequence one.
 
 `context.assembly.created` uses source `context-assembler`, the assembly ID as `correlationId`, and the associated task ID. Its payload contains `assemblyId`, status, request hash, and included/excluded/redaction/injection/conflict counts. Source text, credentials, model messages, and injection excerpts are prohibited from both the event and audit payload. Identical canonical input already stored does not emit another event.
+
+
+Native workspace creation emits `self_build.workspace_creation.phase_recorded`
+and `self_build.workspace_creation.checkpoint_acknowledged` through the existing
+transactional outbox. Phase records contain the typed operation, exact approved
+plan and measured registration/source prefix evidence plus intent digest. Private
+ownership nonce and lease tokens are never published. Native runtime checkpoints
+bind operation/attempt, phase recovery cursor and canonical integrity digest;
+the workspace projection acknowledges their identifier after verification. Ready
+publication follows the verified complete-source checkpoint, preserving the
+interrupted finalization gap for idempotent recovery. Audit history is append-only.

@@ -89,7 +89,7 @@ jobs:
       - run: python -m pip install -e './apps/api[dev]'
       - name: Verify sealed Linux executable and native Git boundaries
         working-directory: apps/api
-        run: python -m pytest tests/test_self_build_git_observer.py tests/test_self_build_git_inspection.py tests/test_owned_process.py --basetemp "${{ runner.temp }}/git-native-linux" --timeout=300 -q
+        run: python -m pytest tests/test_self_build_git_observer.py tests/test_self_build_git_inspection.py tests/test_owned_process.py tests/test_checkout_driver.py::test_mutation_on_unconfined_platform_fails_before_side_effects --basetemp "${{ runner.temp }}/git-native-linux" --timeout=300 -q
 
   # Preserve the existing required status context while gating every backend job.
   backend:

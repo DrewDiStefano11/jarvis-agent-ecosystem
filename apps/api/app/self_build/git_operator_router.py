@@ -8,6 +8,7 @@ from app.models.git_inspection import (
     RepositoryInspectionApproval,
     RepositoryInspectionPlan,
 )
+from app.models.workspace_creation import ApproveWorkspaceCreation, WorkspaceCreationApproval
 from app.remote_control.router import Actor
 
 router = APIRouter(prefix="/api/remote/self-build", tags=["authenticated self-build inspection"])
@@ -27,4 +28,13 @@ def approve(body: ApproveRepositoryInspection, request: Request, principal: Acto
 def preview(workspace_id: str, request: Request, principal: Actor):
     return TypedApiResponse(
         data=request.app.state.self_build_git_service.preview(principal, workspace_id)
+    )
+
+
+@router.post(
+    "/workspace-creation/approve", response_model=TypedApiResponse[WorkspaceCreationApproval]
+)
+def approve_creation(body: ApproveWorkspaceCreation, request: Request, principal: Actor):
+    return TypedApiResponse(
+        data=request.app.state.self_build_creation_service.approve(principal, body)
     )

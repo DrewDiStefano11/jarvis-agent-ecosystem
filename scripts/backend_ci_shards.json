@@ -82,6 +82,8 @@
     "tests/test_workspace_namespace.py",
     "tests/test_workspace_creation_contract.py",
     "tests/test_owned_process.py",
-    "tests/test_workspace_creation_service.py"
+    "tests/test_workspace_creation_service.py",
+    "tests/test_checkout_driver.py",
+    "tests/test_materialization.py"
   ]
 }

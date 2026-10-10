@@ -18,6 +18,12 @@ from app.models.self_build import (
     WorkspacePlan,
     WorkspaceReservation,
 )
+from app.models.workspace_creation import (
+    CreateWorkspaceRequest,
+    PreviewWorkspaceCreation,
+    WorkspaceCreationPlan,
+    WorkspaceCreationRecord,
+)
 
 router = APIRouter(prefix="/api/self-build/workspaces", tags=["self-build"])
 Actor = Annotated[RuntimeActorContext, Depends(actor)]
@@ -96,4 +102,33 @@ def preview_abandon(workspace_id: str, request: Request, runtime_actor: Actor):
         data=request.app.state.self_build_workspace_service.preview_abandon(
             runtime_actor, workspace_id
         )
+    )
+
+
+@router.post(
+    "/{workspace_id}/creation/preview", response_model=TypedApiResponse[WorkspaceCreationPlan]
+)
+def preview_creation(
+    workspace_id: str, body: PreviewWorkspaceCreation, request: Request, runtime_actor: Actor
+):
+    return TypedApiResponse(
+        data=request.app.state.self_build_creation_service.preview(
+            runtime_actor, workspace_id, body.inspection_id
+        )
+    )
+
+
+@router.post("/{workspace_id}/creation", response_model=TypedApiResponse[WorkspaceCreationRecord])
+def create_workspace(
+    workspace_id: str, body: CreateWorkspaceRequest, request: Request, runtime_actor: Actor
+):
+    return TypedApiResponse(
+        data=request.app.state.self_build_creation_service.create(runtime_actor, workspace_id, body)
+    )
+
+
+@router.get("/{workspace_id}/creation", response_model=TypedApiResponse[WorkspaceCreationRecord])
+def read_creation(workspace_id: str, request: Request, runtime_actor: Actor):
+    return TypedApiResponse(
+        data=request.app.state.self_build_creation_service.read(runtime_actor, workspace_id)
     )
