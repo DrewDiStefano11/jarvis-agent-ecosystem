@@ -202,3 +202,10 @@ an unlimited timeout or a silent CI waiver.
 
 Final output drained after process exit also updates the measured output timestamp;
 short-lived commands cannot report no output activity when their log contains data.
+
+
+Backend matrix checkout and artifact upload each have a five-minute step budget;
+Python setup has ten minutes and dependency installation fifteen minutes. These
+steps do not run the helper watchdog. The serial pytest step retains output
+inactivity and per-test supervision, with no extra accumulated-runtime deadline.
+GitHub's platform job ceiling remains the outer limit.

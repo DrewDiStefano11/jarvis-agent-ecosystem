@@ -931,3 +931,28 @@ class ToolExecutionRow(Base):
     __table_args__ = (
         UniqueConstraint("actor_id", "command_id", name="uq_tool_execution_actor_command"),
     )
+
+
+class DevelopmentWorkspaceRow(Base):
+    __tablename__ = "development_workspaces"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    repository_id: Mapped[str] = mapped_column(String(120))
+    repository_identity: Mapped[str] = mapped_column(String(220))
+    policy_digest: Mapped[str] = mapped_column(String(64))
+    policy_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    runtime_run_id: Mapped[str] = mapped_column(ForeignKey("agent_runtime_runs.run_id"))
+    task_id: Mapped[str] = mapped_column(ForeignKey("tasks.id"), index=True)
+    actor_id: Mapped[str] = mapped_column(ForeignKey("identity_agents.id"))
+    worker_id: Mapped[str] = mapped_column(ForeignKey("workers.id"))
+    approval_id: Mapped[str] = mapped_column(ForeignKey("audit_events.id"))
+    lease_fingerprint: Mapped[str] = mapped_column(String(64))
+    plan_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    state: Mapped[str] = mapped_column(String(30))
+    version: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    __table_args__ = (
+        UniqueConstraint("runtime_run_id", "repository_id", name="uq_workspace_run_repository"),
+        CheckConstraint("version >= 1"),
+        CheckConstraint("state IN ('reserved', 'abandoned')"),
+    )

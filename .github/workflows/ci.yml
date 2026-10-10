@@ -51,23 +51,27 @@ jobs:
   backend-tests:
     name: backend-tests-${{ matrix.shard }}
     runs-on: windows-latest
-    # Inactivity/per-test guards detect hangs. Use GitHub's default platform
-    # ceiling rather than an independent accumulated-runtime job deadline.
+    # Pytest has inactivity/per-test guards. Bound the other steps individually;
+    # retain the platform ceiling without an accumulated-runtime pytest deadline.
     strategy:
       fail-fast: false
       matrix:
         shard: [runtime, autonomy, models, system]
     steps:
       - uses: actions/checkout@v4
+        timeout-minutes: 5
       - uses: actions/setup-python@v5
+        timeout-minutes: 10
         with:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: apps/api/pyproject.toml
       - run: python -m pip install -e './apps/api[dev]'
+        timeout-minutes: 15
       - name: Serial pytest shard with timings and hang diagnostics
         run: python scripts/backend_ci.py ${{ matrix.shard }} --artifacts "${{ runner.temp }}/backend-${{ matrix.shard }}"
       - uses: actions/upload-artifact@v4
+        timeout-minutes: 5
         if: always()
         with:
           name: backend-${{ matrix.shard }}

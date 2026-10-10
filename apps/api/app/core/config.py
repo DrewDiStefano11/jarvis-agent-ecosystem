@@ -20,6 +20,11 @@ class Settings(BaseSettings):
         hide_input_in_errors=True,
     )
 
+    self_build_enabled: bool = Field(False, alias="JARVIS_SELF_BUILD_ENABLED")
+    self_build_repositories_json: str = Field(
+        "{}", alias="JARVIS_SELF_BUILD_REPOSITORIES_JSON", max_length=32768
+    )
+
     app_env: str = Field("development", alias="APP_ENV")
     database_url: str = Field("sqlite:///./data/jarvis.db", alias="JARVIS_DATABASE_URL")
     data_directory: Path = Field(Path("./data"), alias="JARVIS_DATA_DIRECTORY")

@@ -30,3 +30,10 @@ predecessor. Use fresh disposable validation databases for this reconciled candi
 do not treat those older feature-branch databases as deployed main schemas.
 
 To intentionally start clean in development, stop the API, back up anything needed, and delete the database plus its `-wal` and `-shm` sidecars from `apps/api/data`; then run `python -m alembic upgrade head`. This destroys local durable state and should never be automated against an uncertain path. Do not edit SQLite tables manually.
+
+## Self-Build workspace ownership
+
+Revision `20261006_12` follows `20260907_11` and introduces durable development
+workspace reservations. Empty downgrade/re-upgrade is supported. Populated downgrade
+refuses to destroy any reservation history. No filesystem changes are performed by
+the migration. See [workspace reservation boundaries](self-build-workspaces.md).
