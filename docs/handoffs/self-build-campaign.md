@@ -1,4 +1,4 @@
-# Self-Build campaign â€” October 6, 2026
+# Self-Build campaign — October 6, 2026
 
 ## Authority and objective
 
@@ -15,7 +15,7 @@ Fetched `origin/main` at `7abb488d1b73dcfd4c990519ef1578c2906430db`.
 GitHub reported zero open PRs at campaign start. Recent merged work includes #68
 self-improvement, #69 independent verification, #70 remote controls, #71 backlog,
 #72 CI evidence, #73 planning correction, #74/#76/#77/#79 bounded research,
-#75/#78/#80/#81/#83â€“#87 Mission Control, and #82 backend CI scalability.
+#75/#78/#80/#81/#83–#87 Mission Control, and #82 backend CI scalability.
 Historical handoffs are provenance, not current PR/gate/merge authority.
 
 Read architecture/contributor/runtime/lease/recovery/RBAC/context/model-provider,
@@ -67,8 +67,8 @@ command journal and cannot prove autonomous software validation.
    reviewed plan authority, preserving primary and unrelated checkouts. Persist
    side-effect intent before Git. Validate Windows junction/path/race boundaries.
 3. B: bounded source patch/edit journal; C: reviewed command families and bounded
-   provenance; Dâ€“G: safe Git/PR lifecycle, exact-state validation and independent review.
-4. Hâ€“J: durable bounded repair orchestration using existing coordinator/team selection,
+   provenance; D–G: safe Git/PR lifecycle, exact-state validation and independent review.
+4. H–J: durable bounded repair orchestration using existing coordinator/team selection,
    high-level operator mission and truthful Mission Control state.
 5. Production-path real-repository dogfood cutover, then backlog-driven follow-ups.
 
@@ -335,3 +335,18 @@ final combined 122-case run passed. No product/assertion change or test waiver w
 made for the interrupted run. The campaign remains incomplete: later editing,
 confined execution, publication, validation/review repair and real production
 Self-Build acceptance plus improvement audit are still required.
+
+
+## October 9 reconciliation review repair
+
+PR #94 review 4235651524 identified transient in-place Git metadata writes that
+survive directory identity checks. Inspection now retains identity, size and
+mtime/ctime for every bounded metadata file and directory, rechecking the complete
+baseline around each native read. Windows additionally holds non-following
+metadata file handles that deny writes/deletion for the entire inspection; POSIX
+change timestamps detect write/restore even when original mtime is restored.
+Regression coverage exercises config, HEAD and loose refs, with exact restored
+bytes/times on POSIX and actual denied writes on Windows. Review 4235651527's
+handoff punctuation corruption is repaired without altering historical facts.
+New exact-head CI/review remains required after this repair; dependent #93 and
+native checkout work must integrate this parent before publication.

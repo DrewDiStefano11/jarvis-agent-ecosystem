@@ -187,8 +187,13 @@ def test_concurrent_reference_change_is_not_reported_as_coherent(repository, mon
         result = original(policy, operation, base_sha)
         if operation == "inventory":
             (root / "changed.txt").write_text("concurrent change")
-            git("add", "changed.txt")
-            git("commit", "-m", "concurrent")
+            if os.name == "nt":
+                with pytest.raises(subprocess.CalledProcessError):
+                    git("add", "changed.txt")
+                assert git("rev-parse", "HEAD") == head
+            else:
+                git("add", "changed.txt")
+                git("commit", "-m", "concurrent")
         return result
 
     monkeypatch.setattr(observer, "_read", changing_read)
@@ -426,7 +431,14 @@ def test_origin_change_during_inspection_is_not_reported_as_coherent(repository,
         result = native_read(*args)
         if args[1] == "remote" and not changed:
             changed = True
-            git("remote", "set-url", "origin", "https://github.com/unrelated/repository.git")
+            if os.name == "nt":
+                with pytest.raises(subprocess.CalledProcessError):
+                    git(
+                        "remote", "set-url", "origin", "https://github.com/unrelated/repository.git"
+                    )
+                assert git("config", "remote.origin.url") == "https://github.com/example/jarvis.git"
+            else:
+                git("remote", "set-url", "origin", "https://github.com/unrelated/repository.git")
         return result
 
     monkeypatch.setattr(observer, "_read", changing_read)
@@ -578,3 +590,44 @@ def test_transient_metadata_directory_replacement_is_blocked_or_rejected(
             observer.inspect(policy, base)
         assert failure.value.code == "SELF_BUILD_GIT_STATE_CHANGED"
     assert attempted and original.is_dir() and not parked.exists()
+
+
+@pytest.mark.parametrize("relative", ["config", "HEAD", "refs/heads/main"])
+def test_transient_in_place_metadata_write_is_blocked_or_rejected(
+    repository, monkeypatch, relative
+):
+    root, policy, observer, base, _ = repository
+    path = root / ".git" / relative
+    original = path.read_bytes()
+    original_stat = path.stat()
+    native = observer._read_image
+    attempted = []
+
+    def changed(policy, operation, sha, executable, launch):
+        if operation != "base" or attempted:
+            return native(policy, operation, sha, executable, launch)
+        attempted.append(True)
+        if os.name == "nt":
+            with pytest.raises(PermissionError):
+                with path.open("r+b") as stream:
+                    stream.write(original)
+            return native(policy, operation, sha, executable, launch)
+        with path.open("r+b") as stream:
+            stream.write(b"x" * len(original))
+            stream.flush()
+            os.fsync(stream.fileno())
+            stream.seek(0)
+            stream.write(original)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+        return native(policy, operation, sha, executable, launch)
+
+    monkeypatch.setattr(observer, "_read_image", changed)
+    if os.name == "nt":
+        assert observer.inspect(policy, base)["base_sha"] == base
+    else:
+        with pytest.raises(DomainError) as failure:
+            observer.inspect(policy, base)
+        assert failure.value.code == "SELF_BUILD_GIT_STATE_CHANGED"
+    assert attempted and path.read_bytes() == original
