@@ -79,10 +79,22 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
 
+  backend-git-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - run: python -m pip install -e './apps/api[dev]'
+      - name: Verify sealed Linux executable and native Git boundaries
+        working-directory: apps/api
+        run: python -m pytest tests/test_git_process.py tests/test_self_build_git_observer.py tests/test_self_build_git_inspection.py --basetemp "${{ runner.temp }}/git-native-linux" --timeout=300 -q
+
   # Preserve the existing required status context while gating every backend job.
   backend:
     if: always()
-    needs: [backend-static, backend-migrations, backend-tests]
+    needs: [backend-static, backend-migrations, backend-tests, backend-git-linux]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:

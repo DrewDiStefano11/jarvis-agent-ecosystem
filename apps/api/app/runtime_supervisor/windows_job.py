@@ -8,7 +8,11 @@ from ctypes import wintypes
 class WindowsJob:
     """Own children in a kill-on-close Job Object on Windows."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, memory_bytes: int | None = None) -> None:
+        if memory_bytes is not None and (
+            not isinstance(memory_bytes, int) or memory_bytes < 16777216
+        ):
+            raise ValueError("Native job memory limit must be at least 16 MiB")
         self.handle: int | None = None
         if os.name != "nt":
             return
@@ -57,6 +61,10 @@ class WindowsJob:
 
         info = ExtendedLimit()
         info.BasicLimitInformation.LimitFlags = 0x00002000
+        if memory_bytes is not None:
+            info.BasicLimitInformation.LimitFlags |= 0x00000300
+            info.ProcessMemoryLimit = memory_bytes
+            info.JobMemoryLimit = memory_bytes
         kernel32.SetInformationJobObject.argtypes = [
             wintypes.HANDLE,
             ctypes.c_int,
@@ -88,3 +96,57 @@ class WindowsJob:
             kernel32.CloseHandle.restype = wintypes.BOOL
             kernel32.CloseHandle(self.handle)
             self.handle = None
+
+
+def resume_initial_thread(process):
+    """Resume only after assigning the still-suspended process to its native job."""
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+
+    class ThreadEntry(ctypes.Structure):
+        _fields_ = [
+            ("size", wintypes.DWORD),
+            ("usage", wintypes.DWORD),
+            ("thread_id", wintypes.DWORD),
+            ("owner_pid", wintypes.DWORD),
+            ("base_priority", wintypes.LONG),
+            ("delta_priority", wintypes.LONG),
+            ("flags", wintypes.DWORD),
+        ]
+
+    kernel.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel.Thread32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(ThreadEntry)]
+    kernel.Thread32First.restype = wintypes.BOOL
+    kernel.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(ThreadEntry)]
+    kernel.Thread32Next.restype = wintypes.BOOL
+    kernel.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenThread.restype = wintypes.HANDLE
+    kernel.ResumeThread.argtypes = [wintypes.HANDLE]
+    kernel.ResumeThread.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    snapshot = kernel.CreateToolhelp32Snapshot(4, 0)
+    if snapshot == ctypes.c_void_p(-1).value:
+        raise OSError(ctypes.get_last_error(), "Cannot inspect suspended process")
+    try:
+        entry = ThreadEntry()
+        entry.size = ctypes.sizeof(entry)
+        found = []
+        available = kernel.Thread32First(snapshot, ctypes.byref(entry))
+        while available:
+            if entry.owner_pid == process.pid:
+                found.append(entry.thread_id)
+            entry.size = ctypes.sizeof(entry)
+            available = kernel.Thread32Next(snapshot, ctypes.byref(entry))
+        if ctypes.get_last_error() != 18 or len(found) != 1:
+            raise OSError("Cannot identify the unique suspended initial thread")
+        thread = kernel.OpenThread(2, False, found[0])
+        if not thread:
+            raise OSError(ctypes.get_last_error(), "Cannot open suspended initial thread")
+        try:
+            if kernel.ResumeThread(thread) != 1:
+                raise OSError("Unexpected initial thread suspension state")
+        finally:
+            kernel.CloseHandle(thread)
+    finally:
+        kernel.CloseHandle(snapshot)
