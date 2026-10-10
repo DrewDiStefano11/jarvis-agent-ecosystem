@@ -59,7 +59,7 @@
     "tests/test_remote_tls.py",
     "tests/test_tool_filesystem.py"
   ],
-  "system": ["tests/test_self_build_workspaces.py", "tests/test_self_build_git_observer.py", "tests/test_self_build_git_inspection.py",
+  "system": ["tests/test_git_process.py", "tests/test_self_build_workspaces.py", "tests/test_self_build_git_observer.py", "tests/test_self_build_git_inspection.py",
     "tests/test_agent_runtime_authorization.py",
     "tests/test_agent_runtime_migration_downgrade.py",
     "tests/test_agent_runtime_repository.py",
