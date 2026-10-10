@@ -118,3 +118,11 @@ and prove that persistent and transient alternate-store injection fail closed.
 Windows fixtures preserve an already-direct mingw32/bin or mingw64/bin executable;
 only standard cmd/bin launchers are translated for test setup. Production still
 requires the operator to configure and hash the actual native implementation.
+
+Linux handles alone do not forbid directory replacement. Inspection retains the
+initial primary/.git/object-store identities and change stamps in a context-local
+baseline. Every fixed read compares its metadata with that baseline and rechecks
+identity/stamps afterwards, so replacing metadata for a command and restoring the
+original names cannot erase the change. The context is reset even on failure.
+Windows holds deny-delete directory handles; the same real rename tests verify
+replacement is blocked there and rejected on the required Linux CI worker.
