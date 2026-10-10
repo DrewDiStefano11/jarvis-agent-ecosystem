@@ -316,7 +316,9 @@ class WorkspaceCreationService:
         self.repository.leases.repository.refresh_event_cursor()
         return self.acknowledge(actor, workspace_id, request, record, private_digest)
 
-    def acknowledge(self, actor, workspace_id, request, record, private_digest):
+    def acknowledge(
+        self, actor, workspace_id, request, record, private_digest, *, publication_guard=None
+    ):
         plan = record.plan
         existing, identifier, metadata = self.checkpoint(actor, record, private_digest)
         if record.checkpoint_id is not None and (
@@ -330,6 +332,8 @@ class WorkspaceCreationService:
             snapshot = self.runtime.read_run_authorized(plan.workspace.runtime_run_id, actor)
 
             def guard(session):
+                if publication_guard is not None:
+                    publication_guard()
                 current, _, current_attempt = self.fence(actor, workspace_id, request, session)
                 current_record, _, current_digest = self.intent(current)
                 if (
@@ -402,6 +406,8 @@ class WorkspaceCreationService:
                         "authorizationApprovalId": request.approval_id,
                     },
                 )
+            if publication_guard is not None:
+                publication_guard()
         self.repository.leases.repository.refresh_event_cursor()
         return current
 
@@ -417,7 +423,9 @@ class WorkspaceCreationService:
                 fail("SELF_BUILD_CREATION_CONFLICT", "Recover the original creation lineage.")
         return record, nonce, private_digest
 
-    def transition(self, actor, workspace_id, request, previous, **changes):
+    def transition(
+        self, actor, workspace_id, request, previous, *, publication_guard=None, **changes
+    ):
         with self.repository.leases._write() as session:
             row, _, attempt = self.fence(actor, workspace_id, request, session)
             record, nonce, private_digest = self.intent(row)
@@ -442,7 +450,14 @@ class WorkspaceCreationService:
                 ),
             )
         self.repository.leases.repository.refresh_event_cursor()
-        return self.acknowledge(actor, workspace_id, request, updated, updated_digest)
+        return self.acknowledge(
+            actor,
+            workspace_id,
+            request,
+            updated,
+            updated_digest,
+            publication_guard=publication_guard,
+        )
 
     def create(self, actor, workspace_id, request):
         if not checkout_driver.supports_mutation():
@@ -454,7 +469,8 @@ class WorkspaceCreationService:
         if absent:
             self.prepare(actor, workspace_id, request)
         record, nonce, private_digest = self.current(actor, workspace_id, request)
-        record = self.acknowledge(actor, workspace_id, request, record, private_digest)
+        if record.state != "finalizing":
+            record = self.acknowledge(actor, workspace_id, request, record, private_digest)
 
         def authority_check():
             # Short transactions revalidate operator/lease/runtime/stop; none spans Git I/O.
@@ -503,27 +519,41 @@ class WorkspaceCreationService:
                 source_digest=source_digest,
             )
 
-        measured = materialization.materialize(
-            driver, policy, record.plan, owner, acknowledge=acknowledge_file
-        )
-        if expected is not None:
-            if measured["source_digest"] != expected:
-                fail("SELF_BUILD_CREATION_CONFLICT", "Ready source evidence changed.")
-            return record
-        if record.state == "finalizing":
-            if record.source_digest != measured["source_digest"]:
-                fail("SELF_BUILD_CREATION_CONFLICT", "Finalization evidence changed.")
-            return self.acknowledge(
-                actor, workspace_id, request, record, intent_digest(record, nonce)
+        def finalize(measured, publication_guard):
+            nonlocal record
+            if expected is not None:
+                if measured["source_digest"] != expected:
+                    fail("SELF_BUILD_CREATION_CONFLICT", "Ready source evidence changed.")
+                return record
+            if record.state == "finalizing":
+                if record.source_digest != measured["source_digest"]:
+                    fail("SELF_BUILD_CREATION_CONFLICT", "Finalization evidence changed.")
+                return self.acknowledge(
+                    actor,
+                    workspace_id,
+                    request,
+                    record,
+                    intent_digest(record, nonce),
+                    publication_guard=publication_guard,
+                )
+            return self.transition(
+                actor,
+                workspace_id,
+                request,
+                record,
+                state="finalizing",
+                completed_file_count=measured["completed_file_count"],
+                source_digest=measured["source_digest"],
+                publication_guard=publication_guard,
             )
-        return self.transition(
-            actor,
-            workspace_id,
-            request,
-            record,
-            state="finalizing",
-            completed_file_count=measured["completed_file_count"],
-            source_digest=measured["source_digest"],
+
+        return materialization.materialize(
+            driver,
+            policy,
+            record.plan,
+            owner,
+            acknowledge=acknowledge_file,
+            finalize=finalize,
         )
 
     def read(self, actor, workspace_id):

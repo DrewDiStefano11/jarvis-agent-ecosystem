@@ -72,3 +72,27 @@ expected content hashes, durable operation journals and native checkpoint recove
 Then actual confined development execution, Git/GitHub publication, source-bound
 validation/review repair, Mission Control and a useful production Jarvis self-build
 plus improvement audit. The software-factory campaign remains incomplete.
+
+
+## Final publication repair (2026-10-10)
+
+P1 4235841586: final source, marker, worktree pointer, common Git metadata/index
+and private owner files remain deny-write/delete pinned through native ready
+checkpoint and workspace projection commit. Recursive source/metadata name watches
+remain armed; their callbacks run inside the existing commit transaction while
+that transaction revalidates authority, avoiding nested SQLite writers. Recovery
+of an unacknowledged finalizing state rechecks physical bytes before adopting an
+existing native ready checkpoint. A tampered crash-gap source remains finalizing.
+
+P2 4235841589: sized inventory allowance includes a derived 32-byte-per-approved-file
+margin above the original 1 MiB inventory bound. A real 4,096-file Git tree below
+the unsized bound but above the former sized bound passes; count/byte/hash limits
+remain unchanged. Fixed mutation commands also receive the same 512 MiB Windows
+process/job memory limit as the parent inspection repair before initial resume.
+
+Current driver/materialization/process/creation regression set: 61 passed. New
+publication tests prove writes to all five final artifact categories are denied
+inside native ready publication and later released. Ruff/format and frontend
+typecheck/lint/194 tests/build pass. A broader full-backend run is still in flight
+and must be reported honestly; it began before the final memory parent changes.
+Integrate the final #93/#94 parent heads before requesting exact-head CI/review.

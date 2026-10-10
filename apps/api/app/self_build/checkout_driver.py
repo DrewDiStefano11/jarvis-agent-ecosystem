@@ -60,6 +60,28 @@ def pinned_object_store(policy, authority_check):
         check()
 
 
+def pin_read_tree(stack, path, authority_check, *, maximum=16384):
+    """Retain file/namespace stability through the caller's durable publication."""
+    open_directory(stack, path, internal=True)
+    check = stack.enter_context(namespace_watch(path))
+    count = 0
+
+    def walk_error(error):
+        raise error
+
+    for parent, directories, files in os.walk(path, followlinks=False, onerror=walk_error):
+        authority_check()
+        count += len(directories) + len(files)
+        if count > maximum:
+            fail("SELF_BUILD_GIT_METADATA_LIMIT", "Final readback exceeds its bounded namespace.")
+        for name in directories:
+            open_directory(stack, Path(parent) / name, internal=True)
+        for name in files:
+            stack.enter_context(pinned_metadata_file(Path(parent) / name))
+    check()
+    return check
+
+
 class CheckoutDriver:
     """Caller supplies persisted preparation/native checkpoint and a live fence.
 
@@ -146,7 +168,13 @@ class CheckoutDriver:
                 GIT_COMMON_DIR=str(Path(policy.primary_root) / ".git"),
                 GIT_OBJECT_DIRECTORY=str(Path(policy.primary_root) / ".git" / "objects"),
             )
-        output_limit = plan.maximum_file_bytes if operation == "blob" else 1048576
+        output_limit = (
+            plan.maximum_file_bytes
+            if operation == "blob"
+            else 1048576 + plan.file_count * 32
+            if operation == "inventory"
+            else 1048576
+        )
         argv = [
             executable,
             "--no-replace-objects",

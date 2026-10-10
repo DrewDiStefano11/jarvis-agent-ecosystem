@@ -1,5 +1,6 @@
 """Real native raw materialization, count/byte limits and conflict-preserving replay."""
 
+import subprocess
 import sys
 from contextlib import ExitStack
 from hashlib import sha256
@@ -9,7 +10,8 @@ import pytest
 
 from app.core.errors import DomainError
 from app.self_build.checkout_driver import CheckoutDriver
-from app.self_build.materialization import materialize, write_file
+from app.self_build.materialization import inventory, materialize, write_file
+from app.self_build.policy import digest
 from app.tool_execution.filesystem import open_directory
 from tests.test_checkout_driver import checkout as checkout
 from tests.test_self_build_git_observer import repository as repository
@@ -125,21 +127,32 @@ def test_final_readback_cannot_acknowledge_interleaved_source_changes(
     driver.create(policy, plan, owner)
     native = driver.invoke
 
+    blocked = []
+
     def changed(policy, operation, plan, target, **kwargs):
         result = native(policy, operation, plan, target, **kwargs)
         if operation == "index_inventory":
-            if tamper == "source":
-                (target / "hello.txt").write_bytes(b"wrong\n")
-            elif tamper == "unexpected":
+            if tamper == "unexpected":
                 (target / "foreign.txt").write_text("preserve")
             else:
-                (target / ".jarvis-workspace.json").write_text("{}")
+                path = target / ("hello.txt" if tamper == "source" else ".jarvis-workspace.json")
+                with pytest.raises(PermissionError):
+                    with path.open("r+b") as stream:
+                        stream.write(b"modified")
+                blocked.append(True)
         return result
 
     monkeypatch.setattr(driver, "invoke", changed)
-    with pytest.raises(DomainError) as failure:
-        materialize(driver, policy, plan, owner, acknowledge=lambda *args: None)
-    assert failure.value.code == "SELF_BUILD_MATERIALIZATION_CONFLICT"
+    if tamper == "unexpected":
+        with pytest.raises(DomainError) as failure:
+            materialize(driver, policy, plan, owner, acknowledge=lambda *args: None)
+        assert failure.value.code in {
+            "SELF_BUILD_MATERIALIZATION_CONFLICT",
+            "SELF_BUILD_GIT_STATE_CHANGED",
+        }
+    else:
+        result = materialize(driver, policy, plan, owner, acknowledge=lambda *args: None)
+        assert blocked and result["completed_file_count"] == 1
 
 
 def test_raw_blobs_never_execute_configured_smudge_filter(checkout, tmp_path):
@@ -181,3 +194,43 @@ def test_private_staging_only_resumes_the_verified_content_prefix(tmp_path, corr
         else:
             write_file(driver, target_directory, staging_directory, "file.txt", content)
             assert (root / "file.txt").read_bytes() == content and not stage.exists()
+
+
+def test_sized_inventory_accepts_approved_tree_near_unsized_output_limit(checkout):
+    root, policy, observer, plan, _, git = checkout
+    blob = git("rev-parse", "HEAD:hello.txt")
+    names = [f"file-{number:04d}-" + "x" * 189 for number in range(4096)]
+    records = b"".join(f"100644 blob {blob}\t{name}\0".encode() for name in names)
+    assert len(records) < 1048576
+    tree = (
+        subprocess.run(
+            [str(observer.executable), "mktree", "-z"],
+            cwd=root,
+            input=records,
+            capture_output=True,
+            check=True,
+        )
+        .stdout.decode()
+        .strip()
+    )
+    base = git("commit-tree", tree, "-p", plan.workspace.base_sha, "-m", "bounded inventory")
+    observed = observer.inspect(policy, base)
+    assert observed["file_count"] == 4096
+    plan = plan.model_copy(
+        update={
+            "workspace": plan.workspace.model_copy(update={"base_sha": base}),
+            "base_tree_sha": observed["base_tree_sha"],
+            "inventory_digest": observed["inventory_digest"],
+            "file_count": observed["file_count"],
+        }
+    )
+    plan = plan.model_copy(
+        update={
+            "plan_hash": digest(plan.model_dump(mode="json", exclude={"plan_hash"})),
+        }
+    )
+    driver = CheckoutDriver(observer, lambda: None)
+    raw = driver.invoke(policy, "inventory", plan, root)
+    assert len(raw) > 1048576
+    entries = inventory(driver, policy, plan, root)
+    assert len(entries) == 4096 and sum(entry[3] for entry in entries) == 24576

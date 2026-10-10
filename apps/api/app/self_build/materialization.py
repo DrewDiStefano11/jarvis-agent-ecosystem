@@ -8,8 +8,8 @@ from ctypes import wintypes
 from hashlib import sha1, sha256
 from pathlib import Path
 
-from app.self_build.checkout_driver import fail, supports_mutation
-from app.self_build.git_observer import COMMIT
+from app.self_build.checkout_driver import fail, pin_read_tree, supports_mutation
+from app.self_build.git_observer import COMMIT, pinned_metadata_file
 from app.self_build.policy import digest
 from app.self_build.workspace_namespace import owned_namespace
 from app.tool_execution.filesystem import (
@@ -143,7 +143,7 @@ def write_file(driver, root, private, path, content):
                 )
 
 
-def materialize(driver, policy, plan, owner, *, acknowledge):
+def materialize(driver, policy, plan, owner, *, acknowledge, finalize=None):
     """Persisted native phase authority/checkpoints belong to the calling service.
 
     Each source effect is an exclusive atomic move of verified raw Git bytes.
@@ -209,6 +209,20 @@ def materialize(driver, policy, plan, owner, *, acknowledge):
         write_file(driver, checkout, private, ".jarvis-workspace.json", marker)
         driver.authority_check()
         driver.invoke(policy, "index", plan, target)
+        # Pin every verified artifact and both absent-name namespaces before
+        # final verification; keep them through the service's ready checkpoint.
+        check_source = pin_read_tree(
+            stack, target, driver.authority_check, maximum=plan.file_count * 16 + 2
+        )
+        check_metadata = pin_read_tree(stack, common.path, driver.authority_check)
+        stack.enter_context(pinned_metadata_file(private.path / "owner.json"))
+        try:
+            with open_file(private, "owner.json", os.O_RDONLY, internal=True) as fd:
+                actual_owner = json.loads(read_bytes(fd, 4096))
+        except (ValueError, UnicodeError):
+            fail("SELF_BUILD_MATERIALIZATION_CONFLICT", "Final namespace ownership is invalid.")
+        if actual_owner != owner:
+            fail("SELF_BUILD_MATERIALIZATION_CONFLICT", "Final namespace ownership changed.")
         raw_index = driver.invoke(policy, "index_inventory", plan, target)
         indexed = []
         try:
@@ -287,8 +301,19 @@ def materialize(driver, policy, plan, owner, *, acknowledge):
                 )
         driver.verify(stack, root, target, policy, plan, common)
         driver.authority_check()
-        return dict(
+        result = dict(
             completed_file_count=len(measured),
             source_digest=digest(measured),
             inventory_digest=plan.inventory_digest,
         )
+        check_source()
+        check_metadata()
+
+        # The callback performs final intent/checkpoint publication while native
+        # deny-write/delete pins and both namespace notifications remain armed.
+        def publication_guard():
+            check_source()
+            check_metadata()
+            # The service revalidates authority in its existing commit transaction.
+
+        return result if finalize is None else finalize(result, publication_guard)

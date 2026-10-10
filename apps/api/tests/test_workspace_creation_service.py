@@ -555,3 +555,61 @@ def test_native_empty_base_has_complete_verified_ready_checkpoint(creation):
         ".git",
         ".jarvis-workspace.json",
     }
+
+
+def test_final_artifacts_remain_deny_write_pinned_through_native_ready_publication(
+    creation, monkeypatch
+):
+    _, actor, _, service, workspace_id, request, _ = creation
+    policy = service.workspace.policies.get("jarvis")
+    target = Path(policy.worktree_root) / workspace_id
+    index = Path(policy.primary_root) / ".git/worktrees" / workspace_id / "index"
+    owner = Path(policy.worktree_root) / (".jarvis-owner-" + workspace_id) / "owner.json"
+    native = service.runtime.handle_authorized
+    blocked = []
+
+    def guarded(command, *args, **kwargs):
+        if getattr(command, "resume_cursor", None) == "ready":
+            for path in (
+                target / "source.py",
+                target / ".git",
+                target / ".jarvis-workspace.json",
+                index,
+                owner,
+            ):
+                with pytest.raises(PermissionError):
+                    with path.open("r+b") as stream:
+                        stream.write(b"foreign")
+                blocked.append(path.name)
+        return native(command, *args, **kwargs)
+
+    monkeypatch.setattr(service.runtime, "handle_authorized", guarded)
+    result = service.create(actor, workspace_id, request)
+    assert result.state == "ready" and len(blocked) == 5
+    assert (target / "source.py").read_bytes() == b"value = 1\n"
+    # Publication releases every pin; later operator changes are separate effects.
+    with (target / "source.py").open("r+b") as stream:
+        stream.write(b"value = 2\n")
+
+
+def test_finalization_recovery_reverifies_files_before_acknowledging_ready(creation, monkeypatch):
+    _, actor, _, service, workspace_id, request, _ = creation
+    native = service.runtime.handle_authorized
+
+    def crash(command, *args, **kwargs):
+        result = native(command, *args, **kwargs)
+        if getattr(command, "resume_cursor", None) == "ready":
+            raise RuntimeError("native ready before projection ack")
+        return result
+
+    monkeypatch.setattr(service.runtime, "handle_authorized", crash)
+    with pytest.raises(RuntimeError, match="projection ack"):
+        service.create(actor, workspace_id, request)
+    target = Path(service.workspace.policies.get("jarvis").worktree_root) / workspace_id
+    (target / "source.py").write_bytes(b"value = 9\n")
+    monkeypatch.setattr(service.runtime, "handle_authorized", native)
+    with pytest.raises(DomainError) as failure:
+        service.create(actor, workspace_id, request)
+    assert failure.value.code == "SELF_BUILD_MATERIALIZATION_CONFLICT"
+    assert service.read(actor, workspace_id).state == "finalizing"
+    assert (target / "source.py").read_bytes() == b"value = 9\n"
