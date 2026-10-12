@@ -240,6 +240,55 @@ def test_tied_failure_is_conservative():
     assert assess(plan, [receipt(plan), failure]).failed == ("repository_integrity",)
 
 
+@pytest.mark.parametrize("outcome", ["failed", "interrupted", "cancelled", "unmeasured"])
+def test_higher_sequence_supersedes_pass_when_clock_regresses(outcome):
+    plan = build_execution_plan(state())
+    passed = receipt(plan)
+    changes = dict(
+        command_run_id="command-2",
+        sequence=2,
+        outcome=outcome,
+        exit_code=None,
+        started_at=NOW - timedelta(seconds=3),
+        finished_at=NOW - timedelta(seconds=2),
+    )
+    if outcome == "failed":
+        changes.update(exit_code=1, failure_kind="test")
+    latest = receipt(plan, **changes)
+    for values in ([passed, latest], [latest, passed]):
+        assert not assess(plan, values).ready
+
+
+def test_expired_higher_sequence_cannot_fall_back_to_fresh_lower_sequence():
+    plan = build_execution_plan(state())
+    latest = receipt(
+        plan,
+        command_run_id="command-2",
+        sequence=2,
+        started_at=NOW - timedelta(seconds=3602),
+        finished_at=NOW - timedelta(seconds=3601),
+    )
+    for values in ([receipt(plan), latest], [latest, receipt(plan)]):
+        result = assess(plan, values)
+        assert not result.ready and result.stale == ("repository_integrity",)
+
+
+def test_sequence_is_scoped_to_run_attempt_and_gate():
+    plan = build_execution_plan(state())
+    old = receipt(
+        plan,
+        command_run_id="command-old",
+        sequence=99,
+        outcome="failed",
+        exit_code=1,
+        failure_kind="test",
+        started_at=NOW - timedelta(seconds=3),
+        finished_at=NOW - timedelta(seconds=2),
+    )
+    fresh = receipt(plan, runtime_run_id="run-2")
+    assert assess(plan, [old, fresh]).ready
+
+
 def test_receipt_bounds_and_trusted_clock_configuration():
     plan = build_execution_plan(state())
     with pytest.raises(ValueError):

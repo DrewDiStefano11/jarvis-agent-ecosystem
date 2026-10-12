@@ -37,6 +37,14 @@ actual tool, dependency, environment and isolation configuration is not measured
 by this milestone. It does not invent a configuration digest or elevate proposals
 to autonomous repair readiness.
 
+Transient infrastructure, CI environment, dependency and watchdog failures project
+to reliability observations and retry-policy diagnoses, preserving the bounded
+retry decision without generating product handler/test-coverage repair proposals.
+Repair disposition selects the highest authenticated sequence within each run and
+attempt before timestamp comparison, consistent with validation assessment even
+when the collector clock regresses. Historical failures still count toward the
+retry budget; sequence selection does not erase prior attempts.
+
 Use isolated fixture receipts/databases for tests. Hosted independent review is
 unavailable; document author-performed local review and applicable repository gates
 before publication. Runtime untrusted-source execution remains disabled.

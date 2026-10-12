@@ -42,8 +42,14 @@ def build_repair_evidence(
                 )
             )
             continue
-        latest = max(m.finished_at for _, m in candidates)
-        tied = [(r, m) for r, m in candidates if m.finished_at == latest]
+        lineages = {}
+        for signed, measured in candidates:
+            lineage = (measured.runtime_run_id, measured.attempt_id)
+            previous = lineages.get(lineage)
+            if previous is None or measured.sequence > previous[1].sequence:
+                lineages[lineage] = (signed, measured)
+        latest = max(m.finished_at for _, m in lineages.values())
+        tied = [(r, m) for r, m in lineages.values() if m.finished_at == latest]
         # Failure wins tied outcomes; interruption/unknown wins a tied pass.
         priority = {"failed": 0, "interrupted": 1, "cancelled": 2, "unmeasured": 3, "passed": 4}
         r, m = min(

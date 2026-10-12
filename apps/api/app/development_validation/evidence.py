@@ -86,7 +86,7 @@ def assess_receipts(state, plan, receipts, verifier, *, now, max_age_seconds=360
     receipts = tuple(islice(receipts, 513))
     if len(receipts) > 512:
         raise ValueError("validation receipt bound exceeded")
-    projected, seen, sequences = [], set(), set()
+    projected, seen, sequences, latest = [], set(), set(), {}
     expired_gates, fresh_gates = set(), set()
     commands = {c.gate: c for c in plan.commands}
     requirements = {g.gate: g for g in plan.validation.gates}
@@ -109,6 +109,15 @@ def assess_receipts(state, plan, receipts, verifier, *, now, max_age_seconds=360
         age = (now - m.finished_at).total_seconds()
         if age < 0:
             raise ValueError("receipt timestamp is in the future")
+        # Authenticate and validate every receipt before selection. Within a
+        # run/attempt/gate, collector sequence owns order even if the clock
+        # regresses; expiration must never revive an earlier passing receipt.
+        lineage = (m.runtime_run_id, m.attempt_id, m.command.gate)
+        previous = latest.get(lineage)
+        if previous is None or m.sequence > previous.sequence:
+            latest[lineage] = m
+    for m in latest.values():
+        age = (now - m.finished_at).total_seconds()
         outcome = m.outcome if m.outcome in {"passed", "failed", "cancelled"} else "unmeasured"
         if age > max_age_seconds:
             expired_gates.add(m.command.gate)

@@ -115,6 +115,7 @@ def test_tied_permanent_failure_is_not_suppressed_by_transient_failure():
         diagnostic_codes=("timeout",),
         sequence=2,
         command_run_id="command-2",
+        attempt_id="attempt-2",
     )
     for values in permutations([permanent, transient]):
         finding = report(values).findings[0]
@@ -161,6 +162,48 @@ def test_expired_evidence_is_unmeasured_in_improvement_projection():
     )
     _, facts = source.collect()
     assert facts[0].actual is None and not facts[0].measured
+
+
+@pytest.mark.parametrize(
+    "failure_kind", ["infrastructure", "ci_environment", "dependency", "watchdog"]
+)
+def test_transient_failures_produce_retry_diagnoses_without_product_repairs(failure_kind):
+    plan = build_execution_plan(state())
+    signed = receipt(
+        plan,
+        outcome="failed",
+        exit_code=1,
+        failure_kind=failure_kind,
+        diagnostic_codes=("timeout",),
+    )
+    provenance, facts = ValidationExecutionSource(
+        "transient-run", state(), plan, [signed], verifier(), now=NOW
+    ).collect()
+    assert facts[0].category == "reliability"
+    baseline = create_baseline(
+        repo_sha=state().head_sha,
+        configuration_fingerprint="c" * 64,
+        safety_fingerprint="d" * 64,
+        sources=(provenance,),
+        observations=facts,
+    )
+    proposals = analyze(baseline).proposals
+    assert proposals and all(p.category == "retry_policy" for p in proposals)
+
+
+def test_repair_disposition_follows_higher_sequence_after_clock_regression():
+    plan = build_execution_plan(state())
+    earlier_pass = receipt(plan)
+    later_failure = failed(
+        command_run_id="command-2",
+        sequence=2,
+        started_at=NOW - timedelta(seconds=3),
+        finished_at=NOW - timedelta(seconds=2),
+    )
+    for values in permutations([earlier_pass, later_failure]):
+        finding = report(values).findings[0]
+        assert finding.disposition == "failed"
+        assert finding.reproduction.command_run_id == "command-2"
 
 
 def test_source_aliases_cannot_replay_same_measured_artifact():
