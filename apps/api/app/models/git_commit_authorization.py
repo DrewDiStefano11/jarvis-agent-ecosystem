@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_serializer, model_validator
 
 from app.models.git_commit import CommitMetadata, CommitPreparationPlan
 from app.models.self_build import Contract, Digest, Identifier
@@ -27,7 +27,7 @@ class CommitSelection(Contract):
 
 
 class CommitInspectionPlan(Contract):
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     operation: Literal["git.commit.inspect"] = "git.commit.inspect"
     workspace_id: Identifier
     creation_operation_id: Identifier
@@ -43,10 +43,20 @@ class CommitInspectionPlan(Contract):
     selection: tuple[str, ...] = Field(min_length=1, max_length=64)
     metadata: CommitMetadata
     authorization_policy_digest: Digest
+    native_artifact_manifest_digest: Digest | None = None
     plan_hash: Digest
+
+    @model_serializer(mode="wrap")
+    def original_shape(self, handler):
+        value = handler(self)
+        if self.schema_version == "1.0":
+            value.pop("native_artifact_manifest_digest", None)
+        return value
 
     @model_validator(mode="after")
     def coherent(self):
+        if (self.schema_version == "1.1") != (self.native_artifact_manifest_digest is not None):
+            raise ValueError("artifact manifests require inspection schema 1.1")
         if self.plan_hash != digest(self.model_dump(mode="json", exclude={"plan_hash"})):
             raise ValueError("inspection requires its exact bounded plan hash")
         return self

@@ -2,11 +2,12 @@
 
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_serializer, model_validator
 
 from app.models.self_build import Commit, Contract, Digest, Identifier
-from app.models.source_change import source_path
+from app.models.source_change import canonical_path, source_path
 from app.self_build.policy import digest
+from app.tool_execution.filesystem import relative_parts
 
 
 class FileIdentity(Contract):
@@ -49,8 +50,40 @@ class IndexFile(Contract):
     _path = field_validator("path")(source_path)
 
 
+class NativeArtifact(Contract):
+    path: str
+    kind: Literal["git_pointer", "workspace_marker", "source_backup"]
+    sha256: Digest
+    byte_count: int = Field(ge=0, le=8388608)
+    provenance_digest: Digest
+
+    @model_validator(mode="after")
+    def exact_path(self):
+        import re
+
+        canonical_path(self.path)
+        segments = relative_parts(self.path)
+        exact = {
+            "git_pointer": ".git",
+            "workspace_marker": ".jarvis-workspace.json",
+        }
+        if self.kind in exact and self.path != exact[self.kind]:
+            raise ValueError("native artifact must use its exact root path")
+        if self.kind == "source_backup" and (
+            not segments or not re.fullmatch(r"\.jarvis-edit-[a-f0-9]{64}\.before", segments[-1])
+        ):
+            raise ValueError("source backup requires a deterministic native path")
+        if len(segments) > 16:
+            raise ValueError("native artifact exceeds path depth")
+        if len(segments) > 1:
+            source_path("/".join(segments[:-1]) + "/placeholder")
+            if any(part.casefold().startswith(".jarvis-") for part in segments[:-1]):
+                raise ValueError("native backup parents must remain ordinary source directories")
+        return self
+
+
 class GitChangeObservation(Contract):
-    schema_version: Literal["1.0"] = "1.0"
+    schema_version: Literal["1.0", "1.1"] = "1.0"
     workspace_id: Identifier
     creation_operation_id: Identifier
     creation_plan_hash: Digest
@@ -74,12 +107,25 @@ class GitChangeObservation(Contract):
     original_inventory: tuple[InventoryFile, ...] = Field(max_length=4096)
     current_inventory: tuple[InventoryFile, ...] = Field(max_length=4096)
     index_inventory: tuple[IndexFile, ...] = Field(max_length=4096)
+    internal_inventory: tuple[NativeArtifact, ...] = Field(default=(), max_length=66)
     changes: tuple[FileChange, ...] = Field(max_length=4096)
     change_fingerprint: Digest
     commit_preview_fingerprint: Digest
 
+    @model_serializer(mode="wrap")
+    def original_shape(self, handler):
+        value = handler(self)
+        if self.schema_version == "1.0":
+            value.pop("internal_inventory", None)
+        return value
+
     @model_validator(mode="after")
     def fingerprints(self):
+        if self.schema_version == "1.0" and self.internal_inventory:
+            raise ValueError("native artifacts require observation schema 1.1")
+        internal = [item.path for item in self.internal_inventory]
+        if internal != sorted(internal) or len(set(map(str.casefold, internal))) != len(internal):
+            raise ValueError("native artifact inventory must be unique and ordered")
         for inventory in (self.original_inventory, self.current_inventory, self.index_inventory):
             names = [item.path for item in inventory]
             if names != sorted(names) or len(set(map(str.casefold, names))) != len(names):

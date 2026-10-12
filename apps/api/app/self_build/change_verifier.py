@@ -12,7 +12,7 @@ from pathlib import Path
 
 from app.models import git_changes as contracts
 from app.models import source_change as source_contracts
-from app.models.git_changes import FileChange, FileIdentity, GitChangeObservation
+from app.models.git_changes import FileChange, FileIdentity, GitChangeObservation, NativeArtifact
 from app.models.source_change import source_path
 from app.self_build.checkout_driver import CheckoutDriver, fail, pin_read_tree, supports_mutation
 from app.self_build.creation_service import CREATION_POLICY_DIGEST, ownership
@@ -21,7 +21,13 @@ from app.self_build.git_observer import COMMIT, pinned_metadata_file
 from app.self_build.materialization import blob_digest, inventory
 from app.self_build.policy import digest
 from app.self_build.workspace_namespace import owned_namespace
-from app.tool_execution.filesystem import open_directory, open_file, read_bytes, repository_parts
+from app.tool_execution.filesystem import (
+    open_directory,
+    open_file,
+    read_bytes,
+    relative_parts,
+    repository_parts,
+)
 
 MAX_NODES = 65538
 INTERNAL = {".git", ".jarvis-workspace.json"}
@@ -44,13 +50,18 @@ def identity(content, mode):
     )
 
 
-def path_nodes(paths):
+def path_nodes(paths, *, artifacts=()):
     """Check every component, including file/directory and parent-case collisions."""
     nodes = {}
     for path, is_file in paths:
-        source_path(path)
-        segments = repository_parts(path)
-        if any(part.casefold().startswith(".jarvis-") for part in segments):
+        if path in artifacts and is_file:
+            segments = relative_parts(path)
+        else:
+            source_path(path)
+            segments = repository_parts(path)
+        if path not in artifacts and any(
+            part.casefold().startswith(".jarvis-") for part in segments
+        ):
             fail("SELF_BUILD_CHANGE_PROTECTED", "Private workspace paths cannot be source changes.")
         if len(segments) > 16:
             fail("SELF_BUILD_CHANGE_LIMIT", "Repository path depth exceeds its bound.")
@@ -93,7 +104,17 @@ class ChangeVerifier:
         self.driver = CheckoutDriver(observer, authority_check)
         self.guard = authority_check
 
-    def inspect(self, policy, record, nonce, *, finalize=None):
+    def inspect(self, policy, record, nonce, *, finalize=None, native_artifacts=()):
+        native_artifacts = tuple(NativeArtifact.model_validate(item) for item in native_artifacts)
+        if (
+            any(item.kind != "source_backup" for item in native_artifacts)
+            or len(native_artifacts) > 64
+        ):
+            fail(
+                "SELF_BUILD_CHANGE_PROTECTED", "Only authenticated source backups may be supplied."
+            )
+        if len({item.path.casefold() for item in native_artifacts}) != len(native_artifacts):
+            fail("SELF_BUILD_CHANGE_COLLISION", "Native artifact paths collide.")
         if not supports_mutation():
             fail(
                 "SELF_BUILD_CHANGE_PLATFORM_UNAVAILABLE",
@@ -121,11 +142,11 @@ class ChangeVerifier:
         ):
             fail("SELF_BUILD_PLAN_CHANGED", "Registered repository policy changed.")
         try:
-            return self._inspect(policy, record, nonce, finalize)
+            return self._inspect(policy, record, nonce, finalize, native_artifacts)
         except (OSError, ValueError, UnicodeError):
             fail("SELF_BUILD_CHANGE_UNSAFE", "Change inventory is unavailable, unsafe or changed.")
 
-    def _inspect(self, policy, record, nonce, finalize):
+    def _inspect(self, policy, record, nonce, finalize, native_artifacts):
         plan = record.plan
         owner = ownership(record, nonce)
         # Inspection may never claim a missing workspace. Pin all existing
@@ -203,6 +224,8 @@ class ChangeVerifier:
                         "Sparse or assume-unchanged index entries require operator recovery.",
                     )
                 actual, directories, total = {}, [], 0
+                expected_artifacts = {item.path: item for item in native_artifacts}
+                measured_artifacts = {}
 
                 def walk_error(error):
                     raise error
@@ -215,15 +238,20 @@ class ChangeVerifier:
                         directories.append((Path(directory) / leaf).relative_to(target).as_posix())
                     for leaf in files:
                         path = (Path(directory) / leaf).relative_to(target).as_posix()
-                        if path in INTERNAL:
-                            continue
+                        internal = path in INTERNAL
+                        artifact = expected_artifacts.get(path)
                         # Refuse protected/private/deep paths before reading bytes.
-                        path_nodes([(path, True)])
+                        if not internal and artifact is None:
+                            path_nodes([(path, True)])
                         if len(actual) >= 4096:
                             fail("SELF_BUILD_CHANGE_LIMIT", "File inventory exceeds its bound.")
                         with ExitStack() as file_stack:
                             parent_directory = checkout
-                            segments = repository_parts(path)
+                            segments = (
+                                relative_parts(path)
+                                if internal or artifact
+                                else repository_parts(path)
+                            )
                             for segment in segments[:-1]:
                                 parent_directory = open_directory(
                                     file_stack,
@@ -235,18 +263,56 @@ class ChangeVerifier:
                             with open_file(
                                 parent_directory, segments[-1], os.O_RDONLY, internal=True
                             ) as fd:
-                                content = read_bytes(fd, plan.maximum_file_bytes)
+                                maximum = (
+                                    artifact.byte_count
+                                    if artifact
+                                    else 8192
+                                    if internal
+                                    else plan.maximum_file_bytes
+                                )
+                                content = read_bytes(fd, maximum)
+                        if internal or artifact:
+                            content_hash = sha256(content).hexdigest()
+                            if artifact:
+                                if (
+                                    content_hash != artifact.sha256
+                                    or len(content) != artifact.byte_count
+                                ):
+                                    fail(
+                                        "SELF_BUILD_CHANGE_PROTECTED",
+                                        "Native backup identity differs from history.",
+                                    )
+                                measured_artifacts[path] = artifact
+                            else:
+                                kind = {
+                                    ".git": "git_pointer",
+                                    ".jarvis-workspace.json": "workspace_marker",
+                                }[path]
+                                measured_artifacts[path] = NativeArtifact(
+                                    path=path,
+                                    kind=kind,
+                                    sha256=content_hash,
+                                    byte_count=len(content),
+                                    provenance_digest=record.ownership_digest,
+                                )
+                            continue
                         total += len(content)
                         if total > plan.maximum_total_bytes:
                             fail("SELF_BUILD_CHANGE_LIMIT", "Source bytes exceed their bound.")
                         actual[path] = content
                 # Combine all three namespaces so a deleted parent cannot hide
                 # an added case alias or a file/directory replacement.
+                if not expected_artifacts.keys() <= measured_artifacts.keys():
+                    fail(
+                        "SELF_BUILD_CHANGE_PROTECTED", "An authenticated native backup is missing."
+                    )
                 path_nodes(
                     [(item[2], True) for item in original]
                     + [(item[2], True) for item in indexed]
                     + [(path, True) for path in actual]
                     + [(path, False) for path in directories]
+                    + [(path, True) for path in measured_artifacts],
+                    artifacts=measured_artifacts,
                 )
                 modes = {item[2]: item[0] for item in indexed}
                 before = {}
@@ -282,7 +348,7 @@ class ChangeVerifier:
                             )
                         )
                 payload = dict(
-                    schema_version="1.0",
+                    schema_version="1.1",
                     workspace_id=record.workspace_id,
                     creation_operation_id=record.operation_id,
                     creation_plan_hash=plan.plan_hash,
@@ -316,6 +382,10 @@ class ChangeVerifier:
                     ],
                     index_inventory=[
                         dict(mode=mode, blob_sha=blob, path=path) for mode, blob, path in indexed
+                    ],
+                    internal_inventory=[
+                        item.model_dump(mode="json")
+                        for _, item in sorted(measured_artifacts.items())
                     ],
                     changes=[item.model_dump(mode="json") for item in changes],
                 )

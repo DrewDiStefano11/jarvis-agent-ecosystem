@@ -65,6 +65,7 @@
     "tests/test_git_change_verifier.py",
     "tests/test_git_commit_preparation.py",
     "tests/test_git_commit_authorization.py",
+    "tests/test_git_applied_source.py",
     "tests/test_self_build_workspaces.py",
     "tests/test_self_build_git_observer.py",
     "tests/test_self_build_git_inspection.py",

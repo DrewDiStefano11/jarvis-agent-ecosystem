@@ -23,9 +23,11 @@ from app.models.git_commit_authorization import (
     CommitSelection,
     PreparedCommitRecord,
 )
+from app.self_build import native_artifacts as artifact_policy
 from app.self_build.change_verifier import ChangeVerifier
 from app.self_build.commit_planner import PREPARATION_POLICY_DIGEST, propose_commit
 from app.self_build.creation_service import ownership
+from app.self_build.native_artifacts import mutation_artifacts
 from app.self_build.policy import digest
 from app.source_edit_planning.service import EDITING_POLICY_DIGEST, SourceEditingPlanService
 
@@ -35,6 +37,7 @@ AUTHORIZATION_POLICY_DIGEST = sha256(
         + Path(contracts.__file__).read_text(encoding="utf-8")
         + PREPARATION_POLICY_DIGEST
         + EDITING_POLICY_DIGEST
+        + Path(artifact_policy.__file__).read_text(encoding="utf-8")
     ).encode()
 ).hexdigest()
 PREPARED = "self_build.commit_preparation.prepared"
@@ -138,6 +141,7 @@ class CommitPreparationService:
 
     def inspection_plan(self, actor, workspace_id, body):
         source = self.source_record(actor, workspace_id, body.source_edit_record_id)
+        artifacts = mutation_artifacts(self.app, actor, source)
         acknowledged = self.creation.read(actor, workspace_id)
         with self.repository.leases._write() as session:
             row, attempt, _, creation, _ = self.live(actor, workspace_id, session)
@@ -150,7 +154,7 @@ class CommitPreparationService:
                 )
             )
             payload = dict(
-                schema_version="1.0",
+                schema_version="1.1",
                 operation="git.commit.inspect",
                 workspace_id=workspace_id,
                 creation_operation_id=creation.operation_id,
@@ -166,6 +170,7 @@ class CommitPreparationService:
                 selection=list(selection.selection),
                 metadata=selection.metadata.model_dump(mode="json"),
                 authorization_policy_digest=AUTHORIZATION_POLICY_DIGEST,
+                native_artifact_manifest_digest=artifacts.fingerprint,
             )
             return CommitInspectionPlan(**payload, plan_hash=digest(payload))
 
@@ -246,6 +251,9 @@ class CommitPreparationService:
     def measured(self, actor, workspace_id, body, callback=None, *, request=None):
         inspection_plan = self.inspection_plan(actor, workspace_id, body)
         source = self.source_record(actor, workspace_id, body.source_edit_record_id)
+        artifacts = mutation_artifacts(self.app, actor, source)
+        if artifacts.fingerprint != inspection_plan.native_artifact_manifest_digest:
+            fail("GIT_COMMIT_SOURCE_RECORD_INVALID")
         # Validate the actual acknowledged creation checkpoint, not its ID alone.
         initial_creation = self.creation.read(actor, workspace_id)
         with self.repository.leases._write() as session:
@@ -282,6 +290,8 @@ class CommitPreparationService:
                     self.approval(actor, current, bound[0], request, session)
             if self.source_record(actor, workspace_id, body.source_edit_record_id) != source:
                 fail("GIT_COMMIT_SOURCE_RECORD_INVALID")
+            if mutation_artifacts(self.app, actor, source) != artifacts:
+                fail("GIT_COMMIT_SOURCE_RECORD_INVALID")
             if self.creation.read(actor, workspace_id) != creation:
                 fail("GIT_COMMIT_WORKSPACE_INVALID")
 
@@ -314,7 +324,9 @@ class CommitPreparationService:
             return plan if callback is None else callback(plan, filesystem_guard)
 
         verifier = ChangeVerifier(self.git.tool(), guard)
-        return verifier.inspect(policy, creation, nonce, finalize=finalize)
+        return verifier.inspect(
+            policy, creation, nonce, finalize=finalize, native_artifacts=artifacts.artifacts
+        )
 
     def preview(self, actor, workspace_id, body):
         return self.measured(actor, workspace_id, body)
