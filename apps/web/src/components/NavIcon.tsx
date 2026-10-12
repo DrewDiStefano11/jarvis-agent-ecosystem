@@ -1,6 +1,8 @@
 import type { CSSProperties } from 'react'
 
 const paths: Record<string, string> = {
+  close: 'M6 6l12 12M18 6 6 18',
+  plus: 'M12 4v16M4 12h16',
   overview: 'M3 10 12 3l9 7M5 9v12h5v-7h4v7h5V9',
   tasks: 'M8 6h13M8 12h13M8 18h13M3 6h1M3 12h1M3 18h1',
   agents: 'M16 21v-3a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v3M16 4a4 4 0 0 1 0 8M22 21v-3a4 4 0 0 0-3-4M13 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0',

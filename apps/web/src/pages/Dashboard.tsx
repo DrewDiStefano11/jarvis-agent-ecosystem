@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom'
 import { NavIcon } from '../components/NavIcon'
 import { Status } from '../components/Status'
 import { useAppStore } from '../state/AppStore'
+import { NewTaskButton } from '../components/NewTaskButton'
 
 const terminalRuns = new Set(['succeeded', 'cancelled', 'failed', 'timed_out', 'abandoned'])
 export function Dashboard() {
@@ -30,7 +31,7 @@ export function Dashboard() {
     ['Emergency stop', !system ? 'unavailable' : system.emergencyStop ? 'active' : 'clear'],
   ]
   return <div className="mission-overview">
-    <header className="page-title"><div><h1>Mission Control</h1><p>Runtime health, operator attention, and task requests.</p></div><Link className="primary" to="/tasks?create=1">+ New task</Link></header>
+    <header className="page-title"><div><h1>Mission Control</h1><p>Runtime health, operator attention, and task requests.</p></div><NewTaskButton/></header>
     <section className={`mc-panel attention-panel${attention.length ? ' attention-needed' : ''}`} aria-labelledby="attention-heading"><NavIcon name="attention"/><div><h2 id="attention-heading">Needs attention</h2>{!system ? <p>System health could not be confirmed. Inspect synchronization before acting.</p> : !attention.length ? <p>{error ? 'Last-known snapshot reported no system blockers. Refresh to confirm.' : 'No system blockers reported'}</p> : <ul className="attention-list">{attention.map(item => <li key={item.title}><Link to={item.path}>{item.title}<span aria-hidden="true"> →</span></Link><small>{item.detail}</small></li>)}</ul>}{system && error && <p className="mc-note">Last-known blockers shown. System health could not be refreshed.</p>}<p className="mc-note">Task and approval records may include demonstration work. {pending.length > 0 && <Link to="/approvals">Review {pending.length} pending approval records →</Link>}</p></div></section>
     <div className="mission-grid">
       <section className="mc-panel runtime-panel" aria-labelledby="runtime-heading"><div className="mc-heading"><h2 id="runtime-heading">Runtime work</h2><Link to="/runtime">Open planning ↗</Link></div>
