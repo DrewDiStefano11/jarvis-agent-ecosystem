@@ -52,6 +52,8 @@ test('chart filters include matching child records and never issue a runtime com
 test('choosing an identity updates shared inspection scope without navigating or queueing', async () => {
   store.runtime = { ...store.runtime, identityLoaded: true, identities: [{ id: 'registered', display_name: 'Real local identity', stable_key: 'local-fixture', lifecycle_state: 'active', operational_status: 'idle', is_enabled: true, agent_type: 'worker', description: 'Isolated test identity', version: 1 }], selectActor: vi.fn() }
   renderShell()
+  await userEvent.click(screen.getByRole('button', { name: 'Inspect runtime as Real local identity' }))
+  expect(store.runtime.selectActor).toHaveBeenCalledWith('registered')
   await userEvent.click(screen.getByRole('button', { name: 'Choose identity' }))
   await userEvent.selectOptions(screen.getByLabelText('Inspect as identity'), 'registered')
   expect(store.runtime.selectActor).toHaveBeenCalledWith('registered')
@@ -101,6 +103,8 @@ test('unknown health never displays a clear system', () => {
   renderShell()
   expect(screen.getByText(/System health could not be confirmed/)).toBeInTheDocument()
   expect(screen.queryByText('No system blockers reported')).not.toBeInTheDocument()
+  expect(screen.getByText('Approval snapshot unavailable')).toBeInTheDocument()
+  expect(screen.queryByText('No pending decisions')).not.toBeInTheDocument()
   expect(screen.getByRole('button', { name: 'Emergency stop' })).toBeDisabled()
 })
 test('degraded delivery and emergency stop appear before runtime work', () => {

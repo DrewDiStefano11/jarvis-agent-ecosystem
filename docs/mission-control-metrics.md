@@ -36,3 +36,24 @@ Additional QA renders an explicitly empty network fixture consistently over HTTP
 Completed local checks: frontend typecheck, ESLint, 224 Vitest tests and production build; both real-API browser acceptance harnesses; all nine supported routes across the six required screenshot widths with no overflow or browser exceptions; seven-width Mission Control acceptance including 2560px; focused approval-to-task inspection; empty and long-collection scenarios. Backend Ruff check/format and all four isolated pytest shards passed 2,406 tests with three platform skips. The initial JavaScript chunk is about 367 KB (110 KB gzip), below the shell milestone's 400 KB (118 KB gzip), despite the added dashboard. No hosted review was requested. Exact-head hosted CI awaits publication approval.
 
 This dashboard branch is intentionally stacked on the shell milestone because it uses its tokens, route grouping, native ActionDrawer and direct task-creation component. Task/Planning and Workforce workflow redesigns, Business Lab and Office refinement, merged-contract Software Factory components and final product acceptance remain subsequent campaign work. Neither these two milestones nor passing checks declare the entire overhaul complete.
+
+## Operator-requested reference refinement (2026-10-12)
+
+The operator asked for the Overview to follow the supplied Mission Control reference more closely after reviewing the initial dashboard. The updated composition leads with the recorded-event plot and task-status donut, followed by a three-column work/runtime/decision layout with a compact activity rail. Completed evidence and system health follow as supporting panels. Primary actions remain in-place drawers, filters, identity selection and task/result inspection.
+
+Visual comparison ledger against attachment image-1.png:
+
+| Comparison | Reference / observed mismatch | Implemented repair or deliberate difference |
+| --- | --- | --- |
+| Section hierarchy | Reference puts a large activity chart alongside the donut; initial render buried it below two rows | Moved both charts to the leading visual row |
+| Lower composition | Reference uses work, workforce and attention columns; initial render repeated equal two-column rows | Added independent work/runtime columns and a decision/activity rail; short filters no longer leave gaps beneath unrelated panels |
+| Density and typography | Initial render used oversized heading spacing and repetitive explanatory copy | Compact five-card strip, tighter heading scale, shorter visible scope copy and an accessible Data scope disclosure |
+| Borders and palette | Reference uses midnight surfaces and restrained purple framing | Maintained the shared midnight/purple system, softened panel borders and added consistent heading icons |
+| Workforce | Reference shows populated active workers; this installation has no registered real identities and execution is disabled | Displays real registry counts and a connected readiness path; enabled identities, when loaded, can directly select shared inspection scope |
+| Attention | Initial approvals were embedded under the donut and repeated in health | Dedicated decision panel opens an individual approval or the full pending set in place |
+| Chart evidence | Reference's smooth histories and throughput are fabricated design content | Actual loaded-event bars with an event total, integer scale, observed-day labels, tooltips and accessible values; no invented missing-date zeros or rate histories |
+| Responsive continuation | Three columns would be too narrow on tablets and phones | Two-column tablet arrangement, stacked mobile sections and sparse labels for dense mobile plots; all bar dates remain accessible through button labels and the values table |
+
+Above-the-fold copy differs intentionally from the illustrative reference: no fabricated person/greeting, example metrics, throughput, duration, uptime, sparkline history, unsupported routes or worker names. Existing Jarvis route and action labels remain accurate. Source/provenance disclosure remains available even when reduced from prominent repeated paragraphs.
+
+Rendered evidence: dashboard/reference-revision under the task's visualization directory. Captured at 1920, 1586, 1440, 1024, 768, 390 and 320px; the reference-native comparison is reference-viewport.png at 1586x992. Inspected the supplied reference and rendered image with view_image, plus the live IAB. Real-API smoke checks passed task creation, chart/date filtering, identity selection, approvals, results/system controls, offline recovery and seven viewport widths. Additional browser checks passed focused approval inspection and explicitly labeled empty/dense-event fixtures without overflow or browser exceptions. Fixtures do not modify the operator preview's persisted records. The operator preview uses a separate isolated database from the prior long-label stress database, which remains preserved.

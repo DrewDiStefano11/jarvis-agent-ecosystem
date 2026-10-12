@@ -29,7 +29,7 @@ export function WorkDistribution({ tasks, filter, onFilter }: { tasks: Task[]; f
     </div>
     <figcaption>
       <div className="distribution-legend" role="group" aria-label="Filter task records by status">{groups.map(group => <button key={group.key} aria-label={`${group.label}, ${group.count} task records`} aria-pressed={filter === group.key} onClick={() => onFilter(filter === group.key ? 'all' : group.key)} title={`${group.count} ${group.label.toLowerCase()} task records. Filter the request list.`}><span className="chart-key" style={{ background: group.color }} aria-hidden="true"/><span>{group.label}</span><strong>{group.count}</strong></button>)}</div>
-      <p className="mc-note">Current snapshot, including child tasks and demonstrations. Select a status to filter requests below.</p>
+      <p className="mc-note">Snapshot including child tasks and demonstrations.</p>
     </figcaption>
   </figure>
 }
