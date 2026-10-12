@@ -174,6 +174,64 @@ def test_source_mutation_recovers_effect_before_file_checkpoint(checkout, monkey
     assert journal["completed"] == 1 and (target / "hello.txt").stat().st_ino == inode
 
 
+def test_source_mutation_pending_add_refuses_unclaimed_published_bytes(checkout, monkeypatch):
+    from app.source_mutation.driver import SourceMutationDriver
+
+    target, plan, journal, apply = editing_fixture(checkout, "add", "new.txt")
+    native = SourceMutationDriver._file
+
+    def crash_before_stage(*args, **kwargs):
+        raise RuntimeError("crash before stage claim")
+
+    monkeypatch.setattr(SourceMutationDriver, "_file", crash_before_stage)
+    with pytest.raises(RuntimeError, match="stage claim"):
+        apply()
+    assert journal["pending"] == 0 and journal["stage"] is None
+    destination = target / "new.txt"
+    destination.write_bytes(plan.changes[0].after.text.encode())
+    foreign_inode = destination.stat().st_ino
+    monkeypatch.setattr(SourceMutationDriver, "_file", native)
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SOURCE_MUTATION_STAGE_CONFLICT"
+    assert journal["completed"] == 0
+    assert destination.stat().st_ino == foreign_inode
+
+
+@pytest.mark.parametrize("operation", ["add", "modify"])
+def test_source_mutation_pending_publication_refuses_same_bytes_foreign_inode(
+    checkout, monkeypatch, operation
+):
+    from app.source_mutation import driver as mutation_driver
+
+    filename = "new.txt" if operation == "add" else "hello.txt"
+    target, plan, journal, apply = editing_fixture(checkout, operation, filename)
+    native = mutation_driver.rename_pinned
+
+    def crash_after_publication(fd, leaf):
+        native(fd, leaf)
+        if leaf == filename:
+            raise RuntimeError("crash after publication")
+
+    monkeypatch.setattr(mutation_driver, "rename_pinned", crash_after_publication)
+    with pytest.raises(RuntimeError, match="publication"):
+        apply()
+    destination = target / filename
+    owned_inode = destination.stat().st_ino
+    replacement = target.parent / "foreign-replacement.txt"
+    replacement.write_bytes(plan.changes[0].after.text.encode())
+    replacement.replace(destination)
+    foreign_inode = destination.stat().st_ino
+    assert foreign_inode != owned_inode
+    monkeypatch.setattr(mutation_driver, "rename_pinned", native)
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SOURCE_MUTATION_STAGE_CONFLICT"
+    assert journal["completed"] == 0 and journal["stage"][1] == owned_inode
+    assert destination.stat().st_ino == foreign_inode
+    assert destination.read_bytes() == plan.changes[0].after.text.encode()
+
+
 @pytest.mark.parametrize("artifact", ["stage", "backup", "target", "sibling"])
 def test_source_mutation_never_adopts_foreign_artifacts(checkout, artifact):
     from app.source_mutation.driver import staging_names
