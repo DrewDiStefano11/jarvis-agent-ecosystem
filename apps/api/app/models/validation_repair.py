@@ -3,10 +3,10 @@
 from datetime import datetime
 from typing import Literal
 
-from app.models.validation_execution import Identifier
 from pydantic import Field, field_validator
 
 from app.models.development_validation import Commit, Contract, Digest, FailureKind, Gate
+from app.models.validation_execution import Identifier
 
 
 class ReproductionReference(Contract):
