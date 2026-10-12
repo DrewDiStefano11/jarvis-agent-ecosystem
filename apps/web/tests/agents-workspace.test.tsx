@@ -19,6 +19,7 @@ function agent(patch: Partial<Agent> & Pick<Agent, 'id' | 'name'>): Agent {
 
 const departments: Department[] = [{ id: 'research', name: 'Research', description: '', managerAgentId: null, agentIds: ['scout'] }, { id: 'executive', name: 'Executive', description: '', managerAgentId: 'jarvis', agentIds: ['jarvis'] }]
 let agents: Agent[]
+let snapshotDepartments: Department[]
 class Socket { static OPEN = 1; readyState = 1; onopen: (() => void) | null = null; onclose: (() => void) | null = null; constructor() { queueMicrotask(() => this.onopen?.()) } close() {} send() {} }
 
 function Selection() {
@@ -32,6 +33,7 @@ function renderAgents() {
 }
 
 beforeEach(() => {
+  snapshotDepartments = [...departments]
   agents = [
     agent({ id: 'jarvis', name: 'Jarvis', role: 'Executive Manager', departmentId: 'executive', status: 'idle' }),
     agent({ id: 'scout', name: 'Scout', status: 'researching', description: 'Reads fixture sources', isTemporary: true, capabilities: ['fixtures'] }),
@@ -44,12 +46,27 @@ beforeEach(() => {
       agents = [...agents, agent({ id: 'temp-1', name: String(body.name), role: String(body.role), departmentId: body.departmentId, isTemporary: true })]
       return { ok: true, status: 201, json: async () => ({ data: { id: 'temp-1' } }) } as Response
     }
-    const data = url.pathname === '/api/agents' ? agents : url.pathname === '/api/departments' ? departments : url.pathname === '/api/identity/agents' ? [] : url.pathname === '/api/system/status' ? { eventSessionId: 'agents-test' } : []
+    const data = url.pathname === '/api/agents' ? agents : url.pathname === '/api/departments' ? snapshotDepartments : url.pathname === '/api/identity/agents' ? [] : url.pathname === '/api/system/status' ? { eventSessionId: 'agents-test' } : []
     return { ok: true, status: 200, json: async () => ({ data }) } as Response
   }))
 })
 
 describe('Agents workforce page', () => {
+  test('retains a vanished selected department across live snapshots', async () => {
+    renderAgents()
+    await screen.findByRole('heading', { name: 'Scout' })
+    await userEvent.selectOptions(screen.getByLabelText('Demonstration department'), 'research')
+    snapshotDepartments = snapshotDepartments.filter(item => item.id !== 'research')
+    agents = agents.filter(item => item.departmentId !== 'research')
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh test snapshot' }))
+    await screen.findByText('No demonstration agents match this filter.')
+    expect(screen.getByLabelText('Demonstration department')).toHaveValue('research')
+    expect(screen.getByRole('option', { name: 'Selected department (not in snapshot)' })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Clear demonstration filters' }))
+    expect(screen.getByRole('heading', { name: 'Jarvis' })).toBeInTheDocument()
+    expect(within(screen.getByRole('article', { name: 'Jarvis demonstration' })).getByText('Executive · Permanent demonstration · not a runtime identity')).toBeInTheDocument()
+  })
+
   test('retains the selected recorded status when the snapshot changes', async () => {
     renderAgents()
     await screen.findByRole('heading', { name: 'Scout' })
