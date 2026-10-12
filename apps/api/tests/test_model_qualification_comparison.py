@@ -420,3 +420,80 @@ def test_cli_comparison_execution(tmp_path: Path):
 def test_cli_invalid_file():
     exit_code = cli_main(["non_existent_b.json", "non_existent_t.json"])
     assert exit_code == EXIT_INVALID_INPUT
+
+
+@pytest.mark.parametrize("target_pass", [False, True])
+def test_advisory_gate_changes_affect_verdict_with_same_level_and_score(target_pass):
+    baseline = _make_profile(
+        roles={
+            "manager": _make_role_record(
+                qualification="conditional",
+                score=0.6,
+                gates=(
+                    *_make_role_record().gates,
+                    _make_gate(key="additional_advisory", mandatory=False, passed=not target_pass),
+                ),
+            )
+        }
+    )
+    target = _make_profile(
+        roles={
+            "manager": _make_role_record(
+                qualification="conditional",
+                score=0.6,
+                gates=(
+                    *_make_role_record().gates,
+                    _make_gate(key="additional_advisory", mandatory=False, passed=target_pass),
+                ),
+            )
+        }
+    )
+    comparison = compare_qualification_artifacts(baseline, target).comparisons[0]
+    assert comparison.verdict == (VERDICT_IMPROVED if target_pass else VERDICT_REGRESSED)
+    assert "gates remained unchanged" not in comparison.reason
+
+
+@pytest.mark.parametrize(
+    "score, verdict",
+    [
+        (0.80496, VERDICT_UNCHANGED),
+        (0.79504, VERDICT_UNCHANGED),
+        (0.8051, VERDICT_IMPROVED),
+        (0.7949, VERDICT_REGRESSED),
+    ],
+)
+def test_score_threshold_uses_raw_values(score, verdict):
+    baseline = _make_profile(roles={"manager": _make_role_record(score=0.8)})
+    target = _make_profile(roles={"manager": _make_role_record(score=score)})
+    comparison = compare_qualification_artifacts(baseline, target).comparisons[0]
+    assert comparison.verdict == verdict
+    assert comparison.meaningful_score_change == (verdict != VERDICT_UNCHANGED)
+
+
+@pytest.mark.parametrize(
+    "field", ["qualification_policy_version", "evaluation_suite_version", "evaluation_suite_digest"]
+)
+def test_attacker_version_metadata_is_not_persisted(tmp_path, field):
+    baseline = _make_profile()
+    target = baseline.model_copy(update={field: "api_key=TOP-SECRET"})
+    report = compare_qualification_artifacts(baseline, target)
+    assert report.comparisons[0].verdict == VERDICT_NON_COMPARABLE
+    output = write_comparison_json(tmp_path / "report.json", report).read_text(encoding="utf-8")
+    markdown = write_comparison_markdown(tmp_path / "report.md", report).read_text(encoding="utf-8")
+    assert "TOP-SECRET" not in output + markdown
+
+
+def test_missing_gate_evidence_cannot_imply_improvement():
+    baseline = _make_profile(roles={"manager": _make_role_record(gates=(_make_gate(),))})
+    target = _make_profile(roles={"manager": _make_role_record(score=0.99, gates=())})
+    comparison = compare_qualification_artifacts(baseline, target).comparisons[0]
+    assert comparison.verdict == VERDICT_INSUFFICIENT_EVIDENCE
+    assert comparison.missing_or_incomplete_evidence
+
+
+def test_malformed_input_error_does_not_expose_artifact_values():
+    profile = _make_profile().model_dump(mode="json")
+    profile["roles"]["manager"]["score"] = "api_key=TOP-SECRET"
+    with pytest.raises(ValueError) as failure:
+        load_qualification_artifact(profile)
+    assert "TOP-SECRET" not in str(failure.value)

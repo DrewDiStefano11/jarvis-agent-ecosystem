@@ -947,6 +947,9 @@ class DevelopmentWorkspaceRow(Base):
     approval_id: Mapped[str] = mapped_column(ForeignKey("audit_events.id"))
     lease_fingerprint: Mapped[str] = mapped_column(String(64))
     plan_json: Mapped[dict[str, Any]] = mapped_column(JSON)
+    creation_json: Mapped[dict[str, Any] | None] = mapped_column(
+        JSON(none_as_null=True), nullable=True
+    )
     state: Mapped[str] = mapped_column(String(30))
     version: Mapped[int] = mapped_column(Integer)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

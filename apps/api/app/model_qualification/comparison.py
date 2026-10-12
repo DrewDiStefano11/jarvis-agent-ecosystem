@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.autonomy.events import scrub_text
 from app.model_qualification.policy import policy_for
@@ -82,6 +82,29 @@ class RoleQualificationComparison(BaseModel):
     newly_passing_gates: tuple[str, ...] = ()
     missing_or_incomplete_evidence: tuple[str, ...] = ()
 
+    @field_validator(
+        "model",
+        "provider",
+        "reason",
+        "baseline_model",
+        "baseline_provider",
+        "target_model",
+        "target_provider",
+    )
+    @classmethod
+    def safe_text(cls, value: str | None) -> str | None:
+        return scrub_text(value)[:1200] if value is not None else None
+
+    @field_validator(
+        "mandatory_gate_changes",
+        "previously_passing_failed_gates",
+        "newly_passing_gates",
+        "missing_or_incomplete_evidence",
+    )
+    @classmethod
+    def safe_evidence(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return _scrub_str_tuple(value[:100])
+
     @field_validator("role")
     @classmethod
     def validate_role(cls, value: str) -> str:
@@ -112,7 +135,7 @@ class QualificationComparisonReport(BaseModel):
     notes: tuple[str, ...] = ()
 
 
-def load_qualification_artifact(
+def _load_qualification_artifact(
     source: str | Path | dict[str, Any] | list[Any] | ModelProfile | QualificationRun,
 ) -> tuple[ModelProfile, ...]:
     """Load and validate qualification artifact(s) from a file path, dict, list, or model object."""
@@ -171,6 +194,13 @@ def load_qualification_artifact(
     raise ValueError(f"unsupported qualification artifact source type: {type(source).__name__}")
 
 
+def load_qualification_artifact(source) -> tuple[ModelProfile, ...]:
+    try:
+        return _load_qualification_artifact(source)
+    except ValidationError as exc:
+        raise ValueError("qualification artifact does not match its evidence schema") from exc
+
+
 def compare_qualification_artifacts(
     baseline_source: str | Path | dict[str, Any] | list[Any] | ModelProfile | QualificationRun,
     target_source: str | Path | dict[str, Any] | list[Any] | ModelProfile | QualificationRun,
@@ -224,6 +254,15 @@ def compare_qualification_artifacts(
         b_prof = b_map.get(baseline_key)
         t_prof = t_map.get(target_key)
 
+        def comparison(baseline=b_prof, target=t_prof, **fields):
+            return RoleQualificationComparison(
+                **fields,
+                baseline_model=baseline.model if baseline else None,
+                baseline_provider=baseline.provider if baseline else None,
+                target_model=target.model if target else None,
+                target_provider=target.provider if target else None,
+            )
+
         if b_prof is None and t_prof is not None:
             candidate_roles = sorted(t_prof.roles.keys())
             if allowed_roles:
@@ -231,7 +270,7 @@ def compare_qualification_artifacts(
             for role in candidate_roles:
                 t_role = t_prof.roles.get(role)
                 comparisons.append(
-                    RoleQualificationComparison(
+                    comparison(
                         model=model,
                         provider=provider,
                         role=role,
@@ -258,7 +297,7 @@ def compare_qualification_artifacts(
             for role in candidate_roles:
                 b_role = b_prof.roles.get(role)
                 comparisons.append(
-                    RoleQualificationComparison(
+                    comparison(
                         model=model,
                         provider=provider,
                         role=role,
@@ -313,7 +352,7 @@ def compare_qualification_artifacts(
                 b_role = b_prof.roles.get(role)
                 t_role = t_prof.roles.get(role)
                 comparisons.append(
-                    RoleQualificationComparison(
+                    comparison(
                         model=model,
                         provider=provider,
                         role=role,
@@ -337,7 +376,7 @@ def compare_qualification_artifacts(
 
             if b_role is None and t_role is not None:
                 comparisons.append(
-                    RoleQualificationComparison(
+                    comparison(
                         model=model,
                         provider=provider,
                         role=role,
@@ -359,7 +398,7 @@ def compare_qualification_artifacts(
 
             if t_role is None and b_role is not None:
                 comparisons.append(
-                    RoleQualificationComparison(
+                    comparison(
                         model=model,
                         provider=provider,
                         role=role,
@@ -440,7 +479,7 @@ def compare_qualification_artifacts(
                         f"gate evidence changed to or from unmeasured: {changed_unmeasured}"
                     )
                 comparisons.append(
-                    RoleQualificationComparison(
+                    comparison(
                         model=model,
                         provider=provider,
                         role=role,
@@ -523,7 +562,10 @@ def compare_qualification_artifacts(
             failed_gate_regressed = len(previously_passing_failed) > 0
             passed_gate_improved = len(newly_passing) > 0
 
-            if (
+            if evidence_issues:
+                verdict = VERDICT_INSUFFICIENT_EVIDENCE
+                reason = "; ".join(evidence_issues)
+            elif (
                 t_rank > b_rank
                 or failed_gate_regressed
                 or (
@@ -580,7 +622,7 @@ def compare_qualification_artifacts(
                     reason += f" (score delta: {delta:+.3f})"
 
             comparisons.append(
-                RoleQualificationComparison(
+                comparison(
                     model=model,
                     provider=provider,
                     role=role,
@@ -602,22 +644,6 @@ def compare_qualification_artifacts(
                 )
             )
 
-    identities = {target: baseline for baseline, target in profile_pairs}
-    comparisons = [
-        item.model_copy(
-            update={
-                "baseline_model": identities[(item.model, item.provider)][0]
-                if identities[(item.model, item.provider)] in b_map
-                else None,
-                "baseline_provider": identities[(item.model, item.provider)][1]
-                if identities[(item.model, item.provider)] in b_map
-                else None,
-                "target_model": item.model if (item.model, item.provider) in t_map else None,
-                "target_provider": item.provider if (item.model, item.provider) in t_map else None,
-            }
-        )
-        for item in comparisons
-    ]
     # Sort comparisons deterministically by model, provider, role
     comparisons.sort(key=lambda c: (c.model, c.provider, c.role))
 
