@@ -17,3 +17,5 @@ The shared agent detail drawer still opens from each demonstration card.
 Temporary names accept 2–60 characters and roles accept 2–100, matching `CreateTemporaryAgentRequest`. The demonstration navigation target and its accessible heading have distinct IDs.
 
 A selected recorded status stays visible when it disappears from a later snapshot, so the displayed filter continues to match the filtered results.
+
+A selected department also stays visible if a snapshot removes it. The missing department is labeled explicitly until the operator selects another department or clears the filters.
