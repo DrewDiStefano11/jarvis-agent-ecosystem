@@ -1,13 +1,19 @@
 """Safety, exact-state invalidation and useful focused validation regressions."""
 
+import importlib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from itertools import permutations
 
 import pytest
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from pydantic import ValidationError
+from sqlalchemy import func, select
 
 from app.core.errors import DomainError
+from app.db.models import AuditEventRow, OutboxEventRow
 from app.development_validation.planner import (
     PUBLICATION,
     assess_validation,
@@ -31,11 +37,16 @@ from app.models.source_change import (
     Topology,
     canonical_path,
 )
+from app.models.source_edit_planning import PersistEditingPlanRequest
 from app.source_change.planner import (
     observation_identity,
     plan_source_changes,
     verify_source_plan,
 )
+from app.source_edit_planning import projection
+from app.source_edit_planning.repository import SourceEditingPlanRow
+from app.source_edit_planning.service import SourceEditingPlanService
+from tests.test_self_build_workspaces import workspace as source_plan_workspace  # noqa: F401
 
 
 def file_change(**values):
@@ -1113,3 +1124,522 @@ def test_pure_planning_never_touches_filesystem_or_environment(monkeypatch):
     monkeypatch.setattr(os, "open", forbidden)
     monkeypatch.setattr(os, "environ", {})
     assert verify_source_plan(plan_source_changes(proposal, observed), observed)
+
+
+# Durable source edit planning regressions.
+
+
+def source_projection_state(observed, *changes):
+    return CodeState(
+        repository_identity=observed.repository_identity,
+        head_sha=observed.head_sha,
+        base_sha=observed.base_sha,
+        changes=changes,
+    )
+
+
+def delta(path, before, after):
+    return FileChange(
+        path=path,
+        before_hash=before.digest if before else None,
+        before_mode=before.mode if before else None,
+        after_hash=after.digest if after else None,
+        after_mode=after.mode if after else None,
+    )
+
+
+@pytest.mark.parametrize(
+    "original_operation,new_operation",
+    [
+        ("add", "modify"),
+        ("add", "delete"),
+        ("modify", "modify"),
+        ("modify", "delete"),
+        ("delete", "add"),
+    ],
+)
+def test_projects_existing_deltas_without_losing_unrelated_changes(
+    original_operation, new_operation
+):
+    baseline = None if original_operation == "add" else content("base")
+    current = None if original_operation == "delete" else content("current")
+    replacement = None if new_operation == "delete" else content("candidate")
+    observed = observation(
+        SourceEntry(path="a.py", kind="file" if current else "absent", content=current)
+    )
+    original = source_projection_state(
+        observed,
+        delta("a.py", baseline, current),
+        delta("unrelated.py", content("old"), content("unrelated")),
+    )
+    proposal = intent(
+        observed,
+        change(
+            "a.py",
+            operation=new_operation,
+            before=identity(current) if current else None,
+            after=replacement,
+        ),
+    )
+    source_plan = plan_source_changes(proposal, observed)
+    expected, validation = projection.project_source_state(source_plan, original)
+    assert original.changes[-1] in expected.changes
+    matching = [entry for entry in expected.changes if entry.path == "a.py"]
+    if baseline is None and replacement is None:
+        assert not matching
+    else:
+        assert matching == [delta("a.py", baseline, replacement)]
+    assert {gate.gate for gate in validation.gates} >= set(PUBLICATION)
+    assert validation.boundary == "publication"
+
+
+@pytest.mark.parametrize("operation", ["modify", "delete"])
+def test_full_revert_removes_existing_delta(operation):
+    baseline = content("baseline")
+    current = content("current") if operation == "modify" else None
+    observed = observation(
+        SourceEntry(path="a.py", kind="file" if current else "absent", content=current)
+    )
+    original = source_projection_state(observed, delta("a.py", baseline, current))
+    proposal = intent(
+        observed,
+        change(
+            "a.py",
+            operation="modify" if current else "add",
+            before=identity(current) if current else None,
+            after=baseline,
+        ),
+    )
+    expected, validation = projection.project_source_state(
+        plan_source_changes(proposal, observed), original
+    )
+    assert not expected.changes
+    assert {gate.gate for gate in validation.gates} == set(PUBLICATION)
+
+
+def test_projection_rejects_stale_existing_delta_identity():
+    current = content("current")
+    observed = observation(SourceEntry(path="a.py", kind="file", content=current))
+    original = source_projection_state(observed, delta("a.py", content("base"), content("stale")))
+    source_plan = plan_source_changes(
+        intent(observed, change("a.py", before=identity(current), after=content("new"))),
+        observed,
+    )
+    with pytest.raises(DomainError) as failure:
+        projection.project_source_state(source_plan, original)
+    assert failure.value.code == "SOURCE_VALIDATION_BEFORE_CONFLICT"
+
+
+def test_unrelated_unsafe_existing_deltas_are_not_hidden():
+    observed = observation(SourceEntry(path="a.py", kind="absent"))
+    original = source_projection_state(observed, delta("dist/generated.py", None, content("build")))
+    source_plan = plan_source_changes(
+        intent(observed, change("a.py", operation="add", after=content("new"))),
+        observed,
+    )
+    with pytest.raises(DomainError) as failure:
+        projection.project_source_state(source_plan, original)
+    assert failure.value.code == "SOURCE_VALIDATION_PATH_DENIED"
+
+
+migration = importlib.import_module("migrations.versions.20261012_source_edit_plans")
+
+
+@pytest.fixture
+def source_planning_prepared(source_plan_workspace):  # noqa: F811
+    app, actor, workspace_service, workspace_request, _, _ = source_plan_workspace
+    reservation = workspace_service.reserve(actor, workspace_request)
+    observed = observation(
+        SourceEntry(path="source.py", kind="absent"),
+        base_sha=workspace_request.base_sha,
+    )
+    source_intent = intent(
+        observed,
+        change("source.py", operation="add", after=content("unpublished_code_payload\n")),
+        references=PlanReferences(
+            original_plan_hash=reservation.plan.plan_hash,
+            authorization_reference=reservation.approval_id,
+        ),
+    )
+    request = PersistEditingPlanRequest(
+        workspace_id=reservation.workspace_id,
+        expected_workspace_version=reservation.version,
+        expected_workspace_plan_hash=reservation.plan.plan_hash,
+        command_id="source-command",
+        source_intent=source_intent,
+    )
+    original = CodeState(
+        repository_identity=observed.repository_identity,
+        head_sha=observed.head_sha,
+        base_sha=observed.base_sha,
+        changes=(),
+    )
+    yield app, actor, SourceEditingPlanService(app), request, observed, original
+
+
+def count_events(app):
+    with app.state.repository.session_factory() as session:
+        audits = list(
+            session.scalars(
+                select(AuditEventRow).where(
+                    AuditEventRow.event_type == "self_build.source_edit_plan.persisted"
+                )
+            )
+        )
+        outbox = list(
+            session.scalars(
+                select(OutboxEventRow).where(
+                    OutboxEventRow.event_type == "self_build.source_edit_plan.persisted"
+                )
+            )
+        )
+        rows = session.scalar(select(func.count()).select_from(SourceEditingPlanRow))
+        return rows, audits, outbox
+
+
+def test_source_planning_prepared_exact_plan_persistence_replay_and_protected_read(
+    source_planning_prepared,
+):
+    app, actor, service, request, observed, original = source_planning_prepared
+    result = service.persist(actor, request, observed, original)
+    assert service.persist(actor, request, observed, original) == result
+    assert service.read(actor, result.record_id) == result
+    assert result.plan.state == "proposed"
+    assert result.plan.evidence_status == "unmeasured"
+    assert result.plan.mutation_supported is False
+    rows, audit, outbox = count_events(app)
+    assert rows == len(audit) == len(outbox) == 1
+    assert "unpublished_code_payload" not in str(audit[0].payload)
+    assert "source.py" not in str(audit[0].payload)
+
+
+def test_source_planning_prepared_concurrent_command_is_one_immutable_record(
+    source_planning_prepared,
+):
+    app, actor, service, request, observed, original = source_planning_prepared
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(
+            executor.map(lambda _: service.persist(actor, request, observed, original), range(2))
+        )
+    assert results[0] == results[1]
+    rows, audit, outbox = count_events(app)
+    assert rows == len(audit) == len(outbox) == 1
+
+
+def test_source_planning_prepared_command_content_conflict_never_replaces_plan(
+    source_planning_prepared,
+):
+    app, actor, service, request, observed, original = source_planning_prepared
+    result = service.persist(actor, request, observed, original)
+    altered = request.model_copy(
+        update={
+            "source_intent": request.source_intent.model_copy(
+                update={
+                    "changes": (change("source.py", operation="add", after=content("different")),),
+                }
+            )
+        }
+    )
+    with pytest.raises(DomainError) as failure:
+        service.persist(actor, altered, observed, original)
+    assert failure.value.code == "SOURCE_EDIT_COMMAND_CONFLICT"
+    assert service.read(actor, result.record_id) == result
+    assert count_events(app)[0] == 1
+
+
+def test_source_planning_prepared_event_failure_rolls_back_record_and_outbox(
+    source_planning_prepared, monkeypatch
+):
+    app, actor, service, request, observed, original = source_planning_prepared
+    original_add = service.repository.leases._add_event
+
+    def fail_after_event(*args, **kwargs):
+        original_add(*args, **kwargs)
+        raise RuntimeError("injected rollback")
+
+    monkeypatch.setattr(service.repository.leases, "_add_event", fail_after_event)
+    with pytest.raises(RuntimeError, match="injected rollback"):
+        service.persist(actor, request, observed, original)
+    rows, audit, outbox = count_events(app)
+    assert rows == len(audit) == len(outbox) == 0
+
+
+@pytest.mark.parametrize("boundary", ["disabled", "stop", "lease", "task", "workspace"])
+def test_live_authority_loss_prevents_source_plan_persistence(source_planning_prepared, boundary):
+    from datetime import UTC, datetime, timedelta
+
+    from app.db.models import (
+        DevelopmentWorkspaceRow,
+        SystemStateRow,
+        TaskLeaseRow,
+        TaskRow,
+    )
+
+    app, actor, service, request, observed, original = source_planning_prepared
+    if boundary == "disabled":
+        app.state.settings.self_build_enabled = False
+    else:
+        with app.state.repository.session_factory() as session:
+            if boundary == "stop":
+                session.get(SystemStateRow, 1).emergency_stop = True
+            elif boundary == "lease":
+                session.get(TaskLeaseRow, "task-demo").expires_at = datetime.now(UTC) - timedelta(
+                    seconds=1
+                )
+            elif boundary == "task":
+                session.get(TaskRow, "task-demo").status = "cancelled"
+            else:
+                session.get(DevelopmentWorkspaceRow, request.workspace_id).state = "abandoned"
+            session.commit()
+    with pytest.raises(DomainError):
+        service.persist(actor, request, observed, original)
+    rows, audit, outbox = count_events(app)
+    assert rows == len(audit) == len(outbox) == 0
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("expected_workspace_version", 2),
+        ("expected_workspace_plan_hash", "d" * 64),
+    ],
+)
+def test_exact_workspace_provenance_is_required(source_planning_prepared, field, value):
+    app, actor, service, request, observed, original = source_planning_prepared
+    with pytest.raises(DomainError) as failure:
+        service.persist(actor, request.model_copy(update={field: value}), observed, original)
+    assert failure.value.code == "SOURCE_EDIT_PROVENANCE_CONFLICT"
+    assert count_events(app)[0] == 0
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("original_plan_hash", "d" * 64),
+        ("authorization_reference", "foreign-approval"),
+    ],
+)
+def test_model_references_cannot_replace_durable_original_authorization(
+    source_planning_prepared, field, value
+):
+    app, actor, service, request, observed, original = source_planning_prepared
+    references = request.source_intent.references.model_copy(update={field: value})
+    altered = request.model_copy(
+        update={
+            "source_intent": request.source_intent.model_copy(update={"references": references})
+        }
+    )
+    with pytest.raises(DomainError) as failure:
+        service.persist(actor, altered, observed, original)
+    assert failure.value.code == "SOURCE_EDIT_PROVENANCE_CONFLICT"
+    assert count_events(app)[0] == 0
+
+
+def test_source_payload_in_database_exception_is_sanitized(source_planning_prepared, monkeypatch):
+    import traceback
+
+    from sqlalchemy.exc import OperationalError
+
+    app, actor, service, request, observed, original = source_planning_prepared
+    secret = "private-source-payload-in-a-native-db-error"
+
+    def fail_storage(*args, **kwargs):
+        raise OperationalError("insert source plan", {"payload": secret}, RuntimeError(secret))
+
+    monkeypatch.setattr(service.repository.leases, "_add_event", fail_storage)
+    with pytest.raises(DomainError) as failure:
+        service.persist(actor, request, observed, original)
+    assert failure.value.code == "SOURCE_EDIT_STORAGE_FAILED"
+    assert secret not in "".join(traceback.format_exception(failure.value))
+    assert count_events(app)[0] == 0
+
+
+def test_immutable_source_plan_history_blocks_downgrade(source_planning_prepared):
+    app, actor, service, request, observed, original = source_planning_prepared
+    result = service.persist(actor, request, observed, original)
+    with pytest.raises(RuntimeError, match="Export source edit plan evidence"):
+        with (
+            app.state.engine.begin() as connection,
+            Operations.context(MigrationContext.configure(connection)),
+        ):
+            migration.downgrade()
+    assert service.read(actor, result.record_id) == result
+
+
+def test_restart_style_fresh_service_reads_immutable_record(source_planning_prepared):
+    app, actor, service, request, observed, original = source_planning_prepared
+    result = service.persist(actor, request, observed, original)
+    app.state.engine.dispose()
+    fresh = SourceEditingPlanService(app)
+    assert fresh.read(actor, result.record_id) == result
+    assert fresh.persist(actor, request, observed, original) == result
+    assert count_events(app)[0] == 1
+
+
+def test_task_read_permission_alone_does_not_reveal_protected_source(
+    source_planning_prepared, monkeypatch
+):
+    from types import SimpleNamespace
+
+    app, actor, service, request, observed, original = source_planning_prepared
+    result = service.persist(actor, request, observed, original)
+    original_check = service.workspace.identity.check_permission_resource_access
+
+    def deny_source(actor_id, permission_key, *args, **kwargs):
+        if permission_key == "self_build.workspace":
+            return SimpleNamespace(allowed=False)
+        return original_check(actor_id, permission_key, *args, **kwargs)
+
+    monkeypatch.setattr(service.workspace.identity, "check_permission_resource_access", deny_source)
+    with pytest.raises(DomainError) as failure:
+        service.read(actor, result.record_id)
+    assert failure.value.code == "SOURCE_EDIT_PERMISSION_DENIED"
+
+
+def test_rehashed_record_cannot_drop_required_publication_gates(source_planning_prepared):
+    from app.development_validation.planner import digest
+
+    app, actor, service, request, observed, original = source_planning_prepared
+    result = service.persist(actor, request, observed, original)
+    with app.state.repository.session_factory() as session:
+        row = session.get(SourceEditingPlanRow, result.record_id)
+        payload = dict(row.payload)
+        plan = dict(payload["plan"])
+        validation = dict(plan["validation_plan"])
+        validation["gates"] = validation["gates"][:1]
+        validation["plan_hash"] = digest(
+            {key: value for key, value in validation.items() if key != "plan_hash"}
+        )
+        plan["validation_plan"] = validation
+        plan["plan_hash"] = digest(
+            {key: value for key, value in plan.items() if key != "plan_hash"}
+        )
+        payload["plan"] = plan
+        row.payload = payload
+        row.plan_hash = plan["plan_hash"]
+        session.commit()
+    with pytest.raises(DomainError) as failure:
+        service.read(actor, result.record_id)
+    assert failure.value.code == "SOURCE_EDIT_RECORD_INVALID"
+
+
+@pytest.mark.parametrize(
+    "field,foreign_value",
+    [
+        ("repository_identity", "github.com/foreign/project"),
+        ("base_sha", "d" * 40),
+    ],
+)
+def test_coherently_rehashed_foreign_source_is_not_owned_workspace_evidence(
+    source_planning_prepared, field, foreign_value
+):
+    from app.development_validation.planner import digest
+    from app.models.source_change import SourceChangeIntent, SourceObservation
+    from app.source_change.planner import observation_identity, plan_source_changes
+    from app.source_edit_planning.projection import project_source_state
+
+    app, actor, service, request, observed, original = source_planning_prepared
+    result = service.persist(actor, request, observed, original)
+    foreign_observation = SourceObservation.model_validate(
+        observed.model_dump(mode="json") | {field: foreign_value},
+    )
+    new_intent = SourceChangeIntent.model_validate(
+        request.source_intent.model_dump(mode="json")
+        | {"source": observation_identity(foreign_observation).model_dump(mode="json")},
+    )
+    source_plan = plan_source_changes(new_intent, foreign_observation)
+    foreign_original = CodeState.model_validate(
+        original.model_dump(mode="json") | {field: foreign_value}
+    )
+    projected, validation = project_source_state(source_plan, foreign_original)
+    payload = result.plan.model_dump(mode="json", exclude={"plan_hash"}) | {
+        "source_plan": source_plan.model_dump(mode="json"),
+        "observation": foreign_observation.model_dump(mode="json"),
+        "original_code_state": foreign_original.model_dump(mode="json"),
+        "expected_code_state": projected.model_dump(mode="json"),
+        "validation_plan": validation.model_dump(mode="json"),
+    }
+    new_request = request.model_copy(update={"source_intent": new_intent})
+    request_hash = digest(
+        {
+            "request": new_request.model_dump(mode="json"),
+            "source_plan_hash": source_plan.plan_hash,
+            "original_code_state": foreign_original.model_dump(mode="json"),
+        }
+    )
+    record_payload = result.model_dump(mode="json") | {
+        "request_hash": request_hash,
+        "plan": payload | {"plan_hash": digest(payload)},
+    }
+    with app.state.repository.session_factory() as session:
+        row = session.get(SourceEditingPlanRow, result.record_id)
+        row.payload = record_payload
+        row.request_hash = request_hash
+        row.plan_hash = digest(payload)
+        session.commit()
+    with pytest.raises(DomainError) as failure:
+        service.read(actor, result.record_id)
+    assert failure.value.code == "SOURCE_EDIT_RECORD_INVALID"
+
+
+def test_per_workspace_evidence_bound_preserves_exact_replay(source_planning_prepared, monkeypatch):
+    from app.source_edit_planning import service as service_module
+
+    app, actor, service, request, observed, original = source_planning_prepared
+    monkeypatch.setattr(service_module, "MAX_PLANS_PER_WORKSPACE", 2)
+    first = service.persist(actor, request, observed, original)
+    service.persist(actor, request.model_copy(update={"command_id": "second"}), observed, original)
+    assert service.persist(actor, request, observed, original) == first
+    with pytest.raises(DomainError) as failure:
+        service.persist(
+            actor,
+            request.model_copy(update={"command_id": "overflow"}),
+            observed,
+            original,
+        )
+    assert failure.value.code == "SOURCE_EDIT_PLAN_LIMIT"
+    assert count_events(app)[0] == 2
+
+
+def test_serialized_record_limit_refuses_without_event(source_planning_prepared, monkeypatch):
+    from app.source_edit_planning import service as service_module
+
+    app, actor, service, request, observed, original = source_planning_prepared
+    monkeypatch.setattr(service_module, "MAX_RECORD_BYTES", 1)
+    with pytest.raises(DomainError) as failure:
+        service.persist(actor, request, observed, original)
+    assert failure.value.code == "SOURCE_EDIT_RECORD_LIMIT"
+    rows, audit, outbox = count_events(app)
+    assert rows == len(audit) == len(outbox) == 0
+
+
+def test_proposal_read_survives_stop_and_workspace_abandonment(source_planning_prepared):
+    from app.db.models import DevelopmentWorkspaceRow, SystemStateRow
+
+    app, actor, service, request, observed, original = source_planning_prepared
+    result = service.persist(actor, request, observed, original)
+    with app.state.repository.session_factory() as session:
+        session.get(SystemStateRow, 1).emergency_stop = True
+        workspace_row = session.get(DevelopmentWorkspaceRow, request.workspace_id)
+        workspace_row.state = "abandoned"
+        workspace_row.version += 1
+        session.commit()
+    assert service.read(actor, result.record_id) == result
+    with pytest.raises(DomainError):
+        service.persist(actor, request, observed, original)
+
+
+def test_real_control_plane_restart_keeps_proposal_and_authorization(source_planning_prepared):
+    from app.main import create_app
+
+    app, actor, service, request, observed, original = source_planning_prepared
+    result = service.persist(actor, request, observed, original)
+    database_url = str(app.state.engine.url)
+    app.state.engine.dispose()
+    restarted = create_app(database_url=database_url)
+    try:
+        current_actor = restarted.state.agent_runtime_service.authenticate_actor(actor.actor_id)
+        fresh_service = SourceEditingPlanService(restarted)
+        assert fresh_service.read(current_actor, result.record_id) == result
+    finally:
+        restarted.state.engine.dispose()

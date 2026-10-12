@@ -23,6 +23,7 @@ from app.model_providers.errors import (
 )
 from app.model_providers.registry import ProviderRegistry
 from app.model_providers.retry import RetryExecutor
+from app.model_providers.tool_calls import validate_tool_response
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +76,7 @@ class ModelRouter:
             provider
             for provider in providers
             if (capability is None or capability in provider.capabilities)
+            and (not request.tools or ModelCapability.TOOL_CALLING in provider.capabilities)
             and (
                 requirements.provider_allowlist is None
                 or provider.name in requirements.provider_allowlist
@@ -112,6 +114,7 @@ class ModelRouter:
         budget: TaskBudget,
         pricing: PricingTable | None = None,
     ) -> ModelExecutionResponse:
+        request = ModelExecutionRequest.model_validate(request.model_dump())
         tracker = BudgetTracker(budget, pricing)
         candidates = await self.eligible(request, requirements)
         if not candidates:
@@ -158,6 +161,7 @@ class ModelRouter:
                         task_id=request.task_id,
                         correlation_id=request.correlation_id,
                     )
+                validate_tool_response(response, routed_request)
                 response.estimated_cost_usd = tracker.record(response)
                 response.routing_metadata = {
                     "selected_provider": provider.name,

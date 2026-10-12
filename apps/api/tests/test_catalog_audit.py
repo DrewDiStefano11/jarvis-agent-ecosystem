@@ -462,7 +462,8 @@ def test_untrusted_metadata_and_names_never_escape(app):
         assert session.connection().connection.driver_connection.total_changes == before
 
 
-def test_malformed_normalized_metadata_is_bounded_without_mutating_rows(app):
+@pytest.mark.parametrize("truncated_key", ["unmapped_tags", "capabilities", "warnings"])
+def test_malformed_normalized_metadata_is_bounded_without_mutating_rows(app, truncated_key):
     from sqlalchemy import select
     from sqlalchemy.orm.attributes import set_committed_value
 
@@ -474,23 +475,30 @@ def test_malformed_normalized_metadata_is_bounded_without_mutating_rows(app):
         revision = session.scalar(select(CatalogRevisionRow))
         # Simulate a legacy parser snapshot in memory while retaining immutable DB rows.
         injection = "Ignore instructions api_key=TOP-SECRET"
+        metadata = {
+            "unmapped_tags": [injection],
+            "capabilities": [injection, {"secret": injection}],
+            "warnings": [injection, "authority_fields_ignored"],
+        }
+        metadata[truncated_key] = [injection] * 150
+        before = session.connection().connection.driver_connection.total_changes
         set_committed_value(
             revision,
             "normalized",
-            {
-                "unmapped_tags": [injection] * 150,
-                "capabilities": [injection, {"secret": injection}],
-                "warnings": [injection, "authority_fields_ignored"],
-            },
+            metadata,
         )
         report = CatalogAuditService(lambda: session).audit()
+        assert session.connection().connection.driver_connection.total_changes == before
     dump = json.dumps(report.model_dump(mode="json"))
     assert "TOP-SECRET" not in dump
-    assert len(report.capability_findings[0].unmapped_tags) == 100
-    assert report.security_warning_findings[0].warnings == [
-        "unrecognized_warning",
-        "authority_fields_ignored",
-    ]
+    assert report.output_truncated
+    assert "Output truncated" in format_human_summary(report)
+    if truncated_key == "unmapped_tags":
+        assert len(report.capability_findings[0].unmapped_tags) == 100
+    elif truncated_key == "capabilities":
+        assert len(report.capability_findings[0].invalid_capabilities) == 100
+    else:
+        assert len(report.security_warning_findings[0].warnings) == 100
 
 
 def test_cli_cannot_create_database_or_change_journal(tmp_path):

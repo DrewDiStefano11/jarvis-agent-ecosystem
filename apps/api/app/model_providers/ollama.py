@@ -29,6 +29,12 @@ from app.model_providers.policy import (
     require_live_provider_execution,
     require_provider_network_health,
 )
+from app.model_providers.tool_calls import (
+    decode_model_response,
+    parse_native_calls,
+    post_model_response,
+    validate_tool_support,
+)
 
 
 class OllamaProvider(ProviderBase):
@@ -92,6 +98,8 @@ class OllamaProvider(ProviderBase):
         )
 
     async def execute(self, request: ModelExecutionRequest) -> ModelExecutionResponse:
+        request = ModelExecutionRequest.model_validate(request.model_dump())
+        validate_tool_support(request, self.capabilities, self.name)
         model = request.model or self.default_model
         require_live_provider_execution(
             provider=self.name,
@@ -122,17 +130,25 @@ class OllamaProvider(ProviderBase):
             payload["format"] = request.output_schema.json_schema
         if request.prefer_no_reasoning:
             payload["think"] = False
+        if request.tools:
+            payload["tools"] = [tool.wire_definition() for tool in request.tools]
         client, owned = self._client_or_new()
         started = perf_counter()
         translated_error: ModelProviderError | None = None
         try:
-            response = await client.post(
-                "/api/chat", json=payload, timeout=request.timeout_seconds or self.timeout_seconds
+            response = await post_model_response(
+                client,
+                "/api/chat",
+                tools_enabled=bool(request.tools),
+                provider=self.name,
+                model=model,
+                json=payload,
+                timeout=request.timeout_seconds or self.timeout_seconds,
             )
             response.raise_for_status()
             try:
-                body = response.json()
-            except ValueError:
+                body = decode_model_response(response, tools_enabled=bool(request.tools))
+            except (ValueError, RecursionError):
                 body = None
                 translated_error = MalformedProviderResponseError(
                     "Ollama returned malformed JSON", provider=self.name, model=model
@@ -158,7 +174,18 @@ class OllamaProvider(ProviderBase):
             )
         message = body.get("message")
         content = message.get("content") if isinstance(message, dict) else None
-        if not isinstance(content, str) or not content:
+        calls = parse_native_calls(
+            message.get("tool_calls") if isinstance(message, dict) else None,
+            request=request,
+            provider=self.name,
+            model=body.get("model") or model,
+            compatible=False,
+        )
+        if calls and (message.get("role") != "assistant" or body.get("done") is not True):
+            raise MalformedProviderResponseError(
+                "Ollama tool response is incomplete", provider=self.name, model=model
+            )
+        if not isinstance(content, str) or (not content and not calls):
             raise MalformedProviderResponseError(
                 "Ollama response is missing generated content", provider=self.name, model=model
             )
@@ -169,6 +196,8 @@ class OllamaProvider(ProviderBase):
         try:
             return ModelExecutionResponse(
                 content=content,
+                tool_requests=calls,
+                tool_request_id=request.tool_request_id,
                 provider=self.name,
                 model=returned_model or model,
                 input_tokens=input_tokens,
