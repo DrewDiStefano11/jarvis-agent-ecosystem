@@ -498,6 +498,25 @@ def creation(git_workspace):
     return app, actor, operator, service, reservation.workspace_id, request, scope
 
 
+@pytest.mark.parametrize("identity", ["digest", "path"])
+def test_source_mutation_changed_git_tool_refuses_before_intent_and_files(editing, identity):
+    from app.source_mutation.repository import SourceMutationRow
+
+    app, actor, _, service, request, target, _ = editing
+    if identity == "digest":
+        app.state.settings.self_build_git_sha256 = "0" * 64
+    else:
+        app.state.settings.self_build_git_executable = (
+            app.state.settings.self_build_git_executable.swapcase()
+        )
+    with pytest.raises(DomainError) as failure:
+        service.apply(actor, request)
+    assert failure.value.code == "SOURCE_MUTATION_TOOL_CHANGED"
+    assert (target / "source.py").read_bytes() == b"value = 1\n"
+    with service.repository.sessions() as session:
+        assert session.get(SourceMutationRow, request.editing_record_id) is None
+
+
 def test_native_preparation_checkpoint_and_outbox_are_replayable_without_files(creation):
     app, actor, _, service, workspace_id, request, _ = creation
     result = service.prepare(actor, workspace_id, request)
@@ -1047,3 +1066,39 @@ def test_finalization_recovery_reverifies_files_before_acknowledging_ready(creat
     assert failure.value.code == "SELF_BUILD_MATERIALIZATION_CONFLICT"
     assert service.read(actor, workspace_id).state == "finalizing"
     assert (target / "source.py").read_bytes() == b"value = 9\n"
+
+
+@pytest.mark.parametrize("field", ["original_approval_id", "plan", "operation_id", "created_at"])
+def test_source_mutation_transition_preserves_original_references(editing, field):
+    from app.source_mutation.repository import SourceMutationRow
+
+    _, actor, _, service, request, target, _ = editing
+    previous = service.prepare(actor, request)
+    with pytest.raises(DomainError) as failure:
+        service.transition(actor, request, previous, **{field: "foreign"})
+    assert failure.value.code == "SOURCE_MUTATION_TRANSITION_INVALID"
+    assert (target / "source.py").read_bytes() == b"value = 1\n"
+    with service.repository.sessions() as session:
+        assert (
+            service.intent(
+                session.get(SourceMutationRow, request.editing_record_id), previous.plan, session
+            )
+            == previous
+        )
+
+
+def test_source_mutation_coherently_rehashed_foreign_original_approval_refuses(editing):
+    from app.source_mutation.repository import SourceMutationRow
+    from app.source_mutation.service import intent_digest
+
+    _, actor, _, service, request, target, _ = editing
+    previous = service.prepare(actor, request)
+    changed = previous.model_copy(update={"original_approval_id": "foreign"})
+    with service.repository.leases._write() as session:
+        row = session.get(SourceMutationRow, request.editing_record_id)
+        row.payload = changed.model_dump(mode="json")
+        row.integrity_digest = intent_digest(changed)
+    with pytest.raises(DomainError) as failure:
+        service.apply(actor, request)
+    assert failure.value.code == "SOURCE_MUTATION_INTENT_INVALID"
+    assert (target / "source.py").read_bytes() == b"value = 1\n"

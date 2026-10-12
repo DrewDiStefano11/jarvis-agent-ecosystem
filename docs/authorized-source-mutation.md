@@ -19,6 +19,8 @@ runtime attempt and executor, and current implementation policy.
 `approve(operator, ApproveSourceMutation(...))` requires the configured
 authenticated remote-control operator, task access, native Git-inspection
 permission and the additional `self_build.workspace.source_edit` permission.
+The configured Git executable identity and SHA-256 must exactly match the tool
+bound into the original creation plan; tool changes refuse before intent/effects.
 The implementation actor and runtime agent cannot approve their own operation.
 The operator approves the exact mutation-plan hash, not a model explanation or
 the earlier workspace reservation/creation grant. Approval is an expiring
@@ -132,3 +134,5 @@ Mutation completion is not validation success. The persisted publication
 validation plan must still receive independently measured validation evidence.
 Human review and passing exact-head CI remain publication requirements. Native
 source mutation and any later validation execution are separate authorities.
+
+Journal progress transitions accept only mutable position fields. Original approval, operation identity, creation time and plan references remain immutable. Every journal read verifies the original independent operator approval against the append-only audit plan and task; expired original approvals remain valid provenance, while live execution requires a current exact-plan approval.

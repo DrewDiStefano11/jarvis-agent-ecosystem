@@ -10,6 +10,13 @@ from typing import Any, Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
 from app.model_providers.security import redact_secrets
+from app.models.model_tools import (
+    MAX_RESULT_BYTES,
+    MAX_TOOL_CALLS,
+    ModelToolDefinition,
+    ModelToolRequest,
+    bounded_json,
+)
 
 SECRET_KEY_TERMS = ("api_key", "authorization", "token", "password", "secret", "credential")
 MAX_METADATA_KEYS = 32
@@ -47,6 +54,7 @@ BUILTIN_ADAPTER_CAPABILITIES = frozenset(
         ModelCapability.CODE_EDITING,
         ModelCapability.REASONING,
         ModelCapability.STRUCTURED_OUTPUT,
+        ModelCapability.TOOL_CALLING,
     }
 )
 
@@ -111,6 +119,9 @@ class ModelExecutionRequest(ProviderContract):
     streaming: bool = False
     output_schema: ModelOutputSchema | None = None
     prefer_no_reasoning: bool = Field(default=False, strict=True)
+    tools: list[ModelToolDefinition] = Field(default_factory=list, max_length=MAX_TOOL_CALLS)
+    tool_request_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_.:-]{1,120}$")
+    maximum_tool_calls: int = Field(default=1, ge=1, le=MAX_TOOL_CALLS, strict=True)
 
     @field_validator("task_id", "correlation_id")
     @classmethod
@@ -131,11 +142,20 @@ class ModelExecutionRequest(ProviderContract):
             )
             object.__setattr__(self, "prompt", None)
         validate_safe_metadata(self.metadata)
+        if self.tools:
+            if self.tool_request_id is None:
+                raise ValueError("tool requests require an application-supplied stable request ID")
+            if len({tool.name for tool in self.tools}) != len(self.tools):
+                raise ValueError("tool definitions must have unique names")
+            if self.output_schema is not None:
+                raise ValueError("tool requests and output_schema cannot be combined")
+        elif self.tool_request_id is not None:
+            raise ValueError("tool_request_id requires tool definitions")
         return self
 
 
 class ModelExecutionResponse(ProviderContract):
-    content: str = Field(min_length=1, max_length=10_000_000)
+    content: str = Field(max_length=10_000_000)
     provider: str = Field(min_length=1, max_length=120)
     model: str = Field(min_length=1, max_length=200)
     input_tokens: int | None = Field(default=None, ge=0)
@@ -150,6 +170,8 @@ class ModelExecutionResponse(ProviderContract):
     estimated_cost_usd: float | None = Field(default=None, ge=0)
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
     routing_metadata: dict[str, Any] = Field(default_factory=dict)
+    tool_requests: list[ModelToolRequest] = Field(default_factory=list, max_length=MAX_TOOL_CALLS)
+    tool_request_id: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_.:-]{1,120}$")
 
     @field_validator("task_id", "correlation_id")
     @classmethod
@@ -158,6 +180,18 @@ class ModelExecutionResponse(ProviderContract):
 
     @model_validator(mode="after")
     def derive_and_validate(self) -> ModelExecutionResponse:
+        if not self.content and not self.tool_requests:
+            raise ValueError("response requires content or tool requests")
+        if self.tool_requests and self.tool_request_id is None:
+            raise ValueError("tool requests require their application request identity")
+        if self.tool_request_id is not None:
+            bounded_json(
+                {"content": self.content, "calls": [c.model_dump() for c in self.tool_requests]},
+                MAX_RESULT_BYTES,
+            )
+        ids = [item.call_id for item in self.tool_requests]
+        if len(ids) != len(set(ids)):
+            raise ValueError("tool requests must have unique identities")
         if self.input_tokens is not None and self.output_tokens is not None:
             object.__setattr__(
                 self,

@@ -102,6 +102,13 @@ class SourceMutationService:
         ):
             refuse("SOURCE_MUTATION_OWNER_INACTIVE")
         creation, nonce, creation_digest = self.creation.intent(row)
+        tool = self.creation.git.tool()
+        if (
+            tool.executable_hash != creation.plan.tool_sha256
+            or digest([str(tool.executable), tool.executable_hash])
+            != creation.plan.tool_identity_digest
+        ):
+            refuse("SOURCE_MUTATION_TOOL_CHANGED")
         run = self.repository.runtime(session, row.runtime_run_id)
         if (
             creation.state != "ready"
@@ -215,7 +222,7 @@ class SourceMutationService:
         )
         return row, plan, proposal, creation, nonce
 
-    def intent(self, stored, plan):
+    def intent(self, stored, plan, session):
         try:
             record = MutationRecord.model_validate(stored.payload)
             if (
@@ -226,8 +233,21 @@ class SourceMutationService:
                 or record.completed_count > 64
             ):
                 raise ValueError("inconsistent intent")
+            event = session.get(AuditEventRow, record.original_approval_id)
+            payload = event.payload["payload"]
+            expires = datetime.fromisoformat(payload["expiresAt"])
+            workspace = self.repository.lookup(session, plan.workspace_id)
+            run = self.repository.runtime(session, plan.runtime_run_id)
+            if (
+                event.event_type != "self_build.source_mutation.approved"
+                or event.task_id != plan.task_id
+                or event.actor in {workspace.actor_id, run.agent_id}
+                or MutationPlan.model_validate(payload["plan"]) != plan
+                or expires.tzinfo is None
+            ):
+                raise ValueError("inconsistent original approval")
             return record
-        except (AttributeError, TypeError, ValueError):
+        except (AttributeError, KeyError, TypeError, ValueError):
             refuse("SOURCE_MUTATION_INTENT_INVALID")
 
     def current(self, actor, request):
@@ -236,7 +256,7 @@ class SourceMutationService:
             stored = session.get(SourceMutationRow, request.editing_record_id)
             if stored is None:
                 refuse("SOURCE_MUTATION_INTENT_REQUIRED")
-            record = self.intent(stored, plan)
+            record = self.intent(stored, plan, session)
             total = len(proposal.plan.source_plan.changes)
             expected_prefix = digest(
                 [
@@ -307,7 +327,7 @@ class SourceMutationService:
                 )
                 self.event(session, row, actor, record, "prepared", request.approval_id)
             else:
-                record = self.intent(stored, plan)
+                record = self.intent(stored, plan, session)
         self.repository.leases.repository.refresh_event_cursor()
         return record
 
@@ -357,7 +377,7 @@ class SourceMutationService:
                     publication_guard()
                 _, plan, _, _, _ = self.fence(actor, request, session)
                 current = self.intent(
-                    session.get(SourceMutationRow, request.editing_record_id), plan
+                    session.get(SourceMutationRow, request.editing_record_id), plan, session
                 )
                 if intent_digest(current) != intent_digest(record):
                     refuse("SOURCE_MUTATION_POSITION_CONFLICT")
@@ -389,7 +409,7 @@ class SourceMutationService:
         with self.repository.leases._write() as session:
             row, plan, _, _, _ = self.fence(actor, request, session)
             stored = session.get(SourceMutationRow, request.editing_record_id)
-            current = self.intent(stored, plan)
+            current = self.intent(stored, plan, session)
             if intent_digest(current) != intent_digest(record):
                 refuse("SOURCE_MUTATION_POSITION_CONFLICT")
             if current.checkpoint_id is None:
@@ -410,10 +430,20 @@ class SourceMutationService:
         return current
 
     def transition(self, actor, request, previous, publication_guard=None, **changes):
+        if changes.keys() - {
+            "state",
+            "completed_count",
+            "pending_index",
+            "staging_device",
+            "staging_inode",
+            "prefix_digest",
+            "final_observation_digest",
+        }:
+            refuse("SOURCE_MUTATION_TRANSITION_INVALID")
         with self.repository.leases._write() as session:
             row, plan, _, _, _ = self.fence(actor, request, session)
             stored = session.get(SourceMutationRow, request.editing_record_id)
-            current = self.intent(stored, plan)
+            current = self.intent(stored, plan, session)
             if current != previous:
                 refuse("SOURCE_MUTATION_POSITION_CONFLICT")
             payload = (

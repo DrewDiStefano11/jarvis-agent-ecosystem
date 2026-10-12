@@ -292,6 +292,13 @@ class SourceMutationDriver:
             refuse("SOURCE_MUTATION_PLATFORM_UNAVAILABLE")
         verify_source_plan(source_plan, observation)
         allowed_changes(source_plan)
+        tool = self.checkout_driver.observer
+        if (
+            tool.executable_hash != creation_plan.tool_sha256
+            or digest([str(tool.executable), tool.executable_hash])
+            != creation_plan.tool_identity_digest
+        ):
+            refuse("SOURCE_MUTATION_TOOL_CHANGED")
         if (
             source_plan.source.repository_identity != policy.repository_identity
             or source_plan.source.head_sha != creation_plan.workspace.base_sha

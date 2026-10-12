@@ -14,6 +14,8 @@ Business Lab at `/lab` is the objective list for tasks whose `projectId` is `bus
 ## Status stages
 
 Stages are labels over existing task statuses. They are not new backend states.
+Queued describes the current state only: a released lease can return previously
+planned or executed work to this stage. Inspect task history for earlier activity.
 
 | Stage | Recorded statuses |
 | --- | --- |
