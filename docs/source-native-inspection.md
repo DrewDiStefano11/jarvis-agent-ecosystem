@@ -14,6 +14,11 @@ Windows and the existing approved fixed Git interface are required. Unsupported 
 
 This increment explicitly depends on the protected history PR and mutation adapter. It changes no shared checkout driver, runtime, migration, registration or CI manifest. Remaining limitations: complete single-lineage operations only, current original lease/attempt/approval required, no stopped native read, and no artifact cleanup/chaining.
 
+Inspection requires both the native completion checkpoint and its exact durable
+audit acknowledgement. It checks these historical proof flags before measurement
+and again under the final pins; a mutable checkpoint ID or changed audit lineage
+cannot substitute for acknowledged completion.
+
 ## Retained artifact boundary
 
 Completed mutations retain one `.before` file for each change with a before identity, including deletes. Its exact sibling basename is `.jarvis-edit-` plus SHA-256 of `operation_id:index` plus `.before`; `index` is the immutable source plan change index. Additions have no retained original. The corresponding `.after` file must be absent after completion. Derive the exact bounded list from the protected complete record and original source plan, and verify original byte count/digest; never use glob exclusions.

@@ -1138,6 +1138,36 @@ def test_pending_unacknowledged_history_does_not_write_or_grant_execution(editin
     assert (target / "source.py").read_bytes() == b"value = 1\n"
 
 
+@pytest.mark.parametrize("forged_checkpoint_id", [False, True])
+def test_native_checkpoint_without_audit_acknowledgement_remains_unacknowledged(
+    editing, monkeypatch, forged_checkpoint_id
+):
+    app, actor, _, service, request, _, _ = editing
+    record = service.prepare(actor, request)
+    event = service.event
+
+    def crash_acknowledgement(session, row, actor, current, phase, approval_id):
+        if phase == "checkpoint_acknowledged":
+            raise RuntimeError("crash before durable acknowledgement")
+        return event(session, row, actor, current, phase, approval_id)
+
+    monkeypatch.setattr(service, "event", crash_acknowledgement)
+    with pytest.raises(RuntimeError, match="durable acknowledgement"):
+        service.acknowledge(actor, request, record)
+    checkpoint, identifier, _, _ = service.checkpoint(actor, record)
+    assert checkpoint is not None
+    if forged_checkpoint_id:
+        with service.repository.leases._write() as session:
+            stored = session.get(SourceMutationRow, request.editing_record_id)
+            stored.payload = stored.payload | {"checkpoint_id": identifier}
+            assert stored.integrity_digest == intent_digest(
+                record.model_copy(update={"checkpoint_id": identifier})
+            )
+    result = history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert result.native_checkpoint_present
+    assert not result.journal_checkpoint_acknowledged
+
+
 def test_rehashed_foreign_attempt_cannot_replace_historical_provenance(editing):
     app, actor, _, service, request, _, _ = editing
     record = service.prepare(actor, request)
@@ -1153,6 +1183,22 @@ def test_rehashed_foreign_attempt_cannot_replace_historical_provenance(editing):
     with pytest.raises(DomainError) as failure:
         history.MutationHistoryReader(app).read(actor, request.editing_record_id)
     assert failure.value.code == "SOURCE_MUTATION_HISTORY_INVALID"
+
+
+@pytest.mark.parametrize("field", ["operationId", "editingRecordId", "planHash", "intentDigest"])
+def test_history_acknowledgement_requires_exact_durable_audit_lineage(editing, field):
+    app, actor, _, service, request, _, _ = editing
+    record = service.acknowledge(actor, request, service.prepare(actor, request))
+    with service.repository.leases._write() as session:
+        event = session.scalar(
+            select(AuditEventRow).where(
+                AuditEventRow.event_type == "self_build.source_mutation.checkpoint_acknowledged"
+            )
+        )
+        event.payload = event.payload | {"payload": event.payload["payload"] | {field: "foreign"}}
+    result = history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert result.record == record and result.native_checkpoint_present
+    assert not result.journal_checkpoint_acknowledged
 
 
 def test_valid_mutation_checkpoint_cannot_hide_missing_creation_checkpoint(editing, monkeypatch):
@@ -1366,6 +1412,27 @@ def test_native_source_inspection_requires_original_live_exact_authority(editing
     with pytest.raises(DomainError):
         MutationInspector(app).inspect(actor, request)
     assert (target / "source.py").read_bytes() == b"value = 2\n"
+
+
+def test_native_source_inspection_requires_durable_completion_acknowledgement(editing):
+    from app.source_mutation.inspection import MutationInspector
+
+    app, actor, _, service, request, target, _ = editing
+    service.apply(actor, request)
+    before = (target / "source.py").read_bytes()
+    with service.repository.leases._write() as session:
+        event = session.scalar(
+            select(AuditEventRow)
+            .where(AuditEventRow.event_type == "self_build.source_mutation.checkpoint_acknowledged")
+            .order_by(AuditEventRow.sequence_number.desc())
+        )
+        event.payload = event.payload | {
+            "payload": event.payload["payload"] | {"intentDigest": "foreign"}
+        }
+    with pytest.raises(DomainError) as failure:
+        MutationInspector(app).inspect(actor, request)
+    assert failure.value.code == "SOURCE_MUTATION_CHECKPOINT_INVALID"
+    assert (target / "source.py").read_bytes() == before
 
 
 def test_native_source_inspection_refuses_incomplete_journal_without_effects(editing):
