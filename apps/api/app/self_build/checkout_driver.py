@@ -144,6 +144,13 @@ class CheckoutDriver:
                 "-z",
             ],
         }
+        commands["index_flags"] = [
+            "--git-dir=" + str(metadata),
+            "--work-tree=" + str(target),
+            "ls-files",
+            "-v",
+            "-z",
+        ]
         if operation not in commands:
             fail("SELF_BUILD_GIT_OPERATION_INVALID", "Unsupported native registration operation.")
         self.authority_check()
@@ -163,7 +170,7 @@ class CheckoutDriver:
             GIT_TERMINAL_PROMPT="0",
             LC_ALL="C",
         )
-        if operation in {"index", "index_inventory"}:
+        if operation in {"index", "index_inventory", "index_flags"}:
             environment.update(
                 GIT_COMMON_DIR=str(Path(policy.primary_root) / ".git"),
                 GIT_OBJECT_DIRECTORY=str(Path(policy.primary_root) / ".git" / "objects"),
