@@ -241,3 +241,32 @@ def test_transient_alternates_are_rejected_during_fixed_mutation_command(checkou
         driver.invoke(policy, "index", plan, Path(policy.worktree_root) / plan.workspace_id)
     assert failure.value.code == "SELF_BUILD_GIT_STATE_CHANGED"
     assert not path.exists()
+
+
+@pytest.mark.timeout(600)  # Real 16K native metadata pins/scans need bounded Windows CI headroom.
+@pytest.mark.parametrize("metadata_nodes", [16352, 16353])
+def test_native_creation_reserves_metadata_capacity_and_keeps_replay_inspectable(
+    checkout, metadata_nodes
+):
+    from app.self_build.materialization import materialize
+
+    root, policy, observer, plan, owner, git = checkout
+    padding = root / ".git/fixture-metadata"
+    padding.mkdir()
+    count = len(observer._metadata_state(policy)) - 2
+    for index in range(metadata_nodes - count):
+        (padding / f"node-{index:05d}").write_bytes(b"")
+    assert len(observer._metadata_state(policy)) - 2 == metadata_nodes
+    driver = CheckoutDriver(observer, lambda: None)
+    target = Path(policy.worktree_root) / plan.workspace_id
+    if metadata_nodes > plan.maximum_initial_metadata_nodes:
+        with pytest.raises(DomainError) as failure:
+            driver.create(policy, plan, owner)
+        assert failure.value.code == "SELF_BUILD_GIT_METADATA_LIMIT"
+        assert not target.exists() and not git("branch", "--list", plan.workspace.branch)
+    else:
+        first = driver.create(policy, plan, owner)
+        result = materialize(driver, policy, plan, owner, acknowledge=lambda *args: None)
+        assert result["completed_file_count"] == 1
+        assert driver.create(policy, plan, owner) == first
+        assert len(observer._metadata_state(policy)) - 2 <= 16384

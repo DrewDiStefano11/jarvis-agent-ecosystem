@@ -64,3 +64,16 @@ can be adopted. Native regressions exercise both intent-before-checkpoint and
 checkpoint-before-acknowledgement with expired original and fresh exact approval.
 Final #94 namespace-notification repair must also be integrated before re-review;
 no automatic merge or completed checkout/factory claim.
+
+
+## Replay ownership repair (2026-10-12)
+
+P2 4238327853: a surviving private marker cannot claim a target that appeared
+after preparation. The owned-namespace primitive now checks the generated target
+before yielding and rejects existing targets unless an internal caller validates
+actual creation lineage. Preparation has no such adoption callback. Native
+regression proves a post-claim foreign directory and file are preserved and never
+yielded as owned. Namespace plus preparation suite: 28 passed; Ruff/format pass.
+The actual checkout driver must provide complete native registration validation
+for existing owned worktrees before #99 can reuse this parent. No model marker
+or proposal grants ownership or authority; no automatic merge.

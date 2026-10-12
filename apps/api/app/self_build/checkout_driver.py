@@ -343,6 +343,16 @@ class CheckoutDriver:
             ),
         )
 
+    def validate_existing_target(self, stack, root, target, policy, plan):
+        primary_path = Path(policy.primary_root)
+        primary = open_directory(stack, Path(primary_path.anchor), internal=True)
+        for leaf in primary_path.parts[1:]:
+            primary = open_directory(stack, primary.path / leaf, primary, leaf, internal=True)
+        common = open_directory(stack, primary.path / ".git", primary, ".git", internal=True)
+        # A marker is insufficient: require the generated branch/base, exact
+        # forward/reverse admin pointers and unique native Git registration.
+        return self.verify(stack, root, target, policy, plan, common)
+
     def create(self, policy, plan, owner):
         if not supports_mutation():
             fail(
@@ -375,7 +385,13 @@ class CheckoutDriver:
                 "Native registration requires the approved measured inventory.",
             )
         with owned_namespace(
-            policy, plan.workspace_id, owner, authority_check=self.authority_check
+            policy,
+            plan.workspace_id,
+            owner,
+            authority_check=self.authority_check,
+            validate_existing_target=lambda stack, root, target: self.validate_existing_target(
+                stack, root, target, policy, plan
+            ),
         ) as (stack, root, target, owner_digest):
             # Hold both primary namespace identities through the mutation. The
             # workspace root and target are already pinned by owned_namespace.
@@ -384,6 +400,13 @@ class CheckoutDriver:
             for leaf in primary_path.parts[1:]:
                 primary = open_directory(stack, primary.path / leaf, primary, leaf, internal=True)
             common = open_directory(stack, primary.path / ".git", primary, ".git", internal=True)
+            if not target.exists():
+                metadata_nodes = len(self.observer._metadata_state(policy)) - 2
+                if metadata_nodes > plan.maximum_initial_metadata_nodes:
+                    fail(
+                        "SELF_BUILD_GIT_METADATA_LIMIT",
+                        "Reserve 32 metadata nodes for bounded native creation before effects.",
+                    )
             try:
                 os.mkdir(common.name("worktrees"), 0o700, **common.kwargs)
             except FileExistsError:

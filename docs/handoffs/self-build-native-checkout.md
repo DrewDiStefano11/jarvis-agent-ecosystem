@@ -1,8 +1,8 @@
 # Approved native checkout creation - October 9, 2026
 
 Worktree: C:/Users/DDistefano/.codex/worktrees/self-build-native-checkout/jarvis-agent-ecosystem.
-Branch: codex/self-build-native-checkout. Parent: #93 at 9b4b923, stacked on #94
-reconciliation at 087840a. #91 was human-merged into a feature branch rather than
+Branch: codex/self-build-native-checkout. Parent: #93 at 5172bc1, stacked on #94
+reconciliation at a16bc13. #91 was human-merged into a feature branch rather than
 main; #94 must reach main before #93 is retargeted there. No agent merges PRs.
 
 ## Implemented production path
@@ -96,3 +96,40 @@ inside native ready publication and later released. Ruff/format and frontend
 typecheck/lint/194 tests/build pass. A broader full-backend run is still in flight
 and must be reported honestly; it began before the final memory parent changes.
 Integrate the final #93/#94 parent heads before requesting exact-head CI/review.
+
+
+## Ownership, directory and capacity repair (2026-10-12)
+
+P2 4238334869: final source verification now derives the exact parent-directory
+set from approved Git paths and rejects unapproved empty directories, preserving
+those contents for operator recovery. File and directory equality both gate ready.
+P2 4238334875: the approved plan reserves 32 Git metadata nodes, with an initial
+ceiling of 16,352 and final ceiling of 16,384. Driver preflight rejects insufficient
+capacity before target, branch or registration creation. Actual near-boundary
+fixtures cover acceptance/materialization/replay and rejection before target effects.
+
+The #93 marker-replay repair is integrated. Both registration and materialization
+provide native validation of existing targets before namespace replay yields them:
+exact generated branch/base, Git forward/reverse administrative pointers and unique
+registration; marker text alone never grants target ownership. Legacy prepared
+readback coverage removes all later plan fields and preserves original raw hashes.
+
+Hosted autonomy CI exposed an invalid test fixture: core async service tests and
+a TestClient lifespan dispatcher shared a broker across different event loops.
+The core fixture now creates the already-migrated app without a parallel HTTP
+lifespan; HTTP integration keeps its own TestClient lifecycle. All 34 remote
+authentication/goal/HTTP cases pass with all cancellation/lease/audit assertions
+preserved. Production broker code is unchanged. Local older-head full pytest
+completed: 2,143 passed, two existing skips, one outdated source-size assertion
+that was already corrected and passes in final publication regressions. This
+older run is not final-head validation. Request current exact-head CI/review after
+these concrete repairs, and do not merge.
+
+
+Final ownership/directory/capacity native set: 56 passed (650.59 seconds, including
+two actual 16K-node fixtures); remote integration set: 34 passed; strengthened
+legacy-plan readback: one passed. The new large bounded metadata fixture has a
+600-second per-case hang guard for Windows CI; production limits and existing
+test deadlines are unchanged. Full shard collection verifies 2,153 cases. Ruff
+and formatting pass; frontend source is unchanged from passing typecheck/lint/194
+Vitest/build gates. Independent exact-head review/CI remains required.

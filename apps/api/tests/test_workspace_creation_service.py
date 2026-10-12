@@ -446,7 +446,12 @@ def test_legacy_prepared_projection_remains_readable_after_schema_extension(crea
         raw.pop("source_digest")
         raw["checkpoint_id"] = None
         plan = dict(raw["plan"])
-        plan.pop("mutation_platform")
+        for field in (
+            "mutation_platform",
+            "maximum_initial_metadata_nodes",
+            "metadata_growth_reserve",
+        ):
+            plan.pop(field)
         plan["plan_hash"] = digest(
             {key: value for key, value in plan.items() if key != "plan_hash"}
         )

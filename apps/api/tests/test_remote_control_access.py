@@ -1,7 +1,6 @@
 """Core authentication/authorization only; network integration is not claimed."""
 
 import pytest
-from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
 from app.agent_runtime.errors import RuntimeActorInactiveError
@@ -18,9 +17,14 @@ TOKEN = "fixtureRemoteCredential_" + "x" * 32
 @pytest.fixture
 def remote_access(tmp_path):
     app = create_app(delay_ms=1, database_url=database_url(tmp_path / "remote-access.db"))
-    with TestClient(app):
-        actor = create_actor(app, "remote-operator")
+    # Core service tests run on pytest's loop. A TestClient lifespan here
+    # would concurrently dispatch the same broker on a different thread/loop.
+    # HTTP tests create their own app and TestClient lifespan explicitly.
+    actor = create_actor(app, "remote-operator")
+    try:
         yield app, actor, RemoteControlAccess(app.state.identity_service, actor, SecretStr(TOKEN))
+    finally:
+        app.state.engine.dispose()
 
 
 @pytest.mark.parametrize(

@@ -234,3 +234,23 @@ def test_sized_inventory_accepts_approved_tree_near_unsized_output_limit(checkou
     assert len(raw) > 1048576
     entries = inventory(driver, policy, plan, root)
     assert len(entries) == 4096 and sum(entry[3] for entry in entries) == 24576
+
+
+def test_unapproved_empty_directory_is_preserved_without_ready_publication(checkout):
+    _, policy, observer, plan, owner, _ = checkout
+    driver = CheckoutDriver(observer, lambda: None)
+    driver.create(policy, plan, owner)
+    target = Path(policy.worktree_root) / plan.workspace_id
+    (target / "node_modules").mkdir()
+    published = []
+    with pytest.raises(DomainError) as failure:
+        materialize(
+            driver,
+            policy,
+            plan,
+            owner,
+            acknowledge=lambda *args: None,
+            finalize=lambda *args: published.append(args),
+        )
+    assert failure.value.code == "SELF_BUILD_MATERIALIZATION_CONFLICT"
+    assert (target / "node_modules").is_dir() and not published

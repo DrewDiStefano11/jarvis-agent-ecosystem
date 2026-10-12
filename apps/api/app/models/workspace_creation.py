@@ -22,6 +22,8 @@ class WorkspaceCreationPlan(Contract):
     tool_sha256: Digest
     creation_policy_digest: Digest
     mutation_platform: Literal["windows"] = "windows"
+    maximum_initial_metadata_nodes: Literal[16352] = 16352
+    metadata_growth_reserve: Literal[32] = 32
     maximum_file_bytes: Literal[8388608] = 8388608
     maximum_total_bytes: Literal[67108864] = 67108864
     # Initial creation registers reading only. Source writes need separate approval.

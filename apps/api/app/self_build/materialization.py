@@ -157,7 +157,13 @@ def materialize(driver, policy, plan, owner, *, acknowledge, finalize=None):
             "Raw materialization requires Windows native containment.",
         )
     with owned_namespace(
-        policy, plan.workspace_id, owner, authority_check=driver.authority_check
+        policy,
+        plan.workspace_id,
+        owner,
+        authority_check=driver.authority_check,
+        validate_existing_target=lambda stack, root, target: driver.validate_existing_target(
+            stack, root, target, policy, plan
+        ),
     ) as (stack, root, target, _):
         primary_path = Path(policy.primary_root)
         primary = open_directory(stack, Path(primary_path.anchor), internal=True)
@@ -214,7 +220,12 @@ def materialize(driver, policy, plan, owner, *, acknowledge, finalize=None):
         check_source = pin_read_tree(
             stack, target, driver.authority_check, maximum=plan.file_count * 16 + 2
         )
-        check_metadata = pin_read_tree(stack, common.path, driver.authority_check)
+        check_metadata = pin_read_tree(
+            stack,
+            common.path,
+            driver.authority_check,
+            maximum=plan.maximum_initial_metadata_nodes + plan.metadata_growth_reserve,
+        )
         stack.enter_context(pinned_metadata_file(private.path / "owner.json"))
         try:
             with open_file(private, "owner.json", os.O_RDONLY, internal=True) as fd:
@@ -242,6 +253,12 @@ def materialize(driver, policy, plan, owner, *, acknowledge, finalize=None):
                 "The dedicated index differs from the approved inventory.",
             )
         expected_names = {entry[2] for entry in entries} | {".git", ".jarvis-workspace.json"}
+        expected_directories = {
+            "/".join(repository_parts(entry[2])[:length])
+            for entry in entries
+            for length in range(1, len(repository_parts(entry[2])))
+        }
+        observed_directories = set()
         observed_names = set()
         directory_count = 0
         for directory, directories, files in os.walk(target, followlinks=False):
@@ -254,6 +271,13 @@ def materialize(driver, policy, plan, owner, *, acknowledge, finalize=None):
                 )
             parent = Path(directory)
             for leaf in directories:
+                relative_directory = (parent / leaf).relative_to(target).as_posix()
+                if relative_directory not in expected_directories:
+                    fail(
+                        "SELF_BUILD_MATERIALIZATION_CONFLICT",
+                        "The workspace contains an unapproved directory; preserve it for recovery.",
+                    )
+                observed_directories.add(relative_directory)
                 open_directory(stack, parent / leaf, internal=True)
             for leaf in files:
                 relative = (parent / leaf).relative_to(target).as_posix()
@@ -263,7 +287,7 @@ def materialize(driver, policy, plan, owner, *, acknowledge, finalize=None):
                         "The workspace contains an unexpected file; preserve it for recovery.",
                     )
                 observed_names.add(relative)
-        if observed_names != expected_names:
+        if observed_names != expected_names or observed_directories != expected_directories:
             fail(
                 "SELF_BUILD_MATERIALIZATION_CONFLICT",
                 "The final workspace inventory is incomplete.",
