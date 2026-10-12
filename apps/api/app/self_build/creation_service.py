@@ -18,7 +18,7 @@ from app.models.workspace_creation import (
     WorkspaceCreationRecord,
 )
 from app.runtime_supervisor import windows_job
-from app.self_build import owned_process, workspace_namespace
+from app.self_build import atomic_directory, owned_process, workspace_namespace
 from app.self_build.git_service import INSPECTION_POLICY_DIGEST
 from app.self_build.policy import digest
 
@@ -27,6 +27,7 @@ CREATION_POLICY_DIGEST = sha256(
         Path(__file__).read_text(encoding="utf-8")
         + Path(contracts.__file__).read_text(encoding="utf-8")
         + Path(owned_process.__file__).read_text(encoding="utf-8")
+        + Path(atomic_directory.__file__).read_text(encoding="utf-8")
         + Path(workspace_namespace.__file__).read_text(encoding="utf-8")
         + Path(windows_job.__file__).read_text(encoding="utf-8")
         + INSPECTION_POLICY_DIGEST

@@ -77,3 +77,33 @@ yielded as owned. Namespace plus preparation suite: 28 passed; Ruff/format pass.
 The actual checkout driver must provide complete native registration validation
 for existing owned worktrees before #99 can reuse this parent. No model marker
 or proposal grants ownership or authority; no automatic merge.
+
+
+## Atomic target ownership and main reconciliation (2026-10-12)
+
+Human merge #94 is main c3939851504ab1ddd0eb0a17a139836d858bf161. Merge-base audit
+confirmed its exact reviewed source head a16bc13 is an ancestor, and native
+inspection/process/job source matches main. #93 now integrates that main merge
+without modifying main or discarding other work. Retarget #93 from the merged
+feature parent to main after publishing this concrete repair and revalidate its
+final preparation-only diff and exact CI/review.
+
+P2 4247796810: stat-then-yield is replaced by NtCreateFile FILE_CREATE relative
+to the pinned root, returning a new directory and deny-write/delete native handle
+as one operation. EEXIST is never adopted. A private fsynced target.json binds
+original ownership digest plus volume/file identity; replay opens, pins and
+validates that exact object before yielding. A target replaced after context
+release is rejected even if empty. Atomic creation and target identity pins are
+Windows-only and fail before effects elsewhere. The implementation source is
+bound into creation policy hashes. This private foundation now claims an empty
+target; production prepare still persists intent/checkpoints without invoking it.
+
+A crash after native target creation but before its private identity claim is
+persisted remains uncertain and requires explicit operator recovery, preserving
+all artifacts. No foreign/uncertain target is deleted or guessed as owned. #99
+must use this already-claimed empty target, require atomic pre-claim metadata
+headroom, and retain its registration checks rather than mkdir/adopt paths.
+Namespace + preparation suite: 30 passed; the additional adapter-unavailable
+no-effects regression is being checked. Frontend source remains unchanged from
+its passing type/lint/194 cases/build. Require independent exact-head review and
+CI after push; do not merge automatically.

@@ -13,3 +13,10 @@ projection. Creating intent or acknowledging its checkpoint invalidates older
 abandonment approvals without changing the reserved plan/version used by creation.
 Fresh operator approval can explicitly tombstone that exact prepared state while
 preserving its recovery evidence. The digest exposes no private nonce or lease token.
+
+Private namespace helpers on Windows atomically claim and pin an empty generated
+target with a durable native identity marker. Matching owner text cannot adopt
+a directory that appeared concurrently or replaced the original. Production
+preparation does not invoke this filesystem primitive; the dependent checkout
+capability must supply Git registration validation and preserve uncertain crash
+gaps for explicit operator recovery.
