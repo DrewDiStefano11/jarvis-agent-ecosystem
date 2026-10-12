@@ -667,3 +667,115 @@ def test_unapproved_empty_directory_is_preserved_without_ready_publication(check
         )
     assert failure.value.code == "SELF_BUILD_MATERIALIZATION_CONFLICT"
     assert (target / "node_modules").is_dir() and not published
+
+
+@pytest.mark.parametrize("phase", ["published_pending", "complete"])
+def test_source_mutation_recovery_refuses_foreign_publication_stage(checkout, monkeypatch, phase):
+    from app.source_mutation import driver as mutation_driver
+
+    target, plan, journal, apply = editing_fixture(checkout)
+    native = mutation_driver.rename_pinned
+    if phase == "published_pending":
+
+        def interrupted(fd, leaf):
+            native(fd, leaf)
+            if leaf == "hello.txt":
+                raise RuntimeError("crash after publication")
+
+        monkeypatch.setattr(mutation_driver, "rename_pinned", interrupted)
+        with pytest.raises(RuntimeError, match="after publication"):
+            apply()
+        monkeypatch.setattr(mutation_driver, "rename_pinned", native)
+    else:
+        apply()
+    before, after = mutation_driver.staging_names("fixture-operation", 0)
+    stage = target / after
+    stage.write_bytes(b"foreign publication artifact")
+    position = dict(journal)
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SOURCE_MUTATION_FOREIGN_ARTIFACT"
+    assert journal == position
+    assert stage.read_bytes() == b"foreign publication artifact"
+    assert (target / before).read_bytes() == b"hello\n"
+    assert (target / "hello.txt").read_bytes() == plan.changes[0].after.text.encode()
+
+
+def test_source_mutation_foreign_stage_at_final_pin_boundary_refuses_completion(
+    checkout, monkeypatch
+):
+    from app.source_mutation import driver as mutation_driver
+
+    target, plan, journal, apply = editing_fixture(checkout)
+    native = mutation_driver.pin_source_tree
+    _, after = mutation_driver.staging_names("fixture-operation", 0)
+    stage = target / after
+
+    def introduced(stack, owned, authority_check):
+        stage.write_bytes(b"foreign final artifact")
+        return native(stack, owned, authority_check)
+
+    monkeypatch.setattr(mutation_driver, "pin_source_tree", introduced)
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SOURCE_MUTATION_FOREIGN_ARTIFACT"
+    assert journal["completed"] == 1
+    assert stage.read_bytes() == b"foreign final artifact"
+    assert (target / "hello.txt").read_bytes() == plan.changes[0].after.text.encode()
+
+
+def test_source_mutation_delete_foreign_stage_refuses_before_original_effect(checkout):
+    from app.source_mutation import driver as mutation_driver
+
+    target, _, journal, apply = editing_fixture(checkout, "delete")
+    _, after = mutation_driver.staging_names("fixture-operation", 0)
+    stage = target / after
+    stage.write_bytes(b"foreign deletion artifact")
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SOURCE_MUTATION_FOREIGN_ARTIFACT"
+    assert journal == dict(completed=0, pending=None, stage=None)
+    assert stage.read_bytes() == b"foreign deletion artifact"
+    assert (target / "hello.txt").read_bytes() == b"hello\n"
+
+
+@pytest.mark.parametrize("error", [PermissionError, OSError])
+def test_source_mutation_stage_absence_does_not_swallow_native_errors(monkeypatch, tmp_path, error):
+    from contextlib import contextmanager
+
+    from app.source_mutation import driver as mutation_driver
+
+    @contextmanager
+    def denied(path):
+        raise error("private path details")
+        yield
+
+    monkeypatch.setattr(mutation_driver, "read_pin", denied)
+    with pytest.raises(error):
+        mutation_driver.require_stage_absent(tmp_path / "stage")
+
+
+def test_source_mutation_publication_stage_inserted_after_final_absence_is_fenced(
+    checkout, monkeypatch
+):
+    from app.source_mutation import driver as mutation_driver
+
+    target, _, journal, apply = editing_fixture(checkout)
+    native = mutation_driver.observe
+    _, after = mutation_driver.staging_names("fixture-operation", 0)
+    stage = target / after
+    inserted = []
+
+    def introduced(*args, **kwargs):
+        result = native(*args, **kwargs)
+        if journal["completed"] == 1 and not inserted:
+            stage.write_bytes(b"foreign late artifact")
+            inserted.append(True)
+        return result
+
+    monkeypatch.setattr(mutation_driver, "observe", introduced)
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SELF_BUILD_GIT_STATE_CHANGED"
+    assert inserted and journal["completed"] == 1
+    assert stage.read_bytes() == b"foreign late artifact"
