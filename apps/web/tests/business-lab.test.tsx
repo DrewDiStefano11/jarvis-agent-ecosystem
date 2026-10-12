@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
@@ -64,6 +64,46 @@ beforeEach(() => {
 })
 
 describe('Business Lab workspace', () => {
+  test('does not infer approval from pending or paused objectives', async () => {
+    tasks = tasks.map(item => ({ ...item, status: 'waiting_for_approval' }))
+    renderLab()
+    await screen.findByRole('heading', { name: 'Customer interview synthesis' })
+    expect(screen.queryByText(/Approved execution/)).not.toBeInTheDocument()
+    expect(screen.getByRole('region', { name: /Work in progress or waiting/ })).toHaveTextContent('does not establish approval or active execution')
+  })
+
+  test('keeps a vanished status selected after a refreshed snapshot', async () => {
+    renderLab()
+    await screen.findByRole('heading', { name: 'Customer interview synthesis' })
+    await userEvent.selectOptions(screen.getByLabelText('Recorded status'), 'queued')
+    tasks = tasks.map(item => ({ ...item, status: 'planning' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh objectives' }))
+    await screen.findByText(/No objectives match this search or filter/)
+    expect(screen.getByLabelText('Recorded status')).toHaveValue('queued')
+    await userEvent.selectOptions(screen.getByLabelText('Recorded status'), '')
+    expect(screen.getByRole('heading', { name: 'Customer interview synthesis' })).toBeInTheDocument()
+  })
+
+  test('disables manual refresh and shows pending feedback until synchronization settles', async () => {
+    renderLab()
+    await screen.findByRole('heading', { name: 'Customer interview synthesis' })
+    const original = vi.mocked(fetch).getMockImplementation()!
+    let release!: () => void
+    const pending = new Promise<void>(resolve => { release = resolve })
+    vi.mocked(fetch).mockImplementation(async (input, init) => {
+      if (String(input).endsWith('/api/tasks')) await pending
+      return original(input, init)
+    })
+    const before = vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/api/tasks')).length
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh objectives' }))
+    const button = screen.getByRole('button', { name: 'Refreshing…' })
+    expect(button).toBeDisabled()
+    await userEvent.click(button)
+    expect(vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/api/tasks'))).toHaveLength(before + 1)
+    release()
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh objectives' })).toBeEnabled())
+  })
+
   test('shows only lab objectives, their recorded stage, and distinct participant kinds', async () => {
     renderLab()
     expect(await screen.findByRole('heading', { name: 'Customer interview synthesis' })).toBeInTheDocument()

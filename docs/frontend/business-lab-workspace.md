@@ -19,11 +19,11 @@ Stages are labels over existing task statuses. They are not new backend states.
 | --- | --- |
 | Queued | `queued` |
 | Planning | `planning`, `assigned` |
-| Approved execution | `in_progress`, `waiting`, `waiting_for_approval`, `under_review`, `revision_requested`, `paused`, `retrying` |
+| Work in progress or waiting | `in_progress`, `waiting`, `waiting_for_approval`, `under_review`, `revision_requested`, `paused`, `retrying` |
 | Completed | `completed` |
 | Needs attention | `failed`, `cancelled` |
 
-Approved execution means the task record is already past planning. It does not mean an unattended worker is running.
+Work in progress or waiting groups recorded statuses without inferring approval, permission to execute, or an active worker.
 
 ## Participants
 
@@ -34,3 +34,5 @@ Assigned ids are labeled as a runtime identity, a demonstration agent, or an unr
 - No budgets, profitability, or research-generation controls.
 - No separate objective detail store. History remains the shared task drawer.
 - Identity names depend on the existing identity registry. A failed identity load is shown; it does not hide the objective list.
+
+Manual refresh shows a pending label and prevents overlapping snapshot requests. Selected status values stay available after live updates so the control always reflects the active filter.

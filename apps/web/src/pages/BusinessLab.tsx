@@ -23,6 +23,8 @@ export function BusinessLab() {
   const { tasks, artifacts, agents, runtime, selectTask, loading, error, connection, lastSync, refresh, resyncRequired } = useAppStore()
   const [creating, setCreating] = useState(false)
   const [message, setMessage] = useState('')
+  const [refreshing, setRefreshing] = useState(false)
+  const refreshPending = useRef(false)
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState('')
   const [lane, setLane] = useState<ObjectiveLane | ''>('')
@@ -35,7 +37,7 @@ export function BusinessLab() {
 
   const objectives = useMemo(() => businessObjectives(tasks), [tasks])
   const counts = useMemo(() => laneCounts(tasks), [tasks])
-  const statuses = useMemo(() => recordedStatuses(tasks), [tasks])
+  const statuses = useMemo(() => [...new Set([...recordedStatuses(tasks), ...(status ? [status] : [])])].sort(), [tasks, status])
   const visible = useMemo(
     () => sortObjectives(filterObjectives(tasks, { query, status, lane }), sort),
     [tasks, query, status, lane, sort],
@@ -43,6 +45,14 @@ export function BusinessLab() {
   const lanes = lane ? OBJECTIVE_LANES.filter(item => item === lane) : OBJECTIVE_LANES
   const filtersActive = Boolean(query.trim() || status || lane)
   const artifactCount = (taskId: string) => artifacts.filter(item => item.taskId === taskId).length
+
+  const refreshObjectives = async () => {
+    if (refreshPending.current) return
+    refreshPending.current = true
+    setRefreshing(true)
+    try { await refresh() }
+    finally { refreshPending.current = false; setRefreshing(false) }
+  }
 
   return <div className="lab">
     <header className="page-title">
@@ -60,7 +70,7 @@ export function BusinessLab() {
       <h2 id="lab-purpose-title">What this workspace does</h2>
       <p>Supply the facts and the report you want. Open the objective workspace to prepare a local planner and queue a workspace action plan. Inspect proposed file contents, then explicitly authorize a configured workspace.</p>
       <p>Reading files returns observations. Automatic research and adaptive follow-up from those reads are not implemented. Creating an objective does not start planning or execution.</p>
-      <p><Link to="/agents">Manage workforce identities</Link> · <Link to="/runtime?mode=workspace">Open the planning workspace</Link></p>
+      <p><Link to="/agents">Manage workforce identities</Link> Â· <Link to="/runtime?mode=workspace">Open the planning workspace</Link></p>
       <p className="lab-meta"><span>Sync <Status value={connection} /></span>{lastSync ? <span>Last synchronized {formatTimestamp(lastSync)}</span> : <span>Not synchronized yet</span>}</p>
     </section>
 
@@ -109,10 +119,10 @@ export function BusinessLab() {
       </label>
     </div>
     <p className="lab-meta" aria-live="polite">
-      <span>Showing {visible.length} of {objectives.length} objectives{artifacts.length ? ` · ${artifacts.length} artifacts in the current snapshot` : ''}</span>
+      <span>Showing {visible.length} of {objectives.length} objectives{artifacts.length ? ` Â· ${artifacts.length} artifacts in the current snapshot` : ''}</span>
       <span className="lab-actions">
         {filtersActive && <button type="button" className="secondary lab-clear" onClick={() => { setQuery(''); setStatus(''); setLane('') }}>Clear filters</button>}
-        <button type="button" className="secondary" onClick={() => void refresh()}>{loading ? 'Refreshing…' : 'Refresh objectives'}</button>
+        <button type="button" className="secondary" disabled={loading || refreshing} onClick={() => void refreshObjectives()}>{loading || refreshing ? 'Refreshing…' : 'Refresh objectives'}</button>
       </span>
     </p>
 
@@ -154,7 +164,7 @@ export function BusinessLab() {
                   <button type="button" className="secondary" onClick={() => selectTask(task.id)}>Inspect task history</button>
                 </p>
                 <p className="muted">Opening the workspace selects this objective. It does not queue a plan or approve execution.</p>
-                {task.correctionOfTaskId && <p>Corrected follow-up · <button type="button" className="secondary" onClick={() => selectTask(task.correctionOfTaskId!)}>Inspect original objective</button></p>}
+                {task.correctionOfTaskId && <p>Corrected follow-up Â· <button type="button" className="secondary" onClick={() => selectTask(task.correctionOfTaskId!)}>Inspect original objective</button></p>}
               </article>
             })}
           </div>
