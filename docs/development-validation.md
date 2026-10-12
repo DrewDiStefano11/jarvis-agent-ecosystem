@@ -47,6 +47,14 @@ migration, lint/type/build or unknown. Classification does not infer root cause
 or waive a gate. Cancelled/unmeasured work is missing evidence. The newest matching
 observation wins; simultaneous contradictory outcomes fail conservatively.
 
+Authenticated collector receipts first select the highest sequence for each
+runtime run, attempt and gate. This ordering takes precedence over finish times
+within that lineage, including clock regressions. Freshness is assessed after
+selection, so an expired higher sequence cannot revive a lower-sequence pass.
+Every supplied receipt is authenticated and checked for replay and plan
+membership before selection. Different run/attempt lineages retain the planner's
+timestamp ordering and conservative handling of simultaneous contradictions.
+
 Iteration may reuse unchanged component evidence across an unrelated uncommitted
 component edit. Publication requires the exact current full code-state hash.
 Changed HEAD/base/repository, relevant source, target suite or policy invalidates
