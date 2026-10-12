@@ -20,7 +20,7 @@ const { chromium } = require(path.join(process.env.SMOKE_WEB, 'node_modules/play
     await page.getByRole('heading', { name: 'Mission Control' }).waitFor()
     const nav = page.getByRole('navigation', { name: 'Primary', exact: true })
     await nav.getByRole('link', { name: 'Tasks', exact: true }).click()
-    await page.getByRole('button', { name: '+ New task' }).click()
+    await page.getByRole('button', { name: 'New task', exact: true }).click()
     await page.getByLabel('Title', { exact: true }).fill('Browser golden path')
     await page.getByLabel('Description', { exact: true }).fill('Create a bounded plan to verify the local Hub.')
     const created = page.waitForResponse(response => response.url().endsWith('/api/tasks') && response.request().method() === 'POST')
@@ -84,7 +84,7 @@ const { chromium } = require(path.join(process.env.SMOKE_WEB, 'node_modules/play
     assert.equal(originalCompleted.status, 'completed')
     // Correct a completed request through the ordinary UI. Task creation also
     // survives an unreadable acknowledgement and a reload with identical input.
-    await page.getByRole('link', { name: 'Revise task input', exact: true }).click()
+    await page.getByRole('button', { name: 'Revise task input', exact: true }).click()
     await page.getByRole('heading', { name: 'Correct task input', exact: true }).waitFor()
     const correctionInput = { title: 'Browser corrected plan', description: 'Revise the Hub validation plan with explicit restart acceptance.' }
     const fillCorrection = async () => {
@@ -105,17 +105,20 @@ const { chromium } = require(path.join(process.env.SMOKE_WEB, 'node_modules/play
     await page.getByRole('button', { name: 'Create corrected task', exact: true }).click()
     await page.getByRole('button', { name: 'Retry creation', exact: true }).waitFor()
     await page.reload()
+    await page.getByRole('heading', { name: 'Queue a local plan', exact: true }).waitFor()
+    await page.getByLabel('Task and history').selectOption(task.id)
+    await page.getByRole('button', { name: 'Revise task input', exact: true }).click()
     await page.getByRole('heading', { name: 'Correct task input', exact: true }).waitFor()
     await fillCorrection()
     await page.getByRole('button', { name: 'Create corrected task', exact: true }).click()
-    await page.getByRole('link', { name: 'Open planning for this task', exact: true }).waitFor()
+    await page.getByRole('button', { name: 'Plan this task', exact: true }).waitFor()
     assert.equal(creations.length, 2)
     assert.deepEqual(creations[0], creations[1], 'Creation retry must use the same input and idempotency key')
     assert.equal(correctedTask.correctionOfTaskId, task.id)
     const allTasks = (await (await page.request.get(`${process.env.SMOKE_BASE}/api/tasks`)).json()).data
     assert.equal(allTasks.filter(item => item.correctionOfTaskId === task.id).length, 1)
     assert.deepEqual((await (await page.request.get(`${process.env.SMOKE_BASE}/api/tasks/${task.id}`)).json()).data, originalCompleted)
-    await page.getByRole('link', { name: 'Open planning for this task', exact: true }).click()
+    await page.getByRole('button', { name: 'Plan this task', exact: true }).click()
     await page.getByLabel('Task and history').selectOption(correctedTask.id)
     await page.getByRole('button', { name: 'Prepare local planner for this task', exact: true }).click()
     await page.getByText('Local planner prepared for this task. Queue the plan when ready.', { exact: true }).waitFor()

@@ -8,6 +8,7 @@ import { request } from '../src/api/client'
 import { newPlanningSubmission, submitPlanning } from '../src/api/planning'
 import type { Task } from '../src/types/contracts'
 import type { RuntimeRun } from '../src/types/runtime'
+import { readPlanningRecovery, restorePlanningSubmission, type SavedPlanningSubmission } from '../src/state/planningRecovery'
 
 vi.mock('../src/state/AppStore', () => ({ useAppStore: vi.fn() }))
 vi.mock('../src/api/client', () => ({ request: vi.fn() }))
@@ -15,7 +16,7 @@ vi.mock('../src/api/planning', async importOriginal => {
   const actual = await importOriginal<typeof import('../src/api/planning')>()
   return { ...actual, newPlanningSubmission: vi.fn(actual.newPlanningSubmission), submitPlanning: vi.fn() }
 })
-vi.mock('../src/state/planningRecovery', () => ({ readPlanningRecovery: () => ({ items: [], warning: '' }), rememberPlanningSubmission: vi.fn().mockResolvedValue(''), forgetPlanningSubmission: vi.fn().mockReturnValue(''), restorePlanningSubmission: vi.fn() }))
+vi.mock('../src/state/planningRecovery', () => ({ readPlanningRecovery: vi.fn(), rememberPlanningSubmission: vi.fn().mockResolvedValue(''), forgetPlanningSubmission: vi.fn().mockReturnValue(''), restorePlanningSubmission: vi.fn() }))
 
 const task = { id: 'task-qa', title: 'Bounded request', description: 'Produce an inspectable local plan.', request: 'Bounded request', status: 'queued', updatedAt: '2026-10-12T12:00:00Z' } as Task
 const identity = { id: 'worker', display_name: 'Configured planner', stable_key: 'planner', lifecycle_state: 'active', is_enabled: true, operational_status: 'idle', agent_type: 'worker', description: '', version: 1 }
@@ -23,6 +24,7 @@ let store: ReturnType<typeof useAppStore>
 const renderPlanning = (props = {}) => render(<MemoryRouter><Runtime {...props}/></MemoryRouter>)
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(readPlanningRecovery).mockReturnValue({ items: [], warning: '' })
   store = {
     tasks: [task], loading: false, error: null, resyncRequired: false, connection: 'connected',
     system: { emergencyStop: false, autonomousWorker: { enabled: true, status: 'healthy', workerActorId: 'worker', providerReady: true } },
@@ -104,5 +106,30 @@ test('task inspectors lock the request so shared planning evidence cannot drift 
   expect(screen.getByLabelText('Task and history')).toBeDisabled()
   expect(screen.getByLabelText('Task and history')).toHaveValue(task.id)
   expect(store.runtime.setTaskId).not.toHaveBeenCalled()
+  expect(submitPlanning).not.toHaveBeenCalled()
+})
+
+test('task-scoped planning excludes recovery submissions for another task', async () => {
+  const foreign = { ...task, id: 'task-other', title: 'Another request' }
+  store.tasks = [task, foreign]
+  const saved = { version: 1, id: 'foreign-submission', taskId: foreign.id, actorId: 'worker', targetId: 'worker', timestamp: task.updatedAt, inputHash: 'a'.repeat(64) } as SavedPlanningSubmission
+  vi.mocked(readPlanningRecovery).mockReturnValue({ items: [saved], warning: '' })
+  renderPlanning({ lockedTaskId: task.id }); await makeReady()
+  expect(screen.queryByRole('button', { name: 'Recover submission' })).not.toBeInTheDocument()
+  expect(restorePlanningSubmission).not.toHaveBeenCalled()
+})
+
+test('a recovered pending submission cannot retry after the task scope changes', async () => {
+  const foreign = { ...task, id: 'task-other', title: 'Another request' }
+  store.tasks = [task, foreign]
+  const saved = { version: 1, id: 'foreign-submission', taskId: foreign.id, actorId: 'worker', targetId: 'worker', timestamp: task.updatedAt, inputHash: 'a'.repeat(64) } as SavedPlanningSubmission
+  vi.mocked(readPlanningRecovery).mockReturnValue({ items: [saved], warning: '' })
+  vi.mocked(restorePlanningSubmission).mockResolvedValue({ id: saved.id, timestamp: saved.timestamp, task: foreign, actorId: 'worker', targetId: 'worker' })
+  const view = renderPlanning(); await makeReady()
+  await userEvent.click(screen.getByRole('button', { name: 'Recover submission' }))
+  await screen.findByText(/Saved submission recovered/)
+  view.rerender(<MemoryRouter><Runtime lockedTaskId={task.id}/></MemoryRouter>)
+  expect(screen.getByRole('button', { name: 'Retry same submission' })).toBeDisabled()
+  await userEvent.click(screen.getByRole('button', { name: 'Retry same submission' }))
   expect(submitPlanning).not.toHaveBeenCalled()
 })

@@ -47,4 +47,21 @@ Above-the-fold copy preserves the concept's Tasks title, subtitle, primary actio
 
 ## Review boundary
 
-This feature branch is stacked on the approved Overview implementation because it changes the same shared drawer/task-creation foundation and verifies its effects throughout Overview, Tasks and Planning. The shell PR has merged; Overview is retargeted to main. Source-edit planning has also merged into main and will be assessed separately for the Software Factory milestone. It is not modified by this frontend branch. The broader campaign remains active for workforce, Business Lab, Office, Software Factory readiness and a final consistency audit. Do not auto-merge.
+Recovery inside a task inspector only lists submissions for that locked task.
+Recovery also rejects a foreign task before restoring it, and queue/retry requires
+the immutable pending submission's task to match the current shared selection.
+Changing task scope cannot replay another task's original command IDs.
+
+Campaign validation after reconciling current main: frontend typecheck, ESLint,
+232 Vitest tests and production build pass; API regressions pass (28 tests).
+The normal browser smoke exercises current drawer/button actions, including
+creation/correction acknowledgement loss and exact replay after reload. The
+separate Office smoke verifies assignments, movement/stop/reload/continue,
+actual worker activity, emergency stop and mobile layout. Both pass without
+relaxing timeouts or assertions. Final-head hosted checks and review remain gates.
+
+The approved shell and Overview implementations have merged. This feature branch
+is reconciled with current main, including the merged source-edit review contracts,
+and now targets main. The Tasks and Planning improvements retain their own review
+boundary and shared state. Source-edit implementation is inherited from main.
+Final-head checks and independent review remain required. Do not auto-merge.

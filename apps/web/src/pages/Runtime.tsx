@@ -47,7 +47,9 @@ export function Runtime({ onInspectTask, onCreateTask, onCorrectTask, lockedTask
   const workerActorId = worker?.workerActorId
   const workerActor = active.find(identity => identity.id === workerActorId)
   const task = tasks.find(item => item.id === taskId)
-  const taskScopeMatches = !lockedTaskId || lockedTaskId === taskId
+  const taskScopeMatches = (!lockedTaskId || lockedTaskId === taskId)
+    && (!pending || pending.task.id === taskId)
+  const scopedRecovery = recovery.items.filter(saved => !lockedTaskId || saved.taskId === lockedTaskId)
   useEffect(() => { if (lockedTaskId && taskId !== lockedTaskId) setTaskId(lockedTaskId) }, [lockedTaskId, taskId, setTaskId])
   const identityBlock = !workerActorId
     ? 'Configure JARVIS_AUTONOMOUS_WORKER_ACTOR_ID and restart the local services before queueing a plan.'
@@ -65,6 +67,10 @@ export function Runtime({ onInspectTask, onCreateTask, onCorrectTask, lockedTask
     && Boolean(worker?.enabled && worker.providerReady) && !system?.emergencyStop
   const recover = async (saved: SavedPlanningSubmission) => {
     if (busy || pending) return
+    if (lockedTaskId && saved.taskId !== lockedTaskId) {
+      setMessage('This saved submission belongs to a different task. Open its task to inspect or retry it.')
+      return
+    }
     const originalTask = tasks.find(item => item.id === saved.taskId)
     if (!originalTask) { setMessage('The saved task is not available. Refresh the Hub or inspect its durable history before creating replacement work.'); return }
     setBusy(true)
@@ -137,7 +143,7 @@ export function Runtime({ onInspectTask, onCreateTask, onCorrectTask, lockedTask
     </section>
     <section className="panel planning-request"><div className="planning-section-heading"><NavIcon name="planning"/><h2>Queue a local plan</h2></div>
       {(storageWarning || recovery.warning) && <p role="alert">{storageWarning || recovery.warning}</p>}
-      {recovery.items.some(item => item.id !== pending?.id) && <div className="callout"><h3>Unfinished submissions saved in this browser</h3><p>Only retry IDs and an input fingerprint are stored here. Task text and results stay in the Hub. Recovering a form never queues it automatically.</p>{recovery.items.filter(item => item.id !== pending?.id).map(saved => <article key={saved.id}><p>{tasks.find(item => item.id === saved.taskId)?.title ?? saved.taskId} · {new Date(saved.timestamp).toLocaleString()}</p><p>Run ID: <code>run-{saved.id}</code></p><button className="secondary" disabled={busy || Boolean(pending)} onClick={() => void recover(saved)}>Recover submission</button> <button className="secondary" disabled={busy} onClick={() => forget(saved.id)}>Forget saved retry ID</button></article>)}</div>}
+      {scopedRecovery.some(item => item.id !== pending?.id) && <div className="callout"><h3>Unfinished submissions saved in this browser</h3><p>Only retry IDs and an input fingerprint are stored here. Task text and results stay in the Hub. Recovering a form never queues it automatically.</p>{scopedRecovery.filter(item => item.id !== pending?.id).map(saved => <article key={saved.id}><p>{tasks.find(item => item.id === saved.taskId)?.title ?? saved.taskId} · {new Date(saved.timestamp).toLocaleString()}</p><p>Run ID: <code>run-{saved.id}</code></p><button className="secondary" disabled={busy || Boolean(pending)} onClick={() => void recover(saved)}>Recover submission</button> <button className="secondary" disabled={busy} onClick={() => forget(saved.id)}>Forget saved retry ID</button></article>)}</div>}
       <p>Queue as the configured worker identity, with its existing task permissions, or explicitly prepare it for the selected task. The target agent can be a different active identity. Create a task first if its request is not yet saved.</p>
       <label>Task and history<select aria-label="Task and history" value={taskId} disabled={busy || Boolean(pending) || Boolean(lockedTaskId)} onChange={event => setTaskId(event.target.value)}><option value="">Select task</option>{tasks.map(item => <option key={item.id} value={item.id}>{item.title} · {item.status}</option>)}</select></label>
       <label className="plan-type-field">Plan type<select aria-label="Plan type" value={mode} disabled={busy || Boolean(pending)} onChange={event => setMode(event.target.value as 'planning' | 'workspace')}><option value="planning">Planning advice</option><option value="workspace">Workspace actions and report</option></select></label>
