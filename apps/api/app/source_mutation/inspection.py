@@ -14,6 +14,10 @@ from pathlib import Path
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.models.source_artifact_verification import (
+    ArtifactMeasurement,
+    NativeArtifactVerification,
+)
 from app.models.source_change import source_path
 from app.models.source_mutation import ApplySourceMutation
 from app.models.source_mutation_inspection import MutationInspection
@@ -22,6 +26,7 @@ from app.self_build.checkout_driver import CheckoutDriver, pin_read_tree, suppor
 from app.self_build.creation_service import ownership
 from app.self_build.materialization import blob_digest, inventory
 from app.self_build.policy import digest
+from app.source_mutation.artifacts import plan_expected_artifacts
 from app.source_mutation.driver import (
     measure_code_state,
     observe,
@@ -33,7 +38,7 @@ from app.source_mutation.driver import (
 )
 from app.source_mutation.history import MutationHistoryReader
 from app.source_mutation.native import read_pin
-from app.tool_execution.filesystem import open_directory, open_file, read_bytes
+from app.tool_execution.filesystem import open_directory, open_file, read_bytes, windows_native_path
 
 
 class MutationInspector:
@@ -42,6 +47,13 @@ class MutationInspector:
         self.service = self.history.service
 
     def inspect(self, actor, request):
+        return self._inspect(actor, request, artifacts=False)
+
+    def verify_artifacts(self, actor, request):
+        """Measure exact expected artifacts under the same live native source pins."""
+        return self._inspect(actor, request, artifacts=True)
+
+    def _inspect(self, actor, request, *, artifacts):
         try:
             request = ApplySourceMutation.model_validate(
                 request.model_dump(mode="json", warnings=False)
@@ -72,7 +84,14 @@ class MutationInspector:
                     refuse("SOURCE_MUTATION_POSITION_CONFLICT")
 
             return self._measure(
-                checkout_driver, policy, creation, nonce, proposal, record, final_guard
+                checkout_driver,
+                policy,
+                creation,
+                nonce,
+                proposal,
+                record,
+                final_guard,
+                artifacts=artifacts,
             )
         except SQLAlchemyError:
             refuse("SOURCE_MUTATION_STORAGE_FAILED")
@@ -123,7 +142,9 @@ class MutationInspector:
                     refuse("SOURCE_MUTATION_FOREIGN_ARTIFACT")
                 source_path(path)
 
-    def _measure(self, driver, policy, creation, nonce, proposal, record, final_guard):
+    def _measure(
+        self, driver, policy, creation, nonce, proposal, record, final_guard, *, artifacts=False
+    ):
         tool = driver.observer
         if (
             tool.executable_hash != creation.plan.tool_sha256
@@ -134,6 +155,8 @@ class MutationInspector:
         root_path = Path(policy.worktree_root)
         key = creation.plan.workspace_id
         source_plan = proposal.plan.source_plan
+        manifest = plan_expected_artifacts(record, proposal.plan) if artifacts else None
+        measurements = []
         owner = ownership(creation, nonce)
         with ExitStack() as stack:
             root = open_directory(stack, Path(root_path.anchor), internal=True)
@@ -203,9 +226,46 @@ class MutationInspector:
                         change.before.digest,
                     ):
                         refuse("SOURCE_MUTATION_BACKUP_CONFLICT")
+                    if artifacts:
+                        # read_pin already denies writes/deletion and verifies the
+                        # canonical single-link file. Identity is measured, never
+                        # promoted to durable provenance or a cleanup grant.
+                        info = os.stat(windows_native_path(before_path), follow_symlinks=False)
+                        measurements.append(
+                            ArtifactMeasurement(
+                                path=before_path.relative_to(target).as_posix(),
+                                presence="retained_original",
+                                digest=sha256(data).hexdigest(),
+                                byte_count=len(data),
+                                device=info.st_dev,
+                                inode=info.st_ino,
+                            )
+                        )
                 else:
                     self._require_absent(stack, before_path)
+                    if artifacts:
+                        measurements.append(
+                            ArtifactMeasurement(
+                                path=before_path.relative_to(target).as_posix(),
+                                presence="absent",
+                                digest=None,
+                                byte_count=None,
+                                device=None,
+                                inode=None,
+                            )
+                        )
                 self._require_absent(stack, after_path)
+                if artifacts:
+                    measurements.append(
+                        ArtifactMeasurement(
+                            path=after_path.relative_to(target).as_posix(),
+                            presence="absent",
+                            digest=None,
+                            byte_count=None,
+                            device=None,
+                            inode=None,
+                        )
+                    )
             self._check_namespace_names(target, ignored)
             observation, _ = observe(stack, checkout, source_plan, modes, ignored)
             current_state, _ = measure_code_state(
@@ -235,10 +295,26 @@ class MutationInspector:
             final_guard()
             check_metadata()
             check_source()
-            return MutationInspection(
+            result = MutationInspection(
                 **payload,
                 inspection_fingerprint=digest(
                     payload | {"code_state": current_state.model_dump(mode="json")}
                 ),
                 measured_at=datetime.now(UTC),
+            )
+            if not artifacts:
+                return result
+            payload = dict(
+                schema_version="1.0",
+                manifest=manifest.model_dump(mode="json"),
+                source_inspection=result.model_dump(mode="json", exclude={"measured_at"}),
+                measurements=[item.model_dump(mode="json") for item in measurements],
+                native_artifacts_verified=True,
+                execution_authorized=False,
+                deletion_authorized=False,
+                durable_artifact_ownership_verified=False,
+            )
+            return NativeArtifactVerification(
+                **(payload | {"source_inspection": result}),
+                verification_fingerprint=digest(payload),
             )
