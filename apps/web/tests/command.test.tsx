@@ -20,10 +20,10 @@ beforeEach(()=>{
   vi.mocked(useAppStore).mockImplementation(()=>store)
 })
 const renderCommand=()=>render(<BrowserRouter><JarvisCommand/></BrowserRouter>)
-const open=async()=>{await userEvent.click(screen.getByRole('button',{name:'Talk to Jarvis'}));return screen.getByRole('dialog',{name:'Talk to Jarvis'})}
+const open=async()=>{await userEvent.click(screen.getByRole('button',{name:'Search Jarvis'}));return screen.getByRole('dialog',{name:'Search Jarvis'})}
 test('shortcut opens real grouped lookup and task result search uses shared inspection',async()=>{
   renderCommand();fireEvent.keyDown(window,{key:'k',ctrlKey:true})
-  const dialog=await screen.findByRole('dialog',{name:'Talk to Jarvis'})
+  const dialog=await screen.findByRole('dialog',{name:'Search Jarvis'})
   expect(store.runtime.loadIdentities).toHaveBeenCalledOnce()
   expect(within(dialog).getByRole('region',{name:'Registered identities'})).toBeVisible()
   await userEvent.type(within(dialog).getByLabelText('Find records and pages'),'completed result')
@@ -46,12 +46,12 @@ test('simulated agents are distinguished and approvals navigate to the existing 
 })
 test('draft survives close and mode switching; stale state blocks the reused creation form',async()=>{
   const app=renderCommand();let dialog=await open()
-  await userEvent.click(within(dialog).getByRole('button',{name:'New request'}))
+  await userEvent.click(within(dialog).getByRole('button',{name:'New task request'}))
   await userEvent.type(within(dialog).getByLabelText('Title'),'Keep this draft')
-  await userEvent.click(within(dialog).getByRole('button',{name:'Close Talk to Jarvis'}))
+  await userEvent.click(within(dialog).getByRole('button',{name:'Close Search Jarvis'}))
   dialog=await open();expect(within(dialog).getByLabelText('Title')).toHaveValue('Keep this draft')
   await userEvent.click(within(dialog).getByRole('button',{name:'Find records'}))
-  await userEvent.click(within(dialog).getByRole('button',{name:'New request'}))
+  await userEvent.click(within(dialog).getByRole('button',{name:'New task request'}))
   expect(within(dialog).getByLabelText('Title')).toHaveValue('Keep this draft')
   store={...store,connection:'offline'};app.rerender(<BrowserRouter><JarvisCommand/></BrowserRouter>)
   expect(within(dialog).getByRole('button',{name:'Create task'})).toBeDisabled()
@@ -60,12 +60,12 @@ test('draft survives close and mode switching; stale state blocks the reused cre
 test('creation acknowledgement remains visible after closing while submission is pending',async()=>{
   let resolve!: (value:Response)=>void
   vi.stubGlobal('fetch',vi.fn(()=>new Promise<Response>(finish=>{resolve=finish})))
-  renderCommand();let dialog=await open();await userEvent.click(within(dialog).getByRole('button',{name:'New request'}))
+  renderCommand();let dialog=await open();await userEvent.click(within(dialog).getByRole('button',{name:'New task request'}))
   await userEvent.type(within(dialog).getByLabelText('Title'),'Queued request')
   await userEvent.type(within(dialog).getByLabelText('Description'),'Create and wait for acknowledgement')
   await userEvent.click(within(dialog).getByRole('button',{name:'Create task'}))
   await waitFor(()=>expect(fetch).toHaveBeenCalledOnce())
-  await userEvent.click(within(dialog).getByRole('button',{name:'Close Talk to Jarvis'}))
+  await userEvent.click(within(dialog).getByRole('button',{name:'Close Search Jarvis'}))
   resolve({ok:true,json:async()=>({data:{id:'new-task',title:'Queued request'}})} as Response)
   await waitFor(()=>expect(store.refresh).toHaveBeenCalledOnce())
   dialog=await open();expect(await within(dialog).findByRole('heading',{name:'Task created and queued'})).toBeVisible()

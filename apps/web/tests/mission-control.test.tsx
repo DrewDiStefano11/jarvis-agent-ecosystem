@@ -1,12 +1,16 @@
 import { act, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Link, MemoryRouter, useNavigate } from 'react-router-dom'
-import { beforeEach, expect, test, vi } from 'vitest'
+import { beforeAll, beforeEach, expect, test, vi } from 'vitest'
 import App from '../src/App'
 import { useAppStore } from '../src/state/AppStore'
 import type { SystemStatus } from '../src/types/contracts'
 
 vi.mock('../src/state/AppStore', () => ({ useAppStore: vi.fn() }))
+beforeAll(() => {
+  HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+  HTMLDialogElement.prototype.close = function () { this.removeAttribute('open'); this.dispatchEvent(new Event('close')) }
+})
 const healthySystem = {
   status: 'healthy', databaseHealthy: true, schemaCurrent: true, emergencyStop: false,
   outboxExhaustedCount: 0, outboxPendingCount: 0, staleWorkerCount: 0, expiredLeaseCount: 0,
@@ -15,6 +19,25 @@ const healthySystem = {
 } as unknown as SystemStatus
 let store: ReturnType<typeof useAppStore>
 function renderShell() { return render(<MemoryRouter><App/></MemoryRouter>) }
+test('new task works in place and preserves a draft after closing', async () => {
+  renderShell()
+  await userEvent.click(screen.getByRole('button', { name: 'New task' }))
+  const drawer = within(screen.getByRole('dialog', { name: 'New task' }))
+  await userEvent.type(drawer.getByLabelText('Title'), 'Preserve my request')
+  await userEvent.click(drawer.getByRole('button', { name: 'Close New task' }))
+  await userEvent.click(screen.getByRole('button', { name: 'New task' }))
+  expect(within(screen.getByRole('dialog', { name: 'New task' })).getByLabelText('Title')).toHaveValue('Preserve my request')
+  expect(screen.getByRole('heading', { name: 'Mission Control' })).toBeInTheDocument()
+  expect(store.action).not.toHaveBeenCalled()
+})
+test('stale state disables in-place task creation without hiding the request', async () => {
+  store.connection = 'offline'
+  renderShell()
+  await userEvent.click(screen.getByRole('button', { name: 'New task' }))
+  const drawer = within(screen.getByRole('dialog', { name: 'New task' }))
+  expect(drawer.getByRole('button', { name: 'Create task' })).toBeDisabled()
+  expect(drawer.getByRole('status')).toHaveTextContent('Reconnect')
+})
 beforeEach(() => {
   store = {
     system: healthySystem, connection: 'connected', lastSync: '2026-10-06T14:00:00Z',
