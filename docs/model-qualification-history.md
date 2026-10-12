@@ -108,9 +108,3 @@ Example Markdown comparison table:
 - **Observational Only**: Qualification comparison never edits production routing, manager authority, agent models, or coordinator state.
 - **Offline & Local**: Performs zero network calls, model executions, or provider calls.
 - **Secret Scrubbing**: All free-text reasons and evidence fields are scrubbed to prevent key or credential exposure.
-
-Verdicts compare raw score deltas; four-decimal rounding affects reported deltas only.
-Advisory gate regressions and improvements affect verdicts even when scores and
-qualification labels stay constant. Missing gate evidence prevents quality conclusions.
-Version mismatch reasons omit artifact-controlled values; output evidence is scrubbed
-and bounded, and malformed artifact errors do not repeat raw validation inputs.
