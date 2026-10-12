@@ -117,3 +117,20 @@ def test_same_namespace_is_serialized_while_other_missions_remain_independent(na
             _,
         ):
             assert target.name == other_key and not target.exists()
+
+
+def test_preparation_replay_cannot_adopt_target_added_after_private_claim(namespace):
+    policy, owner = namespace
+    with owned_namespace(policy, KEY, owner, authority_check=lambda: None):
+        pass
+    target = Path(policy.worktree_root) / KEY
+    target.mkdir()
+    foreign = target / "user.txt"
+    foreign.write_bytes(b"foreign workspace")
+    marker = target.parent / (".jarvis-owner-" + KEY) / "owner.json"
+    original = marker.read_bytes()
+    with pytest.raises(DomainError) as failure:
+        with owned_namespace(policy, KEY, owner, authority_check=lambda: None):
+            pytest.fail("foreign target yielded as owned")
+    assert failure.value.code == "SELF_BUILD_OWNERSHIP_CONFLICT"
+    assert foreign.read_bytes() == b"foreign workspace" and marker.read_bytes() == original

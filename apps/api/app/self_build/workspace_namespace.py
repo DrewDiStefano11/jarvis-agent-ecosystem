@@ -19,7 +19,9 @@ def fail(code, message):
 
 
 @contextmanager
-def owned_namespace(policy, workspace_key, ownership, *, authority_check):
+def owned_namespace(
+    policy, workspace_key, ownership, *, authority_check, validate_existing_target=None
+):
     """Claim/verify one generated namespace under a registered, pinned root.
 
     The caller must persist creation intent and its native checkpoint first, and
@@ -98,8 +100,21 @@ def owned_namespace(policy, workspace_key, ownership, *, authority_check):
                 )
             with workspace_lock(private):
                 authority_check()
-                # The target remains absent until the structured Git driver creates it.
-                yield stack, root, root.path / workspace_key, digest(ownership)
+                target = root.path / workspace_key
+                try:
+                    os.stat(root.name(workspace_key), follow_symlinks=False, **root.kwargs)
+                except FileNotFoundError:
+                    pass
+                else:
+                    if not callable(validate_existing_target):
+                        fail(
+                            "SELF_BUILD_OWNERSHIP_CONFLICT",
+                            "An existing target requires validated durable creation evidence.",
+                        )
+                    # A matching sibling marker alone does not attest target identity.
+                    validate_existing_target(stack, root, target)
+                    authority_check()
+                yield stack, root, target, digest(ownership)
     except DomainError:
         raise
     except OSError:
