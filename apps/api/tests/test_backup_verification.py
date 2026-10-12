@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -26,6 +27,42 @@ from app.runtime_supervisor.backup_verification import (
 from app.runtime_supervisor.cli import main as cli_main
 from app.runtime_supervisor.io import atomic_write_json, ensure_runtime_home
 from tests.test_runtime_supervisor import create_database, make_config
+
+
+def test_backup_directory_link_cannot_redirect_verification(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    ensure_runtime_home(config.runtime_home, config.repository)
+    outside = tmp_path / "outside-backups"
+    outside.mkdir()
+    sentinel = outside / "jarvis-sentinel.sqlite3"
+    sentinel.write_bytes(b"foreign backup must not be opened")
+    if os.name == "nt":
+        import _winapi
+
+        _winapi.CreateJunction(str(outside), str(config.backups_directory))
+    else:
+        config.backups_directory.symlink_to(outside, target_is_directory=True)
+    for result in (
+        verify_backup(config, sentinel.name),
+        verify_latest_backup(config),
+        verify_all_backups(config),
+    ):
+        assert result["status"] == STATUS_UNAPPROVED_PATH
+        assert not result["valid"]
+    assert sentinel.read_bytes() == b"foreign backup must not be opened"
+    assert list(outside.iterdir()) == [sentinel]
+
+
+def test_invalid_utf8_manifest_returns_structured_failure(tmp_path: Path) -> None:
+    config = make_config(tmp_path)
+    ensure_runtime_home(config.runtime_home, config.repository)
+    create_database(config)
+    manifest = create_backup(config)
+    backup = config.backups_directory / str(manifest["backupFile"])
+    backup.with_suffix(".json").write_bytes(b"\xff\xfe")
+    result = verify_backup(config, backup.name)
+    assert result["status"] == STATUS_INVALID_MANIFEST
+    assert not result["valid"]
 
 
 def test_verify_backup_valid(tmp_path: Path) -> None:

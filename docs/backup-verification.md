@@ -126,6 +126,7 @@ Multi-backup verification summary (`--all`):
 
 - **Read-Only Operation**: Verification opens database connections exclusively with `mode=ro` (read-only SQLite URI). It never performs writes, updates, deletes, or schema migrations.
 - **Path Security**: All targets must reside strictly within `config.backups_directory`. Path traversal attempts (e.g., `../..`) and symlinks are rejected with `unapproved_path`.
+- The backup directory itself must remain an unlinked `backups` child of the verified runtime home. Directory symlinks and Windows junctions are rejected before single, latest, or all-backup enumeration. Invalid UTF-8 manifests return `invalid_manifest`.
 - **Runtime Home Ownership**: Refuses execution if `.jarvis-supervisor-runtime.json` does not match the active repository installation.
 
 ## Limitations
