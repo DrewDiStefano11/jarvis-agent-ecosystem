@@ -1,0 +1,229 @@
+"""Authenticated repair evidence remains exact-state, bounded and advisory."""
+
+from datetime import timedelta
+from itertools import permutations
+
+import pytest
+
+from app.development_validation.evidence import ReceiptVerifier, build_execution_plan
+from app.development_validation.planner import digest
+from app.development_validation.repair import build_repair_evidence
+from app.models.development_validation import FileChange
+from app.self_improvement.engine import analyze, create_baseline
+from app.self_improvement.validation import ValidationExecutionSource
+from tests.test_validation_evidence import KEY, NOW, receipt, state
+
+
+def verifier():
+    return ReceiptVerifier({("fixture", "key-1"): KEY})
+
+
+def report(values, *, current=None, now=NOW, **options):
+    plan = build_execution_plan(state())
+    return build_repair_evidence(current or state(), plan, values, verifier(), now=now, **options)
+
+
+def failed(**changes):
+    return receipt(
+        build_execution_plan(state()), outcome="failed", exit_code=1, failure_kind="test", **changes
+    )
+
+
+def test_exact_reproduction_and_no_mutation_authority():
+    signed = failed()
+    result = report([signed])
+    finding = result.findings[0]
+    assert finding.disposition == "failed" and finding.recommendation == "diagnose_failure"
+    assert finding.reproduction.command_run_id == signed.measurement.command_run_id
+    assert finding.reproduction.code_state_hash == signed.measurement.code_state_hash
+    assert finding.reproduction.suite_digest == signed.measurement.command.suite_digest
+    assert not result.execution_authorized and not result.source_mutation_authorized
+
+
+@pytest.mark.parametrize("outcome", ["interrupted", "cancelled", "unmeasured"])
+def test_unknown_results_require_evidence_and_do_not_invent_failure(outcome):
+    signed = receipt(build_execution_plan(state()), outcome=outcome, exit_code=None)
+    finding = report([signed]).findings[0]
+    assert finding.disposition == outcome and finding.failure_kind is None
+    assert finding.recommendation == "gather_evidence"
+
+
+def test_missing_and_stale_results_request_revalidation():
+    assert report([]).findings[0].disposition == "missing"
+    expired = report([failed()], now=NOW + timedelta(seconds=3601)).findings[0]
+    assert expired.disposition == "stale" and expired.recommendation == "revalidate"
+    changed = state().model_copy(
+        update={
+            "changes": (
+                FileChange(
+                    path="docs/change.md",
+                    before_hash=None,
+                    before_mode=None,
+                    after_hash="c" * 64,
+                    after_mode="100644",
+                ),
+            )
+        }
+    )
+    stale = report([failed()], current=changed)
+    assert stale.source_changed and stale.findings[0].disposition == "stale"
+    assert (
+        stale.findings[0].reproduction.code_state_hash
+        != build_execution_plan(changed).validation.code_state_hash
+    )
+
+
+def test_transient_retry_budget_is_bounded_by_recorded_failures():
+    plan = build_execution_plan(state())
+    values = []
+    for i in range(3):
+        values.append(
+            receipt(
+                plan,
+                outcome="failed",
+                exit_code=1,
+                failure_kind="watchdog",
+                diagnostic_codes=("timeout",),
+                command_run_id="command-" + str(i),
+                sequence=i + 1,
+                started_at=NOW - timedelta(seconds=4 - i),
+                finished_at=NOW - timedelta(seconds=3 - i),
+            )
+        )
+        result = report(values).findings[0]
+        assert result.retries_remaining == max(0, 2 - i)
+        assert result.recommendation == ("request_bounded_retry" if i < 2 else "stop_retrying")
+    with pytest.raises(ValueError):
+        report(values, retry_budget=3)
+    assert report(values, retry_budget=0).findings[0].recommendation == "stop_retrying"
+
+
+def test_failure_category_without_recorded_transient_code_cannot_request_retry():
+    plan = build_execution_plan(state())
+    signed = receipt(plan, outcome="failed", exit_code=1, failure_kind="infrastructure")
+    assert report([signed]).findings[0].recommendation == "diagnose_failure"
+
+
+def test_tied_permanent_failure_is_not_suppressed_by_transient_failure():
+    plan = build_execution_plan(state())
+    permanent = failed()
+    transient = receipt(
+        plan,
+        outcome="failed",
+        exit_code=1,
+        failure_kind="watchdog",
+        diagnostic_codes=("timeout",),
+        sequence=2,
+        command_run_id="command-2",
+    )
+    for values in permutations([permanent, transient]):
+        finding = report(values).findings[0]
+        assert finding.recommendation == "diagnose_failure"
+        assert len(finding.supporting_receipt_digests) == 2
+
+
+def test_forged_replayed_and_wrong_plan_evidence_rejected():
+    signed = failed()
+    for values in (
+        [signed, signed],
+        [signed.model_copy(update={"authentication_tag": "f" * 64})],
+        [receipt(build_execution_plan(state()), execution_plan_hash="f" * 64)],
+    ):
+        with pytest.raises(ValueError):
+            report(values)
+
+
+def test_existing_improvement_engine_accepts_measured_failure_with_incomplete_provenance():
+    plan = build_execution_plan(state())
+    source = ValidationExecutionSource(
+        "validation-run", state(), plan, [failed()], verifier(), now=NOW
+    )
+    provenance, facts = source.collect()
+    assert provenance.source_type == "validation_execution" and not provenance.complete
+    assert provenance.configuration_digest is None
+    assert facts[0].actual == 0 and facts[0].hard_gate
+    baseline = create_baseline(
+        repo_sha=state().head_sha,
+        configuration_fingerprint="c" * 64,
+        safety_fingerprint="d" * 64,
+        sources=(provenance,),
+        observations=facts,
+    )
+    analysis = analyze(baseline)
+    assert analysis.weaknesses and not analysis.weaknesses[0].actionable
+    assert all(p.status == "needs_evidence" for p in analysis.proposals)
+
+
+def test_expired_evidence_is_unmeasured_in_improvement_projection():
+    plan = build_execution_plan(state())
+    source = ValidationExecutionSource(
+        "validation-run", state(), plan, [failed()], verifier(), now=NOW + timedelta(seconds=3601)
+    )
+    _, facts = source.collect()
+    assert facts[0].actual is None and not facts[0].measured
+
+
+def test_source_aliases_cannot_replay_same_measured_artifact():
+    plan = build_execution_plan(state())
+    payload = [failed()]
+    left = ValidationExecutionSource("left", state(), plan, payload, verifier(), now=NOW)
+    right = ValidationExecutionSource("right", state(), plan, payload, verifier(), now=NOW)
+    a, x = left.collect()
+    b, y = right.collect()
+    assert a.digest == b.digest
+    with pytest.raises(ValueError):
+        create_baseline(
+            repo_sha=state().head_sha,
+            configuration_fingerprint="c" * 64,
+            safety_fingerprint="d" * 64,
+            sources=(a, b),
+            observations=(*x, *y),
+        )
+
+
+def test_report_digest_uses_canonical_validated_timestamp_serialization():
+    result = report([failed()])
+    assert result.report_digest == digest(result.model_dump(mode="json", exclude={"report_digest"}))
+
+
+def test_validation_baseline_head_must_match_measured_execution():
+    from app.self_improvement.service import ImprovementService
+
+    source = ValidationExecutionSource(
+        "validation-run", state(), build_execution_plan(state()), [failed()], verifier(), now=NOW
+    )
+    with pytest.raises(ValueError, match="Validation evidence head differs"):
+        ImprovementService(None).analyze(
+            (source,),
+            repo_sha="b" * 40,
+            configuration_fingerprint="c" * 64,
+            safety_fingerprint="d" * 64,
+        )
+
+
+def test_collector_key_rotation_cannot_replay_same_execution_as_distinct_artifacts():
+    import hmac
+    import json
+    from hashlib import sha256
+
+    from app.models.validation_execution import SignedReceipt
+
+    plan = build_execution_plan(state())
+    original = failed()
+    envelope = original.model_dump(mode="json", exclude={"authentication_tag"})
+    envelope["key_id"] = "key-2"
+    tag = hmac.new(
+        KEY,
+        b"jarvis-validation-receipt-v1\0"
+        + json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode(),
+        sha256,
+    ).hexdigest()
+    rotated = SignedReceipt(**envelope, authentication_tag=tag)
+    trusted = ReceiptVerifier({("fixture", "key-1"): KEY, ("fixture", "key-2"): KEY})
+    a, _ = ValidationExecutionSource(
+        "original", state(), plan, [original], trusted, now=NOW
+    ).collect()
+    b, _ = ValidationExecutionSource(
+        "rotated", state(), plan, [rotated], trusted, now=NOW
+    ).collect()
+    assert a.digest == b.digest

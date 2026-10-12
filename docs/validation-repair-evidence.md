@@ -1,0 +1,62 @@
+# Validation-driven repair evidence
+
+This milestone explicitly depends on the trusted validation evidence PR and uses
+the existing self-improvement EvidenceSource protocol. It introduces no source
+mutation path, command execution, provider call, integration, route or migration.
+It adds an additive `validation_execution` source kind and preserves CI import
+behavior while requiring validation source HEAD to match the requested baseline.
+
+Authenticated measurements are assessed against the original exact plan before
+any diagnosis projection. Every current gate has a disposition. Missing, stale,
+interrupted, cancelled and unmeasured outcomes remain unavailable measurements,
+never passing tests or invented product defects. Source-state changes require
+revalidation, including changes with unchanged HEAD. Expired receipts remain
+available as historical reproduction references and cannot authorize a retry.
+
+Reproduction references retain repository, HEAD, base, complete code-state hash,
+execution/validation plan hashes, suite and policy identities, task/run/attempt/
+command references, authenticated receipt digest and captured output digests.
+No logs, environment values, source text or generated explanation is imported.
+The deterministic classifier retains explicit measured failure categories without
+claiming to know a root cause. Permanent test/product/lint/migration failures need
+diagnosis. Only recorded transient infrastructure/dependency/watchdog codes can
+request another validation attempt, with at most two retries. Replayed receipts
+are rejected before counting; prior failures consume the bounded budget. Tied
+conflicting results are conservative and retain supporting receipt digests.
+
+Recommendations are advisory requests. Both execution and source-mutation authority
+are literal false in the output contract. Existing runtime leases, exact-plan
+operator approval and durable journal remain necessary for any later execution;
+source editing must use the separately approved mutation subsystem. No report,
+model assertion or retry decision grants either authority.
+
+The existing improvement engine receives measured passed/failed gate observations
+and unavailable unknown/stale observations. It can identify weaknesses while
+retaining provenance. The adapter explicitly reports incomplete provenance because
+actual tool, dependency, environment and isolation configuration is not measured
+by this milestone. It does not invent a configuration digest or elevate proposals
+to autonomous repair readiness.
+
+Use isolated fixture receipts/databases for tests. Hosted independent review is
+unavailable; document author-performed local review and applicable repository gates
+before publication. Runtime untrusted-source execution remains disabled.
+
+
+Retry recommendations count the supplied authenticated execution history and are
+bounded advisory requests. They do not assert that a caller supplied every prior
+attempt. Any future dispatcher must use the complete durable journal and existing
+runtime attempt budgets before allocating a retry. This adapter cannot grant or
+reset that authority. Collector key rotation does not create a new measurement
+artifact for improvement-frequency counting.
+
+
+## Local validation and review
+
+Repair/improvement regressions: 86 passed. Backend Ruff and frontend typecheck,
+ESLint, Vitest (214 tests) and build passed. The full backend dependency baseline
+passed 2,350 tests with 2 skips; focused tests cover this delta without repeating
+that unchanged full baseline. CI collection covers the added file exactly.
+Author-performed local review checked receipt authentication, source-state/age
+invalidation, conservative tied failures, retry counts, canonical report hashing,
+collector-rotation deduplication, preserved CI error behavior and incomplete
+provenance. This is not hosted independent review. Exact final-head CI is required.
