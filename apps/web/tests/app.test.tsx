@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter } from 'react-router-dom'
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -32,7 +32,7 @@ describe('Jarvis interface',()=>{
  test('dashboard renders synchronized seed state',async()=>{renderApp();expect(await screen.findByRole('heading', { name: 'Mission Control' })).toBeInTheDocument();expect(screen.getByText('Select an identity to inspect runtime work')).toBeInTheDocument();await userEvent.click(screen.getByText('Demonstration state')); expect(screen.getByText('fixture 18%')).toBeInTheDocument()})
  test('routes set a useful title and unknown paths render a recoverable 404',async()=>{window.history.pushState({},'','/missing-view');renderApp();expect(await screen.findByRole('heading',{name:'Page not found'})).toBeInTheDocument();expect(document.title).toBe('Not found · Jarvis');await userEvent.click(screen.getByRole('link',{name:'Return to overview'}));expect(await screen.findByRole('heading', { name: 'Mission Control' })).toBeInTheDocument();expect(document.title).toBe('Overview · Jarvis')})
  test('agent list and shared details render',async()=>{renderApp();await screen.findByRole('heading', { name: 'Mission Control' });await userEvent.click(screen.getAllByRole('link',{name:'Agents'})[0]!);expect(await screen.findByText('Five permanent operators')).toBeInTheDocument();await userEvent.click(screen.getByRole('button',{name:'Open Jarvis'}));expect(screen.getByRole('dialog',{name:'Jarvis'})).toBeInTheDocument();expect(screen.getByText('Tool policy')).toBeInTheDocument()})
- test('task hierarchy renders and opens details',async()=>{renderApp();await screen.findByRole('heading', { name: 'Mission Control' });await userEvent.click(screen.getAllByRole('link',{name:'Tasks'})[0]!);expect(await screen.findByText('1 subtasks')).toBeInTheDocument();await userEvent.click(screen.getByRole('button',{name:'Open Caribbean recommendation'}));expect(screen.getByText('Original request')).toBeInTheDocument();expect(screen.getByRole('button', {name:'Research destinations'})).toBeInTheDocument()})
+ test('task hierarchy renders and opens details',async()=>{renderApp();await screen.findByRole('heading', { name: 'Mission Control' });await userEvent.click(screen.getAllByRole('link',{name:'Tasks'})[0]!);expect(await screen.findByText('1 subtasks')).toBeInTheDocument();await userEvent.click(screen.getByRole('button',{name:'Open Caribbean recommendation'}));expect(screen.getByText('Original request')).toBeInTheDocument();expect(within(screen.getByRole('dialog',{name:'Caribbean recommendation'})).getByRole('button', {name:'Research destinations'})).toBeInTheDocument()})
  test('pending approval renders and policy disables unsafe actions',async()=>{renderApp();await screen.findByRole('heading', { name: 'Mission Control' });await userEvent.click(screen.getAllByRole('link',{name:/^Approvals/})[0]!);await screen.findByRole('heading', { name: 'Approval inbox' });expect(await screen.findByText('Publish report')).toBeInTheDocument();const cards=screen.getAllByRole('article');expect(cards[1]!.querySelector('button')).toBeDisabled();expect(cards[2]!.querySelector('button')).toBeDisabled();expect(screen.getByText(/Black-risk actions are prohibited/)).toBeInTheDocument()})
  test('approval action refreshes UI',async()=>{renderApp();await screen.findByRole('heading', { name: 'Mission Control' });await userEvent.click(screen.getAllByRole('link',{name:/^Approvals/})[0]!);await screen.findByRole('heading', { name: 'Approval inbox' });await userEvent.click(screen.getAllByRole('button',{name:'Approve'})[0]!);await waitFor(()=>expect(screen.getByRole('status')).toHaveTextContent('Approval approved'))})
  test('emergency-stop state is visible in system data',async()=>{endpointData['/api/system/status']={...system,emergencyStop:true,simulator:{...system.simulator,state:'paused'}};renderApp();expect(await screen.findByRole('button',{name:'Resume system'})).toBeInTheDocument();endpointData['/api/system/status']=system})
@@ -82,8 +82,8 @@ describe('Local planning integration', () => {
  })
  test('task creation failure remains visible and retains the form', async () => {
   window.history.pushState({}, '', '/tasks'); renderApp()
-  await screen.findByRole('button', { name: '+ New task' })
-  await userEvent.click(screen.getByRole('button', { name: '+ New task' }))
+  await screen.findByRole('button', { name: 'New task' })
+  await userEvent.click(screen.getByRole('button', { name: 'New task' }))
   await userEvent.type(screen.getByLabelText('Title'), 'Plan next milestone')
   await userEvent.type(screen.getByLabelText('Description'), 'Produce a bounded plan for the next milestone.')
   const original = vi.mocked(fetch).getMockImplementation()!
@@ -122,7 +122,7 @@ describe('operator control failures', () => {
    expect(await screen.findByRole('alert')).toHaveTextContent('Acknowledgement interrupted')
    expect(screen.getByLabelText('Description')).toBeDisabled()
    await userEvent.click(screen.getByRole('button', { name: 'Retry creation' }))
-   const planning = await screen.findByRole('link', { name: 'Open planning for this task' })
+   const planning = await screen.findByRole('button', { name: 'Open planning for this task' })
    expect(creations).toHaveLength(2)
    expect(creations[0]).toEqual(creations[1])
    expect(JSON.parse(creations[0]!.body as string)).toEqual({ title: corrected.title, description: corrected.description, priority: source.priority, correctionOfTaskId: source.id })
