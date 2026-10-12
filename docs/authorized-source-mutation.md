@@ -138,4 +138,8 @@ validation plan must still receive independently measured validation evidence.
 Human review and passing exact-head CI remain publication requirements. Native
 source mutation and any later validation execution are separate authorities.
 
+Application refuses unsupported native platforms before persisting mutation
+intent or acknowledging a checkpoint. An unavailable execution platform cannot
+consume the workspace's sole mutation lineage without performing an edit.
+
 Journal progress transitions accept only mutable position fields. Original approval, operation identity, creation time and plan references remain immutable. Every journal read verifies the original independent operator approval against the append-only audit plan and task; expired original approvals remain valid provenance, while live execution requires a current exact-plan approval.
