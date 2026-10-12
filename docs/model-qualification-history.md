@@ -48,9 +48,6 @@ python scripts/compare_model_qualification.py baseline.json target.json --role p
 
 # Write comparison evidence to custom directory
 python scripts/compare_model_qualification.py baseline.json target.json --out .local/qualification-comparison
-
-# Explicitly pair changed model identities (model, provider on each side)
-python scripts/compare_model_qualification.py baseline.json target.json --pair qwen3:14b-q4 ollama qwen3:14b-q8 ollama
 ```
 
 ### CLI Exit Codes
@@ -81,25 +78,16 @@ To maintain scientific rigor and prevent misleading comparisons:
 
 When an artifact pair fails any comparability check, a `non_comparable` verdict is returned with a clear, explicit reason string instead of computing an arbitrary score delta.
 
-By default, profiles pair by exact model and provider. Repeat `--pair` to explicitly
-map existing baseline identities to existing target identities. Pairings must be
-one-to-one; duplicate artifact identities and missing endpoints are rejected.
-Explicitly paired identities are excluded from automatic matching, and both source
-identities appear in JSON and Markdown. All inference-mode, policy and suite fences
-still apply. `--model` selects a pair when either endpoint matches.
-Any gate changing between measured and unmeasured or missing returns
-`insufficient_evidence`, including optional advisory gates.
-
 ## Verdict Semantics
 
 For each evaluated `(model, provider, role)` combination:
 
 | Verdict | Meaning |
 | --- | --- |
-| `improved` | Role qualification level improved (e.g. `unqualified` -> `qualified`), OR a previously failing measured gate now passes (mandatory or advisory), OR role score increased meaningfully (raw delta >= `+0.005`). |
-| `regressed` | Role qualification level dropped (e.g. `qualified` -> `conditional`), OR a previously passing gate now fails (mandatory or advisory), OR role score decreased meaningfully (raw delta <= `-0.005`). |
+| `improved` | Role qualification level improved (e.g. `unqualified` -> `qualified`), OR a previously failing mandatory gate now passes, OR role score increased meaningfully (delta >= `+0.005`). |
+| `regressed` | Role qualification level dropped (e.g. `qualified` -> `conditional`), OR a previously passing mandatory gate now fails, OR role score decreased meaningfully (delta <= `-0.005`). |
 | `unchanged` | Qualification level, mandatory gates, and advisory gates remained identical, with score delta within threshold (`|delta| < 0.005`). |
-| `insufficient_evidence` | Role is missing or `not_evaluated`, required gates are absent, or any gate changes between measured and unmeasured/missing. |
+| `insufficient_evidence` | Role is missing from baseline or target report, or role qualification status is `not_evaluated`. |
 | `non_comparable` | Fixture vs. real mode mismatch, or policy/suite version/digest mismatch. |
 
 ## Evidence Reports & Output Formats
