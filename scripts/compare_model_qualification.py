@@ -89,19 +89,6 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"Filter comparison to specific role(s) (available: {', '.join(role_names())})",
     )
     parser.add_argument(
-        "--pair",
-        action="append",
-        nargs=4,
-        default=[],
-        metavar=(
-            "BASELINE_MODEL",
-            "BASELINE_PROVIDER",
-            "TARGET_MODEL",
-            "TARGET_PROVIDER",
-        ),
-        help="Explicit one-to-one profile pairing for changed model or provider identities",
-    )
-    parser.add_argument(
         "--out",
         default=str(DEFAULT_OUT),
         help=f"Output directory for comparison evidence (default: {DEFAULT_OUT})",
@@ -150,7 +137,6 @@ def main(argv: list[str] | None = None) -> int:
             target_source=target_path,
             roles=role_filter,
             model_names=model_filter,
-            pairings=tuple(((bm, bp), (tm, tp)) for bm, bp, tm, tp in args.pair),
             baseline_source_name=str(baseline_path),
             target_source_name=str(target_path),
         )
