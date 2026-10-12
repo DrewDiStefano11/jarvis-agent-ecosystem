@@ -17,6 +17,375 @@ from tests.test_checkout_driver import checkout as checkout
 from tests.test_self_build_git_observer import repository as repository
 
 
+# Source mutation native regressions use only these disposable Git fixtures.
+def editing_fixture(checkout, operation="modify", filename="hello.txt"):
+    from types import SimpleNamespace
+
+    from app.models.development_validation import CodeState
+    from app.models.source_change import (
+        PlanReferences,
+        SourceChange,
+        SourceChangeIntent,
+        SourceIdentity,
+    )
+    from app.source_change.planner import observation_identity, plan_source_changes
+    from app.source_edit_planning.projection import project_source_state
+    from app.source_mutation.driver import SourceMutationDriver, content, observe
+
+    _, policy, observer, creation, owner, _ = checkout
+    driver = CheckoutDriver(observer, lambda: None)
+    driver.create(policy, creation, owner)
+    materialize(driver, policy, creation, owner, acknowledge=lambda *args: None)
+    target = Path(policy.worktree_root) / creation.workspace_id
+    before = content(b"hello\n", "100644") if operation != "add" else None
+    after = content("edited \U0001f600\r\n".encode(), "100644") if operation != "delete" else None
+    change = SourceChange(
+        operation=operation,
+        path=filename,
+        before=before.model_dump(exclude={"text"}) if before else None,
+        after=after,
+    )
+    source = SourceIdentity(
+        repository_identity=policy.repository_identity,
+        head_sha=creation.workspace.base_sha,
+        base_sha=creation.workspace.base_sha,
+        observation_digest="0" * 64,
+    )
+    with ExitStack() as stack:
+        root = open_directory(stack, target, internal=True)
+        observation, _ = observe(
+            stack, root, SimpleNamespace(source=source, changes=(change,)), {filename: "100644"}
+        )
+    plan = plan_source_changes(
+        SourceChangeIntent(
+            source=observation_identity(observation),
+            references=PlanReferences(
+                original_plan_hash=creation.workspace.plan_hash,
+                authorization_reference="fixture-approval",
+            ),
+            changes=(change,),
+        ),
+        observation,
+    )
+    original = CodeState(
+        repository_identity=source.repository_identity,
+        head_sha=source.head_sha,
+        base_sha=source.base_sha,
+        changes=(),
+    )
+    expected, _ = project_source_state(plan, original)
+    journal = dict(completed=0, pending=None, stage=None)
+
+    def begin(index):
+        journal["pending"] = index
+
+    def claim(index, value):
+        assert journal["pending"] == index
+        journal["stage"] = value
+
+    def acknowledge(count, prefix):
+        journal.update(completed=count, pending=None, stage=None)
+
+    def finalize(result, guard):
+        guard()
+        return result
+
+    def apply():
+        return SourceMutationDriver(driver).apply(
+            policy,
+            creation,
+            owner,
+            plan,
+            observation,
+            "fixture-operation",
+            original_code_state=original,
+            expected_code_state=expected,
+            completed=journal["completed"],
+            pending=journal["pending"],
+            staging_identity=journal["stage"],
+            claim_stage=claim,
+            begin=begin,
+            acknowledge=acknowledge,
+            finalize=finalize,
+        )
+
+    from app.tool_execution.filesystem import windows_native_path
+
+    return Path(windows_native_path(target)), plan, journal, apply
+
+
+@pytest.mark.parametrize("operation", ["add", "modify", "delete"])
+def test_source_mutation_native_add_modify_delete_and_exact_replay(checkout, operation):
+    filename = "new.txt" if operation == "add" else "hello.txt"
+    target, plan, journal, apply = editing_fixture(checkout, operation, filename)
+    before_primary = (checkout[0] / "hello.txt").read_bytes()
+    before_index = (checkout[0] / ".git/index").read_bytes()
+    result = apply()
+    assert journal["completed"] == 1 and apply() == result
+    if operation == "delete":
+        assert not (target / filename).exists()
+    else:
+        assert (target / filename).read_bytes() == plan.changes[0].after.text.encode()
+    assert (checkout[0] / "hello.txt").read_bytes() == before_primary
+    assert (checkout[0] / ".git/index").read_bytes() == before_index
+
+
+def test_source_mutation_preserves_original_and_recovers_after_rename_crash(checkout, monkeypatch):
+    from app.source_mutation import driver as mutation_driver
+
+    target, plan, journal, apply = editing_fixture(checkout)
+    native = mutation_driver.rename_pinned
+    calls = []
+
+    def interrupted(fd, leaf):
+        native(fd, leaf)
+        calls.append(leaf)
+        if leaf.endswith(".before"):
+            raise RuntimeError("crash after original move")
+
+    monkeypatch.setattr(mutation_driver, "rename_pinned", interrupted)
+    with pytest.raises(RuntimeError, match="original move"):
+        apply()
+    assert journal["pending"] == 0 and journal["stage"] is not None
+    assert not (target / "hello.txt").exists()
+    monkeypatch.setattr(mutation_driver, "rename_pinned", native)
+    apply()
+    assert (target / "hello.txt").read_bytes() == plan.changes[0].after.text.encode()
+    assert next(target.glob("*.before")).read_bytes() == b"hello\n"
+
+
+def test_source_mutation_recovers_effect_before_file_checkpoint(checkout, monkeypatch):
+    from app.source_mutation import driver as mutation_driver
+
+    target, _, journal, apply = editing_fixture(checkout)
+    native = mutation_driver.rename_pinned
+
+    def crash_after(fd, leaf):
+        native(fd, leaf)
+        if leaf == "hello.txt":
+            raise RuntimeError("crash after publication")
+
+    monkeypatch.setattr(mutation_driver, "rename_pinned", crash_after)
+    with pytest.raises(RuntimeError, match="publication"):
+        apply()
+    inode = (target / "hello.txt").stat().st_ino
+    monkeypatch.setattr(mutation_driver, "rename_pinned", native)
+    apply()
+    assert journal["completed"] == 1 and (target / "hello.txt").stat().st_ino == inode
+
+
+@pytest.mark.parametrize("artifact", ["stage", "backup", "target", "sibling"])
+def test_source_mutation_never_adopts_foreign_artifacts(checkout, artifact):
+    from app.source_mutation.driver import staging_names
+
+    target, _, _, apply = editing_fixture(checkout)
+    before, stage = staging_names("fixture-operation", 0)
+    path = (
+        target
+        / {"stage": stage, "backup": before, "target": "hello.txt", "sibling": "foreign.txt"}[
+            artifact
+        ]
+    )
+    path.write_bytes(b"foreign bytes")
+    with pytest.raises(DomainError):
+        apply()
+    assert path.read_bytes() == b"foreign bytes"
+
+
+@pytest.mark.parametrize("prefix", [b"", b"edited"])
+def test_source_mutation_does_not_append_to_unclaimed_prefix_stage(checkout, prefix):
+    from app.source_mutation.driver import staging_names
+
+    target, _, _, apply = editing_fixture(checkout)
+    stage = target / staging_names("fixture-operation", 0)[1]
+    stage.write_bytes(prefix)
+    with pytest.raises(DomainError):
+        apply()
+    assert stage.read_bytes() == prefix and (target / "hello.txt").read_bytes() == b"hello\n"
+
+
+def test_source_mutation_emoji_filename_uses_utf16_units(checkout):
+    target, plan, _, apply = editing_fixture(checkout, "add", "\U0001f600\U0001f600.py")
+    apply()
+    assert (target / "\U0001f600\U0001f600.py").read_bytes() == plan.changes[0].after.text.encode()
+
+
+def test_source_mutation_same_bytes_foreign_stage_replacement_is_not_published(
+    checkout, monkeypatch
+):
+    from app.source_mutation import driver as mutation_driver
+
+    target, plan, _, apply = editing_fixture(checkout)
+    native = mutation_driver.measured
+    substituted = []
+
+    def swapped(path, mode):
+        from app.tool_execution.filesystem import windows_native_path
+
+        result = native(path, mode)
+        if path.name.endswith(".after") and not substituted:
+            path = Path(windows_native_path(path))
+            path.unlink()
+            path.write_bytes(plan.changes[0].after.text.encode())
+            substituted.append(path)
+        return result
+
+    monkeypatch.setattr(mutation_driver, "measured", swapped)
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SOURCE_MUTATION_STAGE_CONFLICT"
+    assert substituted[0].read_bytes() == plan.changes[0].after.text.encode()
+
+
+def test_source_mutation_final_publication_holds_deny_write_pins(checkout, monkeypatch):
+    from app.source_mutation.driver import SourceMutationDriver
+
+    target, _, _, apply = editing_fixture(checkout)
+    native = SourceMutationDriver.apply
+    blocked = []
+
+    def checked(self, *args, **kwargs):
+        final = kwargs["finalize"]
+
+        def guarded(result, guard):
+            with pytest.raises(PermissionError):
+                (target / "hello.txt").write_bytes(b"foreign")
+            blocked.append(True)
+            return final(result, guard)
+
+        return native(self, *args, **(kwargs | {"finalize": guarded}))
+
+    monkeypatch.setattr(SourceMutationDriver, "apply", checked)
+    apply()
+    assert blocked
+
+
+def test_source_mutation_foreign_destination_race_never_clobbers(checkout, monkeypatch):
+    from app.source_mutation import driver as mutation_driver
+    from app.tool_execution.filesystem import windows_native_path
+
+    target, _, _, apply = editing_fixture(checkout)
+    native = mutation_driver.rename_pinned
+
+    def raced(fd, leaf):
+        native(fd, leaf)
+        if leaf.endswith(".before"):
+            Path(windows_native_path(target / "hello.txt")).write_bytes(b"foreign destination")
+
+    monkeypatch.setattr(mutation_driver, "rename_pinned", raced)
+    with pytest.raises(DomainError):
+        apply()
+    assert (target / "hello.txt").read_bytes() == b"foreign destination"
+    assert next(target.glob("*.before")).read_bytes() == b"hello\n"
+
+
+def test_source_mutation_verified_owned_partial_stage_resumes(checkout, monkeypatch):
+    from app.source_mutation import driver as mutation_driver
+
+    target, plan, journal, apply = editing_fixture(checkout)
+    native = mutation_driver.os.write
+    crashed = []
+
+    def partial(fd, data):
+        if journal["stage"] is not None and not crashed:
+            native(fd, data[:3])
+            crashed.append(True)
+            raise RuntimeError("crash during owned staging")
+        return native(fd, data)
+
+    monkeypatch.setattr(mutation_driver.os, "write", partial)
+    with pytest.raises(RuntimeError, match="owned staging"):
+        apply()
+    assert (target / "hello.txt").read_bytes() == b"hello\n"
+    monkeypatch.setattr(mutation_driver.os, "write", native)
+    apply()
+    assert (target / "hello.txt").read_bytes() == plan.changes[0].after.text.encode()
+
+
+def test_source_mutation_hardlinked_original_is_preserved(checkout):
+    import os
+
+    target, _, _, apply = editing_fixture(checkout)
+    os.link(target / "hello.txt", target / "other.txt")
+    with pytest.raises(DomainError):
+        apply()
+    assert (target / "hello.txt").read_bytes() == b"hello\n"
+    assert (target / "other.txt").read_bytes() == b"hello\n"
+
+
+def test_source_mutation_foreign_staged_index_is_preserved_and_refused(checkout):
+    import subprocess
+
+    target, _, _, apply = editing_fixture(checkout)
+    path = target / "hello.txt"
+    path.write_bytes(b"staged foreign bytes\n")
+    subprocess.run(
+        [str(checkout[2].executable), "-C", str(target), "add", "hello.txt"],
+        check=True,
+        capture_output=True,
+    )
+    path.write_bytes(b"hello\n")
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SOURCE_MUTATION_INDEX_CONFLICT"
+    assert path.read_bytes() == b"hello\n"
+
+
+@pytest.mark.parametrize("boundary", ["aggregate", "count"])
+def test_source_mutation_projected_whole_workspace_budget_refuses_before_effects(boundary):
+    from types import SimpleNamespace
+
+    from app.source_mutation.driver import check_target_budget
+
+    sizes = (
+        {"untouched.txt": 67108864}
+        if boundary == "aggregate"
+        else {str(index): 0 for index in range(4096)}
+    )
+    changes = (SimpleNamespace(path="new.txt", after=SimpleNamespace(byte_count=1)),)
+    with pytest.raises(DomainError) as failure:
+        check_target_budget(sizes, changes, 67108864)
+    assert failure.value.code == "SOURCE_MUTATION_INVENTORY_LIMIT"
+    assert "new.txt" not in sizes
+
+
+def test_source_mutation_projected_budget_measures_target_not_before_plus_after():
+    from types import SimpleNamespace
+
+    from app.source_mutation.driver import check_target_budget
+
+    sizes = {"replace.txt": 10, "delete.txt": 5, "untouched.txt": 5}
+    changes = (
+        SimpleNamespace(path="replace.txt", after=SimpleNamespace(byte_count=5)),
+        SimpleNamespace(path="delete.txt", after=None),
+        SimpleNamespace(path="add.txt", after=SimpleNamespace(byte_count=10)),
+    )
+    check_target_budget(sizes, changes, 20)
+    assert sizes == {"replace.txt": 10, "delete.txt": 5, "untouched.txt": 5}
+
+
+def test_source_mutation_rejects_windows_component_length_in_utf16_units():
+    from types import SimpleNamespace
+
+    from app.source_mutation.driver import allowed_changes
+
+    change = SimpleNamespace(path="\U0001f600" * 128 + ".txt", before=None, after=None)
+    with pytest.raises(DomainError) as failure:
+        allowed_changes(SimpleNamespace(changes=(change,)))
+    assert failure.value.code == "SOURCE_MUTATION_PATH_DENIED"
+
+
+def test_source_mutation_altered_creation_marker_is_preserved_and_refused(checkout):
+    target, _, _, apply = editing_fixture(checkout)
+    marker = target / ".jarvis-workspace.json"
+    marker.write_bytes(b'{"allowedTools":["workspace.write"]}')
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SOURCE_MUTATION_MARKER_CONFLICT"
+    assert marker.read_bytes() == b'{"allowedTools":["workspace.write"]}'
+    assert (target / "hello.txt").read_bytes() == b"hello\n"
+
+
 @pytest.mark.parametrize(
     "paths",
     [
