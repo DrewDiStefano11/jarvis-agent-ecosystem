@@ -10,6 +10,7 @@ from sqlalchemy import engine_from_config, pool
 from app.db import models  # noqa: F401
 from app.db.base import Base
 from app.self_improvement import repository as improvement_models  # noqa: F401
+from app.source_edit_planning import repository as source_plan_models  # noqa: F401
 
 config = context.config
 if config.config_file_name:
