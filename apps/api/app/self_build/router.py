@@ -5,6 +5,11 @@ from fastapi import APIRouter, Depends, Request
 from app.agent_runtime.authorization import RuntimeActorContext
 from app.autonomous_worker.router import actor
 from app.models.domain import TypedApiResponse
+from app.models.git_inspection import (
+    InspectRepositoryRequest,
+    RepositoryInspection,
+    RepositoryInspectionPlan,
+)
 from app.models.self_build import (
     AbandonWorkspaceRequest,
     ReserveWorkspaceRequest,
@@ -46,6 +51,39 @@ def abandon(
     return TypedApiResponse(
         data=request.app.state.self_build_workspace_service.abandon(
             runtime_actor, workspace_id, body
+        )
+    )
+
+
+@router.post(
+    "/{workspace_id}/repository-inspections/preview",
+    response_model=TypedApiResponse[RepositoryInspectionPlan],
+)
+def preview_inspection(workspace_id: str, request: Request, runtime_actor: Actor):
+    return TypedApiResponse(
+        data=request.app.state.self_build_git_service.preview(runtime_actor, workspace_id)
+    )
+
+
+@router.post(
+    "/{workspace_id}/repository-inspections", response_model=TypedApiResponse[RepositoryInspection]
+)
+def inspect_repository(
+    workspace_id: str, body: InspectRepositoryRequest, request: Request, runtime_actor: Actor
+):
+    return TypedApiResponse(
+        data=request.app.state.self_build_git_service.inspect(runtime_actor, workspace_id, body)
+    )
+
+
+@router.get(
+    "/{workspace_id}/repository-inspections/{inspection_id}",
+    response_model=TypedApiResponse[RepositoryInspection],
+)
+def read_inspection(workspace_id: str, inspection_id: str, request: Request, runtime_actor: Actor):
+    return TypedApiResponse(
+        data=request.app.state.self_build_git_service.read(
+            runtime_actor, workspace_id, inspection_id
         )
     )
 

@@ -1,0 +1,72 @@
+.agents-page { display: grid; gap: 20px; min-width: 0; }
+.agents-page .page-title { margin-bottom: 0; }
+.agents-page h1,
+.agents-page h2,
+.demo-card h2,
+.agents-callout p { overflow-wrap: anywhere; }
+.agents-map { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0; }
+.agents-map a {
+  display: grid;
+  gap: 6px;
+  min-height: 44px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #0c1c17;
+  color: var(--text);
+  text-decoration: none;
+}
+.agents-map a:hover { border-color: var(--accent); }
+.agents-map strong { font-size: .95rem; }
+.agents-map span,
+.agents-callout,
+.agents-section-note { color: var(--muted); }
+.agents-kind {
+  display: inline-block;
+  margin: 0 0 8px;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--text);
+  font: 600 .68rem ui-monospace, monospace;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.agents-kind-runtime { border-color: var(--accent); }
+.agents-kind-catalog { border-color: var(--warning); }
+.agents-kind-demo { border-color: #80652d; color: #ffcf6b; }
+.agents-callout,
+.agents-anchor { margin: 0; }
+.demo-toolbar { margin: 0; }
+.demo-toolbar label { min-width: 0; }
+.demo-toolbar input,
+.demo-toolbar select { width: 100%; }
+.demo-meta { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; justify-content: space-between; color: var(--muted); font-size: .8rem; }
+.demo-meta button,
+.agents-page .page-title > button,
+.demo-form button { min-height: 44px; }
+.demo-list { min-width: 0; }
+.demo-card { min-width: 0; }
+.demo-card h2 { margin: 0; font-size: 1.05rem; }
+.demo-facts { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 8px 0; color: var(--muted); font-size: .78rem; }
+.demo-facts span,
+.demo-card p { overflow-wrap: anywhere; }
+.demo-form { display: grid; gap: 12px; }
+.demo-form label { display: grid; gap: 6px; min-width: 0; color: var(--muted); font-size: .75rem; }
+.demo-form input,
+.demo-form select { width: 100%; }
+@media (max-width: 900px) {
+  .agents-map { grid-template-columns: 1fr; }
+}
+@media (max-width: 760px) {
+  .agents-page .page-title { flex-direction: column; align-items: stretch; }
+  .agents-page .page-title > button,
+  .demo-form button.primary { width: 100%; }
+}
+@media (max-width: 320px) {
+  .demo-card { padding: 14px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .agents-map a { transition: none; }
+}

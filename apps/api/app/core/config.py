@@ -25,6 +25,11 @@ class Settings(BaseSettings):
         "{}", alias="JARVIS_SELF_BUILD_REPOSITORIES_JSON", max_length=32768
     )
 
+    self_build_git_executable: str = Field(
+        "", alias="JARVIS_SELF_BUILD_GIT_EXECUTABLE", max_length=1000
+    )
+    self_build_git_sha256: str = Field("", alias="JARVIS_SELF_BUILD_GIT_SHA256", max_length=64)
+
     app_env: str = Field("development", alias="APP_ENV")
     database_url: str = Field("sqlite:///./data/jarvis.db", alias="JARVIS_DATABASE_URL")
     data_directory: Path = Field(Path("./data"), alias="JARVIS_DATA_DIRECTORY")
