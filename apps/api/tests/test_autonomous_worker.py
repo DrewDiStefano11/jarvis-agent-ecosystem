@@ -413,10 +413,23 @@ def worker_fixture(
     response_format: str | None = None,
     verification_criteria: tuple = (),
     correction_policy=None,
+    manual_lease_recovery: bool = False,
 ):
     app = create_app(delay_ms=1, database_url=database_url(tmp_path / f"{run_id}.db"))
     client = TestClient(app)
     client.__enter__()
+    if manual_lease_recovery:
+
+        async def stop_background_recovery():
+            task = app.state.lease_recovery_task
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+        assert client.portal is not None
+        client.portal.call(stop_background_recovery)
     queue_only_demo_task(app)
     actor_id = grant_runtime_permissions(app, f"actor-{run_id}", task_id="task-demo")
     configure_worker(app, actor_id, router)
@@ -1488,6 +1501,8 @@ async def test_restart_finalizes_durable_result_without_model_recall(
         tmp_path,
         router=router,
         run_id="run-autonomous-recovery",
+        # This case explicitly owns lease recovery; the lifespan sweeper must not race it.
+        manual_lease_recovery=True,
     )
     service = app.state.autonomous_worker_service
     original_checkpoint = service._checkpoint
