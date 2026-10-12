@@ -3,7 +3,7 @@
 from itertools import islice
 
 from app.development_validation.planner import digest
-from app.development_validation.repair import TRANSIENT_KINDS, build_repair_evidence
+from app.development_validation.repair import build_repair_evidence
 from app.models.self_improvement import SourceProvenance
 from app.self_improvement.adapters import observation
 
@@ -51,7 +51,9 @@ class ValidationExecutionSource:
                 "gate_success:" + f.gate,
                 1 if f.disposition == "passed" else 0 if f.disposition == "failed" else None,
                 expected=1,
-                category="reliability" if f.failure_kind in TRANSIENT_KINDS else "execution",
+                category="reliability"
+                if f.recommendation in {"request_bounded_retry", "stop_retrying"}
+                else "execution",
                 role="validation_gate",
                 inference_mode="runtime",
                 failure_code=f.failure_kind if f.disposition == "failed" else None,

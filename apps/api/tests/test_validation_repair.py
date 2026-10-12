@@ -206,6 +206,19 @@ def test_repair_disposition_follows_higher_sequence_after_clock_regression():
         assert finding.reproduction.command_run_id == "command-2"
 
 
+@pytest.mark.parametrize(
+    "failure_kind", ["infrastructure", "ci_environment", "dependency", "watchdog"]
+)
+def test_unconfirmed_transient_kind_retains_failure_diagnosis(failure_kind):
+    plan = build_execution_plan(state())
+    signed = receipt(plan, outcome="failed", exit_code=1, failure_kind=failure_kind)
+    provenance, facts = ValidationExecutionSource(
+        "unconfirmed-run", state(), plan, [signed], verifier(), now=NOW
+    ).collect()
+    assert facts[0].category == "execution"
+    assert report([signed]).findings[0].recommendation == "diagnose_failure"
+
+
 def test_source_aliases_cannot_replay_same_measured_artifact():
     plan = build_execution_plan(state())
     payload = [failed()]
