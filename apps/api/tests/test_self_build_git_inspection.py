@@ -22,7 +22,7 @@ pytest_plugins = ["tests.test_self_build_workspaces"]
 
 
 @pytest.fixture
-def git_workspace(workspace):
+def git_workspace(workspace, request):
     app, actor, workspace_service, reservation_request, _, policy = workspace
     root = Path(policy["primary_root"])
     executable = shutil.which("git")
@@ -55,9 +55,10 @@ def git_workspace(workspace):
     git("config", "user.name", "Isolated fixture")
     git("config", "user.email", "fixture@example.invalid")
     git("config", "commit.gpgsign", "false")
-    (root / "source.py").write_text("value = 1\n")
-    git("add", "source.py")
-    git("commit", "-m", "base")
+    if getattr(request, "param", None) != "empty":
+        (root / "source.py").write_text("value = 1\n")
+        git("add", "source.py")
+    git("commit", "--allow-empty", "-m", "base")
     head = git("rev-parse", "HEAD")
     git("remote", "add", "origin", "https://github.com/example/jarvis.git")
     git("update-ref", "refs/remotes/origin/main", head)

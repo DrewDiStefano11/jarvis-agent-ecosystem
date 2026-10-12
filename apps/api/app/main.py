@@ -84,6 +84,7 @@ from app.remote_control.router import router as remote_control_router
 from app.remote_control.service import RemoteControlService
 from app.repositories.sqlalchemy import IdempotencyResult, SqlAlchemyRepository
 from app.repositories.task_leases import TaskLeaseRepository
+from app.self_build.creation_service import WorkspaceCreationService
 from app.self_build.git_operator_router import router as git_operator_router
 from app.self_build.git_service import GitInspectionService
 from app.self_build.router import router as self_build_router
@@ -333,6 +334,7 @@ def create_app(
     app.state.autonomous_worker_service.tool_executor = app.state.tool_execution_service
     app.state.self_build_workspace_service = WorkspaceService(app)
     app.state.self_build_git_service = GitInspectionService(app)
+    app.state.self_build_creation_service = WorkspaceCreationService(app)
     app.include_router(self_build_router)
     app.include_router(self_improvement_router)
     app.include_router(tool_execution_router)

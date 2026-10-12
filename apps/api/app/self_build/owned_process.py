@@ -75,7 +75,7 @@ def owned_process(argv, *, cwd, env, authority_check, launch):
     POSIX owns a new session/process group for trusted native tool descendants.
     """
     authority_check()
-    job = WindowsJob() if os.name == "nt" else None
+    job = WindowsJob(memory_bytes=536870912) if os.name == "nt" else None
     process = None
     try:
         kwargs = {"creationflags": 0x08000004} if job else {"start_new_session": True}
