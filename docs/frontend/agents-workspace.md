@@ -13,3 +13,7 @@ Demonstration search, status, department, and permanent/temporary filters read t
 Creating a temporary agent still posts only to `/api/agents/temporary`. The page says the result is not a runtime identity. Registration, activation, and capability assignment stay in the existing identity registry and are unchanged.
 
 The shared agent detail drawer still opens from each demonstration card.
+
+Temporary names accept 2â€“60 characters and roles accept 2â€“100, matching `CreateTemporaryAgentRequest`. The demonstration navigation target and its accessible heading have distinct IDs.
+
+A selected recorded status stays visible when it disappears from a later snapshot, so the displayed filter continues to match the filtered results.

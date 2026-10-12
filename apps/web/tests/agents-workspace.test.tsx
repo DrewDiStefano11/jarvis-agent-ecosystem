@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
@@ -22,8 +22,8 @@ let agents: Agent[]
 class Socket { static OPEN = 1; readyState = 1; onopen: (() => void) | null = null; onclose: (() => void) | null = null; constructor() { queueMicrotask(() => this.onopen?.()) } close() {} send() {} }
 
 function Selection() {
-  const { selectedAgentId } = useAppStore()
-  return <output aria-label="Selected agent">{selectedAgentId ?? 'none'}</output>
+  const { selectedAgentId, refresh } = useAppStore()
+  return <><output aria-label="Selected agent">{selectedAgentId ?? 'none'}</output><button onClick={() => void refresh()}>Refresh test snapshot</button></>
 }
 
 function renderAgents() {
@@ -50,10 +50,45 @@ beforeEach(() => {
 })
 
 describe('Agents workforce page', () => {
+  test('retains the selected recorded status when the snapshot changes', async () => {
+    renderAgents()
+    await screen.findByRole('heading', { name: 'Scout' })
+    await userEvent.selectOptions(screen.getByLabelText('Demonstration status'), 'researching')
+    agents = agents.map(item => ({ ...item, status: 'idle' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Refresh test snapshot' }))
+    await waitFor(() => expect(screen.getByText('No demonstration agents match this filter.')).toBeInTheDocument())
+    expect(screen.getByLabelText('Demonstration status')).toHaveValue('researching')
+    await userEvent.selectOptions(screen.getByLabelText('Demonstration status'), '')
+    expect(screen.getByRole('heading', { name: 'Scout' })).toBeInTheDocument()
+  })
+
+  test('accepts the API name and role boundaries without truncating valid roles', async () => {
+    renderAgents()
+    await screen.findByRole('heading', { name: 'Jarvis' })
+    await userEvent.click(screen.getByRole('button', { name: 'Create temporary agent' }))
+    const form = within(screen.getByRole('form', { name: 'Create demonstration agent' }))
+    const name = form.getByLabelText('Name') as HTMLInputElement
+    const role = form.getByLabelText('Role') as HTMLInputElement
+    expect(name.maxLength).toBe(60)
+    expect(role.maxLength).toBe(100)
+    fireEvent.change(name, { target: { value: 'N'.repeat(60) } })
+    fireEvent.change(role, { target: { value: 'R'.repeat(100) } })
+    await userEvent.click(form.getByRole('button', { name: 'Create restricted simulation' }))
+    await screen.findByText(/Temporary demonstration agent saved/)
+    const posts = vi.mocked(fetch).mock.calls.filter(([, init]) => init?.method === 'POST')
+    expect(posts).toHaveLength(1)
+    expect(JSON.parse(String(posts[0]?.[1]?.body))).toMatchObject({ name: 'N'.repeat(60), role: 'R'.repeat(100) })
+  })
+
   test('separates runtime identities, catalog definitions, and demonstration agents', async () => {
     renderAgents()
     expect(await screen.findByRole('heading', { name: 'Jarvis' })).toBeInTheDocument()
     expect(screen.getByRole('heading', { name: 'Runtime identities' })).toBeInTheDocument()
+    const demonstration = screen.getByRole('region', { name: 'Demonstration agents' })
+    expect(demonstration.id).toBe('demonstration-agents')
+    expect(within(demonstration).getByRole('heading', { name: 'Demonstration agents' }).id).toBe('demonstration-agents-title')
+    const ids = [...document.querySelectorAll('[id]')].map(node => node.id)
+    expect(new Set(ids).size).toBe(ids.length)
     expect(screen.getByRole('heading', { name: 'Catalog boundary' })).toBeInTheDocument()
     expect(screen.getByText('Five permanent operators')).toBeInTheDocument()
     const scout = screen.getByRole('article', { name: 'Scout demonstration' })

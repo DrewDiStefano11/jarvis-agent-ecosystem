@@ -17,7 +17,7 @@ export function Agents() {
   const [departmentId, setDepartmentId] = useState('')
   const [kind, setKind] = useState<DemonstrationKind>('')
   const formRef = useRef<HTMLFormElement>(null)
-  const statuses = useMemo(() => demonstrationStatuses(agents), [agents])
+  const statuses = useMemo(() => [...new Set([...demonstrationStatuses(agents), ...(status ? [status] : [])])].sort(), [agents, status])
   const visible = useMemo(
     () => filterDemonstrationAgents(agents, departments, tasks, { query, status, departmentId, kind }),
     [agents, departments, tasks, query, status, departmentId, kind],
@@ -54,7 +54,7 @@ export function Agents() {
       <a href="#workforce-catalog"><strong>Imported catalog</strong><span>Specialist and skill definitions. Not registered identities.</span></a>
       <a href="#demonstration-agents"><strong>Demonstration agents</strong><span>Simulator roles and workload. Not runtime identities.</span></a>
     </nav>
-    {loading && !agents.length && <p role="status">Loading the workforce snapshot…</p>}
+    {loading && !agents.length && <p role="status">Loading the workforce snapshotâ€¦</p>}
     {error && !formError && <p className="callout danger" role="alert">{error} Demonstration cards below may be missing or stale.</p>}
 
     <section id="runtime-identities" className="agents-anchor" aria-labelledby="runtime-identities-title">
@@ -71,12 +71,12 @@ export function Agents() {
       <AgentCatalog />
     </section>
 
-    <section id="demonstration-agents" aria-labelledby="demonstration-agents">
+    <section id="demonstration-agents" aria-labelledby="demonstration-agents-title">
       <div className="page-title">
         <div>
           <p className="agents-kind agents-kind-demo">Simulator only</p>
           <p className="eyebrow">Five permanent operators</p>
-          <h2 id="demonstration-agents">Demonstration agents</h2>
+          <h2 id="demonstration-agents-title">Demonstration agents</h2>
           <p>Seeded simulation roles and workload. These cards describe the demonstration. They are not the runtime identities registered above.</p>
         </div>
         <button className="secondary" type="button" aria-expanded={showForm} aria-controls="demo-create" disabled={busy} onClick={() => { setShowForm(value => !value); setFormError('') }}>
@@ -86,11 +86,11 @@ export function Agents() {
       {message && <p className="callout success" role="status">{message}</p>}
       {showForm && <form ref={formRef} id="demo-create" className="panel create-form demo-form" onSubmit={event => void create(event)} aria-label="Create demonstration agent">
         <p>This adds a restricted simulation agent to the demonstration. It does not register a runtime identity, and it cannot be selected for planning.</p>
-        <label>Name<input name="name" required minLength={2} maxLength={80} disabled={busy} /></label>
-        <label>Role<input name="role" required minLength={2} maxLength={80} disabled={busy} /></label>
+        <label>Name<input name="name" required minLength={2} maxLength={60} disabled={busy} /></label>
+        <label>Role<input name="role" required minLength={2} maxLength={100} disabled={busy} /></label>
         <label>Department<select name="department" required disabled={busy || departments.length === 0}>{departments.map(department => <option value={department.id} key={department.id}>{department.name}</option>)}</select></label>
         {!departments.length && <p role="status">No demonstration departments are loaded, so a temporary agent cannot be placed.</p>}
-        <button className="primary" disabled={busy || departments.length === 0}>{busy ? 'Creating…' : 'Create restricted simulation'}</button>
+        <button className="primary" disabled={busy || departments.length === 0}>{busy ? 'Creatingâ€¦' : 'Create restricted simulation'}</button>
         {formError && <p role="alert">{formError}</p>}
       </form>}
       <div className="filters demo-toolbar">
@@ -111,7 +111,7 @@ export function Agents() {
         return <article className="agent-card demo-card" key={agent.id} aria-label={`${agent.name} demonstration`}>
           <button className="card-hit" type="button" onClick={() => selectAgent(agent.id)} aria-label={`Open ${agent.name}`} />
           <div className="agent-heading"><span className="avatar large" aria-hidden="true">{agent.name[0] ?? '?'}</span><div><h2>{agent.name}</h2><p>{agent.role}</p></div><Status value={agent.status} /></div>
-          <p>{department} · {agent.isTemporary ? 'Temporary' : 'Permanent'} demonstration · not a runtime identity</p>
+          <p>{department} Â· {agent.isTemporary ? 'Temporary' : 'Permanent'} demonstration Â· not a runtime identity</p>
           {agent.description && <p>{agent.description}</p>}
           <p className="demo-facts"><span>{agent.capabilities.length ? agent.capabilities.join(', ') : 'No capabilities recorded'}</span></p>
           <Progress value={agent.progress} label="Simulated progress" />
