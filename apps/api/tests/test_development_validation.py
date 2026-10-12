@@ -1,10 +1,13 @@
 """Safety, exact-state invalidation and useful focused validation regressions."""
 
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
+from itertools import permutations
 
 import pytest
 from pydantic import ValidationError
 
+from app.core.errors import DomainError
 from app.development_validation.planner import (
     PUBLICATION,
     assess_validation,
@@ -16,6 +19,22 @@ from app.models.development_validation import (
     FileChange,
     ValidationEvidence,
     ValidationPlan,
+)
+from app.models.source_change import (
+    FileIdentity,
+    PlanReferences,
+    SourceChange,
+    SourceChangeIntent,
+    SourceContent,
+    SourceEntry,
+    SourceObservation,
+    Topology,
+    canonical_path,
+)
+from app.source_change.planner import (
+    observation_identity,
+    plan_source_changes,
+    verify_source_plan,
 )
 
 
@@ -525,3 +544,572 @@ def test_changed_or_unsupported_trusted_output_policy_cannot_reuse_evidence(tmp_
     else:
         with pytest.raises(ValueError, match="output policy"):
             runpy.run_path(str(copied))
+
+
+# Pure source proposal regression coverage.
+
+
+def content(text="original\n", mode="100644"):
+    data = text.encode("utf-8")
+    return SourceContent(
+        text=text, digest=sha256(data).hexdigest(), byte_count=len(data), mode=mode
+    )
+
+
+def identity(value):
+    return FileIdentity(**value.model_dump(exclude={"text"}))
+
+
+def observation(*entries, **values):
+    return SourceObservation(
+        **(
+            dict(
+                repository_identity="github.com/example/jarvis",
+                head_sha="a" * 40,
+                base_sha="b" * 40,
+                root=Topology(kind="directory"),
+                entries=entries,
+            )
+            | values
+        )
+    )
+
+
+def intent(observed, *changes, **values):
+    return SourceChangeIntent(
+        **(
+            dict(
+                source=observation_identity(observed),
+                references=PlanReferences(
+                    original_plan_hash="c" * 64, authorization_reference="auth-1"
+                ),
+                changes=changes,
+            )
+            | values
+        )
+    )
+
+
+def change(path="hello.py", before=None, after=None, operation="modify"):
+    return SourceChange(
+        path=path,
+        operation=operation,
+        before=before,
+        after=after,
+    )
+
+
+def fixture():
+    old = content()
+    observed = observation(SourceEntry(path="hello.py", kind="file", content=old))
+    proposal = intent(observed, change(before=identity(old), after=content("replacement\n")))
+    return observed, proposal
+
+
+def refused(code, proposal, observed):
+    with pytest.raises(DomainError) as failure:
+        plan_source_changes(proposal, observed)
+    assert failure.value.code == code
+    assert "hello.py" not in str(failure.value)
+    return failure.value
+
+
+def test_add_modify_delete_and_mode_only_preview_are_exact():
+    old = content()
+    observed = observation(
+        SourceEntry(path="add.py", kind="absent"),
+        SourceEntry(path="delete.py", kind="file", content=old),
+        SourceEntry(path="modify.py", kind="file", content=old),
+        SourceEntry(path="mode.py", kind="file", content=old),
+    )
+    proposal = intent(
+        observed,
+        change("add.py", after=content(""), operation="add"),
+        change("delete.py", before=identity(old), operation="delete"),
+        change("modify.py", before=identity(old), after=content("new\n")),
+        change("mode.py", before=identity(old), after=content(mode="100755")),
+    )
+    plan = plan_source_changes(proposal, observed)
+    assert not plan.mutation_supported
+    assert verify_source_plan(plan, observed) == plan
+    assert [item.operation for item in plan.preview] == ["add", "delete", "modify", "modify"]
+    assert plan.preview[2].before.mode == "100644"
+    assert plan.preview[2].after.mode == "100755"
+    assert "text" not in str(plan.preview)
+    assert plan.references == proposal.references
+
+
+def test_all_permutations_have_identical_canonical_plans():
+    entries = tuple(SourceEntry(path=f"file-{index}.py", kind="absent") for index in range(3))
+    changes = tuple(
+        change(item.path, after=content(str(index)), operation="add")
+        for index, item in enumerate(entries)
+    )
+    plans = []
+    for permuted_entries in permutations(entries):
+        observed = observation(*permuted_entries)
+        for permuted_changes in permutations(changes):
+            plans.append(plan_source_changes(intent(observed, *permuted_changes), observed))
+    assert all(plan == plans[0] for plan in plans)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "../hello.py",
+        "/hello.py",
+        "C:/hello.py",
+        "C:hello.py",
+        "//host/share/file",
+        "a\\b",
+        "a//b",
+        "a/./b",
+        "a/../b",
+        "file:stream",
+        "file.",
+        "file ",
+        " a/b",
+        "a/ b",
+        "a/NUL",
+        "a/CON.txt",
+        "a/COM1.py",
+        "a/LPT9",
+        "a/COM¹",
+        "a/LPT².py",
+        "a/CONIN$",
+        "a/CONOUT$",
+        "a/FOO~1/bar",
+        "a/<b",
+        "a/b?",
+        "a/*",
+        "a/b|",
+        'a/b"',
+        "a/\x00b",
+        "a/\x7fb",
+        "a/\u202eb",
+        "a/\u200bb",
+        "a/e\u0301.py",
+        "",
+        "a" * 241,
+    ],
+)
+def test_noncanonical_windows_and_traversal_paths_are_refused(path):
+    with pytest.raises((ValueError, DomainError)):
+        canonical_path(path)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".git/config",
+        ".AWS/config",
+        ".codex/config",
+        ".ssh/id",
+        ".env",
+        ".env.local",
+        "credentials.json",
+        "a/.secrets.json",
+        "a/id_ed25519",
+        "a/key.pem",
+        "a/key.key",
+        "a/state.db",
+        "a/state.sqlite3",
+        "a/state.db-wal",
+        "a/state.db-shm",
+    ],
+)
+def test_credential_and_runtime_authority_paths_are_denied(path):
+    with pytest.raises(DomainError) as failure:
+        change(path, after=content(), operation="add")
+    assert failure.value.code == "TOOL_PATH_DENIED"
+    assert path not in str(failure.value)
+
+
+@pytest.mark.parametrize(
+    "paths",
+    [
+        ("A.py", "a.py"),
+        ("Foo/a.py", "foo/b.py"),
+        ("ß/a.py", "ss/b.py"),
+        ("same.py", "same.py"),
+    ],
+)
+def test_leaf_and_directory_case_collisions_are_platform_independent(paths):
+    changes = tuple(change(path, after=content(), operation="add") for path in paths)
+    with pytest.raises(ValidationError, match="SOURCE_PATH_COLLISION"):
+        intent(observation(), *changes)
+    with pytest.raises(ValidationError, match="SOURCE_PATH_COLLISION"):
+        observation(*(SourceEntry(path=path, kind="absent") for path in paths))
+
+
+def test_file_ancestor_conflicts_are_rejected_before_planning():
+    with pytest.raises(ValidationError, match="SOURCE_PATH_CONFLICT"):
+        intent(
+            observation(),
+            change("foo", after=content(), operation="add"),
+            change("foo/bar", after=content(), operation="add"),
+        )
+
+
+def test_alias_against_unchanged_sibling_or_parent_refuses():
+    observed = observation(SourceEntry(path="Hello.py", kind="file"))
+    refused(
+        "SOURCE_PATH_COLLISION",
+        intent(observed, change("hello.py", after=content(), operation="add")),
+        observed,
+    )
+    observed = observation(
+        SourceEntry(path="Dir", kind="directory"), SourceEntry(path="Dir/a.py", kind="absent")
+    )
+    refused(
+        "SOURCE_PATH_COLLISION",
+        intent(observed, change("dir/a.py", after=content(), operation="add")),
+        observed,
+    )
+
+
+@pytest.mark.parametrize(
+    "root",
+    [
+        Topology(kind="symlink"),
+        Topology(kind="directory", reparse_point=True),
+        Topology(kind="file"),
+        Topology(kind="absent"),
+        Topology(kind="special"),
+    ],
+)
+def test_root_and_root_ancestor_escape_refuses(root):
+    observed, proposal = fixture()
+    observed = observed.model_copy(update={"root": root})
+    proposal = proposal.model_copy(update={"source": observation_identity(observed)})
+    refused("SOURCE_ROOT_UNSAFE", proposal, observed)
+
+
+@pytest.mark.parametrize(
+    "kind,reparse",
+    [
+        ("symlink", False),
+        ("directory", True),
+        ("file", False),
+        ("absent", False),
+        ("special", False),
+    ],
+)
+def test_parent_symlink_junction_reparse_and_nondirectory_refuses(kind, reparse):
+    observed = observation(
+        SourceEntry(path="dir", kind=kind, reparse_point=reparse),
+        SourceEntry(path="dir/hello.py", kind="absent"),
+    )
+    refused(
+        "SOURCE_PARENT_UNSAFE",
+        intent(observed, change("dir/hello.py", after=content(), operation="add")),
+        observed,
+    )
+
+
+@pytest.mark.parametrize(
+    "kind,reparse,links",
+    [
+        ("symlink", False, 1),
+        ("file", True, 1),
+        ("special", False, 1),
+        ("file", False, 2),
+        ("directory", False, 1),
+        ("file", False, 0),
+    ],
+)
+def test_leaf_links_special_files_and_hardlinks_refuse(kind, reparse, links):
+    observed = observation(
+        SourceEntry(path="hello.py", kind=kind, reparse_point=reparse, link_count=links)
+    )
+    refused(
+        "SOURCE_PATH_UNSAFE",
+        intent(observed, change(before=identity(content()), after=content("new"))),
+        observed,
+    )
+
+
+@pytest.mark.parametrize("operation", ["add", "modify", "delete"])
+def test_incomplete_leaf_evidence_never_means_absent(operation):
+    observed = observation()
+    before = identity(content()) if operation != "add" else None
+    after = content("new") if operation != "delete" else None
+    refused(
+        "SOURCE_OBSERVATION_INCOMPLETE",
+        intent(observed, change(before=before, after=after, operation=operation)),
+        observed,
+    )
+
+
+def test_missing_parent_evidence_and_missing_content_refuse():
+    observed = observation(SourceEntry(path="dir/hello.py", kind="absent"))
+    refused(
+        "SOURCE_OBSERVATION_INCOMPLETE",
+        intent(observed, change("dir/hello.py", after=content(), operation="add")),
+        observed,
+    )
+    observed = observation(SourceEntry(path="hello.py", kind="file"))
+    refused(
+        "SOURCE_OBSERVATION_INCOMPLETE",
+        intent(observed, change(before=identity(content()), after=content("new"))),
+        observed,
+    )
+
+
+def test_safe_nested_add_requires_existing_directories_and_absent_leaf():
+    observed = observation(
+        SourceEntry(path="dir", kind="directory"),
+        SourceEntry(path="dir/sub", kind="directory"),
+        SourceEntry(path="dir/sub/new.py", kind="absent"),
+        SourceEntry(path=".git", kind="directory"),
+    )
+    plan = plan_source_changes(
+        intent(observed, change("dir/sub/new.py", after=content(), operation="add")), observed
+    )
+    assert plan.changes[0].path == "dir/sub/new.py"
+
+
+def test_add_existing_and_modify_delete_missing_are_distinct_conflicts():
+    observed, _ = fixture()
+    refused(
+        "SOURCE_ALREADY_EXISTS",
+        intent(observed, change(after=content(), operation="add")),
+        observed,
+    )
+    observed = observation(SourceEntry(path="hello.py", kind="absent"))
+    for operation in ("modify", "delete"):
+        refused(
+            "SOURCE_NOT_FOUND",
+            intent(
+                observed,
+                change(
+                    before=identity(content()),
+                    after=content("new") if operation == "modify" else None,
+                    operation=operation,
+                ),
+            ),
+            observed,
+        )
+
+
+@pytest.mark.parametrize(
+    "field,value", [("digest", "d" * 64), ("byte_count", 1), ("mode", "100755")]
+)
+def test_exact_before_digest_size_and_mode_conflicts(field, value):
+    observed, proposal = fixture()
+    changed = proposal.changes[0].model_copy(
+        update={
+            "before": proposal.changes[0].before.model_copy(update={field: value}),
+        }
+    )
+    refused("SOURCE_BEFORE_CONFLICT", proposal.model_copy(update={"changes": (changed,)}), observed)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("repository_identity", "github.com/other/jarvis"),
+        ("head_sha", "d" * 40),
+        ("base_sha", "d" * 40),
+        ("observation_digest", "d" * 64),
+    ],
+)
+def test_exact_source_identity_conflicts(field, value):
+    observed, proposal = fixture()
+    proposal = proposal.model_copy(
+        update={"source": proposal.source.model_copy(update={field: value})}
+    )
+    refused("SOURCE_IDENTITY_CONFLICT", proposal, observed)
+
+
+@pytest.mark.parametrize(
+    "path", ["dist/output.py", "a/__pycache__/out.py", "build/a.py", "output.pyc"]
+)
+def test_validation_policy_denies_generated_outputs(path):
+    observed = observation(
+        SourceEntry(path=path, kind="absent"),
+        *(
+            [SourceEntry(path=path.rsplit("/", 1)[0], kind="directory")]
+            if "/" in path and path.count("/") == 1
+            else [
+                SourceEntry(path="a", kind="directory"),
+                SourceEntry(path="a/__pycache__", kind="directory"),
+            ]
+            if path.count("/") == 2
+            else []
+        ),
+    )
+    refused(
+        "SOURCE_PATH_DENIED",
+        intent(observed, change(path, after=content(), operation="add")),
+        observed,
+    )
+
+
+@pytest.mark.parametrize(
+    "before,after,operation",
+    [
+        (None, None, "add"),
+        (identity(content()), content("new"), "add"),
+        (None, content(), "modify"),
+        (identity(content()), None, "modify"),
+        (None, None, "delete"),
+        (identity(content()), content(), "delete"),
+        (identity(content()), content(), "modify"),
+    ],
+)
+def test_operation_shapes_and_noop_are_refused(before, after, operation):
+    with pytest.raises(ValidationError):
+        change(before=before, after=after, operation=operation)
+
+
+@pytest.mark.parametrize("text", ["nul\x00value", "\ud800"])
+def test_invalid_utf8_and_binary_source_are_refused(text):
+    with pytest.raises(ValidationError):
+        SourceContent(text=text, digest="a" * 64, byte_count=1, mode="100644")
+
+
+@pytest.mark.parametrize(
+    "update",
+    [
+        {"digest": "a" * 64},
+        {"byte_count": 0},
+        {"byte_count": True},
+        {"byte_count": "9"},
+        {"mode": "120000"},
+        {"mode": "160000"},
+        {"mode": "100600"},
+        {"surprise": "authority"},
+    ],
+)
+def test_content_digests_strict_counts_modes_and_extra_fields(update):
+    with pytest.raises(ValidationError):
+        SourceContent.model_validate(content().model_dump() | update)
+
+
+def test_unicode_bytes_crlf_and_final_newline_affect_fingerprints():
+    variants = ["é\n", "é\r\n", "é", "e\n"]
+    assert len({content(text).digest for text in variants}) == len(variants)
+    assert content("é").byte_count == 2
+
+
+def test_individual_file_byte_limit_is_not_a_character_limit():
+    assert content("x" * 65536).byte_count == 65536
+    with pytest.raises(ValidationError):
+        content("x" * 65537)
+    with pytest.raises(ValidationError):
+        content("é" * 32769)
+
+
+def test_file_count_and_aggregate_before_after_limits():
+    observed = observation()
+    changes = tuple(change(f"file-{i}.py", after=content(), operation="add") for i in range(64))
+    assert len(intent(observed, *changes).changes) == 64
+    with pytest.raises(ValidationError):
+        intent(observed, *changes, change("too-many.py", after=content(), operation="add"))
+    with pytest.raises(ValidationError):
+        intent(observed)
+    large = content("x" * 65536)
+    edits = tuple(
+        change(f"large-{i}.py", before=identity(large), after=content("y" * 65536))
+        for i in range(8)
+    )
+    assert len(intent(observed, *edits).changes) == 8
+    with pytest.raises(ValidationError, match="SOURCE_TOTAL_LIMIT"):
+        intent(observed, *edits, change("extra.py", after=content("z"), operation="add"))
+
+
+def test_observation_entry_and_content_limits():
+    entries = tuple(SourceEntry(path=f"file-{i}.py", kind="file") for i in range(4096))
+    assert len(observation(*entries).entries) == 4096
+    with pytest.raises(ValidationError):
+        observation(*entries, SourceEntry(path="extra.py", kind="file"))
+    large = content("x" * 65536)
+    entries = tuple(SourceEntry(path=f"file-{i}.py", kind="file", content=large) for i in range(16))
+    assert observation(*entries)
+    with pytest.raises(ValidationError, match="SOURCE_TOTAL_LIMIT"):
+        observation(*entries, SourceEntry(path="extra.py", kind="file", content=content("x")))
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("plan_hash", "d" * 64),
+        ("policy_digest", "d" * 64),
+        ("change_fingerprint", "d" * 64),
+        ("preview", ()),
+        ("mutation_supported", True),
+        (
+            "references",
+            PlanReferences(original_plan_hash="d" * 64, authorization_reference="auth-2"),
+        ),
+    ],
+)
+def test_entire_plan_and_original_authorization_references_are_immutable(field, value):
+    observed, proposal = fixture()
+    plan = plan_source_changes(proposal, observed)
+    with pytest.raises(ValidationError):
+        setattr(plan, field, value)
+    with pytest.raises(DomainError) as failure:
+        verify_source_plan(plan.model_copy(update={field: value}), observed)
+    assert failure.value.code == "SOURCE_PLAN_CHANGED"
+
+
+def test_tampered_constructed_and_copied_content_revalidated_with_sanitized_failure():
+    observed, proposal = fixture()
+    bad_content = content().model_copy(update={"text": "secret-private-input"})
+    bad_change = proposal.changes[0].model_copy(update={"after": bad_content})
+    failure = refused(
+        "SOURCE_CONTRACT_INVALID", proposal.model_copy(update={"changes": (bad_change,)}), observed
+    )
+    assert "secret-private-input" not in str(failure)
+    assert failure.__cause__ is None
+
+
+def test_public_preview_repr_and_failures_do_not_expose_source_secrets():
+    secret = "private arbitrary secret with no recognisable token syntax"
+    old = content(secret)
+    observed = observation(SourceEntry(path="hello.py", kind="file", content=old))
+    plan = plan_source_changes(
+        intent(observed, change(before=identity(old), after=content(secret + "new"))), observed
+    )
+    assert secret not in repr(plan)
+    assert secret not in str(plan.preview)
+    assert "hello.py" not in str(plan.preview)
+    # Exact source is retained only in the protected original proposal.
+    assert plan.changes[0].after.text == secret + "new"
+
+
+def test_copied_invalid_types_cannot_emit_serializer_warnings_with_secret_inputs():
+    import warnings
+
+    observed, proposal = fixture()
+    secret = "private-input-that-must-not-appear-in-a-warning"
+    bad_change = proposal.changes[0].model_copy(update={"operation": secret})
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        failure = refused(
+            "SOURCE_CONTRACT_INVALID",
+            proposal.model_copy(update={"changes": (bad_change,)}),
+            observed,
+        )
+    assert not captured
+    assert secret not in str(failure)
+
+
+def test_pure_planning_never_touches_filesystem_or_environment(monkeypatch):
+    observed, proposal = fixture()
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("planner attempted filesystem access")
+
+    import builtins
+    import os
+    from pathlib import Path
+
+    monkeypatch.setattr(builtins, "open", forbidden)
+    monkeypatch.setattr(Path, "lstat", forbidden)
+    monkeypatch.setattr(Path, "read_text", forbidden)
+    monkeypatch.setattr(os, "open", forbidden)
+    monkeypatch.setattr(os, "environ", {})
+    assert verify_source_plan(plan_source_changes(proposal, observed), observed)
