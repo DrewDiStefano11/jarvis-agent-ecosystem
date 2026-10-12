@@ -522,3 +522,42 @@ def test_operator_cannot_approve_policy_blocked_source_paths(journal):
     with pytest.raises(DomainError) as failure:
         service.approve(operator, workspace_id, plan.execution_plan_hash)
     assert failure.value.code == "VALIDATION_SOURCE_SCOPE_BLOCKED"
+
+
+def test_exact_operator_renewal_preserves_original_intent_and_stamps_current_grant(journal):
+    app, actor, operator, service, workspace_id, request = journal
+    prepared = service.prepare(actor, workspace_id, request)
+    with app.state.repository.session_factory.begin() as session:
+        event = session.get(AuditEventRow, request.approval_id)
+        event.payload = {
+            **event.payload,
+            "payload": {**event.payload["payload"], "expiresAt": "2020-01-01T00:00:00+00:00"},
+        }
+    renewed = service.approve(
+        operator, workspace_id, request.expected_plan_hash, valid_for_seconds=3600
+    )
+    current_request = request.model_copy(update={"approval_id": renewed.approval_id})
+    assert service.prepare(actor, workspace_id, current_request) == prepared
+    updated = advance(
+        service,
+        actor,
+        workspace_id,
+        current_request,
+        prepared,
+        "step_intent",
+        gate=prepared.intent.plan.commands[0].gate,
+        command_run_id="command-1",
+    )
+    assert updated.intent.owner.approval_id == request.approval_id
+    assert entries(app)[-1].payload["payload"]["authorizationApprovalId"] == renewed.approval_id
+    with pytest.raises(DomainError):
+        advance(
+            service,
+            actor,
+            workspace_id,
+            request,
+            updated,
+            "step_started",
+            gate=prepared.intent.plan.commands[0].gate,
+            command_run_id="command-1",
+        )

@@ -121,7 +121,7 @@ class ValidationJournalService:
         )
 
     def approve(self, operator, workspace_id, expected_plan_hash, *, valid_for_seconds=300):
-        if type(valid_for_seconds) is not int or not 1 <= valid_for_seconds <= 900:
+        if type(valid_for_seconds) is not int or not 1 <= valid_for_seconds <= 3600:
             fail("VALIDATION_APPROVAL_INVALID", "Approval lifetime is invalid.")
         with self.repository.leases._write() as session:
             self._operator(operator, workspace_id, session)
@@ -216,7 +216,18 @@ class ValidationJournalService:
         except (KeyError, TypeError, ValueError):
             fail("VALIDATION_JOURNAL_INVALID", "Persisted validation history is malformed.")
 
-    def _append(self, session, actor, task_id, entries, journal_id, kind, **fields):
+    def _append(
+        self,
+        session,
+        actor,
+        task_id,
+        entries,
+        journal_id,
+        kind,
+        *,
+        authorization_approval_id,
+        **fields,
+    ):
         prior = fold(entries) if entries else None
         payload = dict(
             journal_id=journal_id,
@@ -244,6 +255,7 @@ class ValidationJournalService:
             {
                 "journalId": journal_id,
                 "entry": entry.model_dump(mode="json"),
+                "authorizationApprovalId": authorization_approval_id,
             },
         )
         return snapshot
@@ -268,11 +280,23 @@ class ValidationJournalService:
             intent = JournalIntent(journal_id=journal_id, owner=owner, plan=plan)
             if entries:
                 snapshot = fold(entries)
-                if snapshot.intent != intent:
+                if (
+                    snapshot.intent.plan != plan
+                    or snapshot.intent.journal_id != journal_id
+                    or snapshot.intent.owner.model_dump(exclude={"approval_id"})
+                    != owner.model_dump(exclude={"approval_id"})
+                ):
                     fail("VALIDATION_JOURNAL_CONFLICT", "Existing intent has different authority.")
             else:
                 snapshot = self._append(
-                    session, actor, row.task_id, entries, journal_id, "intent", intent=intent
+                    session,
+                    actor,
+                    row.task_id,
+                    entries,
+                    journal_id,
+                    "intent",
+                    authorization_approval_id=request.approval_id,
+                    intent=intent,
                 )
         self.repository.leases.repository.refresh_event_cursor()
         return self.acknowledge(actor, workspace_id, request, snapshot)
@@ -313,7 +337,6 @@ class ValidationJournalService:
                 or owner.runtime_run_id != run.run_id
                 or owner.attempt_id != run.active_attempt_id
                 or owner.worker_id != request.worker_id
-                or owner.approval_id != request.approval_id
                 or owner.lease_fingerprint != digest(request.lease_token)
                 or snapshot.intent.plan != plan
             ):
@@ -425,7 +448,6 @@ class ValidationJournalService:
                 or owner.attempt_id != run.active_attempt_id
                 or owner.runtime_run_id != run.run_id
                 or owner.worker_id != request.worker_id
-                or owner.approval_id != request.approval_id
                 or owner.lease_fingerprint != digest(request.lease_token)
                 or current.intent.plan != plan
             ):
@@ -451,7 +473,14 @@ class ValidationJournalService:
                         "Acknowledge durable intent before advancing.",
                     )
                 result = self._append(
-                    session, actor, row.task_id, entries, journal_id, kind, **fields
+                    session,
+                    actor,
+                    row.task_id,
+                    entries,
+                    journal_id,
+                    kind,
+                    authorization_approval_id=request.approval_id,
+                    **fields,
                 )
         self.repository.leases.repository.refresh_event_cursor()
         return self.acknowledge(actor, workspace_id, request, result)

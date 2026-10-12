@@ -32,8 +32,9 @@ or fabricates a successful exit. Finalization requires every ordered gate to hav
 a measured or uncertain disposition, and does not itself mean validation passed.
 Only authenticated exact-state evidence assessment can grant passing status.
 Journal history remains readable after lease loss or runtime termination, while
-new writes still require live original authority. Approval or ownership changes
-require explicit new intent/attempt authority rather than silently adopting history.
+new writes still require live original authority. An operator may renew the exact plan for the same live owner; the original approval
+reference stays immutable and subsequent audit/outbox entries record the current
+grant. Source, plan, lease or attempt changes still require explicit new authority.
 
 Local fixtures exercise native runtime and SQLite ownership with temporary
 databases, checkpoint crash gaps, replay conflicts, uncertain reconciliation,
@@ -45,7 +46,7 @@ these tests and repository gates run.
 
 ## Local validation and review
 
-Journal/ownership regressions: 32 passed, including checkpoint crash gaps, atomic
+Journal/ownership regressions: 33 passed, including checkpoint crash gaps, atomic
 rollback, forged receipts, stale source state, blocked-scope approval refusal,
 corrupt native attempts, tampered history and final-checkpoint assessment.
 Backend Ruff and frontend typecheck, ESLint, Vitest (214 tests) and build passed.
@@ -55,3 +56,7 @@ Author-performed local review checked persisted authority at every transition,
 original lease/attempt binding, append-only history, journal sequence ordering,
 checkpoint integrity, no invented successful recovery and no process launch.
 This is not hosted independent review.
+
+Exact-plan renewals are bounded to one hour, matching the measured backend-suite
+policy. Renewal never adopts another worker, lease, attempt, source state or plan.
+The original intent/checkpoint remains unchanged; expired grants cannot be reused.
