@@ -9,12 +9,12 @@ import { useAppStore } from './state/AppStore'
 import { Dashboard } from './pages/Dashboard'
 import { Tasks } from './pages/Tasks'
 import { Agents } from './pages/Agents'
-import { Approvals } from './pages/Approvals'
 import { Audit } from './pages/Audit'
-import { System } from './pages/System'
-import { Runtime } from './pages/Runtime'
 import { BusinessLab } from './pages/BusinessLab'
 
+const Approvals = lazy(() => import('./pages/Approvals').then(module => ({ default: module.Approvals })))
+const System = lazy(() => import('./pages/System').then(module => ({ default: module.System })))
+const Runtime = lazy(() => import('./pages/Runtime').then(module => ({ default: module.Runtime })))
 const Office = lazy(() => import('./pages/Office').then(module => ({ default: module.Office })))
 const routeTitles: Record<string, string> = Object.fromEntries(links.map(link => [link.to, link.label]))
 function RouteTitle() {
@@ -57,7 +57,7 @@ export default function App() {
       <main id="main-content" className="content" tabIndex={-1}>
         {stale && <div className="sync-banner" role="status"><div><strong>Data may be stale</strong><p>{error ?? (resyncRequired ? 'Reconciling an event sequence gap.' : 'The event stream is disconnected; HTTP refresh remains available.')} Last synchronized: {lastSync ? new Date(lastSync).toLocaleString() : 'never'}.</p></div><button className="secondary" disabled={refreshing} onClick={async () => { setRefreshing(true); try { await refresh() } finally { setRefreshing(false) } }}>{refreshing ? 'Refreshing…' : 'Refresh state'}</button></div>}
         {controlError && <p role="alert">{controlError}</p>}
-        <Routes><Route path="/" element={<Dashboard/>}/><Route path="/tasks" element={<Tasks/>}/><Route path="/agents" element={<Agents/>}/><Route path="/approvals" element={<Approvals/>}/><Route path="/audit" element={<Audit/>}/><Route path="/runtime" element={<Runtime/>}/><Route path="/lab" element={<BusinessLab/>}/><Route path="/office" element={<Suspense fallback={<p>Loading office…</p>}><Office/></Suspense>}/><Route path="/system" element={<System/>}/><Route path="*" element={<NotFound/>}/></Routes>
+        <Suspense fallback={<p role="status">Loading workspace...</p>}><Routes><Route path="/" element={<Dashboard/>}/><Route path="/tasks" element={<Tasks/>}/><Route path="/agents" element={<Agents/>}/><Route path="/approvals" element={<Approvals/>}/><Route path="/audit" element={<Audit/>}/><Route path="/runtime" element={<Runtime/>}/><Route path="/lab" element={<BusinessLab/>}/><Route path="/office" element={<Suspense fallback={<p>Loading office…</p>}><Office/></Suspense>}/><Route path="/system" element={<System/>}/><Route path="*" element={<NotFound/>}/></Routes></Suspense>
       </main>
       <nav className={`mobile-nav${more ? ' mobile-nav-expanded' : ''}`} aria-label="Mobile primary">{links.filter(link => 'mobile' in link && link.mobile).map(link => <NavLink key={link.to} to={link.to} end={link.to === '/'} className="mobile-main-link" aria-label={link.to === '/approvals' && pending > 0 ? `${link.label}, ${pending} pending approval records` : link.label} onClick={() => setMore(false)}><NavIcon name={link.icon}/><small>{link.label}</small></NavLink>)}<button className="mobile-more" aria-expanded={more} aria-label={more ? 'Close more navigation' : 'More navigation'} onClick={() => setMore(value => !value)}><span aria-hidden="true">{more ? '×' : '•••'}</span><small>More</small></button>{more && links.filter(link => !('mobile' in link && link.mobile)).map(link => <NavLink key={link.to} to={link.to} className="mobile-extra-link" onClick={() => setMore(false)}><NavIcon name={link.icon}/><small>{link.label}</small></NavLink>)}</nav>
     </div>{selectedAgentId && <AgentDetails/>}{selectedTaskId && <TaskDetails/>}
