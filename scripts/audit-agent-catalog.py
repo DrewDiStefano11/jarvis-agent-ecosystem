@@ -2,9 +2,13 @@
 
 import argparse
 import json
+import sqlite3
+from pathlib import Path
 
 from app.catalog.audit import CatalogAuditService, format_human_summary
-from app.db.session import create_database_engine, create_session_factory
+from app.db.session import create_session_factory
+from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 
 
 def main():
@@ -17,7 +21,22 @@ def main():
     )
     args = parser.parse_args()
 
-    engine = create_database_engine(args.database_url)
+    url = make_url(args.database_url)
+    if (
+        url.drivername != "sqlite"
+        or not url.database
+        or url.database == ":memory:"
+        or url.query
+    ):
+        parser.error("Audit requires an existing SQLite file with no URL query options")
+    database = Path(url.database).resolve()
+    if not database.is_file():
+        parser.error("Audit database must already exist")
+    # No startup migrations, writable connections or journal-mode changes.
+    engine = create_engine(
+        "sqlite://",
+        creator=lambda: sqlite3.connect(database.as_uri() + "?mode=ro", uri=True),
+    )
     try:
         session_factory = create_session_factory(engine)
         service = CatalogAuditService(session_factory)

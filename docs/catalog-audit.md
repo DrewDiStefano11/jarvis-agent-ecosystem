@@ -127,3 +127,19 @@ The audit output contains the following top-level sections:
   fetch upstream git repositories, clone external projects, or download network resources.
 - Structural or authorization policy modifications (such as changing RBAC boundaries or
   permission inheritance) are beyond the scope of this audit tool.
+
+## Effective authority and safe metadata
+
+Counts exclude revoked, expired and future assignments using the audit timestamp.
+Effective resource access reuses the production evaluator, including all, agent, role,
+team and rank policies, scoped roles, inactive identities and overriding denials.
+`effective_resource_access_count` counts authorized resource/action pairs.
+
+Unmapped tags and invalid capabilities are represented by bounded fingerprints; only
+known parser warning codes are shown. Free-text identity names and roles are omitted.
+Identifiers have a bounded alphabet, and unexpected metadata is withheld. Each finding
+collection is limited to 1,000 rows, with `output_truncated` marking incomplete output.
+Recommendations use the complete counts before truncation.
+
+The CLI requires an existing SQLite file and opens it with `mode=ro`, without changing
+journal mode or running migrations. It cannot create a missing database or write rows.

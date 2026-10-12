@@ -216,6 +216,7 @@ class ActiveIdentityFinding(IdentityModel):
     capability_count: int = 0
     permission_count: int = 0
     role_assignment_count: int = 0
+    effective_resource_access_count: int = 0
     confirmed_unsafe: bool = False
     unsafe_reasons: list[str] = Field(default_factory=list)
 
@@ -226,6 +227,7 @@ class CategorizedFindings(IdentityModel):
 
 
 class CatalogAuditReport(IdentityModel):
+    output_truncated: bool = False
     audit_timestamp: datetime
     summary_counts: CatalogAuditSummaryCounts
     state_breakdown: StateBreakdown

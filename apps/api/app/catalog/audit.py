@@ -6,8 +6,9 @@ activates identities, or alters database records.
 
 import re
 from datetime import UTC, datetime
+from hashlib import sha256
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.catalog.taxonomy import CAPABILITIES
 from app.db.models import (
@@ -19,7 +20,9 @@ from app.db.models import (
     CatalogRevisionRow,
     CatalogSourceRow,
     IdentityAgentRow,
+    ResourceAccessPolicyRow,
 )
+from app.identity.service import IdentityService
 from app.models.catalog import (
     ActivationStateBreakdown,
     ActiveIdentityFinding,
@@ -33,6 +36,30 @@ from app.models.catalog import (
     SecurityWarningFinding,
     StateBreakdown,
 )
+
+MAX_FINDINGS = 1000
+MAX_METADATA_ITEMS = 100
+PARSER_WARNINGS = {
+    "authority_fields_ignored",
+    "suspicious_instruction_text",
+    "capability_review_required",
+    "tool_requests_are_not_permissions",
+}
+
+
+def fingerprint(value) -> str:
+    return "withheld:" + sha256(str(value).encode("utf-8")).hexdigest()[:16]
+
+
+def reference(value) -> str:
+    # Identifiers only: never include untrusted prose or credential-shaped metadata.
+    if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.:/-]{1,160}", value):
+        return value
+    return fingerprint(value)
+
+
+def metadata_items(value) -> list:
+    return value[:MAX_METADATA_ITEMS] if isinstance(value, list) else [value]
 
 
 class CatalogAuditService:
@@ -155,9 +182,9 @@ class CatalogAuditService:
                 if not re.match(r"^[0-9a-f]{40}$", source.commit):
                     provenance_findings.append(
                         ProvenanceFinding(
-                            source_id=source.id,
-                            repository=source.repository,
-                            commit=source.commit,
+                            source_id=reference(source.id),
+                            repository=reference(source.repository),
+                            commit=reference(source.commit),
                             issue="INVALID_COMMIT_SHA",
                             details="Source commit SHA is not a 40-character hex string.",
                         )
@@ -165,11 +192,11 @@ class CatalogAuditService:
                 if source.license != "MIT":
                     provenance_findings.append(
                         ProvenanceFinding(
-                            source_id=source.id,
-                            repository=source.repository,
-                            commit=source.commit,
+                            source_id=reference(source.id),
+                            repository=reference(source.repository),
+                            commit=reference(source.commit),
                             issue="NON_MIT_LICENSE",
-                            details=f"Source license is '{source.license}', expected 'MIT'.",
+                            details="Source license differs from expected MIT license.",
                         )
                     )
                 # Check entry count discrepancy
@@ -184,9 +211,9 @@ class CatalogAuditService:
                 if rev_count != source.imported_count:
                     provenance_findings.append(
                         ProvenanceFinding(
-                            source_id=source.id,
-                            repository=source.repository,
-                            commit=source.commit,
+                            source_id=reference(source.id),
+                            repository=reference(source.repository),
+                            commit=reference(source.commit),
                             issue="IMPORTED_COUNT_DISCREPANCY",
                             details=f"Source records {source.imported_count} imported items, but {rev_count} distinct entry revisions exist.",
                         )
@@ -207,11 +234,11 @@ class CatalogAuditService:
             for rev in revisions_without_source:
                 provenance_findings.append(
                     ProvenanceFinding(
-                        source_id=rev.source_id,
+                        source_id=reference(rev.source_id),
                         repository="unknown",
                         commit="unknown",
                         issue="MISSING_SOURCE_ROW",
-                        details=f"Revision {rev.id} references non-existent source {rev.source_id}.",
+                        details=f"Revision {reference(rev.id)} references non-existent source {reference(rev.source_id)}.",
                     )
                 )
 
@@ -225,12 +252,14 @@ class CatalogAuditService:
                     canonical = entry_map.get(entry.duplicate_of)
                     duplicate_findings.append(
                         DuplicateFinding(
-                            entry_id=entry.id,
-                            stable_key=entry.stable_key,
+                            entry_id=reference(entry.id),
+                            stable_key=reference(entry.stable_key),
                             kind=entry.kind,
-                            duplicate_of=entry.duplicate_of,
-                            canonical_stable_key=canonical.stable_key if canonical else None,
-                            duplicate_key=entry.duplicate_key,
+                            duplicate_of=reference(entry.duplicate_of),
+                            canonical_stable_key=reference(canonical.stable_key)
+                            if canonical
+                            else None,
+                            duplicate_key=reference(entry.duplicate_key),
                         )
                     )
 
@@ -254,17 +283,26 @@ class CatalogAuditService:
                 activation = activations_by_entry.get(entry.id)
 
                 if current_rev:
-                    normalized = current_rev.normalized or {}
-                    unmapped = normalized.get("unmapped_tags", [])
-                    caps = normalized.get("capabilities", [])
-                    invalid_caps = [c for c in caps if c not in CAPABILITIES]
+                    normalized = (
+                        current_rev.normalized if isinstance(current_rev.normalized, dict) else {}
+                    )
+                    unmapped = [
+                        fingerprint(value)
+                        for value in metadata_items(normalized.get("unmapped_tags", []))
+                    ]
+                    caps = metadata_items(normalized.get("capabilities", []))
+                    invalid_caps = [
+                        fingerprint(c)
+                        for c in caps
+                        if not isinstance(c, str) or c not in CAPABILITIES
+                    ]
                     missing_caps = bool(entry.kind == "agent" and not caps)
 
                     if unmapped or invalid_caps or missing_caps:
                         capability_findings.append(
                             CapabilityFinding(
-                                entry_id=entry.id,
-                                stable_key=entry.stable_key,
+                                entry_id=reference(entry.id),
+                                stable_key=reference(entry.stable_key),
                                 kind=entry.kind,
                                 unmapped_tags=unmapped,
                                 invalid_capabilities=invalid_caps,
@@ -272,12 +310,17 @@ class CatalogAuditService:
                             )
                         )
 
-                    warnings = normalized.get("warnings", [])
+                    warnings = [
+                        value
+                        if isinstance(value, str) and value in PARSER_WARNINGS
+                        else "unrecognized_warning"
+                        for value in metadata_items(normalized.get("warnings", []))
+                    ]
                     if warnings:
                         security_warning_findings.append(
                             SecurityWarningFinding(
-                                entry_id=entry.id,
-                                stable_key=entry.stable_key,
+                                entry_id=reference(entry.id),
+                                stable_key=reference(entry.stable_key),
                                 kind=entry.kind,
                                 warnings=warnings,
                             )
@@ -290,11 +333,15 @@ class CatalogAuditService:
                 if superseded_count > 0 or update_avail or (activation and current_rev):
                     revision_findings.append(
                         RevisionFinding(
-                            entry_id=entry.id,
-                            stable_key=entry.stable_key,
+                            entry_id=reference(entry.id),
+                            stable_key=reference(entry.stable_key),
                             kind=entry.kind,
-                            current_revision_id=entry.current_revision_id or "none",
-                            active_revision_id=activation.revision_id if activation else None,
+                            current_revision_id=reference(entry.current_revision_id)
+                            if entry.current_revision_id
+                            else "none",
+                            active_revision_id=reference(activation.revision_id)
+                            if activation
+                            else None,
                             update_available=update_avail,
                             superseded_revisions_count=superseded_count,
                         )
@@ -309,12 +356,51 @@ class CatalogAuditService:
                 .join(IdentityAgentRow, IdentityAgentRow.id == CatalogActivationRow.identity_id)
             ).all()
 
+            # Reuse production authorization, including all/agent/role/team/rank
+            # policies, role scope, explicit denials, lifecycle and enablement.
+            policy_resources = session.execute(
+                select(
+                    ResourceAccessPolicyRow.resource_type,
+                    ResourceAccessPolicyRow.resource_id,
+                    ResourceAccessPolicyRow.action,
+                )
+                .where(
+                    ResourceAccessPolicyRow.effect == "allow",
+                    ResourceAccessPolicyRow.revoked_at.is_(None),
+                    ResourceAccessPolicyRow.starts_at <= now,
+                    or_(
+                        ResourceAccessPolicyRow.expires_at.is_(None),
+                        ResourceAccessPolicyRow.expires_at > now,
+                    ),
+                )
+                .distinct()
+                .order_by(
+                    ResourceAccessPolicyRow.resource_type,
+                    ResourceAccessPolicyRow.resource_id,
+                    ResourceAccessPolicyRow.action,
+                )
+            ).all()
+            evaluator = IdentityService(self.session_factory)
             for _act, entry, identity in activations_with_identities:
+                resource_count = 0
+                for resource_type, resource_id, action in policy_resources:
+                    decision = evaluator._check_resource_access(
+                        identity.id, resource_type, resource_id, action, session=session
+                    )
+                    if decision.allowed and any(
+                        grant.startswith("policy:") for grant in decision.matched_grants
+                    ):
+                        resource_count += 1
                 cap_count = (
                     session.scalar(
                         select(func.count(AgentCapabilityAssignmentRow.id)).where(
                             AgentCapabilityAssignmentRow.agent_id == identity.id,
                             AgentCapabilityAssignmentRow.revoked_at.is_(None),
+                            AgentCapabilityAssignmentRow.starts_at <= now,
+                            or_(
+                                AgentCapabilityAssignmentRow.expires_at.is_(None),
+                                AgentCapabilityAssignmentRow.expires_at > now,
+                            ),
                         )
                     )
                     or 0
@@ -325,6 +411,11 @@ class CatalogAuditService:
                         select(func.count(AgentPermissionAssignmentRow.id)).where(
                             AgentPermissionAssignmentRow.agent_id == identity.id,
                             AgentPermissionAssignmentRow.revoked_at.is_(None),
+                            AgentPermissionAssignmentRow.starts_at <= now,
+                            or_(
+                                AgentPermissionAssignmentRow.expires_at.is_(None),
+                                AgentPermissionAssignmentRow.expires_at > now,
+                            ),
                         )
                     )
                     or 0
@@ -335,21 +426,30 @@ class CatalogAuditService:
                         select(func.count(AgentRoleAssignmentRow.id)).where(
                             AgentRoleAssignmentRow.agent_id == identity.id,
                             AgentRoleAssignmentRow.revoked_at.is_(None),
+                            AgentRoleAssignmentRow.starts_at <= now,
+                            or_(
+                                AgentRoleAssignmentRow.expires_at.is_(None),
+                                AgentRoleAssignmentRow.expires_at > now,
+                            ),
                         )
                     )
                     or 0
                 )
 
                 unsafe_reasons = []
+                if resource_count:
+                    unsafe_reasons.append(
+                        f"Catalog identity has effective policy access to {resource_count} resource/action pair(s)."
+                    )
                 if identity.is_system_agent:
                     unsafe_reasons.append("Catalog identity is marked as a system agent.")
                 if identity.agent_type != "specialist":
                     unsafe_reasons.append(
-                        f"Catalog identity has agent_type '{identity.agent_type}', expected 'specialist'."
+                        f"Catalog identity has agent_type '{reference(identity.agent_type)}', expected 'specialist'."
                     )
                 if identity.rank_id is not None:
                     unsafe_reasons.append(
-                        f"Catalog identity has assigned rank_id '{identity.rank_id}'."
+                        f"Catalog identity has assigned rank_id '{reference(identity.rank_id)}'."
                     )
                 if perm_count > 0:
                     unsafe_reasons.append(
@@ -362,20 +462,21 @@ class CatalogAuditService:
 
                 active_identity_findings.append(
                     ActiveIdentityFinding(
-                        entry_id=entry.id,
-                        stable_key=entry.stable_key,
-                        identity_id=identity.id,
-                        display_name=identity.display_name,
-                        role=identity.display_name,
+                        entry_id=reference(entry.id),
+                        stable_key=reference(entry.stable_key),
+                        identity_id=reference(identity.id),
+                        display_name="Catalog identity",
+                        role="Catalog specialist",
                         lifecycle_state=identity.lifecycle_state,
                         operational_status=identity.operational_status,
                         is_enabled=identity.is_enabled,
                         is_system_agent=identity.is_system_agent,
                         agent_type=identity.agent_type,
-                        rank_id=identity.rank_id,
+                        rank_id=reference(identity.rank_id) if identity.rank_id else None,
                         capability_count=cap_count,
                         permission_count=perm_count,
                         role_assignment_count=role_count,
+                        effective_resource_access_count=resource_count,
                         confirmed_unsafe=bool(unsafe_reasons),
                         unsafe_reasons=unsafe_reasons,
                     )
@@ -471,20 +572,32 @@ class CatalogAuditService:
                 )
 
             categorized = CategorizedFindings(
-                confirmed_unsafe=confirmed_unsafe,
-                informational_warnings=informational_warnings,
+                confirmed_unsafe=confirmed_unsafe[:MAX_FINDINGS],
+                informational_warnings=informational_warnings[:MAX_FINDINGS],
             )
 
+            finding_groups = [
+                provenance_findings,
+                duplicate_findings,
+                capability_findings,
+                security_warning_findings,
+                revision_findings,
+                active_identity_findings,
+                confirmed_unsafe,
+                informational_warnings,
+            ]
+            output_truncated = any(len(group) > MAX_FINDINGS for group in finding_groups)
             return CatalogAuditReport(
+                output_truncated=output_truncated,
                 audit_timestamp=now,
                 summary_counts=summary_counts,
                 state_breakdown=state_breakdown,
-                provenance_findings=provenance_findings,
-                duplicate_findings=duplicate_findings,
-                capability_findings=capability_findings,
-                security_warning_findings=security_warning_findings,
-                revision_findings=revision_findings,
-                active_identity_findings=active_identity_findings,
+                provenance_findings=provenance_findings[:MAX_FINDINGS],
+                duplicate_findings=duplicate_findings[:MAX_FINDINGS],
+                capability_findings=capability_findings[:MAX_FINDINGS],
+                security_warning_findings=security_warning_findings[:MAX_FINDINGS],
+                revision_findings=revision_findings[:MAX_FINDINGS],
+                active_identity_findings=active_identity_findings[:MAX_FINDINGS],
                 categorized_findings=categorized,
                 recommendations=recommendations,
             )
@@ -492,6 +605,7 @@ class CatalogAuditService:
 
 def format_human_summary(report: CatalogAuditReport) -> str:
     lines = [
+        "Output truncated; inspect catalog in smaller groups." if report.output_truncated else "",
         "=== JARVIS AGENT & SKILL CATALOG AUDIT REPORT ===",
         f"Timestamp: {report.audit_timestamp.isoformat()}",
         "",
