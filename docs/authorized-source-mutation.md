@@ -98,7 +98,10 @@ not by inventing a new operation or trusting a model cursor.
 On restart the editor verifies already completed files and retained originals.
 For the pending file it accepts only the exact reviewed before state, its exact
 retained original with an absent destination, or the exact reviewed after state
-acknowledged by durable pending intent. Partial owned staging resumes only the
+acknowledged by durable pending intent and proven to be the originally claimed
+staging device/inode. An after-state without a claimed stage, or a foreign
+same-content replacement of the published file, is refused and preserved.
+Partial owned staging resumes only the
 verified prefix. Unexpected destination/staging/original bytes or ownership
 refuse and preserve artifacts. A crash after exclusive staging creation but
 before durable identity acknowledgement leaves an ambiguous stage: safe refusal
@@ -136,3 +139,10 @@ Human review and passing exact-head CI remain publication requirements. Native
 source mutation and any later validation execution are separate authorities.
 
 Journal progress transitions accept only mutable position fields. Original approval, operation identity, creation time and plan references remain immutable. Every journal read verifies the original independent operator approval against the append-only audit plan and task; expired original approvals remain valid provenance, while live execution requires a current exact-plan approval.
+
+Protected recovery history reports journal checkpoint acknowledgement only when
+the append-only acknowledgement event matches the task, operation, editing record,
+plan hash and exact intent digest. A native checkpoint without that durable audit
+event remains a native-only crash gap, even if mutable journal payload fields
+claim the deterministic checkpoint ID. History reads do not repair or grant
+execution authority.

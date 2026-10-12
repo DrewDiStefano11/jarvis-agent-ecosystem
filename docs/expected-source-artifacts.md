@@ -13,3 +13,8 @@ All manifests explicitly report `native_artifacts_verified: false`, `execution_a
 The source adapter's lock is outside the checkout under the private owner namespace. A checkout-root `.jarvis-workspace.lock`, unknown `.before`/`.after`, metadata alias or private directory remains foreign and must be preserved on refusal. This contract does not authorize Git staging/commit, publication, another editing batch, validation execution or artifact cleanup.
 
 This increment explicitly depends on the protected history/mutation PR ancestry. It modifies no shared checkout/validation/publication modules, migrations, runtime orchestration or CI manifest. Native consumers may use it only after merge or by declaring their own explicit dependency. Current mutation/editing policies and preserved original lineage remain required; unsupported legacy-policy recovery safely refuses.
+
+The protected artifact reader reports `SOURCE_ARTIFACTS_STORAGE_FAILED` for database
+failures, including failures already translated by the nested history or editing
+plan reader. Other domain errors, such as authorization or lineage refusals, retain
+their original codes. Storage errors suppress private database details.

@@ -548,6 +548,17 @@ class SourceMutationDriver:
         if saved is not None and saved != before:
             refuse("SOURCE_MUTATION_BACKUP_CONFLICT")
         if current == after and (before is None or saved == before):
+            if after is not None:
+                # A pending publication is owned only by the stage identity in
+                # the validated checkpoint. Matching bytes alone grant nothing.
+                if staging_identity is None:
+                    refuse("SOURCE_MUTATION_STAGE_CONFLICT")
+                with pinned_file(parent.path / leaf) as fd:
+                    info = os.fstat(fd)
+                    if (info.st_dev, info.st_ino) != staging_identity:
+                        refuse("SOURCE_MUTATION_STAGE_CONFLICT")
+                    if content(read_bytes(fd, MAX_FILE_BYTES), after.mode) != change.after:
+                        refuse("SOURCE_MUTATION_AFTER_CONFLICT")
             return
         if current != before and not (current is None and saved == before and before is not None):
             refuse("SOURCE_MUTATION_BEFORE_CONFLICT")
