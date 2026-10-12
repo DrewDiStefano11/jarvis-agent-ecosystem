@@ -108,9 +108,10 @@ def test_live_revocation_at_mutation_boundary_never_creates_checkout(checkout, m
     driver = CheckoutDriver(observer, authority)
     native = driver.invoke
 
-    def revoked(*args):
-        allowed[0] = False
-        return native(*args)
+    def revoked(policy, operation, plan, target, **kwargs):
+        if operation == "create":
+            allowed[0] = False
+        return native(policy, operation, plan, target, **kwargs)
 
     monkeypatch.setattr(driver, "invoke", revoked)
     with pytest.raises(DomainError) as failure:

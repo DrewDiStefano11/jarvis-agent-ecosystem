@@ -284,3 +284,7 @@ source bytes; use the creation record for measured native readiness. Configure
 and the separate authenticated operator through the existing identity/RBAC service.
 Historical evidence remains readable after execution is disabled; changed policy,
 expired/revoked approval or a successor lease cannot silently resume mutation.
+When authenticated remote operator service is disabled, persisted creation approvals
+return `SELF_BUILD_APPROVAL_UNAVAILABLE` before intent or native effects. Windows
+inventory validation rejects aliased path components and file/directory collisions
+with `SELF_BUILD_MATERIALIZATION_UNSAFE` before target/branch registration.

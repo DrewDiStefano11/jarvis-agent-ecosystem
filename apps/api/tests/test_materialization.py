@@ -17,6 +17,50 @@ from tests.test_checkout_driver import checkout as checkout
 from tests.test_self_build_git_observer import repository as repository
 
 
+@pytest.mark.parametrize(
+    "paths",
+    [
+        ("Foo/a", "foo/b"),
+        ("Foo", "foo/bar"),
+        ("foo/bar", "Foo"),
+        ("Foo/a", "Foo/A"),
+        ("foo/a", "foo/a"),
+        ("foo/bar", "foo"),
+    ],
+)
+def test_inventory_rejects_component_collisions_before_source_effects(paths):
+    from types import SimpleNamespace
+
+    entries = [("100644", "a" * 40, path) for path in paths]
+    raw = b"".join(f"{mode} blob {blob} 1\t{path}\0".encode() for mode, blob, path in entries)
+    driver = SimpleNamespace(invoke=lambda *args: raw)
+    plan = SimpleNamespace(
+        maximum_file_bytes=10,
+        maximum_total_bytes=10,
+        file_count=len(paths),
+        inventory_digest=digest([list(e) for e in entries]),
+    )
+    with pytest.raises(DomainError) as failure:
+        inventory(driver, None, plan, None)
+    assert failure.value.code == "SELF_BUILD_MATERIALIZATION_UNSAFE"
+
+
+def test_inventory_accepts_shared_parent_with_identical_spelling():
+    from types import SimpleNamespace
+
+    entries = [("100644", "a" * 40, path) for path in ("Foo/a", "Foo/b")]
+    raw = b"".join(f"{mode} blob {blob} 1\t{path}\0".encode() for mode, blob, path in entries)
+    plan = SimpleNamespace(
+        maximum_file_bytes=10,
+        maximum_total_bytes=10,
+        file_count=2,
+        inventory_digest=digest([list(e) for e in entries]),
+    )
+    assert [
+        entry[2] for entry in inventory(SimpleNamespace(invoke=lambda *args: raw), None, plan, None)
+    ] == ["Foo/a", "Foo/b"]
+
+
 def test_raw_materialization_and_dedicated_index_replay_preserve_primary(checkout):
     root, policy, observer, plan, owner, _ = checkout
     driver = CheckoutDriver(observer, lambda: None)
@@ -180,7 +224,7 @@ def test_private_staging_only_resumes_the_verified_content_prefix(tmp_path, corr
     root, private = tmp_path / "target", tmp_path / "private"
     root.mkdir()
     private.mkdir()
-    stage = private / ("stage-" + sha256(content).hexdigest())
+    stage = root / (".jarvis-stage-" + sha256(content).hexdigest())
     stage.write_bytes(b"changed" if corrupt else content[:5])
     driver = CheckoutDriver(None, lambda: None)
     with ExitStack() as stack:

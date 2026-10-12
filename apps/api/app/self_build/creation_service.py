@@ -18,7 +18,13 @@ from app.models.workspace_creation import (
     WorkspaceCreationRecord,
 )
 from app.runtime_supervisor import windows_job
-from app.self_build import checkout_driver, materialization, owned_process, workspace_namespace
+from app.self_build import (
+    atomic_directory,
+    checkout_driver,
+    materialization,
+    owned_process,
+    workspace_namespace,
+)
 from app.self_build.git_service import INSPECTION_POLICY_DIGEST
 from app.self_build.policy import digest
 
@@ -29,6 +35,7 @@ CREATION_POLICY_DIGEST = sha256(
         + Path(owned_process.__file__).read_text(encoding="utf-8")
         + Path(checkout_driver.__file__).read_text(encoding="utf-8")
         + Path(materialization.__file__).read_text(encoding="utf-8")
+        + Path(atomic_directory.__file__).read_text(encoding="utf-8")
         + Path(workspace_namespace.__file__).read_text(encoding="utf-8")
         + Path(windows_job.__file__).read_text(encoding="utf-8")
         + INSPECTION_POLICY_DIGEST
@@ -120,9 +127,12 @@ class WorkspaceCreationService:
             return self.plan_in_session(actor, workspace_id, inspection_id, session)[1]
 
     def operator(self, actor, row, session):
+        access = getattr(self.app.state, "remote_control_service", None)
+        if access is None:
+            fail("SELF_BUILD_APPROVAL_UNAVAILABLE", "Configure authenticated operator access.")
         self.git.operator(actor, row, session)
         self.permission(actor, row, session)
-        if self.app.state.remote_control_service.access.actor_id != actor.actor_id:
+        if access.access.actor_id != actor.actor_id:
             fail("SELF_BUILD_APPROVAL_REQUIRED", "Use the configured authenticated operator.", 403)
 
     def approve(self, actor, request):

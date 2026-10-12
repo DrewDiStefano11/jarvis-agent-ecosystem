@@ -384,11 +384,27 @@ class CheckoutDriver:
                 "SELF_BUILD_REINSPECTION_REQUIRED",
                 "Native registration requires the approved measured inventory.",
             )
+        from app.self_build.materialization import inventory
+
+        inventory(self, policy, plan, Path(policy.worktree_root) / plan.workspace_id)
+        fresh_target = False
+
+        def before_target_claim(stack, root, target):
+            nonlocal fresh_target
+            metadata_nodes = len(self.observer._metadata_state(policy)) - 2
+            if metadata_nodes > plan.maximum_initial_metadata_nodes:
+                fail(
+                    "SELF_BUILD_GIT_METADATA_LIMIT",
+                    "Reserve 32 metadata nodes for bounded native creation before effects.",
+                )
+            fresh_target = True
+
         with owned_namespace(
             policy,
             plan.workspace_id,
             owner,
             authority_check=self.authority_check,
+            before_target_claim=before_target_claim,
             validate_existing_target=lambda stack, root, target: self.validate_existing_target(
                 stack, root, target, policy, plan
             ),
@@ -400,13 +416,6 @@ class CheckoutDriver:
             for leaf in primary_path.parts[1:]:
                 primary = open_directory(stack, primary.path / leaf, primary, leaf, internal=True)
             common = open_directory(stack, primary.path / ".git", primary, ".git", internal=True)
-            if not target.exists():
-                metadata_nodes = len(self.observer._metadata_state(policy)) - 2
-                if metadata_nodes > plan.maximum_initial_metadata_nodes:
-                    fail(
-                        "SELF_BUILD_GIT_METADATA_LIMIT",
-                        "Reserve 32 metadata nodes for bounded native creation before effects.",
-                    )
             try:
                 os.mkdir(common.name("worktrees"), 0o700, **common.kwargs)
             except FileExistsError:
@@ -414,9 +423,7 @@ class CheckoutDriver:
             registrations = open_directory(
                 stack, common.path / "worktrees", common, "worktrees", internal=True
             )
-            try:
-                os.stat(root.name(target.name), follow_symlinks=False, **root.kwargs)
-            except FileNotFoundError:
+            if fresh_target:
                 self.authority_check()
                 try:
                     os.stat(
@@ -430,13 +437,6 @@ class CheckoutDriver:
                     fail(
                         "SELF_BUILD_GIT_CREATION_UNCERTAIN",
                         "An existing generated registration requires explicit recovery.",
-                    )
-                try:
-                    os.mkdir(root.name(target.name), 0o700, **root.kwargs)
-                except FileExistsError:
-                    fail(
-                        "SELF_BUILD_OWNERSHIP_CONFLICT",
-                        "The target appeared before exclusive creation.",
                     )
                 open_directory(stack, target, root, target.name, internal=True)
                 self.invoke(policy, "create", plan, target)

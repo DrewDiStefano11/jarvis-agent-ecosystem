@@ -25,17 +25,18 @@ def namespace(tmp_path):
     return policy, owner
 
 
-def test_claim_replay_preserves_private_owner_and_leaves_target_absent(namespace):
+def test_claim_replay_preserves_private_owner_and_pinned_target_identity(namespace):
     policy, owner = namespace
     calls = []
     arguments = dict(authority_check=lambda: calls.append("fence"))
     with owned_namespace(policy, KEY, owner, **arguments) as (_, root, target, first):
         assert target.parent == root.path
-        assert not target.exists()
+        assert target.is_dir() and list(target.iterdir()) == []
+        identity = target.stat().st_ino
     marker = Path(policy.worktree_root) / (".jarvis-owner-" + KEY) / "owner.json"
     original = marker.read_bytes()
     with owned_namespace(policy, KEY, owner, **arguments) as (_, _, target, second):
-        assert first == second and not target.exists()
+        assert first == second and target.stat().st_ino == identity
     assert marker.read_bytes() == original and len(calls) >= 6
 
 
@@ -116,7 +117,7 @@ def test_same_namespace_is_serialized_while_other_missions_remain_independent(na
             target,
             _,
         ):
-            assert target.name == other_key and not target.exists()
+            assert target.name == other_key and target.is_dir() and list(target.iterdir()) == []
 
 
 def test_preparation_replay_cannot_adopt_target_added_after_private_claim(namespace):
@@ -124,6 +125,7 @@ def test_preparation_replay_cannot_adopt_target_added_after_private_claim(namesp
     with owned_namespace(policy, KEY, owner, authority_check=lambda: None):
         pass
     target = Path(policy.worktree_root) / KEY
+    target.rename(target.with_name("saved-original"))
     target.mkdir()
     foreign = target / "user.txt"
     foreign.write_bytes(b"foreign workspace")
@@ -134,3 +136,49 @@ def test_preparation_replay_cannot_adopt_target_added_after_private_claim(namesp
             pytest.fail("foreign target yielded as owned")
     assert failure.value.code == "SELF_BUILD_OWNERSHIP_CONFLICT"
     assert foreign.read_bytes() == b"foreign workspace" and marker.read_bytes() == original
+
+
+def test_target_created_at_atomic_claim_boundary_is_never_adopted(namespace, monkeypatch):
+    from app.self_build import workspace_namespace
+
+    policy, owner = namespace
+    native = workspace_namespace.pinned_target_directory
+    target = Path(policy.worktree_root) / KEY
+
+    def foreign(stack, root, leaf, *, create):
+        if create:
+            target.mkdir()
+            (target / "foreign.txt").write_bytes(b"foreign")
+        return native(stack, root, leaf, create=create)
+
+    monkeypatch.setattr(workspace_namespace, "pinned_target_directory", foreign)
+    with pytest.raises(DomainError) as failure:
+        with owned_namespace(policy, KEY, owner, authority_check=lambda: None):
+            pytest.fail("foreign target yielded")
+    assert failure.value.code == "SELF_BUILD_OWNERSHIP_CONFLICT"
+    assert (target / "foreign.txt").read_bytes() == b"foreign"
+    assert not (target.parent / (".jarvis-owner-" + KEY) / "target.json").exists()
+
+
+def test_atomically_claimed_target_cannot_be_replaced_before_context_release(namespace):
+    policy, owner = namespace
+    with owned_namespace(policy, KEY, owner, authority_check=lambda: None) as (_, _, target, _):
+        with pytest.raises(PermissionError):
+            target.rename(target.with_name("replacement"))
+        with pytest.raises(PermissionError):
+            target.rmdir()
+        # Child creation is allowed without granting directory replacement rights.
+        (target / "owned.txt").write_bytes(b"owned")
+    assert (target / "owned.txt").read_bytes() == b"owned"
+
+
+def test_unavailable_atomic_directory_adapter_has_no_filesystem_effects(namespace, monkeypatch):
+    from app.self_build import workspace_namespace
+
+    policy, owner = namespace
+    monkeypatch.setattr(workspace_namespace, "supports_atomic_directory", lambda: False)
+    with pytest.raises(DomainError) as failure:
+        with owned_namespace(policy, KEY, owner, authority_check=lambda: None):
+            pytest.fail("unavailable adapter yielded")
+    assert failure.value.code == "SELF_BUILD_NAMESPACE_PLATFORM_UNAVAILABLE"
+    assert list(Path(policy.worktree_root).iterdir()) == []

@@ -28,7 +28,7 @@ requires explicit recovery rather than guessed adoption/removal.
 
 Raw blobs are checked against the approved Git inventory/object identities and
 8 MiB file/64 MiB total/4096-file budgets. Pinned directory handles and exclusive
-atomic non-replacing moves publish verified staging bytes. Partial private stages
+atomic non-replacing moves publish verified staging bytes. Partial owned stages
 resume only an exact expected prefix. Existing conflicting files are preserved.
 Only the dedicated index is initialized/read back. Final physical inventory,
 source bytes, marker, index and registration are remeasured before finalization.
@@ -133,3 +133,24 @@ legacy-plan readback: one passed. The new large bounded metadata fixture has a
 test deadlines are unchanged. Full shard collection verifies 2,153 cases. Ruff
 and formatting pass; frontend source is unchanged from passing typecheck/lint/194
 Vitest/build gates. Independent exact-head review/CI remains required.
+
+## Recovery integration with reviewed #93
+
+The atomic target claim from #93 is retained through Git registration and raw
+materialization. Registration uses the explicit fresh-claim callback rather than
+target absence. Metadata headroom and component-by-component Windows inventory
+collisions are checked before claiming the target. Existing targets still require
+complete branch/base/pointer/registration verification; incomplete registration
+remains uncertain and preserves artifacts for operator recovery.
+
+The root's deny-write/delete pin prevents cross-directory MoveFileEx acknowledgement.
+Verified staging now uses reserved `.jarvis-stage-<content digest>` names in the
+destination's pinned parent, followed by native same-parent FileRenameInformation
+with replacement disabled. Staging handles deny concurrent writes and deletion;
+partial stages resume only an exact approved prefix. The approved inventory cannot
+contain these reserved names, and final readback rejects residual staging files.
+No sharing permission was widened. Runtime authority, checkpoints, publication
+pins and original approval/lease/attempt lineage remain mandatory.
+
+Disabled remote operator service returns `SELF_BUILD_APPROVAL_UNAVAILABLE` before
+creation intent, checkpoint or native effects, including persisted approvals.

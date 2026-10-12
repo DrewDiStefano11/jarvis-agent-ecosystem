@@ -13,10 +13,12 @@ from app.self_build.git_observer import COMMIT, pinned_metadata_file
 from app.self_build.policy import digest
 from app.self_build.workspace_namespace import owned_namespace
 from app.tool_execution.filesystem import (
+    check_stat,
     open_directory,
     open_file,
     read_bytes,
     repository_parts,
+    windows_final_path,
     windows_native_path,
 )
 
@@ -25,7 +27,7 @@ RESERVED = {".jarvis-workspace.json", ".jarvis-workspace.lock"}
 
 def inventory(driver, policy, plan, target):
     raw = driver.invoke(policy, "inventory", plan, target)
-    entries, names, total = [], set(), 0
+    entries, names, total = [], {}, 0
     try:
         for record in raw.split(b"\0"):
             if not record:
@@ -42,14 +44,27 @@ def inventory(driver, policy, plan, target):
                 or length < 0
                 or length > plan.maximum_file_bytes
                 or len(segments) > 16
-                or any(part.casefold() in RESERVED for part in segments)
-                or path.casefold() in names
+                or any(
+                    part.casefold() in RESERVED or part.casefold().startswith(".jarvis-stage-")
+                    for part in segments
+                )
             ):
                 fail(
                     "SELF_BUILD_MATERIALIZATION_UNSAFE",
                     "The base inventory exceeds its protected materialization scope.",
                 )
-            names.add(path.casefold())
+            # Every Windows path prefix has one exact spelling and node kind.
+            # Full-path checks alone miss aliased parents and file/directory collisions.
+            for depth in range(1, len(segments) + 1):
+                prefix = "/".join(segments[:depth])
+                node = (prefix, depth == len(segments))
+                previous = names.get(prefix.casefold())
+                if previous is not None and (previous != node or node[1]):
+                    fail(
+                        "SELF_BUILD_MATERIALIZATION_UNSAFE",
+                        "The base inventory contains colliding path components.",
+                    )
+                names[prefix.casefold()] = node
             total += length
             entries.append((mode, blob, path, length))
             if len(entries) > plan.file_count or total > plan.maximum_total_bytes:
@@ -77,14 +92,65 @@ def blob_digest(content):
 
 
 def move_without_replace(source, target):
-    # Only Windows mutation is supported. No replacement, cross-volume copy,
-    # reboot scheduling, deletion or arbitrary user-selected destination is used.
+    # A same-parent native rename avoids reopening the pinned directory for write.
+    # The target ownership pin remains deny-write/delete throughout acknowledgement.
+    import msvcrt
+
+    if source.parent != target.parent:
+        raise ValueError("Owned acknowledgement must remain in its pinned parent")
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    move = kernel.MoveFileExW
-    move.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD]
-    move.restype = wintypes.BOOL
-    if not move(windows_native_path(source), windows_native_path(target), 8):
-        raise OSError(ctypes.get_last_error(), "Owned file acknowledgement failed")
+    native = ctypes.WinDLL("ntdll")
+    kernel.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    handle = kernel.CreateFileW(
+        windows_native_path(source), 0x80010000, 1, None, 3, 0x00200000, None
+    )
+    if handle == ctypes.c_void_p(-1).value:
+        raise OSError(ctypes.get_last_error(), "Cannot pin owned staging file")
+    fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    try:
+        check_stat(os.fstat(fd), internal=True)
+        if os.path.normcase(windows_final_path(fd)) != os.path.normcase(str(source)):
+            raise OSError("Owned staging handle changed namespace")
+
+        class Rename(ctypes.Structure):
+            _fields_ = [
+                ("ReplaceIfExists", wintypes.BOOLEAN),
+                ("RootDirectory", wintypes.HANDLE),
+                ("FileNameLength", wintypes.ULONG),
+                ("FileName", wintypes.WCHAR * (len(target.name) + 1)),
+            ]
+
+        class IoStatus(ctypes.Structure):
+            _fields_ = [("Status", ctypes.c_void_p), ("Information", ctypes.c_size_t)]
+
+        rename = Rename(False, None, len(target.name.encode("utf-16-le")), target.name)
+        io = IoStatus()
+        native.NtSetInformationFile.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(IoStatus),
+            ctypes.c_void_p,
+            wintypes.ULONG,
+            wintypes.ULONG,
+        ]
+        native.NtSetInformationFile.restype = ctypes.c_long
+        status = native.NtSetInformationFile(
+            handle, ctypes.byref(io), ctypes.byref(rename), ctypes.sizeof(rename), 10
+        )
+        if status < 0:
+            native.RtlNtStatusToDosError.argtypes = [ctypes.c_long]
+            native.RtlNtStatusToDosError.restype = wintypes.ULONG
+            raise OSError(native.RtlNtStatusToDosError(status), "Owned file acknowledgement failed")
+    finally:
+        os.close(fd)
 
 
 def write_file(driver, root, private, path, content):
@@ -109,9 +175,9 @@ def write_file(driver, root, private, path, content):
                     "An existing workspace file differs from approved content; preserve it for recovery.",
                 )
             return
-        stage = "stage-" + sha256(content).hexdigest()
+        stage = ".jarvis-stage-" + sha256(content).hexdigest()
         driver.authority_check()
-        with open_file(private, stage, os.O_RDWR | os.O_CREAT, internal=True) as fd:
+        with open_file(parent, stage, os.O_RDWR | os.O_CREAT, internal=True) as fd:
             partial = read_bytes(fd, len(content))
             if partial != content[: len(partial)]:
                 fail(
@@ -134,7 +200,7 @@ def write_file(driver, root, private, path, content):
                     "Owned staging write was not acknowledged.",
                 )
         driver.authority_check()
-        move_without_replace(private.path / stage, parent.path / leaf)
+        move_without_replace(parent.path / stage, parent.path / leaf)
         with open_file(parent, leaf, os.O_RDONLY, internal=True) as fd:
             if read_bytes(fd, len(content)) != content:
                 fail(

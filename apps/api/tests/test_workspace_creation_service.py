@@ -201,6 +201,18 @@ def test_revoked_creation_authority_never_persists_intent(creation, boundary, mo
         assert session.get(DevelopmentWorkspaceRow, workspace_id).creation_json is None
 
 
+@pytest.mark.parametrize("method", ["prepare", "create"])
+def test_disabled_remote_operator_rejects_persisted_approval_without_effects(creation, method):
+    app, actor, _, service, workspace_id, request, _ = creation
+    del app.state.remote_control_service
+    with pytest.raises(DomainError) as failure:
+        getattr(service, method)(actor, workspace_id, request)
+    assert failure.value.code == "SELF_BUILD_APPROVAL_UNAVAILABLE"
+    assert service.runtime.checkpoints_authorized("run-1", actor) == []
+    with app.state.repository.session_factory() as session:
+        assert session.get(DevelopmentWorkspaceRow, workspace_id).creation_json is None
+
+
 def test_private_intent_tampering_blocks_recovery(creation):
     app, actor, _, service, workspace_id, request, _ = creation
     service.prepare(actor, workspace_id, request)
