@@ -1342,3 +1342,39 @@ def test_history_storage_failure_never_exposes_database_details():
     assert failure.value.code == "SOURCE_MUTATION_STORAGE_FAILED"
     assert "private" not in str(failure.value)
     assert failure.value.__suppress_context__
+
+
+def test_source_mutation_published_recovery_foreign_stage_never_records_completion(
+    editing, monkeypatch
+):
+    from app.source_mutation import driver as mutation_driver
+
+    _, actor, _, service, request, target, _ = editing
+    native = mutation_driver.rename_pinned
+
+    def interrupted(fd, leaf):
+        native(fd, leaf)
+        if leaf == "source.py":
+            raise RuntimeError("interrupted published source")
+
+    monkeypatch.setattr(mutation_driver, "rename_pinned", interrupted)
+    with pytest.raises(RuntimeError, match="interrupted published source"):
+        service.apply(actor, request)
+    pending = service.current(actor, request)[0]
+    assert pending.state == "editing" and pending.pending_index == 0
+    _, after = mutation_driver.staging_names(pending.operation_id, 0)
+    stage = target / after
+    stage.write_bytes(b"foreign published recovery artifact")
+    monkeypatch.setattr(mutation_driver, "rename_pinned", native)
+    with pytest.raises(DomainError) as failure:
+        service.apply(actor, request)
+    assert failure.value.code == "SOURCE_MUTATION_FOREIGN_ARTIFACT"
+    refused = service.current(actor, request)[0]
+    assert refused == pending
+    assert stage.read_bytes() == b"foreign published recovery artifact"
+    assert (target / "source.py").read_bytes() == b"value = 2\n"
+    assert not any(
+        item.resume_cursor.startswith("complete")
+        for item in service.runtime.checkpoints_authorized(refused.plan.runtime_run_id, actor)
+        if item.state_reference.startswith("source-mutation:")
+    )

@@ -82,6 +82,15 @@ def staging_names(operation_id, index):
     return ".jarvis-edit-" + key + ".before", ".jarvis-edit-" + key + ".after"
 
 
+def require_stage_absent(path):
+    """Only native file-not-found establishes a missing publication artifact."""
+    try:
+        with read_pin(path):
+            refuse("SOURCE_MUTATION_FOREIGN_ARTIFACT")
+    except FileNotFoundError:
+        return
+
+
 def observe(stack, checkout, source_plan, modes, ignored=()):
     """Complete immediate sibling inventory at every selected directory level.
 
@@ -462,6 +471,8 @@ class SourceMutationDriver:
                     self.authority_check()
                     backup, stage = staging_names(operation_id, index)
                     parent_path = owned.joinpath(*change.path.split("/")[:-1])
+                    if index < completed or change.after is None:
+                        require_stage_absent(parent_path / stage)
                     backup_identity = measured(parent_path / backup, modes[change.path])
                     if backup_identity is not None and backup_identity != change.before:
                         refuse("SOURCE_MUTATION_BACKUP_CONFLICT")
@@ -515,6 +526,12 @@ class SourceMutationDriver:
                         ),
                     )
                 check_source = pin_source_tree(stack, owned, self.authority_check)
+                # Recheck after the final namespace watch is armed. A foreign
+                # stage may have appeared after a completed-prefix probe; never
+                # silently exclude it from the completion measurement.
+                for index, change in enumerate(source_plan.changes):
+                    _, stage = staging_names(operation_id, index)
+                    require_stage_absent(owned.joinpath(*change.path.split("/")[:-1], stage))
                 final, _ = observe(stack, checkout, source_plan, modes, ignored)
                 final_state, _ = measure_code_state(
                     stack,
@@ -548,6 +565,7 @@ class SourceMutationDriver:
         if saved is not None and saved != before:
             refuse("SOURCE_MUTATION_BACKUP_CONFLICT")
         if current == after and (before is None or saved == before):
+            require_stage_absent(parent.path / stage)
             if after is not None:
                 # A pending publication is owned only by the stage identity in
                 # the validated checkpoint. Matching bytes alone grant nothing.
