@@ -65,6 +65,42 @@ def test_focused_targets_come_only_from_deterministic_plan():
     assert full.invocations[0].arguments == ("-m", "pytest", "tests", "--timeout=300")
 
 
+@pytest.mark.parametrize("packaged_file", ["catalog.py", "validation_runner.py"])
+def test_approved_execution_plan_rejects_packaged_invocation_policy_drift(
+    monkeypatch, packaged_file
+):
+    from pathlib import Path
+
+    from app.development_validation.evidence import verify_plan
+
+    approved = plan(boundary="publication")
+    read_text = Path.read_text
+
+    def updated(path, *args, **kwargs):
+        text = read_text(path, *args, **kwargs)
+        return text + "\n# updated invocation policy\n" if path.name == packaged_file else text
+
+    monkeypatch.setattr(Path, "read_text", updated)
+    assert plan(boundary="publication").execution_plan_hash != approved.execution_plan_hash
+    with pytest.raises(ValueError):
+        verify_plan(approved)
+    with pytest.raises(ValueError):
+        describe_invocations(approved)
+
+
+def test_browser_acceptance_requires_browser_and_office_invocations():
+    expected = plan(boundary="publication", browser_required=True)
+    browser = next(g for g in describe_invocations(expected) if g.gate == "browser_acceptance")
+    assert len(browser.invocations) == 2
+    normal, office = browser.invocations
+    assert normal.arguments == office.arguments == ("scripts/smoke-local-planning.py",)
+    assert normal.environment == (("JARVIS_SMOKE_BROWSER", "true"),)
+    assert office.environment == (
+        ("JARVIS_SMOKE_BROWSER", "true"),
+        ("JARVIS_SMOKE_OFFICE", "true"),
+    )
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

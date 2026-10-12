@@ -48,6 +48,12 @@ def describe_invocations(plan):
                 "scripts/smoke-local-planning.py",
                 environment=(("JARVIS_SMOKE_BROWSER", "true"),),
             ),
+            _description(
+                "python",
+                ".",
+                "scripts/smoke-local-planning.py",
+                environment=(("JARVIS_SMOKE_BROWSER", "true"), ("JARVIS_SMOKE_OFFICE", "true")),
+            ),
         ),
     }
     groups = []

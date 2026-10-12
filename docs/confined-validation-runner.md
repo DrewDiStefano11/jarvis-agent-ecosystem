@@ -18,6 +18,13 @@ are not launch-ready capabilities; native integrity, artifact scope, tool sealin
 and isolation adapters still require implementation before an executable runner
 can consume them.
 
+The approved execution-plan policy hashes the packaged invocation catalog and
+invocation contract along with the collector policy. Catalog or contract changes
+invalidate earlier approved plans before descriptions can be consumed. Browser
+acceptance describes both the normal browser smoke and a separate Office smoke
+with the fixed `JARVIS_SMOKE_OFFICE=true` environment switch; the gate budget
+covers both invocations.
+
 The existing `self_build.owned_process` primitive and Windows Job Objects own
 process lifecycle and clean up descendants. They do not isolate repository code
 from user files, credentials, the network or other processes. A worktree, command

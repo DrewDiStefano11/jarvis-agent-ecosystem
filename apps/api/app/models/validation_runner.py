@@ -12,9 +12,9 @@ class InvocationDescription(Contract):
     program: Literal["python", "pnpm", "native_repository_integrity"]
     working_directory: Literal[".", "apps/api", "apps/web"]
     arguments: tuple[str, ...] = Field(max_length=140)
-    environment: tuple[tuple[Literal["JARVIS_SMOKE_BROWSER"], Literal["true"]], ...] = Field(
-        default=(), max_length=1
-    )
+    environment: tuple[
+        tuple[Literal["JARVIS_SMOKE_BROWSER", "JARVIS_SMOKE_OFFICE"], Literal["true"]], ...
+    ] = Field(default=(), max_length=2)
 
     @field_validator("arguments")
     @classmethod

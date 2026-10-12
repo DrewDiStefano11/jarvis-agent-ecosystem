@@ -160,8 +160,9 @@ def build_execution_plan(state, **derivation):
     """
     from pathlib import Path
 
-    from app.models import validation_execution
+    from app.models import validation_execution, validation_runner
     from app.models.validation_execution import CommandDefinition
+    from app.validation_runner import catalog
 
     validation = plan_validation(state, **derivation)
     policy = digest(
@@ -170,6 +171,8 @@ def build_execution_plan(state, **derivation):
             "implementation": sha256(
                 Path(__file__).read_text(encoding="utf-8").encode()
                 + Path(validation_execution.__file__).read_text(encoding="utf-8").encode()
+                + Path(catalog.__file__).read_text(encoding="utf-8").encode()
+                + Path(validation_runner.__file__).read_text(encoding="utf-8").encode()
             ).hexdigest(),
         }
     )
