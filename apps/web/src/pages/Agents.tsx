@@ -54,7 +54,7 @@ export function Agents() {
       <a href="#workforce-catalog"><strong>Imported catalog</strong><span>Specialist and skill definitions. Not registered identities.</span></a>
       <a href="#demonstration-agents"><strong>Demonstration agents</strong><span>Simulator roles and workload. Not runtime identities.</span></a>
     </nav>
-    {loading && !agents.length && <p role="status">Loading the workforce snapshotâ€¦</p>}
+    {loading && !agents.length && <p role="status">Loading the workforce snapshot…</p>}
     {error && !formError && <p className="callout danger" role="alert">{error} Demonstration cards below may be missing or stale.</p>}
 
     <section id="runtime-identities" className="agents-anchor" aria-labelledby="runtime-identities-title">
@@ -90,7 +90,7 @@ export function Agents() {
         <label>Role<input name="role" required minLength={2} maxLength={100} disabled={busy} /></label>
         <label>Department<select name="department" required disabled={busy || departments.length === 0}>{departments.map(department => <option value={department.id} key={department.id}>{department.name}</option>)}</select></label>
         {!departments.length && <p role="status">No demonstration departments are loaded, so a temporary agent cannot be placed.</p>}
-        <button className="primary" disabled={busy || departments.length === 0}>{busy ? 'Creatingâ€¦' : 'Create restricted simulation'}</button>
+        <button className="primary" disabled={busy || departments.length === 0}>{busy ? 'Creating…' : 'Create restricted simulation'}</button>
         {formError && <p role="alert">{formError}</p>}
       </form>}
       <div className="filters demo-toolbar">

@@ -14,6 +14,6 @@ Creating a temporary agent still posts only to `/api/agents/temporary`. The page
 
 The shared agent detail drawer still opens from each demonstration card.
 
-Temporary names accept 2â€“60 characters and roles accept 2â€“100, matching `CreateTemporaryAgentRequest`. The demonstration navigation target and its accessible heading have distinct IDs.
+Temporary names accept 2–60 characters and roles accept 2–100, matching `CreateTemporaryAgentRequest`. The demonstration navigation target and its accessible heading have distinct IDs.
 
 A selected recorded status stays visible when it disappears from a later snapshot, so the displayed filter continues to match the filtered results.
