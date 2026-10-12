@@ -67,6 +67,10 @@ class RoleQualificationComparison(BaseModel):
     reason: str
     baseline_inference_mode: str | None = None
     target_inference_mode: str | None = None
+    baseline_model: str | None = None
+    baseline_provider: str | None = None
+    target_model: str | None = None
+    target_provider: str | None = None
     baseline_qualification: str | None = None
     target_qualification: str | None = None
     baseline_score: float | None = None
@@ -174,6 +178,7 @@ def compare_qualification_artifacts(
     compared_at: datetime | None = None,
     roles: tuple[str, ...] | list[str] | None = None,
     model_names: tuple[str, ...] | list[str] | None = None,
+    pairings: tuple[tuple[tuple[str, str], tuple[str, str]], ...] = (),
     baseline_source_name: str = "baseline",
     target_source_name: str = "target",
 ) -> QualificationComparisonReport:
@@ -190,19 +195,34 @@ def compare_qualification_artifacts(
     }
     t_map: dict[tuple[str, str], ModelProfile] = {(p.model, p.provider): p for p in target_profiles}
 
-    all_keys = sorted(set(b_map.keys()) | set(t_map.keys()))
+    if len(b_map) != len(baseline_profiles) or len(t_map) != len(target_profiles):
+        raise ValueError("qualification artifact contains duplicate model/provider identities")
+    paired_baselines, paired_targets = set(), set()
+    for baseline_key, target_key in pairings:
+        if baseline_key not in b_map or target_key not in t_map:
+            raise ValueError("explicit pairing must identify existing baseline and target profiles")
+        if baseline_key in paired_baselines or target_key in paired_targets:
+            raise ValueError("explicit model pairings must be one-to-one")
+        paired_baselines.add(baseline_key)
+        paired_targets.add(target_key)
+    excluded = paired_baselines | paired_targets
+    remaining_keys = sorted((set(b_map) | set(t_map)) - excluded)
+    profile_pairs = list(pairings) + [(key, key) for key in remaining_keys]
     if model_names:
         allowed_models = set(model_names)
-        all_keys = [k for k in all_keys if k[0] in allowed_models]
+        profile_pairs = [
+            pair for pair in profile_pairs if any(key[0] in allowed_models for key in pair)
+        ]
 
     allowed_roles = set(roles) if roles else None
 
     comparisons: list[RoleQualificationComparison] = []
     warnings: list[str] = []
 
-    for model, provider in all_keys:
-        b_prof = b_map.get((model, provider))
-        t_prof = t_map.get((model, provider))
+    for baseline_key, target_key in profile_pairs:
+        model, provider = target_key
+        b_prof = b_map.get(baseline_key)
+        t_prof = t_map.get(target_key)
 
         if b_prof is None and t_prof is not None:
             candidate_roles = sorted(t_prof.roles.keys())
@@ -382,8 +402,26 @@ def compare_qualification_artifacts(
                 for key in policy_mandatory_keys
                 if key not in t_gates or t_gates[key].passed is None
             ]
+            changed_unmeasured = [
+                key
+                for key in sorted(set(b_gates) | set(t_gates))
+                if (b_gates[key].passed if key in b_gates else None)
+                != (t_gates[key].passed if key in t_gates else None)
+                and (
+                    key not in b_gates
+                    or b_gates[key].passed is None
+                    or key not in t_gates
+                    or t_gates[key].passed is None
+                )
+            ]
 
-            if b_not_eval or t_not_eval or b_missing_mandatory or t_missing_mandatory:
+            if (
+                b_not_eval
+                or t_not_eval
+                or b_missing_mandatory
+                or t_missing_mandatory
+                or changed_unmeasured
+            ):
                 evidence_issues: list[str] = []
                 if b_not_eval:
                     evidence_issues.append(f"baseline role '{role}' is not_evaluated")
@@ -396,6 +434,10 @@ def compare_qualification_artifacts(
                 if t_missing_mandatory:
                     evidence_issues.append(
                         f"target unmeasured/missing mandatory gates: {t_missing_mandatory}"
+                    )
+                if changed_unmeasured:
+                    evidence_issues.append(
+                        f"gate evidence changed to or from unmeasured: {changed_unmeasured}"
                     )
                 comparisons.append(
                     RoleQualificationComparison(
@@ -560,6 +602,22 @@ def compare_qualification_artifacts(
                 )
             )
 
+    identities = {target: baseline for baseline, target in profile_pairs}
+    comparisons = [
+        item.model_copy(
+            update={
+                "baseline_model": identities[(item.model, item.provider)][0]
+                if identities[(item.model, item.provider)] in b_map
+                else None,
+                "baseline_provider": identities[(item.model, item.provider)][1]
+                if identities[(item.model, item.provider)] in b_map
+                else None,
+                "target_model": item.model if (item.model, item.provider) in t_map else None,
+                "target_provider": item.provider if (item.model, item.provider) in t_map else None,
+            }
+        )
+        for item in comparisons
+    ]
     # Sort comparisons deterministically by model, provider, role
     comparisons.sort(key=lambda c: (c.model, c.provider, c.role))
 
@@ -616,7 +674,7 @@ def render_comparison_markdown(report: QualificationComparisonReport) -> str:
         "",
         "## Role Comparisons",
         "",
-        "| model | provider | role | verdict | baseline level | target level | baseline score | target score | score delta | reason |",
+        "| baseline model/provider | target model/provider | role | verdict | baseline level | target level | baseline score | target score | score delta | reason |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
 
@@ -627,7 +685,7 @@ def render_comparison_markdown(report: QualificationComparisonReport) -> str:
         t_score = f"{c.target_score:.3f}" if c.target_score is not None else "n/a"
         delta = f"{c.score_delta:+.3f}" if c.score_delta is not None else "n/a"
         lines.append(
-            f"| `{c.model}` | `{c.provider}` | `{c.role}` | **{c.verdict}** | "
+            f"| `{c.baseline_model or c.model}` / `{c.baseline_provider or c.provider}` | `{c.target_model or c.model}` / `{c.target_provider or c.provider}` | `{c.role}` | **{c.verdict}** | "
             f"{b_level} | {t_level} | {b_score} | {t_score} | {delta} | {c.reason} |"
         )
 

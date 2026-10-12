@@ -42,6 +42,86 @@ from scripts.compare_model_qualification import (  # noqa: E402, I001
 )
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("missing", [False, True])
+def test_advisory_evidence_disappearing_or_reappearing_is_insufficient(reverse, missing):
+    role = _make_role_record()
+    key = next(g.key for g in role.gates if not g.mandatory)
+    altered = role.model_copy(
+        update={
+            "gates": tuple(
+                g.model_copy(update={"passed": None, "status": "not_evaluated", "observed": None})
+                if g.key == key
+                else g
+                for g in role.gates
+                if not (missing and g.key == key)
+            )
+        }
+    )
+    baseline, target = (
+        _make_profile(roles={"manager": role}),
+        _make_profile(roles={"manager": altered}),
+    )
+    if reverse:
+        baseline, target = target, baseline
+    result = compare_qualification_artifacts(baseline, target).comparisons[0]
+    assert result.verdict == VERDICT_INSUFFICIENT_EVIDENCE
+    assert key in result.reason
+
+
+def test_explicit_changed_model_pairing_preserves_identities_and_comparability(tmp_path, capsys):
+    baseline = _make_profile(model="qwen3:14b-q4")
+    target = _make_profile(model="qwen3:14b-q8")
+    pairs = (((baseline.model, baseline.provider), (target.model, target.provider)),)
+    report = compare_qualification_artifacts(baseline, target, pairings=pairs)
+    assert len(report.comparisons) == 1
+    item = report.comparisons[0]
+    assert item.verdict == VERDICT_UNCHANGED
+    assert item.baseline_model == baseline.model and item.target_model == target.model
+    mismatched = target.model_copy(update={"inference_mode": FIXTURE_MODE})
+    assert (
+        compare_qualification_artifacts(baseline, mismatched, pairings=pairs).comparisons[0].verdict
+        == VERDICT_NON_COMPARABLE
+    )
+    b_path, t_path = tmp_path / "baseline.json", tmp_path / "target.json"
+    b_path.write_text(baseline.model_dump_json(), encoding="utf-8")
+    t_path.write_text(target.model_dump_json(), encoding="utf-8")
+    out = tmp_path / "out"
+    assert (
+        cli_main(
+            [
+                str(b_path),
+                str(t_path),
+                "--pair",
+                baseline.model,
+                baseline.provider,
+                target.model,
+                target.provider,
+                "--out",
+                str(out),
+                "--json",
+            ]
+        )
+        == EXIT_OK
+    )
+    result = json.loads(capsys.readouterr().out)
+    assert result["comparisons"][0]["baseline_model"] == baseline.model
+    markdown = (out / "qualification-comparison-summary.md").read_text(encoding="utf-8")
+    assert baseline.model in markdown and target.model in markdown
+
+
+@pytest.mark.parametrize("invalid", ["missing", "duplicate", "ambiguous_artifact"])
+def test_explicit_pairing_rejects_missing_or_ambiguous_profiles(invalid):
+    baseline, target = _make_profile(model="old"), _make_profile(model="new")
+    pair = (("old", "ollama"), ("new", "ollama"))
+    pairs = (pair, pair) if invalid == "duplicate" else (pair,)
+    if invalid == "missing":
+        pairs = ((("missing", "ollama"), pair[1]),)
+    sources = [baseline, baseline] if invalid == "ambiguous_artifact" else baseline
+    with pytest.raises(ValueError):
+        compare_qualification_artifacts(sources, target, pairings=pairs)
+
+
 def _make_gate(
     key: str = "case_pass_rate_min",
     metric: str = "case_pass_rate",
