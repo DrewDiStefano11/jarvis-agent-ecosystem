@@ -1,9 +1,9 @@
 """Fixed family descriptions and non-bypassable execution denial."""
 
 import pytest
-from app.development_validation.evidence import build_execution_plan
 
 from app.core.errors import DomainError
+from app.development_validation.evidence import build_execution_plan
 from app.development_validation.planner import digest
 from app.models.development_validation import CodeState, FileChange
 from app.models.validation_runner import RunnerAvailability

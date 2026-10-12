@@ -2,10 +2,10 @@
 
 from typing import Literal
 
-from app.models.validation_execution import CommandDefinition
 from pydantic import Field, field_validator
 
 from app.models.development_validation import Contract, Digest, Gate
+from app.models.validation_execution import CommandDefinition
 
 
 class InvocationDescription(Contract):
