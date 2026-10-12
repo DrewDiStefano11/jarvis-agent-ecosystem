@@ -10,7 +10,7 @@ import { Status } from '../components/Status'
 import { PlannedWork } from '../components/PlannedWork'
 import { forgetPlanningSubmission, readPlanningRecovery, rememberPlanningSubmission, restorePlanningSubmission, type SavedPlanningSubmission } from '../state/planningRecovery'
 
-export function Runtime() {
+export function Runtime({ onInspectTask }: { onInspectTask?: (id: string) => void } = {}) {
   const [searchParams] = useSearchParams()
   const [mode, setMode] = useState<'planning' | 'workspace'>(searchParams.get('mode') === 'workspace' ? 'workspace' : 'planning')
   const { runtime, tools, tasks, system, refresh, selectTask, decomposition, coordination } = useAppStore()
@@ -144,7 +144,7 @@ export function Runtime() {
       {message && <p role="status">{message}</p>}
     </section>
     <section className="panel"><PlannedWork record={decomposition.record} error={decomposition.error} execution={coordination.record}/><CoordinatedWork record={coordination.record} error={coordination.error}/></section>
-    <RuntimeRunHistory/>
+    <RuntimeRunHistory onInspectTask={onInspectTask}/>
     <section className="panel"><h2>Persisted model results</h2>{!taskId && <p>Select a task to inspect its results.</p>}
       {executions.map(execution => <article className="runtime-result" key={execution.executionId}><h3>{execution.result?.summary ?? 'Execution in progress'}</h3><Status value={execution.stage}/><p>{execution.provider ?? 'Provider pending'} · {execution.model ?? 'Model pending'} · {execution.requestCount} request(s)</p><code>{execution.executionId}</code>
         {execution.failureCode && <p role="status">{execution.failureCode}</p>}
