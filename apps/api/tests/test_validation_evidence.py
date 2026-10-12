@@ -257,3 +257,32 @@ def test_backend_full_suite_budget_is_bounded_and_matches_measured_baseline():
     backend = next(c for c in plan.commands if c.gate == "backend_tests")
     assert backend.timeout_seconds == 3600
     assert all(c.timeout_seconds == 900 for c in plan.commands if c.gate != "backend_tests")
+
+
+def test_windows_unsigned_crash_exit_and_failed_budget_overrun_remain_recordable():
+    plan = build_execution_plan(state())
+    crash = receipt(plan, outcome="failed", exit_code=3221225477, failure_kind="unknown")
+    assert assess(plan, [crash]).failed == ("repository_integrity",)
+    overrun = receipt(
+        plan,
+        outcome="failed",
+        exit_code=1,
+        failure_kind="watchdog",
+        started_at=NOW - timedelta(hours=2),
+        finished_at=NOW,
+        resources=ResourceMeasurements(wall_time_ms=7200000, peak_memory_bytes=16 * 1024**3),
+    )
+    assert not assess(plan, [overrun]).ready
+    with pytest.raises(ValidationError):
+        receipt(
+            plan,
+            started_at=NOW - timedelta(hours=2),
+            finished_at=NOW,
+            resources=ResourceMeasurements(wall_time_ms=7200000),
+        )
+
+
+@pytest.mark.parametrize("identity", ["invalid-repo", "github.com/example/" + "x" * 101])
+def test_measurement_repository_identity_is_canonical_and_bounded(identity):
+    with pytest.raises(ValidationError):
+        receipt(build_execution_plan(state()), repository_identity=identity)

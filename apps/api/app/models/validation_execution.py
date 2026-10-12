@@ -37,16 +37,18 @@ class ExecutionPlan(Contract):
 
 class ResourceMeasurements(Contract):
     # None means unavailable, never a fabricated zero measurement.
-    wall_time_ms: int = Field(strict=True, ge=0, le=3600000)
+    wall_time_ms: int = Field(strict=True, ge=0, le=86400000)
     cpu_time_ms: int | None = Field(default=None, strict=True, ge=0, le=360000000)
-    peak_memory_bytes: int | None = Field(default=None, strict=True, ge=0, le=8589934592)
+    peak_memory_bytes: int | None = Field(default=None, strict=True, ge=0, le=2**63 - 1)
 
 
 class ExecutionMeasurement(Contract):
     schema_version: Literal["1.0"] = "1.0"
     execution_plan_hash: Digest
     validation_plan_hash: Digest
-    repository_identity: str
+    repository_identity: str = Field(
+        pattern=r"^github\.com/[a-z0-9][a-z0-9_-]{0,99}/[a-z0-9][a-z0-9._-]{0,99}$"
+    )
     code_state_hash: Digest
     command: CommandDefinition
     task_id: Identifier
@@ -57,7 +59,7 @@ class ExecutionMeasurement(Contract):
     started_at: datetime
     finished_at: datetime
     outcome: Literal["passed", "failed", "interrupted", "cancelled", "unmeasured"]
-    exit_code: int | None = Field(default=None, strict=True, ge=-2147483648, le=2147483647)
+    exit_code: int | None = Field(default=None, strict=True, ge=-2147483648, le=4294967295)
     failure_kind: FailureKind | None = None
     resources: ResourceMeasurements
     stdout_digest: Digest
