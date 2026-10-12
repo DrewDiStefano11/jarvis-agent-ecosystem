@@ -31,6 +31,12 @@ from app.model_providers.policy import (
     require_provider_network_health,
 )
 from app.model_providers.security import redact_secrets
+from app.model_providers.tool_calls import (
+    decode_model_response,
+    parse_native_calls,
+    post_model_response,
+    validate_tool_support,
+)
 
 
 class HealthCheckStrategy(StrEnum):
@@ -136,6 +142,8 @@ class OpenAICompatibleProvider(ProviderBase):
         )
 
     async def execute(self, request: ModelExecutionRequest) -> ModelExecutionResponse:
+        request = ModelExecutionRequest.model_validate(request.model_dump())
+        validate_tool_support(request, self.capabilities, self.name)
         model = request.model or self.default_model
         require_live_provider_execution(
             provider=self.name,
@@ -165,6 +173,8 @@ class OpenAICompatibleProvider(ProviderBase):
             payload["temperature"] = request.temperature
         if request.max_output_tokens is not None:
             payload["max_tokens"] = request.max_output_tokens
+        if request.tools:
+            payload["tools"] = [tool.wire_definition() for tool in request.tools]
         if (
             request.output_schema is not None
             and ModelCapability.STRUCTURED_OUTPUT in self.capabilities
@@ -182,16 +192,20 @@ class OpenAICompatibleProvider(ProviderBase):
         started = perf_counter()
         translated_error: ModelProviderError | None = None
         try:
-            response = await client.post(
+            response = await post_model_response(
+                client,
                 "chat/completions",
+                tools_enabled=bool(request.tools),
+                provider=self.name,
+                model=model,
                 json=payload,
                 headers=self._headers() if self._client is not None else None,
                 timeout=request.timeout_seconds or self.timeout_seconds,
             )
             response.raise_for_status()
             try:
-                body = response.json()
-            except ValueError:
+                body = decode_model_response(response, tools_enabled=bool(request.tools))
+            except (ValueError, RecursionError):
                 body = None
                 translated_error = MalformedProviderResponseError(
                     "provider returned malformed JSON", provider=self.name, model=model
@@ -211,10 +225,25 @@ class OpenAICompatibleProvider(ProviderBase):
                 await client.aclose()
         if translated_error is not None:
             raise translated_error
-        normalized = _normalize_completion(body, provider=self.name, requested_model=model)
+        if request.tools and (
+            _contains_credential(body, self.api_key.get_secret_value())
+            or _contains_credential(
+                response.headers.get("x-request-id"), self.api_key.get_secret_value()
+            )
+        ):
+            raise _malformed(self.name, model, "provider tool response contains a credential")
+        normalized = _normalize_completion(
+            body,
+            provider=self.name,
+            requested_model=model,
+            request=request,
+            credential=self.api_key.get_secret_value(),
+        )
         try:
             return ModelExecutionResponse(
                 content=normalized["content"],
+                tool_requests=normalized["tool_requests"],
+                tool_request_id=request.tool_request_id,
                 provider=self.name,
                 model=normalized["model"],
                 input_tokens=normalized["input_tokens"],
@@ -373,15 +402,42 @@ class OpenAICompatibleProvider(ProviderBase):
         return {item["id"] for item in body["data"]}
 
 
-def _normalize_completion(body: object, *, provider: str, requested_model: str) -> dict[str, Any]:
+def _normalize_completion(
+    body: object,
+    *,
+    provider: str,
+    requested_model: str,
+    request: ModelExecutionRequest,
+    credential: str,
+) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise _malformed(provider, requested_model, "response must be an object")
     choices = body.get("choices")
-    if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+    if not isinstance(choices, list) or len(choices) != 1 or not isinstance(choices[0], dict):
         raise _malformed(provider, requested_model, "response contains no generated choice")
     message = choices[0].get("message")
     content = message.get("content") if isinstance(message, dict) else None
-    if not isinstance(content, str) or not content:
+    returned_model = _optional_string(body.get("model"), provider, requested_model)
+    calls = parse_native_calls(
+        message.get("tool_calls") if isinstance(message, dict) else None,
+        request=request,
+        provider=provider,
+        model=returned_model or requested_model,
+        compatible=True,
+    )
+    if isinstance(message, dict) and message.get("function_call") is not None:
+        raise _malformed(provider, requested_model, "legacy function calls are unsupported")
+    if calls and (
+        message.get("role") != "assistant" or choices[0].get("finish_reason") != "tool_calls"
+    ):
+        raise _malformed(provider, requested_model, "provider tool response is incomplete")
+    if not calls and choices[0].get("finish_reason") == "tool_calls":
+        raise _malformed(provider, requested_model, "provider tool finish reason has no calls")
+    if request.tools and _contains_credential([call.model_dump() for call in calls], credential):
+        raise _malformed(provider, requested_model, "provider tool response contains a credential")
+    if content is None and calls:
+        content = ""
+    if not isinstance(content, str) or (not content and not calls):
         raise _malformed(provider, requested_model, "response is missing generated content")
     usage = body.get("usage")
     if usage is not None and not isinstance(usage, dict):
@@ -390,11 +446,11 @@ def _normalize_completion(body: object, *, provider: str, requested_model: str) 
     input_tokens = _optional_integer(usage.get("prompt_tokens"), provider, requested_model)
     output_tokens = _optional_integer(usage.get("completion_tokens"), provider, requested_model)
     total_tokens = _optional_integer(usage.get("total_tokens"), provider, requested_model)
-    returned_model = _optional_string(body.get("model"), provider, requested_model)
     response_id = _optional_string(body.get("id"), provider, requested_model)
     finish_reason = _optional_string(choices[0].get("finish_reason"), provider, requested_model)
     return {
         "content": content,
+        "tool_requests": calls,
         "model": returned_model or requested_model,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
@@ -427,3 +483,17 @@ def _optional_string(value: object, provider: str, model: str) -> str | None:
 
 def _malformed(provider: str, model: str, message: str) -> MalformedProviderResponseError:
     return MalformedProviderResponseError(message, provider=provider, model=model)
+
+
+def _contains_credential(value: object, credential: str) -> bool:
+    pending = [value]
+    while pending:
+        item = pending.pop()
+        if isinstance(item, str) and credential in item:
+            return True
+        if isinstance(item, dict):
+            pending.extend(item.keys())
+            pending.extend(item.values())
+        elif isinstance(item, list):
+            pending.extend(item)
+    return False

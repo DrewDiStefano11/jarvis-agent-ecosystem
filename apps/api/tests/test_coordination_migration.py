@@ -35,7 +35,8 @@ def test_coordination_upgrade_from_dependency_and_empty_roundtrip(tmp_path):
         engine.dispose()
         with engine.connect() as connection:
             assert (
-                connection.scalar(text("SELECT version_num FROM alembic_version")) == "20261007_13"
+                connection.scalar(text("SELECT version_num FROM alembic_version"))
+                == "20261012_source_plans"
             )
     finally:
         engine.dispose()
@@ -77,7 +78,10 @@ def test_populated_main_upgrade_preserves_task_and_supported_roundtrip(tmp_path)
             connection.scalar(text("SELECT title FROM tasks WHERE id='preserved-task'"))
             == "Populated upgrade"
         )
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20261007_13"
+        assert (
+            connection.scalar(text("SELECT version_num FROM alembic_version"))
+            == "20261012_source_plans"
+        )
     engine.dispose()
     command.downgrade(config, "20260729_04")
     command.upgrade(config, "head")
@@ -97,7 +101,7 @@ def test_upgrade_from_self_improvement_preserves_populated_history(tmp_path):
     from alembic.script import ScriptDirectory
 
     config = migration_config(tmp_path / "self-improvement-upgrade.db")
-    assert ScriptDirectory.from_config(config).get_heads() == ["20261007_13"]
+    assert ScriptDirectory.from_config(config).get_heads() == ["20261012_source_plans"]
     command.upgrade(config, "20261002_si")
     engine = create_engine(config.get_main_option("sqlalchemy.url"))
     payload = json.dumps({"immutable_evidence": "preserve self-improvement history"})
@@ -118,7 +122,10 @@ def test_upgrade_from_self_improvement_preserves_populated_history(tmp_path):
     engine.dispose()
     command.upgrade(config, "head")
     with engine.connect() as connection:
-        assert connection.scalar(text("SELECT version_num FROM alembic_version")) == "20261007_13"
+        assert (
+            connection.scalar(text("SELECT version_num FROM alembic_version"))
+            == "20261012_source_plans"
+        )
         assert connection.scalar(text("SELECT payload FROM self_improvement_records")) == payload
     engine.dispose()
     command.downgrade(config, "20261002_si")

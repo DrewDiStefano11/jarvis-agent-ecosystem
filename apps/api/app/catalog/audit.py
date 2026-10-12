@@ -69,6 +69,7 @@ class CatalogAuditService:
     def audit(self) -> CatalogAuditReport:
         with self.session_factory() as session:
             now = datetime.now(UTC)
+            metadata_truncated = False
 
             # 1. Total counts
             total_entries = session.scalar(select(func.count(CatalogEntryRow.id))) or 0
@@ -285,6 +286,11 @@ class CatalogAuditService:
                 if current_rev:
                     normalized = (
                         current_rev.normalized if isinstance(current_rev.normalized, dict) else {}
+                    )
+                    metadata_truncated |= any(
+                        isinstance(normalized.get(key), list)
+                        and len(normalized[key]) > MAX_METADATA_ITEMS
+                        for key in ("unmapped_tags", "capabilities", "warnings")
                     )
                     unmapped = [
                         fingerprint(value)
@@ -586,7 +592,9 @@ class CatalogAuditService:
                 confirmed_unsafe,
                 informational_warnings,
             ]
-            output_truncated = any(len(group) > MAX_FINDINGS for group in finding_groups)
+            output_truncated = metadata_truncated or any(
+                len(group) > MAX_FINDINGS for group in finding_groups
+            )
             return CatalogAuditReport(
                 output_truncated=output_truncated,
                 audit_timestamp=now,

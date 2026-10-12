@@ -74,6 +74,7 @@
     "tests/test_coordination.py",
     "tests/test_independent_verification.py",
     "tests/test_model_provider_contracts.py",
+    "tests/test_model_tool_calls.py",
     "tests/test_model_router.py",
     "tests/test_planning_http_golden_path.py",
     "tests/test_remote_system_control.py",
