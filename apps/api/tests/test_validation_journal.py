@@ -561,3 +561,38 @@ def test_exact_operator_renewal_preserves_original_intent_and_stamps_current_gra
             gate=prepared.intent.plan.commands[0].gate,
             command_run_id="command-1",
         )
+
+
+def test_historical_journal_survives_policy_upgrade_without_granting_current_authority(
+    journal, monkeypatch
+):
+    from app.development_validation import evidence
+    from app.development_validation.planner import digest
+    from app.validation_journal import service as journal_service
+
+    _, actor, _, service, workspace_id, request = journal
+    prepared = service.prepare(actor, workspace_id, request)
+    original = evidence.build_execution_plan
+
+    def upgraded(*args, **kwargs):
+        plan = original(*args, **kwargs)
+        commands = (
+            plan.commands[0].model_copy(update={"policy_fingerprint": "f" * 64}),
+            *plan.commands[1:],
+        )
+        changed = plan.model_copy(update={"commands": commands})
+        return changed.model_copy(
+            update={
+                "execution_plan_hash": digest(
+                    changed.model_dump(mode="json", exclude={"execution_plan_hash"})
+                )
+            }
+        )
+
+    monkeypatch.setattr(evidence, "build_execution_plan", upgraded)
+    monkeypatch.setattr(journal_service, "build_execution_plan", upgraded)
+    assert service.read(actor, workspace_id, prepared.intent.journal_id) == prepared
+    with pytest.raises(DomainError):
+        service.prepare(actor, workspace_id, request)
+    with pytest.raises(ValueError):
+        evidence.verify_plan(prepared.intent.plan)

@@ -60,3 +60,9 @@ This is not hosted independent review.
 Exact-plan renewals are bounded to one hour, matching the measured backend-suite
 policy. Renewal never adopts another worker, lease, attempt, source state or plan.
 The original intent/checkpoint remains unchanged; expired grants cannot be reused.
+
+Final follow-up validation: 34 focused regressions passed with no-cache Ruff.
+
+Historical replay checks recorded plan integrity without granting current policy
+authority. Old plans remain inspectable after upgrades; current approval and
+passing assessment continue to reconstruct and require current packaged policy.

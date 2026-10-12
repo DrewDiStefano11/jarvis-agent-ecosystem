@@ -2,7 +2,6 @@
 
 from itertools import islice
 
-from app.development_validation.evidence import verify_plan
 from app.development_validation.planner import digest
 from app.models.validation_journal import JournalEntry, JournalSnapshot, JournalStep
 
@@ -28,7 +27,20 @@ def fold(entries):
             intent = entry.intent
             if intent.journal_id != entry.journal_id:
                 raise ValueError("journal intent identity mismatch")
-            verify_plan(intent.plan)
+            plan = intent.plan
+            # Reading trusted append-only history is not current-policy authority.
+            # Keep old plans inspectable after package/policy upgrades; writers and
+            # passing assessment still reconstruct the current packaged policy.
+            if (
+                digest(plan.code_state.model_dump(mode="json")) != plan.validation.code_state_hash
+                or digest(plan.validation.model_dump(mode="json", exclude={"plan_hash"}))
+                != plan.validation.plan_hash
+                or tuple(c.gate for c in plan.commands)
+                != tuple(g.gate for g in plan.validation.gates)
+                or digest(plan.model_dump(mode="json", exclude={"execution_plan_hash"}))
+                != plan.execution_plan_hash
+            ):
+                raise ValueError("recorded validation plan integrity mismatch")
             snapshot = JournalSnapshot(
                 intent=intent,
                 sequence=1,
