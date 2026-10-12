@@ -66,3 +66,11 @@ permission or proof of confinement. Ruff format/lint, all frontend gates (214
 Vitest tests), migration round trip and exact CI collection coverage passed.
 Subprocess imports were explicitly bound to this isolated checkout via PYTHONPATH.
 Exact final-head CI remains required after PR publication.
+
+Final follow-up validation: 243 focused regressions passed with no-cache Ruff.
+
+Measurement bounds retain signed POSIX and unsigned 32-bit Windows termination
+status. Failed executions may record budget overrun durations and large measured
+peaks; successful exits still must meet immutable command budgets. Repository
+identity is canonical and bounded. See [GetExitCodeProcess](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getexitcodeprocess)
+and [DWORD data type](https://learn.microsoft.com/en-us/windows/win32/winprog/windows-data-types).
