@@ -44,35 +44,17 @@ def _is_safe_path(target: Path, allowed_directory: Path) -> bool:
         return False
 
 
-def _approved_backup_directory(config: SupervisorConfig) -> bool:
-    try:
-        directory = config.backups_directory
-        return (
-            verified_runtime_home(config.runtime_home, config.repository)
-            and directory.resolve() == config.runtime_home.resolve() / "backups"
-            and not directory.is_symlink()
-            and not getattr(directory, "is_junction", lambda: False)()
-        )
-    except OSError:
-        return False
-
-
-def _unapproved_directory() -> dict[str, Any]:
-    return {
-        "status": STATUS_UNAPPROVED_PATH,
-        "valid": False,
-        "detail": "Backup directory must be unlinked inside the verified runtime home",
-    }
-
-
 def verify_backup(config: SupervisorConfig, target: str | Path) -> dict[str, Any]:
     """Verify a single SQLite backup file and its manifest in a completely read-only manner."""
-    if not _approved_backup_directory(config):
+    directory = config.backups_directory.resolve()
+
+    if not verified_runtime_home(config.runtime_home, config.repository):
         return {
-            **_unapproved_directory(),
+            "status": STATUS_UNAPPROVED_PATH,
+            "valid": False,
+            "detail": "Runtime home is not verified for this repository installation",
             "backupFile": str(target) if isinstance(target, str) else target.name,
         }
-    directory = config.backups_directory.resolve()
 
     if isinstance(target, str):
         target_path = Path(target)
@@ -125,10 +107,7 @@ def verify_backup(config: SupervisorConfig, target: str | Path) -> dict[str, Any
             "detail": f"Backup manifest file is missing: {manifest_path.name}",
         }
 
-    try:
-        manifest = read_json(manifest_path)
-    except UnicodeError:
-        manifest = None
+    manifest = read_json(manifest_path)
     if (
         not manifest
         or manifest.get("kind") != "jarvis-sqlite-backup"
@@ -233,8 +212,6 @@ def verify_backup(config: SupervisorConfig, target: str | Path) -> dict[str, Any
 
 def verify_latest_backup(config: SupervisorConfig) -> dict[str, Any]:
     """Verify the latest available SQLite backup in the supervisor backup directory."""
-    if not _approved_backup_directory(config):
-        return {**_unapproved_directory(), "backupsChecked": 0}
     directory = config.backups_directory.resolve()
     if not directory.exists():
         return {
@@ -277,14 +254,6 @@ def verify_latest_backup(config: SupervisorConfig) -> dict[str, Any]:
 
 def verify_all_backups(config: SupervisorConfig) -> dict[str, Any]:
     """Verify all SQLite backup files found in the supervisor backup directory."""
-    if not _approved_backup_directory(config):
-        return {
-            **_unapproved_directory(),
-            "results": [],
-            "totalCount": 0,
-            "validCount": 0,
-            "invalidCount": 0,
-        }
     directory = config.backups_directory.resolve()
     if not directory.exists():
         return {
