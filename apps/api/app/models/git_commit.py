@@ -67,7 +67,7 @@ class CommitLineage(Contract):
     worker_id: Identifier
     # References are immutable native evidence identities, never authority strings.
     source_edit_record_id: Identifier
-    source_edit_checkpoint_id: Identifier
+    source_edit_checkpoint_id: Identifier | None = None
     source_edit_plan_hash: Digest
     original_references: PlanReferences
 
