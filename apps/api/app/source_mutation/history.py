@@ -2,6 +2,7 @@
 
 from datetime import datetime
 
+from sqlalchemy import select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.models import AuditEventRow
@@ -104,12 +105,32 @@ class MutationHistoryReader:
                     raise ValueError("historical approval mismatch")
             except (ValueError, AttributeError, TypeError, KeyError):
                 refuse("SOURCE_MUTATION_HISTORY_INVALID")
+            # checkpoint_id is deliberately outside the native intent digest.
+            # Only the append-only acknowledgement transaction proves that the
+            # journal acknowledged this exact operation and recovery position.
+            payload = AuditEventRow.payload["payload"]
+            audit_acknowledged = (
+                session.scalar(
+                    select(AuditEventRow.id)
+                    .where(
+                        AuditEventRow.task_id == plan.task_id,
+                        AuditEventRow.event_type
+                        == "self_build.source_mutation.checkpoint_acknowledged",
+                        payload["operationId"].as_string() == record.operation_id,
+                        payload["editingRecordId"].as_string() == editing_record_id,
+                        payload["planHash"].as_string() == plan.plan_hash,
+                        payload["intentDigest"].as_string() == intent_digest(record),
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
         checkpoint, identifier, _, _ = self.service.checkpoint(actor, record)
-        acknowledged = record.checkpoint_id is not None
-        if acknowledged and (checkpoint is None or record.checkpoint_id != identifier):
+        claimed = record.checkpoint_id is not None
+        if claimed and (checkpoint is None or record.checkpoint_id != identifier):
             refuse("SOURCE_MUTATION_CHECKPOINT_INVALID")
         return MutationHistory(
             record=record,
             native_checkpoint_present=checkpoint is not None,
-            journal_checkpoint_acknowledged=acknowledged,
+            journal_checkpoint_acknowledged=claimed and audit_acknowledged,
         )
