@@ -44,10 +44,22 @@ export const runtimeBuildConfig = (mode: string, webDirectory = process.cwd()) =
   }
 }
 
+// Opt-in development proxy for same-origin previews (for example a sandboxed
+// browser that cannot reach the loopback API directly). Pair it with
+// VITE_API_BASE_URL= (empty) and VITE_WS_URL=/ws/events. Never used in builds.
+export const devProxy = (target: string | undefined) =>
+  target
+    ? {
+        '/api': { target, changeOrigin: true },
+        '/ws': { target: target.replace(/^http/, 'ws'), ws: true, changeOrigin: true }
+      }
+    : undefined
+
 export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '')
   return {
     ...runtimeBuildConfig(mode),
-    server: { port: 5173 },
+    server: { port: 5173, proxy: devProxy(env.JARVIS_DEV_PROXY_TARGET) },
     test: { environment: 'jsdom', setupFiles: './tests/setup.ts', globals: true, css: true }
   }
 })

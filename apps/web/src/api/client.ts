@@ -1,7 +1,14 @@
 import type { ApiEnvelope } from '../types/contracts'
 
 export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000'
-export const WS_URL = import.meta.env.VITE_WS_URL ?? 'ws://127.0.0.1:8000/ws/events'
+const CONFIGURED_WS_URL = import.meta.env.VITE_WS_URL ?? 'ws://127.0.0.1:8000/ws/events'
+
+export function resolveWebSocketUrl(value: string, origin = typeof window === 'undefined' ? undefined : window.location): string {
+  if (!value.startsWith('/') || !origin) return value
+  return `${origin.protocol === 'https:' ? 'wss:' : 'ws:'}//${origin.host}${value}`
+}
+
+export const WS_URL = resolveWebSocketUrl(CONFIGURED_WS_URL)
 
 export class ApiError extends Error { constructor(public code:string, message:string, public status:number){super(message)} }
 
