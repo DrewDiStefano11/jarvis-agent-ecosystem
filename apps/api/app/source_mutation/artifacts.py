@@ -5,6 +5,7 @@ from pathlib import Path
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.errors import DomainError
 from app.models import source_artifacts as contracts
 from app.models.source_artifacts import ArtifactExpectation, ExpectedArtifactManifest
 from app.models.source_edit_planning import EditingPlan
@@ -129,6 +130,10 @@ class ArtifactManifestReader:
             return plan_expected_artifacts(history.record, proposal.plan)
         except SQLAlchemyError:
             refuse("SOURCE_ARTIFACTS_STORAGE_FAILED")
+        except DomainError as error:
+            if error.code in {"SOURCE_MUTATION_STORAGE_FAILED", "SOURCE_EDIT_STORAGE_FAILED"}:
+                refuse("SOURCE_ARTIFACTS_STORAGE_FAILED")
+            raise
 
 
 def verify_expected_artifacts(manifest, record, editing_plan):

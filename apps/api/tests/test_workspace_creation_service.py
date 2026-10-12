@@ -1352,3 +1352,30 @@ def test_expected_artifact_manifest_storage_error_does_not_expose_database_detai
         reader.read(None, "0" * 64)
     assert failure.value.code == "SOURCE_ARTIFACTS_STORAGE_FAILED"
     assert "private" not in str(failure.value) and failure.value.__suppress_context__
+
+
+@pytest.mark.parametrize("nested_reader", ["history", "planning"])
+def test_artifact_reader_translates_real_nested_database_read_errors(
+    editing, monkeypatch, nested_reader
+):
+    from sqlalchemy.exc import SQLAlchemyError
+    from sqlalchemy.orm import Session
+
+    from app.source_edit_planning.repository import SourceEditingPlanRow
+    from app.source_mutation.artifacts import ArtifactManifestReader
+
+    app, actor, _, service, request, _, _ = editing
+    service.prepare(actor, request)
+    entity = SourceMutationRow if nested_reader == "history" else SourceEditingPlanRow
+    native = Session.get
+
+    def storage_failure(session, model, *args, **kwargs):
+        if model is entity:
+            raise SQLAlchemyError("private source text and lease token")
+        return native(session, model, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "get", storage_failure)
+    with pytest.raises(DomainError) as failure:
+        ArtifactManifestReader(app).read(actor, request.editing_record_id)
+    assert failure.value.code == "SOURCE_ARTIFACTS_STORAGE_FAILED"
+    assert "private" not in str(failure.value) and failure.value.__suppress_context__
