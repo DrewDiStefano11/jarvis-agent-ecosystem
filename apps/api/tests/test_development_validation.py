@@ -1643,3 +1643,267 @@ def test_real_control_plane_restart_keeps_proposal_and_authorization(source_plan
         assert fresh_service.read(current_actor, result.record_id) == result
     finally:
         restarted.state.engine.dispose()
+
+
+# Expected retained-artifact manifests never establish native evidence or grants.
+def artifact_inputs(operation="modify", path="hello.py"):
+    from app.models.source_edit_planning import EditingPlan
+    from app.models.source_mutation import MutationPlan, MutationRecord
+    from app.source_edit_planning.projection import project_source_state
+    from app.source_edit_planning.service import EDITING_POLICY_DIGEST
+    from app.source_mutation.driver import expected_observation
+    from app.source_mutation.service import MUTATION_POLICY_DIGEST
+
+    old = content()
+    parents = [SourceEntry(path=path.rpartition("/")[0], kind="directory")] if "/" in path else []
+    observed = observation(
+        *parents,
+        SourceEntry(
+            path=path,
+            kind="absent" if operation == "add" else "file",
+            content=None if operation == "add" else old,
+        ),
+    )
+    source = plan_source_changes(
+        intent(
+            observed,
+            change(
+                path,
+                before=identity(old) if operation != "add" else None,
+                after=content("replacement\n") if operation != "delete" else None,
+                operation=operation,
+            ),
+        ),
+        observed,
+    )
+    original = source_projection_state(observed)
+    expected, validation = project_source_state(source, original)
+    editing = EditingPlan(
+        editing_policy_digest=EDITING_POLICY_DIGEST,
+        workspace_id="workspace-1",
+        workspace_version=1,
+        workspace_plan_hash=source.references.original_plan_hash,
+        task_id="task-1",
+        runtime_run_id="run-1",
+        runtime_version=1,
+        runtime_attempt_id="attempt-1",
+        source_plan=source,
+        observation=observed,
+        original_code_state=original,
+        expected_code_state=expected,
+        validation_plan=validation,
+        plan_hash="0" * 64,
+    )
+    editing = editing.model_copy(
+        update={"plan_hash": digest(editing.model_dump(mode="json", exclude={"plan_hash"}))}
+    )
+    plan = MutationPlan(
+        editing_record_id="1" * 64,
+        editing_plan_hash=editing.plan_hash,
+        workspace_id=editing.workspace_id,
+        task_id=editing.task_id,
+        creation_operation_id="create-1",
+        creation_plan_hash="2" * 64,
+        ownership_digest="3" * 64,
+        runtime_run_id=editing.runtime_run_id,
+        attempt_id="attempt-1",
+        worker_id="worker-1",
+        mutation_policy_digest=MUTATION_POLICY_DIGEST,
+        plan_hash="0" * 64,
+    )
+    plan = plan.model_copy(
+        update={"plan_hash": digest(plan.model_dump(mode="json", exclude={"plan_hash"}))}
+    )
+    stamp = datetime(2026, 10, 12, tzinfo=UTC)
+    record = MutationRecord(
+        operation_id="source-edit-1",
+        plan=plan,
+        original_approval_id="approval-1",
+        state="complete",
+        completed_count=1,
+        prefix_digest=digest([item.model_dump(mode="json") for item in source.preview]),
+        final_observation_digest=digest(
+            expected_observation(observed, source.changes, 1).model_dump(mode="json")
+        ),
+        checkpoint_id="checkpoint-source-edit-1-complete-1-None",
+        created_at=stamp,
+        updated_at=stamp,
+    )
+    return record, editing
+
+
+@pytest.mark.parametrize("operation", ["add", "modify", "delete"])
+def test_artifact_manifest_closed_bounded_expected_names_and_no_grants(operation):
+    from app.source_mutation.artifacts import plan_expected_artifacts, verify_expected_artifacts
+    from app.source_mutation.driver import staging_names
+
+    record, editing = artifact_inputs(operation)
+    result = plan_expected_artifacts(record, editing)
+    before, after = staging_names(record.operation_id, 0)
+    assert [item.path for item in result.artifacts] == [before, after]
+    assert result.artifacts[0].presence == ("absent" if operation == "add" else "retained_original")
+    assert result.artifacts[1].presence == "absent"
+    assert not result.native_artifacts_verified and not result.execution_authorized
+    assert not result.deletion_authorized and not result.checkout_root_lock_allowed
+    assert (
+        "original\n" not in result.model_dump_json()
+        and "replacement" not in result.model_dump_json()
+    )
+    assert verify_expected_artifacts(result, record, editing) == result
+    assert (
+        plan_expected_artifacts(
+            record.model_copy(update={"updated_at": record.updated_at + timedelta(seconds=1)}),
+            editing,
+        )
+        == result
+    )
+
+
+def test_artifact_manifest_preserves_long_derived_sibling_without_traversal():
+    from app.source_mutation.artifacts import plan_expected_artifacts
+
+    record, editing = artifact_inputs(path="d" * 230 + "/x")
+    result = plan_expected_artifacts(record, editing)
+    assert len(result.artifacts[0].path) > 240
+    assert result.artifacts[0].path.startswith("d" * 230 + "/.jarvis-edit-")
+
+
+@pytest.mark.parametrize(
+    "field", ["checkpoint_id", "prefix_digest", "final_observation_digest", "completed_count"]
+)
+def test_artifact_manifest_refuses_substituted_completed_position(field):
+    from app.source_mutation.artifacts import plan_expected_artifacts
+
+    record, editing = artifact_inputs()
+    value = 2 if field == "completed_count" else "foreign" if field == "checkpoint_id" else "0" * 64
+    with pytest.raises(DomainError) as failure:
+        plan_expected_artifacts(record.model_copy(update={field: value}), editing)
+    assert failure.value.code == "SOURCE_ARTIFACTS_POSITION_INVALID"
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "plan_hash",
+        "editing_plan_hash",
+        "workspace_id",
+        "task_id",
+        "attempt_id",
+        "mutation_policy_digest",
+    ],
+)
+def test_artifact_manifest_refuses_foreign_mutation_lineage(field):
+    from app.source_mutation.artifacts import plan_expected_artifacts
+
+    record, editing = artifact_inputs()
+    value = "0" * 64 if field.endswith("hash") or field.endswith("digest") else "foreign"
+    plan = record.plan.model_copy(update={field: value})
+    if field != "plan_hash":
+        plan = plan.model_copy(
+            update={"plan_hash": digest(plan.model_dump(mode="json", exclude={"plan_hash"}))}
+        )
+    with pytest.raises(DomainError) as failure:
+        plan_expected_artifacts(record.model_copy(update={"plan": plan}), editing)
+    assert failure.value.code == "SOURCE_ARTIFACTS_LINEAGE_INVALID"
+
+
+def test_artifact_manifest_refuses_rehashed_expected_state_substitution():
+    from app.source_mutation.artifacts import plan_expected_artifacts
+
+    record, editing = artifact_inputs()
+    editing = editing.model_copy(update={"expected_code_state": editing.original_code_state})
+    editing = editing.model_copy(
+        update={"plan_hash": digest(editing.model_dump(mode="json", exclude={"plan_hash"}))}
+    )
+    plan = record.plan.model_copy(update={"editing_plan_hash": editing.plan_hash})
+    plan = plan.model_copy(
+        update={"plan_hash": digest(plan.model_dump(mode="json", exclude={"plan_hash"}))}
+    )
+    with pytest.raises(DomainError) as failure:
+        plan_expected_artifacts(record.model_copy(update={"plan": plan}), editing)
+    assert failure.value.code == "SOURCE_ARTIFACTS_LINEAGE_INVALID"
+
+
+@pytest.mark.parametrize(
+    "path", ["../escape", ".git/config", "/absolute", "d/.jarvis-edit-" + "0" * 64 + ".before"]
+)
+def test_artifact_expectation_refuses_foreign_or_traversing_sibling(path):
+    from app.models.source_artifacts import ArtifactExpectation
+
+    with pytest.raises(ValidationError):
+        ArtifactExpectation(
+            change_index=0,
+            source_path="hello.py",
+            path=path,
+            presence="absent",
+            expected_identity=None,
+        )
+
+
+def test_artifact_manifest_verifier_refuses_coherently_rehashed_hash_substitution():
+    from app.source_mutation.artifacts import plan_expected_artifacts, verify_expected_artifacts
+
+    record, editing = artifact_inputs()
+    result = plan_expected_artifacts(record, editing)
+    changed = result.model_copy(update={"original_approval_id": "foreign"})
+    changed = changed.model_copy(
+        update={"manifest_hash": digest(changed.model_dump(mode="json", exclude={"manifest_hash"}))}
+    )
+    with pytest.raises(DomainError) as failure:
+        verify_expected_artifacts(changed, record, editing)
+    assert failure.value.code == "SOURCE_ARTIFACTS_MANIFEST_CHANGED"
+
+
+def test_artifact_manifest_serialized_bound_safely_refuses(monkeypatch):
+    from app.source_mutation import artifacts
+
+    record, editing = artifact_inputs()
+    monkeypatch.setattr(artifacts, "MAX_MANIFEST_BYTES", 1)
+    with pytest.raises(DomainError) as failure:
+        artifacts.plan_expected_artifacts(record, editing)
+    assert failure.value.code == "SOURCE_ARTIFACTS_METADATA_LIMIT"
+
+
+def test_artifact_manifest_closed_allowlist_refuses_same_shape_foreign_name():
+    from app.source_mutation.artifacts import plan_expected_artifacts, verify_expected_artifacts
+
+    record, editing = artifact_inputs()
+    result = plan_expected_artifacts(record, editing)
+    first = result.artifacts[0].model_copy(update={"path": ".jarvis-edit-" + "0" * 64 + ".before"})
+    changed = result.model_copy(update={"artifacts": (first, result.artifacts[1])})
+    changed = changed.model_copy(
+        update={"manifest_hash": digest(changed.model_dump(mode="json", exclude={"manifest_hash"}))}
+    )
+    with pytest.raises(DomainError) as failure:
+        verify_expected_artifacts(changed, record, editing)
+    assert failure.value.code == "SOURCE_ARTIFACTS_MANIFEST_CHANGED"
+
+
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "native_artifacts_verified",
+        "execution_authorized",
+        "deletion_authorized",
+        "checkout_root_lock_allowed",
+    ],
+)
+def test_artifact_manifest_cannot_be_coerced_into_a_native_or_effect_grant(flag):
+    from app.source_mutation.artifacts import plan_expected_artifacts, verify_expected_artifacts
+
+    record, editing = artifact_inputs()
+    result = plan_expected_artifacts(record, editing).model_copy(update={flag: True})
+    with pytest.raises(DomainError) as failure:
+        verify_expected_artifacts(result, record, editing)
+    assert failure.value.code == "SOURCE_ARTIFACTS_INPUT_INVALID"
+
+
+def test_artifact_manifest_descriptor_count_is_bounded_even_before_verification():
+    from app.models.source_artifacts import ExpectedArtifactManifest
+    from app.source_mutation.artifacts import plan_expected_artifacts
+
+    record, editing = artifact_inputs()
+    payload = plan_expected_artifacts(record, editing).model_dump(mode="json")
+    payload["artifacts"] = [payload["artifacts"][0]] * 129
+    with pytest.raises(ValidationError):
+        ExpectedArtifactManifest.model_validate(payload)

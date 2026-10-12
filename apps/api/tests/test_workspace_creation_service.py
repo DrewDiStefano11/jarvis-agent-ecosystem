@@ -1296,3 +1296,59 @@ def test_history_storage_failure_never_exposes_database_details():
     assert failure.value.code == "SOURCE_MUTATION_STORAGE_FAILED"
     assert "private" not in str(failure.value)
     assert failure.value.__suppress_context__
+
+
+def test_expected_artifact_manifest_protected_read_survives_stop_without_native_claims(editing):
+    from app.source_mutation.artifacts import ArtifactManifestReader
+    from app.source_mutation.driver import staging_names
+
+    app, actor, _, service, request, target, _ = editing
+    completed = service.apply(actor, request)
+    reader = ArtifactManifestReader(app)
+    result = reader.read(actor, request.editing_record_id)
+    before, after = staging_names(completed.operation_id, 0)
+    assert [item.path for item in result.artifacts] == [before, after]
+    assert result.original_approval_id == completed.original_approval_id
+    assert result.checkpoint_id == completed.checkpoint_id
+    from hashlib import sha256
+
+    assert (
+        result.artifacts[0].expected_identity.digest
+        == sha256((target / before).read_bytes()).hexdigest()
+    )
+    assert not result.native_artifacts_verified and not result.deletion_authorized
+    assert not result.execution_authorized and not result.checkout_root_lock_allowed
+    with service.repository.leases._write() as session:
+        session.get(SystemStateRow, 1).emergency_stop = True
+    assert reader.read(actor, request.editing_record_id) == result
+    assert (target / "source.py").read_bytes() == b"value = 2\n"
+
+
+def test_expected_artifact_manifest_pending_intent_refuses_without_source_effects(editing):
+    from app.source_mutation.artifacts import ArtifactManifestReader
+
+    app, actor, _, service, request, target, _ = editing
+    service.prepare(actor, request)
+    with pytest.raises(DomainError) as failure:
+        ArtifactManifestReader(app).read(actor, request.editing_record_id)
+    assert failure.value.code == "SOURCE_ARTIFACTS_INCOMPLETE"
+    assert (target / "source.py").read_bytes() == b"value = 1\n"
+    assert not list(target.glob(".jarvis-edit-*"))
+
+
+def test_expected_artifact_manifest_storage_error_does_not_expose_database_details():
+    from types import SimpleNamespace
+
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from app.source_mutation.artifacts import ArtifactManifestReader
+
+    def failed(*args):
+        raise SQLAlchemyError("private source text and lease token")
+
+    reader = ArtifactManifestReader.__new__(ArtifactManifestReader)
+    reader.history = SimpleNamespace(read=failed)
+    with pytest.raises(DomainError) as failure:
+        reader.read(None, "0" * 64)
+    assert failure.value.code == "SOURCE_ARTIFACTS_STORAGE_FAILED"
+    assert "private" not in str(failure.value) and failure.value.__suppress_context__
