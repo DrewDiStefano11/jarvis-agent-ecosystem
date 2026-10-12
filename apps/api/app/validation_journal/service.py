@@ -48,6 +48,8 @@ class ValidationJournalService:
         if row is None:
             fail("VALIDATION_WORKSPACE_NOT_FOUND", "Workspace was not found.", 404)
         self.workspace.authorize(actor, row.task_id, session, write=write)
+        if row.state != "reserved":
+            fail("VALIDATION_OWNER_INACTIVE", "Workspace ownership requires recovery.")
         policy = self.workspace.policies.get(row.repository_id)
         reason = self.repository.reason(session, row, digest(policy.model_dump()))
         if reason is not None:

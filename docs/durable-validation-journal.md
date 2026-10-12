@@ -19,6 +19,11 @@ emergency stop, active runtime attempt/executor and the original workspace lease
 The private lease token is never journaled. Only its fingerprint is retained.
 A candidate plan or model response cannot approve itself.
 
+Validation authority additionally requires the workspace to remain reserved.
+Operator abandonment blocks preview, approval, preparation, reconciliation and
+journal transitions even when the runtime and task lease remain active. Existing
+journal history stays readable through the authorized read-only path.
+
 Every journal entry requires a native runtime checkpoint with its exact hash,
 attempt, plan identity and monotonic sequence before the next step can advance.
 Intent is committed before checkpoint publication. A crash between these commits

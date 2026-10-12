@@ -563,6 +563,56 @@ def test_exact_operator_renewal_preserves_original_intent_and_stamps_current_gra
         )
 
 
+@pytest.mark.parametrize("operation", ["preview", "approve", "prepare", "advance", "reconcile"])
+def test_abandoned_workspace_refuses_validation_authority_but_preserves_history(journal, operation):
+    from app.models.self_build import AbandonWorkspaceRequest, ApproveWorkspaceAbandonRequest
+
+    app, actor, operator, service, workspace_id, request = journal
+    prepared = service.prepare(actor, workspace_id, request)
+    plan = service.workspace.preview_abandon(actor, workspace_id)
+    approval = service.workspace.approve_abandon(
+        operator,
+        ApproveWorkspaceAbandonRequest(
+            workspace_id=workspace_id, expected_plan_hash=plan.plan_hash
+        ),
+    )
+    service.workspace.abandon(
+        actor,
+        workspace_id,
+        AbandonWorkspaceRequest(
+            expected_version=plan.workspace_version,
+            expected_plan_hash=plan.plan_hash,
+            approval_id=approval.approval_id,
+            worker_id=request.worker_id,
+            lease_token=request.lease_token,
+        ),
+    )
+    before = len(entries(app))
+    with pytest.raises(DomainError) as failure:
+        if operation == "preview":
+            service.preview(actor, workspace_id)
+        elif operation == "approve":
+            service.approve(operator, workspace_id, request.expected_plan_hash)
+        elif operation == "prepare":
+            service.prepare(actor, workspace_id, request)
+        elif operation == "reconcile":
+            service.reconcile(actor, workspace_id, request, prepared.intent.journal_id)
+        else:
+            advance(
+                service,
+                actor,
+                workspace_id,
+                request,
+                prepared,
+                "step_intent",
+                gate=prepared.intent.plan.commands[0].gate,
+                command_run_id="command-1",
+            )
+    assert failure.value.code == "VALIDATION_OWNER_INACTIVE"
+    assert len(entries(app)) == before
+    assert service.read(actor, workspace_id, prepared.intent.journal_id) == prepared
+
+
 def test_historical_journal_survives_policy_upgrade_without_granting_current_authority(
     journal, monkeypatch
 ):
