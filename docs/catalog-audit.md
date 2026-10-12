@@ -140,6 +140,8 @@ known parser warning codes are shown. Free-text identity names and roles are omi
 Identifiers have a bounded alphabet, and unexpected metadata is withheld. Each finding
 collection is limited to 1,000 rows, with `output_truncated` marking incomplete output.
 Recommendations use the complete counts before truncation.
+The same flag is set when any revision's tags, capabilities, or warnings exceed the
+100-item metadata limit; bounded nested metadata must not imply a complete audit.
 
 The CLI requires an existing SQLite file and opens it with `mode=ro`, without changing
 journal mode or running migrations. It cannot create a missing database or write rows.
