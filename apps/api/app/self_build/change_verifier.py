@@ -333,8 +333,11 @@ class ChangeVerifier:
                     ),
                 )
 
-                def publication_guard():
-                    self.guard()
+                def publication_guard(*, check_authority=True):
+                    # A native transaction callback supplies its own in-session
+                    # authority fence; never open a nested SQLite writer there.
+                    if check_authority:
+                        self.guard()
                     source_check()
                     metadata_check()
                     owner_check()
