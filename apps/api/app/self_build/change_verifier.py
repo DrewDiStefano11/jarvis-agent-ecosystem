@@ -243,8 +243,6 @@ class ChangeVerifier:
                         # Refuse protected/private/deep paths before reading bytes.
                         if not internal and artifact is None:
                             path_nodes([(path, True)])
-                        if len(actual) >= 4096:
-                            fail("SELF_BUILD_CHANGE_LIMIT", "File inventory exceeds its bound.")
                         with ExitStack() as file_stack:
                             parent_directory = checkout
                             segments = (
@@ -296,6 +294,8 @@ class ChangeVerifier:
                                     provenance_digest=record.ownership_digest,
                                 )
                             continue
+                        if len(actual) >= 4096:
+                            fail("SELF_BUILD_CHANGE_LIMIT", "File inventory exceeds its bound.")
                         total += len(content)
                         if total > plan.maximum_total_bytes:
                             fail("SELF_BUILD_CHANGE_LIMIT", "Source bytes exceed their bound.")
