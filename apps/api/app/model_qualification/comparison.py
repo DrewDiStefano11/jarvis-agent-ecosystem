@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.autonomy.events import scrub_text
 from app.model_qualification.profile import (
@@ -76,6 +76,21 @@ class RoleQualificationComparison(BaseModel):
     newly_passing_gates: tuple[str, ...] = ()
     missing_or_incomplete_evidence: tuple[str, ...] = ()
 
+    @field_validator("model", "provider", "reason")
+    @classmethod
+    def safe_text(cls, value: str) -> str:
+        return scrub_text(value)[:1200]
+
+    @field_validator(
+        "mandatory_gate_changes",
+        "previously_passing_failed_gates",
+        "newly_passing_gates",
+        "missing_or_incomplete_evidence",
+    )
+    @classmethod
+    def safe_evidence(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return _scrub_str_tuple(value[:100])
+
     @field_validator("role")
     @classmethod
     def validate_role(cls, value: str) -> str:
@@ -106,7 +121,7 @@ class QualificationComparisonReport(BaseModel):
     notes: tuple[str, ...] = ()
 
 
-def load_qualification_artifact(
+def _load_qualification_artifact(
     source: str | Path | dict[str, Any] | list[Any] | ModelProfile | QualificationRun,
 ) -> tuple[ModelProfile, ...]:
     """Load and validate qualification artifact(s) from a file path, dict, list, or model object."""
@@ -145,7 +160,7 @@ def load_qualification_artifact(
                 return tuple(ModelProfile.model_validate(item) for item in raw_data)
         except Exception as exc:
             raise ValueError(
-                f"failed to parse qualification artifact at {file_path}: {exc}"
+                "failed to parse qualification artifact: invalid evidence schema or JSON"
             ) from exc
 
         raise ValueError(f"unrecognized qualification artifact format at {file_path}")
@@ -161,6 +176,13 @@ def load_qualification_artifact(
         return tuple(ModelProfile.model_validate(item) for item in source)
 
     raise ValueError(f"unsupported qualification artifact source type: {type(source).__name__}")
+
+
+def load_qualification_artifact(source) -> tuple[ModelProfile, ...]:
+    try:
+        return _load_qualification_artifact(source)
+    except ValidationError as exc:
+        raise ValueError("qualification artifact does not match its evidence schema") from exc
 
 
 def compare_qualification_artifacts(
@@ -265,19 +287,13 @@ def compare_qualification_artifacts(
             )
 
         if b_prof.qualification_policy_version != t_prof.qualification_policy_version:
-            non_comp_reasons.append(
-                f"mismatched qualification policy versions: baseline='{b_prof.qualification_policy_version}' vs target='{t_prof.qualification_policy_version}'"
-            )
+            non_comp_reasons.append("mismatched qualification policy versions")
 
         if b_prof.evaluation_suite_version != t_prof.evaluation_suite_version:
-            non_comp_reasons.append(
-                f"mismatched evaluation suite versions: baseline='{b_prof.evaluation_suite_version}' vs target='{t_prof.evaluation_suite_version}'"
-            )
+            non_comp_reasons.append("mismatched evaluation suite versions")
 
         if b_prof.evaluation_suite_digest != t_prof.evaluation_suite_digest:
-            non_comp_reasons.append(
-                f"mismatched evaluation suite digests: baseline='{b_prof.evaluation_suite_digest}' vs target='{t_prof.evaluation_suite_digest}'"
-            )
+            non_comp_reasons.append("mismatched evaluation suite digests")
 
         candidate_roles = sorted(set(b_prof.roles.keys()) | set(t_prof.roles.keys()))
         if allowed_roles:
@@ -388,7 +404,7 @@ def compare_qualification_artifacts(
             b_score = b_role.score
             t_score = t_role.score
             if b_score is not None and t_score is not None:
-                delta = round(t_score - b_score, 4)
+                delta = t_score - b_score
                 meaningful = abs(delta) >= SCORE_DELTA_THRESHOLD
             else:
                 delta = None
@@ -438,6 +454,10 @@ def compare_qualification_artifacts(
             if t_unmeas_mand:
                 evidence_issues.append(f"target unmeasured mandatory gates: {t_unmeas_mand}")
 
+            for key in all_gate_keys:
+                if key not in b_gates or key not in t_gates:
+                    evidence_issues.append(f"gate '{key}' missing from one report")
+
             # Determine verdict
             # Note: LEVEL_RANK values are 0 (qualified), 1 (conditional), 2 (unqualified).
             # Lower rank integer means BETTER qualification.
@@ -446,30 +466,24 @@ def compare_qualification_artifacts(
             b_rank = LEVEL_RANK.get(QualificationLevel(b_level), 3)
             t_rank = LEVEL_RANK.get(QualificationLevel(t_level), 3)
 
-            failed_mand_regressed = any(
-                (k in b_gates and b_gates[k].mandatory and b_gates[k].passed is True)
-                and (k in t_gates and t_gates[k].passed is False)
-                for k in previously_passing_failed
-            )
+            failed_gate_regressed = bool(previously_passing_failed)
+            passed_gate_improved = bool(newly_passing)
 
-            passed_mand_improved = any(
-                (k in t_gates and t_gates[k].mandatory and t_gates[k].passed is True)
-                and (k not in b_gates or b_gates[k].passed is not True)
-                for k in newly_passing
-            )
-
-            if (
+            if evidence_issues:
+                verdict = VERDICT_INSUFFICIENT_EVIDENCE
+                reason = "; ".join(evidence_issues)
+            elif (
                 t_rank > b_rank
-                or failed_mand_regressed
+                or failed_gate_regressed
                 or (t_rank == b_rank and delta is not None and delta <= -SCORE_DELTA_THRESHOLD)
             ):
                 verdict = VERDICT_REGRESSED
                 reasons = []
                 if t_rank > b_rank:
                     reasons.append(f"qualification level dropped from {b_level} to {t_level}")
-                if failed_mand_regressed:
+                if failed_gate_regressed:
                     reasons.append(
-                        f"previously passing mandatory gate(s) failed: {previously_passing_failed}"
+                        f"previously passing gate(s) failed: {previously_passing_failed}"
                     )
                 if t_rank == b_rank and delta is not None and delta <= -SCORE_DELTA_THRESHOLD:
                     reasons.append(
@@ -478,15 +492,15 @@ def compare_qualification_artifacts(
                 reason = "; ".join(reasons)
             elif (
                 t_rank < b_rank
-                or passed_mand_improved
+                or passed_gate_improved
                 or (t_rank == b_rank and delta is not None and delta >= SCORE_DELTA_THRESHOLD)
             ):
                 verdict = VERDICT_IMPROVED
                 reasons = []
                 if t_rank < b_rank:
                     reasons.append(f"qualification level improved from {b_level} to {t_level}")
-                if passed_mand_improved:
-                    reasons.append(f"newly passing mandatory gate(s): {newly_passing}")
+                if passed_gate_improved:
+                    reasons.append(f"newly passing gate(s): {newly_passing}")
                 if t_rank == b_rank and delta is not None and delta >= SCORE_DELTA_THRESHOLD:
                     reasons.append(
                         f"score increased from {b_score:.3f} to {t_score:.3f} ({delta:+.3f})"
@@ -512,7 +526,7 @@ def compare_qualification_artifacts(
                     target_qualification=t_level,
                     baseline_score=b_score,
                     target_score=t_score,
-                    score_delta=delta,
+                    score_delta=round(delta, 4) if delta is not None else None,
                     meaningful_score_change=meaningful,
                     mandatory_gate_changes=_scrub_str_tuple(mandatory_changes),
                     previously_passing_failed_gates=_scrub_str_tuple(previously_passing_failed),
@@ -531,8 +545,8 @@ def compare_qualification_artifacts(
 
     return QualificationComparisonReport(
         compared_at=compared_time,
-        baseline_source=str(baseline_source_name),
-        target_source=str(target_source_name),
+        baseline_source=scrub_text(str(baseline_source_name))[:400],
+        target_source=scrub_text(str(target_source_name))[:400],
         baseline_inference_modes=baseline_modes,
         target_inference_modes=target_modes,
         comparisons=tuple(comparisons),

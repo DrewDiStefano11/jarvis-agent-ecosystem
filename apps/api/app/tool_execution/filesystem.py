@@ -44,7 +44,7 @@ def fail(code, message, status=400):
     raise DomainError(code, message, status)
 
 
-def parts(value: str) -> tuple[str, ...]:
+def relative_parts(value: str) -> tuple[str, ...]:
     if value == ".":
         return ()
     if not isinstance(value, str) or not value or len(value) > 240:
@@ -68,6 +68,12 @@ def parts(value: str) -> tuple[str, ...]:
                 "TOOL_PATH_INVALID",
                 "Path traversal, absolute paths and device names are unavailable.",
             )
+    return tuple(segments)
+
+
+def parts(value: str) -> tuple[str, ...]:
+    segments = relative_parts(value)
+    for item in segments:
         lower = item.casefold()
         if (
             item.startswith(".")
@@ -76,7 +82,47 @@ def parts(value: str) -> tuple[str, ...]:
             or lower.endswith((".pem", ".key", ".p12", ".pfx", ".kdbx"))
         ):
             fail("TOOL_PATH_DENIED", "Hidden files and credential paths are unavailable.", 403)
-    return tuple(segments)
+    return segments
+
+
+def repository_parts(value: str) -> tuple[str, ...]:
+    """Repository metadata permits tracked dotfiles, never credentials/Git authority.
+
+    This does not widen the existing marked report workspace tool boundary.
+    """
+    segments = relative_parts(value)
+    if not segments:
+        fail("TOOL_PATH_INVALID", "Select a repository file, not its root.")
+    for item in segments:
+        lower = item.casefold()
+        ordinary = lower.lstrip(".")
+        if (
+            lower in {".git", ".aws", ".ssh", ".codex", ".venv", "node_modules"}
+            or (lower.startswith(".env") and lower != ".env.example")
+            or ordinary in _CREDENTIALS
+            or ordinary.split(".")[0] in {"credentials", "secrets"}
+            or lower.endswith(
+                (
+                    ".pem",
+                    ".key",
+                    ".p12",
+                    ".pfx",
+                    ".kdbx",
+                    ".db",
+                    ".sqlite",
+                    ".sqlite3",
+                    "-wal",
+                    "-shm",
+                    "-journal",
+                )
+            )
+        ):
+            fail(
+                "TOOL_PATH_DENIED",
+                "Credential, database and Git authority paths are unavailable.",
+                403,
+            )
+    return segments
 
 
 def within(path: tuple[str, ...], prefix: tuple[str, ...]):

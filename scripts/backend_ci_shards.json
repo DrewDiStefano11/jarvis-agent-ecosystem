@@ -77,6 +77,9 @@
     "tests/test_self_improvement.py",
     "tests/test_task_corrections.py",
     "tests/test_task_decomposition.py",
-    "tests/test_team_selection.py"
+    "tests/test_team_selection.py",
+    "tests/test_git_process.py",
+    "tests/test_self_build_git_observer.py",
+    "tests/test_self_build_git_inspection.py"
   ]
 }
