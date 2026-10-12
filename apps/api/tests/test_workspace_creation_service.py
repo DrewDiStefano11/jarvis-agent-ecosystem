@@ -15,6 +15,10 @@ from app.models.agent_runtime import BeginAttemptCommand, StartAttemptCommand
 from app.models.identity import AssignPermissionRequest, CreatePermissionRequest
 from app.models.workspace_creation import ApproveWorkspaceCreation, CreateWorkspaceRequest
 from app.self_build.creation_service import WorkspaceCreationService
+from app.self_build.policy import digest
+from app.source_mutation import history
+from app.source_mutation.repository import SourceMutationRow
+from app.source_mutation.service import intent_digest
 from tests.agent_runtime_testkit import ts
 from tests.test_autonomous_worker_migration import migration_config
 
@@ -1102,3 +1106,193 @@ def test_source_mutation_coherently_rehashed_foreign_original_approval_refuses(e
         service.apply(actor, request)
     assert failure.value.code == "SOURCE_MUTATION_INTENT_INVALID"
     assert (target / "source.py").read_bytes() == b"value = 1\n"
+
+
+def test_protected_complete_history_survives_stop_without_claiming_current_source(editing):
+    app, actor, _, service, request, _, _ = editing
+    completed = service.apply(actor, request)
+    with service.repository.leases._write() as session:
+        session.get(SystemStateRow, 1).emergency_stop = True
+    result = history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert result.record == completed
+    assert result.native_checkpoint_present and result.journal_checkpoint_acknowledged
+    assert not result.execution_authorized and not result.current_source_measured
+    assert "value =" not in result.model_dump_json()
+    assert request.lease_token not in result.model_dump_json()
+
+
+def test_pending_unacknowledged_history_does_not_write_or_grant_execution(editing, monkeypatch):
+    from app.source_mutation.driver import SourceMutationDriver
+
+    app, actor, _, service, request, target, _ = editing
+    record = service.prepare(actor, request)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("read cannot execute files")
+
+    monkeypatch.setattr(SourceMutationDriver, "apply", forbidden)
+    result = history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert result.record == record and not result.native_checkpoint_present
+    assert not result.execution_authorized and not result.journal_checkpoint_acknowledged
+    assert (target / "source.py").read_bytes() == b"value = 1\n"
+
+
+def test_rehashed_foreign_attempt_cannot_replace_historical_provenance(editing):
+    app, actor, _, service, request, _, _ = editing
+    record = service.prepare(actor, request)
+    payload = record.plan.model_dump(mode="json", exclude={"plan_hash"}) | {
+        "attempt_id": "foreign-attempt"
+    }
+    altered_plan = record.plan.model_copy(update=payload | {"plan_hash": digest(payload)})
+    altered = record.model_copy(update={"plan": altered_plan})
+    with service.repository.leases._write() as session:
+        stored = session.get(SourceMutationRow, request.editing_record_id)
+        stored.payload = altered.model_dump(mode="json")
+        stored.integrity_digest = intent_digest(altered)
+    with pytest.raises(DomainError) as failure:
+        history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert failure.value.code == "SOURCE_MUTATION_HISTORY_INVALID"
+
+
+def test_valid_mutation_checkpoint_cannot_hide_missing_creation_checkpoint(editing, monkeypatch):
+    app, actor, _, service, request, _, _ = editing
+    service.apply(actor, request)
+    native = service.runtime.checkpoints_authorized
+
+    def missing_creation(*args):
+        return tuple(
+            item
+            for item in native(*args)
+            if not item.state_reference.startswith("workspace-creation:")
+        )
+
+    monkeypatch.setattr(service.runtime, "checkpoints_authorized", missing_creation)
+    with pytest.raises(DomainError) as failure:
+        history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert failure.value.code == "SOURCE_MUTATION_CREATION_CHECKPOINT_INVALID"
+
+
+def test_historical_receipt_does_not_claim_current_bytes_after_source_drift(editing):
+    app, actor, _, service, request, target, _ = editing
+    recorded = service.apply(actor, request)
+    (target / "source.py").write_bytes(b"later operator edit\n")
+    result = history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert result.record == recorded and result.journal_checkpoint_acknowledged
+    assert not result.current_source_measured and not result.execution_authorized
+    assert (target / "source.py").read_bytes() == b"later operator edit\n"
+
+
+def test_task_read_alone_does_not_reveal_protected_mutation_history(editing, monkeypatch):
+    from types import SimpleNamespace
+
+    app, actor, _, service, request, _, _ = editing
+    service.prepare(actor, request)
+    native = service.workspace.identity.check_permission_resource_access
+
+    def denied(actor_id, permission_key, *args, **kwargs):
+        if permission_key == "self_build.workspace":
+            return SimpleNamespace(allowed=False)
+        return native(actor_id, permission_key, *args, **kwargs)
+
+    monkeypatch.setattr(service.workspace.identity, "check_permission_resource_access", denied)
+    with pytest.raises(DomainError) as failure:
+        history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert failure.value.code == "SOURCE_EDIT_PERMISSION_DENIED"
+
+
+def test_historical_self_approval_tampering_is_not_valid_provenance(editing):
+    from app.db.models import AuditEventRow
+
+    app, actor, _, service, request, _, _ = editing
+    record = service.prepare(actor, request)
+    with service.repository.leases._write() as session:
+        session.get(AuditEventRow, record.original_approval_id).actor = actor.actor_id
+    with pytest.raises(DomainError) as failure:
+        history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert failure.value.code == "SOURCE_MUTATION_HISTORY_INVALID"
+
+
+def test_corrupt_mutation_checkpoint_cannot_be_presented_as_acknowledged_history(
+    editing, monkeypatch
+):
+    app, actor, _, service, request, _, _ = editing
+    record = service.prepare(actor, request)
+    service.acknowledge(actor, request, record)
+    checkpoints = service.runtime.checkpoints_authorized(record.plan.runtime_run_id, actor)
+    native = service.runtime.checkpoints_authorized
+
+    def altered(*args):
+        return tuple(
+            item.model_copy(update={"integrity_digest": "sha256:" + "0" * 64})
+            if item.state_reference.startswith("source-mutation:")
+            else item
+            for item in native(*args)
+        )
+
+    assert any(item.state_reference.startswith("source-mutation:") for item in checkpoints)
+    monkeypatch.setattr(service.runtime, "checkpoints_authorized", altered)
+    with pytest.raises(DomainError) as failure:
+        history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert failure.value.code == "SOURCE_MUTATION_CHECKPOINT_INVALID"
+
+
+@pytest.mark.parametrize("expiry", ["invalid", "2026-10-12T00:00:00"])
+def test_history_refuses_invalid_original_approval_expiry(editing, expiry):
+    from app.db.models import AuditEventRow
+
+    app, actor, _, service, request, _, _ = editing
+    record = service.prepare(actor, request)
+    with service.repository.leases._write() as session:
+        event = session.get(AuditEventRow, record.original_approval_id)
+        event.payload = event.payload | {
+            "payload": event.payload["payload"] | {"expiresAt": expiry}
+        }
+    with pytest.raises(DomainError) as failure:
+        history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert failure.value.code == "SOURCE_MUTATION_HISTORY_INVALID"
+
+
+def test_history_accepts_expired_original_provenance_without_execution_authority(editing):
+    from pydantic import ValidationError
+
+    from app.db.models import AuditEventRow
+    from app.models.source_mutation_history import MutationHistory
+
+    app, actor, _, service, request, target, _ = editing
+    record = service.prepare(actor, request)
+    with service.repository.leases._write() as session:
+        event = session.get(AuditEventRow, record.original_approval_id)
+        event.payload = event.payload | {
+            "payload": event.payload["payload"] | {"expiresAt": "2000-01-01T00:00:00+00:00"}
+        }
+    result = history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert result.record == record and not result.execution_authorized
+    for flag in ("execution_authorized", "current_source_measured"):
+        with pytest.raises(ValidationError):
+            MutationHistory.model_validate(result.model_dump() | {flag: True})
+    assert (target / "source.py").read_bytes() == b"value = 1\n"
+
+
+def test_history_requires_a_persisted_mutation_intent(editing):
+    app, actor, _, _, request, target, _ = editing
+    with pytest.raises(DomainError) as failure:
+        history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert failure.value.code == "SOURCE_MUTATION_INTENT_REQUIRED"
+    assert (target / "source.py").read_bytes() == b"value = 1\n"
+
+
+def test_history_storage_failure_never_exposes_database_details():
+    from types import SimpleNamespace
+
+    from sqlalchemy.exc import SQLAlchemyError
+
+    def failed(*args):
+        raise SQLAlchemyError("private source text and lease token")
+
+    reader = history.MutationHistoryReader.__new__(history.MutationHistoryReader)
+    reader.service = SimpleNamespace(planning=SimpleNamespace(read=failed))
+    with pytest.raises(DomainError) as failure:
+        reader.read(None, "0" * 64)
+    assert failure.value.code == "SOURCE_MUTATION_STORAGE_FAILED"
+    assert "private" not in str(failure.value)
+    assert failure.value.__suppress_context__
