@@ -69,8 +69,8 @@ def editing(creation, request):
     change = SourceChange(
         path=source_path,
         operation=operation,
-        before=before.model_dump(exclude={"text"}) if operation == "modify" else None,
-        after=after,
+        before=before.model_dump(exclude={"text"}) if operation != "add" else None,
+        after=after if operation != "delete" else None,
     )
     source = SourceIdentity(
         repository_identity=policy.repository_identity,
@@ -176,15 +176,19 @@ def test_source_mutation_service_has_exact_checkpoint_and_transactional_outbox(e
     assert len(measured) == 5 and measured[-1].checkpoint_id == result.checkpoint_id
 
 
-def test_unsupported_source_mutation_platform_refuses_before_durable_intent(editing, monkeypatch):
+@pytest.mark.parametrize("entrypoint", ["apply", "prepare"])
+def test_unsupported_source_mutation_platform_refuses_before_durable_intent(
+    editing, monkeypatch, entrypoint
+):
     from app.source_mutation import driver as mutation_driver
     from app.source_mutation.repository import SourceMutationRow
 
     app, actor, _, service, request, target, _ = editing
     before = service.runtime.checkpoints_authorized("run-1", actor)
+    supported = mutation_driver.supports_mutation
     monkeypatch.setattr(mutation_driver, "supports_mutation", lambda: False)
     with pytest.raises(DomainError) as failure:
-        service.apply(actor, request)
+        getattr(service, entrypoint)(actor, request)
     assert failure.value.code == "SOURCE_MUTATION_PLATFORM_UNAVAILABLE"
     with service.repository.sessions() as session:
         assert session.get(SourceMutationRow, request.editing_record_id) is None
@@ -195,6 +199,9 @@ def test_unsupported_source_mutation_platform_refuses_before_durable_intent(edit
         )
     assert service.runtime.checkpoints_authorized("run-1", actor) == before
     assert (target / "source.py").read_bytes() == b"value = 1\n"
+    monkeypatch.setattr(mutation_driver, "supports_mutation", supported)
+    assert service.apply(actor, request).state == "complete"
+    assert (target / "source.py").read_bytes() == b"value = 2\n"
 
 
 @pytest.mark.parametrize(
@@ -371,6 +378,57 @@ def test_source_mutation_file_ack_crash_retains_native_publication_identity(
         assert destination.stat().st_ino == published_inode
     assert interrupted.completed_count == 0 and interrupted.pending_index == 0
     assert interrupted.staging_inode == published_inode
+
+
+@pytest.mark.parametrize("editing", ["modify", "delete"], indirect=True)
+@pytest.mark.parametrize("boundary", ["file_checkpoint", "journal_ack"])
+def test_source_mutation_original_remains_pinned_through_durable_file_ack(
+    editing, monkeypatch, boundary
+):
+    from app.source_mutation.driver import staging_names
+
+    _, actor, _, service, request, target, _ = editing
+    native_checkpoint, native_event = service.runtime.handle_authorized, service.event
+    checked = []
+
+    def adversary(operation_id):
+        before, _ = staging_names(operation_id, 0)
+        backup = target / before
+        inode = backup.stat().st_ino
+        with pytest.raises(PermissionError):
+            backup.unlink()
+        with pytest.raises(PermissionError):
+            backup.write_bytes(b"foreign original")
+        assert backup.read_bytes() == b"value = 1\n" and backup.stat().st_ino == inode
+        checked.append(inode)
+
+    def checkpoint(command, *args, **kwargs):
+        if (
+            boundary == "file_checkpoint"
+            and command.state_reference.startswith("source-mutation:")
+            and command.checkpoint_metadata.get("completedCount") == 1
+            and command.resume_cursor.startswith("editing-")
+        ):
+            adversary(command.checkpoint_metadata["operationId"])
+        return native_checkpoint(command, *args, **kwargs)
+
+    def event(session, row, principal, record, phase, approval_id):
+        if (
+            boundary == "journal_ack"
+            and phase == "checkpoint_acknowledged"
+            and record.state == "editing"
+            and record.completed_count == 1
+        ):
+            adversary(record.operation_id)
+        return native_event(session, row, principal, record, phase, approval_id)
+
+    monkeypatch.setattr(service.runtime, "handle_authorized", checkpoint)
+    monkeypatch.setattr(service, "event", event)
+    completed = service.apply(actor, request)
+    assert completed.state == "complete" and len(checked) == 1
+    before, _ = staging_names(completed.operation_id, 0)
+    assert (target / before).read_bytes() == b"value = 1\n"
+    assert (target / before).stat().st_ino == checked[0]
 
 
 def test_source_mutation_event_failure_rolls_back_intent_before_source(editing, monkeypatch):
