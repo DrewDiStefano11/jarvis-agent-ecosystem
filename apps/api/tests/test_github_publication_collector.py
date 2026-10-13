@@ -183,6 +183,28 @@ def test_missing_protection_never_means_no_required_checks():
     assert not result.ready_for_manual_merge
 
 
+@pytest.mark.parametrize(
+    "protection",
+    [
+        [],
+        ["private-provider-data"],
+        "private-provider-data",
+        {"required_status_checks": []},
+        {"required_pull_request_reviews": []},
+        {"required_signatures": []},
+        {"required_linear_history": []},
+        {"required_status_checks": {"checks": ["private-provider-data"]}},
+    ],
+)
+def test_malformed_protection_is_normalized_without_exposing_provider_data(protection):
+    with pytest.raises(DomainError) as caught:
+        observed(protection=protection)
+    assert caught.value.code == "GITHUB_OBSERVATION_INVALID"
+    assert caught.value.status_code == 502
+    assert "private-provider-data" not in str(caught.value)
+    assert caught.value.__suppress_context__
+
+
 def test_confirmed_unprotected_branch_still_requires_operator_checks_and_review():
     result = assess(observed(protection="absent", protected=False, checks=[], reviews=[]))
     assert "protection_unknown" not in result.blockers

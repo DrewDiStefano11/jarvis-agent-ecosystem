@@ -148,7 +148,7 @@ class GitHubReader:
                         and reset.isdigit()
                         and len(reset) <= 12
                     ):
-                        seconds = max(seconds, max(1, int(reset) - int(time.time())))
+                        seconds = min(86400, max(seconds, max(1, int(reset) - int(time.time()))))
                     raise GitHubRetry(seconds)
                 if response.status_code == 401:
                     raise DomainError(

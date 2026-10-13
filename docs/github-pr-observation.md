@@ -104,3 +104,11 @@ Protocol references: [checks](https://docs.github.com/en/rest/checks/runs),
 [effective branch rules](https://docs.github.com/en/rest/repos/rules#get-rules-for-a-branch),
 [protection](https://docs.github.com/en/rest/branches/branch-protection), and
 [rate limits](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api).
+
+Renewed review hardening: malformed top-level or nested protection objects are
+rejected as `GITHUB_OBSERVATION_INVALID` (502), including empty lists that must
+not silently remove requirements. Attribute errors from malformed observation
+shapes receive the same sanitized envelope. Reset-derived retry delays share the
+one-day maximum with `Retry-After`; oversized numeric resets cannot indefinitely
+postpone a durable observation. All 99 focused collector/transport/readiness
+tests and backend Ruff checks passed for these changes.

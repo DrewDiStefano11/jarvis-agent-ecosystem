@@ -31,6 +31,16 @@ REVIEW_STATES = {
 
 def required_policy(protection, rules):
     """Unknown policy requirements block readiness instead of silently disappearing."""
+    if not isinstance(protection, dict) or any(
+        protection.get(field) is not None and not isinstance(protection[field], dict)
+        for field in (
+            "required_status_checks",
+            "required_pull_request_reviews",
+            "required_signatures",
+            "required_linear_history",
+        )
+    ):
+        raise ValueError("Invalid protection shape")
     required, blockers, approvals = {}, [], 0
 
     def check(context, provider):
@@ -244,7 +254,7 @@ def collect(reader: GitHubReader, number: int, approved_base_sha: str, *, publis
             reviews=tuple(reviews),
             findings=tuple(findings),
         )
-    except (KeyError, TypeError, IndexError, ValueError, ValidationError):
+    except (AttributeError, KeyError, TypeError, IndexError, ValueError, ValidationError):
         raise DomainError(
             "GITHUB_OBSERVATION_INVALID",
             "GitHub observation failed provenance or completeness checks.",
