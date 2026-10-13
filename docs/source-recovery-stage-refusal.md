@@ -30,3 +30,11 @@ lock contracts are unchanged. This changes the existing mutation implementation
 policy digest, so plans and grants from a different deployed policy continue to
 refuse under existing current-policy rules; it does not migrate or refresh their
 authority. No production database or workspace is modified by these tests.
+
+The integrated source-mutation repair retains the publishing handle through file
+acknowledgement and keeps pending staging identity durable when the runtime
+checkpoint or journal acknowledgement is interrupted. The pending published-file
+path still checks publication-stage absence before acknowledging that pinned inode.
+Completed-prefix and final-stage checks remain in place. A foreign same-byte
+destination and a recreated publication stage each refuse independently; neither
+can become completion evidence through recovery.
