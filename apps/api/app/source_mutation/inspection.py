@@ -64,6 +64,8 @@ class MutationInspector:
                 refuse("SOURCE_MUTATION_POSITION_CONFLICT")
             if record.state != "complete":
                 refuse("SOURCE_MUTATION_INSPECTION_INCOMPLETE")
+            if not history.native_checkpoint_present or not history.journal_checkpoint_acknowledged:
+                refuse("SOURCE_MUTATION_CHECKPOINT_INVALID")
             if not supports_mutation():
                 refuse("SOURCE_MUTATION_PLATFORM_UNAVAILABLE")
 
@@ -80,8 +82,14 @@ class MutationInspector:
 
             def final_guard():
                 authority_check()
-                if self.history.read(actor, request.editing_record_id).record != record:
+                current_history = self.history.read(actor, request.editing_record_id)
+                if current_history.record != record:
                     refuse("SOURCE_MUTATION_POSITION_CONFLICT")
+                if (
+                    not current_history.native_checkpoint_present
+                    or not current_history.journal_checkpoint_acknowledged
+                ):
+                    refuse("SOURCE_MUTATION_CHECKPOINT_INVALID")
 
             return self._measure(
                 checkout_driver,
