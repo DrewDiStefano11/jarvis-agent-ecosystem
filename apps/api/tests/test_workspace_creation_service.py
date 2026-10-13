@@ -26,7 +26,7 @@ pytest_plugins = ["tests.test_self_build_git_inspection"]
 
 
 @pytest.fixture
-def editing(creation):
+def editing(creation, request):
     from contextlib import ExitStack
     from types import SimpleNamespace
 
@@ -63,11 +63,13 @@ def editing(creation):
         )
     policy = creator.workspace.policies.get("jarvis")
     target = Path(policy.worktree_root) / workspace_id
+    operation = getattr(request, "param", "modify")
+    source_path = "new.py" if operation == "add" else "source.py"
     before, after = content(b"value = 1\n", "100644"), content(b"value = 2\n", "100644")
     change = SourceChange(
-        path="source.py",
-        operation="modify",
-        before=before.model_dump(exclude={"text"}),
+        path=source_path,
+        operation=operation,
+        before=before.model_dump(exclude={"text"}) if operation == "modify" else None,
         after=after,
     )
     source = SourceIdentity(
@@ -79,7 +81,7 @@ def editing(creation):
     with ExitStack() as stack:
         root = open_directory(stack, target, internal=True)
         observation, _ = observe(
-            stack, root, SimpleNamespace(source=source, changes=(change,)), {"source.py": "100644"}
+            stack, root, SimpleNamespace(source=source, changes=(change,)), {source_path: "100644"}
         )
     with creator.repository.sessions() as session:
         row = creator.repository.lookup(session, workspace_id)
@@ -297,6 +299,78 @@ def test_source_mutation_durable_crash_gaps_recover_same_operation(editing, monk
     result = SourceMutationService(app).apply(actor, request)
     assert result.state == "complete" and result.operation_id == pending.operation_id
     assert (target / "source.py").read_bytes() == b"value = 2\n"
+
+
+@pytest.mark.parametrize("editing", ["add", "modify"], indirect=True)
+@pytest.mark.parametrize("gap", ["before_checkpoint", "before_journal_ack"])
+@pytest.mark.parametrize("foreign_replacement", [False, True])
+def test_source_mutation_file_ack_crash_retains_native_publication_identity(
+    editing, monkeypatch, gap, foreign_replacement
+):
+    from app.source_mutation.service import SourceMutationService
+
+    app, actor, _, service, request, target, _ = editing
+    native_checkpoint, native_event = service.runtime.handle_authorized, service.event
+    crashed = []
+
+    def checkpoint_crash(command, *args, **kwargs):
+        if (
+            gap == "before_checkpoint"
+            and command.state_reference.startswith("source-mutation:")
+            and command.checkpoint_metadata.get("completedCount") == 1
+            and command.resume_cursor.startswith("editing-")
+        ):
+            crashed.append(True)
+            raise RuntimeError("file acknowledgement interruption")
+        return native_checkpoint(command, *args, **kwargs)
+
+    def event_crash(session, row, principal, record, phase, approval_id):
+        if (
+            gap == "before_journal_ack"
+            and phase == "checkpoint_acknowledged"
+            and record.state == "editing"
+            and record.completed_count == 1
+        ):
+            crashed.append(True)
+            raise RuntimeError("file acknowledgement interruption")
+        return native_event(session, row, principal, record, phase, approval_id)
+
+    monkeypatch.setattr(service.runtime, "handle_authorized", checkpoint_crash)
+    monkeypatch.setattr(service, "event", event_crash)
+    with pytest.raises(RuntimeError, match="file acknowledgement interruption"):
+        service.apply(actor, request)
+    assert crashed == [True]
+    destination = target / ("new.py" if (target / "new.py").exists() else "source.py")
+    published_inode = destination.stat().st_ino
+    assert destination.read_bytes() == b"value = 2\n"
+    interrupted = service.current(actor, request)[0]
+
+    if foreign_replacement:
+        replacement = target.parent / "foreign-file-ack.py"
+        replacement.write_bytes(destination.read_bytes())
+        replacement.replace(destination)
+        foreign_inode = destination.stat().st_ino
+        assert foreign_inode != published_inode
+
+    monkeypatch.setattr(service.runtime, "handle_authorized", native_checkpoint)
+    monkeypatch.setattr(service, "event", native_event)
+    restarted = SourceMutationService(app)
+    if foreign_replacement:
+        with pytest.raises(DomainError) as failure:
+            restarted.apply(actor, request)
+        assert failure.value.code == "SOURCE_MUTATION_STAGE_CONFLICT"
+        refused = restarted.current(actor, request)[0]
+        assert refused.completed_count == 0 and refused.pending_index == 0
+        assert refused.staging_inode == published_inode
+        assert destination.stat().st_ino == foreign_inode
+        assert destination.read_bytes() == b"value = 2\n"
+    else:
+        completed = restarted.apply(actor, request)
+        assert completed.state == "complete" and completed.completed_count == 1
+        assert completed.operation_id == interrupted.operation_id
+        assert destination.stat().st_ino == published_inode
+    assert interrupted.completed_count == 0 and interrupted.pending_index == 0
+    assert interrupted.staging_inode == published_inode
 
 
 def test_source_mutation_event_failure_rolls_back_intent_before_source(editing, monkeypatch):

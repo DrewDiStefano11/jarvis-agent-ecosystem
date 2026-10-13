@@ -150,3 +150,14 @@ plan hash and exact intent digest. A native checkpoint without that durable audi
 event remains a native-only crash gap, even if mutable journal payload fields
 claim the deterministic checkpoint ID. History reads do not repair or grant
 execution authority.
+
+Published add/modify handles remain pinned against foreign writes and deletion
+through per-file checkpoint acknowledgement. Recovery retains the handle whose
+device/inode matches the claimed staging identity through that acknowledgement;
+matching bytes never replace that ownership evidence. Final acknowledgement
+continues to use the whole-tree read pins and namespace guard.
+
+Per-file progress advances in the same journal transaction as its checkpoint
+acknowledgement audit event. A crash before the runtime checkpoint or journal
+acknowledgement retains the prior pending position and staging device/inode;
+recovery must validate that identity before acknowledging the proposed progress.
