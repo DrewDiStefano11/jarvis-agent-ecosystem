@@ -84,3 +84,9 @@ Simultaneous latest lineages select outcomes conservatively and break remaining
 ties using measurement content, independent of collector key IDs or signatures.
 Key rotation may change authenticated envelope references but cannot change the
 selected measured failure or exported facts under an unchanged measurement digest.
+
+Authenticated passing commands cannot override blocked repository paths. Repair
+construction rejects policy-blocked assessments before exporting gate findings or
+improvement observations. Source provenance hashes the same revalidated canonical
+current code state used by repair assessment; reordering a model-copy change tuple
+cannot turn the same measured artifact into multiple evidence sources.

@@ -449,3 +449,89 @@ def test_key_rotation_cannot_change_tied_measurement_facts_under_same_provenance
     ]
     assert all(value[0].digest == sources[0][0].digest for value in sources)
     assert all(value[1] == sources[0][1] for value in sources)
+
+
+@pytest.mark.parametrize("path", [".env", "state.db-wal"])
+def test_blocked_repository_policy_cannot_export_passing_repair_or_source(path):
+    blocked = state().model_copy(
+        update={
+            "changes": (
+                FileChange(
+                    path=path,
+                    before_hash=None,
+                    before_mode=None,
+                    after_hash="c" * 64,
+                    after_mode="100644",
+                ),
+            )
+        }
+    )
+    plan = build_execution_plan(blocked, boundary="publication")
+    assert plan.validation.blocked_paths == (path,)
+    values = [receipt(plan, command, sequence=1) for command in plan.commands]
+    with pytest.raises(ValueError, match="blocked repository policy"):
+        build_repair_evidence(
+            blocked,
+            plan,
+            values,
+            verifier(),
+            now=NOW,
+            expected_execution_plan_hash=plan.execution_plan_hash,
+        )
+    with pytest.raises(ValueError, match="blocked repository policy"):
+        ValidationExecutionSource(
+            "blocked",
+            blocked,
+            plan,
+            values,
+            verifier(),
+            now=NOW,
+            expected_execution_plan_hash=plan.execution_plan_hash,
+        ).collect()
+
+
+def test_reordered_model_copy_state_cannot_alias_the_same_measured_artifact():
+    current = state().model_copy(
+        update={
+            "changes": tuple(
+                FileChange(
+                    path=path,
+                    before_hash=None,
+                    before_mode=None,
+                    after_hash="c" * 64,
+                    after_mode="100644",
+                )
+                for path in ("docs/a.md", "docs/b.md")
+            )
+        }
+    )
+    reversed_state = current.model_copy(update={"changes": tuple(reversed(current.changes))})
+    plan = build_execution_plan(state())
+    values = [failed()]
+    a, x = ValidationExecutionSource(
+        "canonical",
+        current,
+        plan,
+        values,
+        verifier(),
+        now=NOW,
+        expected_execution_plan_hash=plan.execution_plan_hash,
+    ).collect()
+    b, y = ValidationExecutionSource(
+        "alias",
+        reversed_state,
+        plan,
+        values,
+        verifier(),
+        now=NOW,
+        expected_execution_plan_hash=plan.execution_plan_hash,
+    ).collect()
+    assert a.digest == b.digest
+    with pytest.raises(ValueError):
+        create_baseline(
+            repo_sha=state().head_sha,
+            configuration_fingerprint="c" * 64,
+            safety_fingerprint="d" * 64,
+            sources=(a, b),
+            observations=(*x, *y),
+        )

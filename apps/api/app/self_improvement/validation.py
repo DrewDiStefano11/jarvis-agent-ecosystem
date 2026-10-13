@@ -4,6 +4,7 @@ from itertools import islice
 
 from app.development_validation.planner import POLICY_VERSION, digest
 from app.development_validation.repair import build_repair_evidence
+from app.models.development_validation import CodeState
 from app.models.self_improvement import SourceProvenance
 from app.self_improvement.adapters import observation
 
@@ -32,8 +33,9 @@ class ValidationExecutionSource:
         self.expected_execution_plan_hash = expected_execution_plan_hash
 
     def collect(self):
+        current_state = CodeState.model_validate(self.state.model_dump(mode="json"))
         report = build_repair_evidence(
-            self.state,
+            current_state,
             self.plan,
             self.receipts,
             self.verifier,
@@ -46,7 +48,7 @@ class ValidationExecutionSource:
             digest=digest(
                 {
                     "plan": self.plan.execution_plan_hash,
-                    "state": self.state.model_dump(mode="json"),
+                    "state": current_state.model_dump(mode="json"),
                     "receipts": sorted(
                         digest(r.measurement.model_dump(mode="json")) for r in self.receipts
                     ),

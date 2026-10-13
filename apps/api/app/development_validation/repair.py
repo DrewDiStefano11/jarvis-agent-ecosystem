@@ -28,7 +28,7 @@ def build_repair_evidence(
     current_state = CodeState.model_validate(current_state.model_dump(mode="json"))
     receipts = tuple(islice(receipts, 513))
     # Assessment rejects unauthenticated, replayed, wrong-plan or future receipts.
-    assess_receipts(
+    assessment = assess_receipts(
         plan.code_state,
         plan,
         receipts,
@@ -37,6 +37,8 @@ def build_repair_evidence(
         max_age_seconds=max_age_seconds,
         expected_execution_plan_hash=expected_execution_plan_hash,
     )
+    if assessment.blocked_paths:
+        raise ValueError("repair evidence cannot hide blocked repository policy")
     source_changed = (
         digest(current_state.model_dump(mode="json")) != plan.validation.code_state_hash
     )
