@@ -301,6 +301,26 @@ class SourceMutationService:
     def prepare(self, actor, request):
         if not driver.supports_mutation():
             refuse("SOURCE_MUTATION_PLATFORM_UNAVAILABLE")
+        with self.repository.sessions() as session:
+            _, _, _, creation, nonce = self.fence(actor, request, session)
+            existing = session.get(SourceMutationRow, request.editing_record_id) is not None
+        if existing:
+            return self._prepare(actor, request)
+
+        def authority_check():
+            with self.repository.sessions() as session:
+                self.fence(actor, request, session)
+
+        checkout = CheckoutDriver(self.creation.git.tool(), authority_check)
+        policy = self.workspace.policies.get(creation.plan.workspace.repository_id)
+        return SourceMutationDriver(checkout).before_intent(
+            policy,
+            creation.plan,
+            ownership(creation, nonce),
+            lambda guard: self._prepare(actor, request, preparation_guard=guard),
+        )
+
+    def _prepare(self, actor, request, *, preparation_guard=None):
         with self.repository.leases._write() as session:
             row, plan, _, _, _ = self.fence(actor, request, session)
             stored = session.get(SourceMutationRow, request.editing_record_id)
@@ -337,6 +357,8 @@ class SourceMutationService:
                 self.event(session, row, actor, record, "prepared", request.approval_id)
             else:
                 record = self.intent(stored, plan, session)
+            if preparation_guard is not None:
+                preparation_guard()
         self.repository.leases.repository.refresh_event_cursor()
         return record
 

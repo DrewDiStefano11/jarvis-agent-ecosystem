@@ -200,6 +200,101 @@ def test_unsupported_source_mutation_platform_refuses_before_durable_intent(
     assert (target / "source.py").read_bytes() == b"value = 2\n"
 
 
+def test_source_mutation_index_remains_pinned_through_intent_persistence(editing, monkeypatch):
+    import subprocess
+
+    from app.source_mutation.repository import SourceMutationRow
+
+    _, actor, _, service, request, target, _ = editing
+    configured = Path(service.workspace.policies.get("jarvis").worktree_root) / target.name
+    executable = str(service.creation.git.tool().executable)
+    persist = service._prepare
+    attempted = []
+
+    def guarded(*args, **kwargs):
+        outcome = subprocess.run(
+            [
+                executable,
+                "-C",
+                str(configured),
+                "update-index",
+                "--assume-unchanged",
+                "--",
+                "source.py",
+            ],
+            capture_output=True,
+        )
+        assert outcome.returncode != 0
+        attempted.append(True)
+        return persist(*args, **kwargs)
+
+    monkeypatch.setattr(service, "_prepare", guarded)
+    with pytest.raises(DomainError) as failure:
+        service.prepare(actor, request)
+    assert failure.value.code == "SELF_BUILD_GIT_STATE_CHANGED"
+    assert attempted == [True]
+    with service.repository.sessions() as session:
+        assert session.get(SourceMutationRow, request.editing_record_id) is None
+        assert not session.scalar(
+            select(AuditEventRow.id).where(
+                AuditEventRow.event_type == "self_build.source_mutation.prepared"
+            )
+        )
+    flags = subprocess.run(
+        [executable, "-C", str(configured), "ls-files", "-v", "-z"], check=True, capture_output=True
+    ).stdout
+    assert flags == b"H source.py\0"
+    monkeypatch.setattr(service, "_prepare", persist)
+    assert service.apply(actor, request).state == "complete"
+
+
+@pytest.mark.parametrize("flag", ["assume-unchanged", "skip-worktree"])
+@pytest.mark.parametrize("entrypoint", ["prepare", "apply"])
+def test_source_mutation_index_flags_refuse_before_intent_and_can_retry(editing, flag, entrypoint):
+    import subprocess
+
+    from app.source_mutation.repository import SourceMutationRow
+
+    _, actor, _, service, request, target, _ = editing
+    policy = service.workspace.policies.get("jarvis")
+    configured = Path(policy.worktree_root) / target.name
+    executable = str(service.creation.git.tool().executable)
+
+    def set_flag(value):
+        subprocess.run(
+            [executable, "-C", str(configured), "update-index", "--" + value, "--", "source.py"],
+            check=True,
+            capture_output=True,
+        )
+
+    set_flag(flag)
+    before = {
+        path.name: (path.read_bytes(), path.stat().st_ino)
+        for path in target.iterdir()
+        if path.is_file()
+    }
+    checkpoints = service.runtime.checkpoints_authorized("run-1", actor)
+    with pytest.raises(DomainError) as failure:
+        getattr(service, entrypoint)(actor, request)
+    assert failure.value.code == "SOURCE_MUTATION_INDEX_CONFLICT"
+    with service.repository.sessions() as session:
+        assert session.get(SourceMutationRow, request.editing_record_id) is None
+        assert not session.scalar(
+            select(AuditEventRow.id).where(
+                AuditEventRow.event_type == "self_build.source_mutation.prepared"
+            )
+        )
+    assert service.runtime.checkpoints_authorized("run-1", actor) == checkpoints
+    assert before == {
+        path.name: (path.read_bytes(), path.stat().st_ino)
+        for path in target.iterdir()
+        if path.is_file()
+    }
+    set_flag("no-" + flag)
+    assert service.apply(actor, request).state == "complete"
+    assert (target / "source.py").read_bytes() == b"value = 2\n"
+
+
 @pytest.mark.parametrize(
     "boundary",
     ["hash", "approval", "lease", "permission", "stop", "self_approval", "foreign_actor"],

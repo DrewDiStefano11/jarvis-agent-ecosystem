@@ -137,6 +137,57 @@ def test_source_mutation_native_add_modify_delete_and_exact_replay(checkout, ope
     assert (checkout[0] / ".git/index").read_bytes() == before_index
 
 
+@pytest.mark.parametrize("flag", ["assume-unchanged", "skip-worktree"])
+@pytest.mark.parametrize("phase", ["initial", "recovery"])
+def test_source_mutation_native_index_flags_refuse_without_file_effects(
+    checkout, monkeypatch, flag, phase
+):
+    from app.source_mutation import driver as mutation_driver
+
+    target, _, journal, apply = editing_fixture(checkout)
+    native = mutation_driver.rename_pinned
+    if phase == "recovery":
+
+        def interrupted(fd, leaf):
+            native(fd, leaf)
+            if leaf.endswith(".before"):
+                raise RuntimeError("after original rename")
+
+        monkeypatch.setattr(mutation_driver, "rename_pinned", interrupted)
+        with pytest.raises(RuntimeError, match="after original rename"):
+            apply()
+        monkeypatch.setattr(mutation_driver, "rename_pinned", native)
+    configured = Path(checkout[1].worktree_root) / checkout[3].workspace_id
+    subprocess.run(
+        [
+            str(checkout[2].executable),
+            "-C",
+            str(configured),
+            "update-index",
+            "--" + flag,
+            "--",
+            "hello.txt",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    before = {
+        path.name: (path.read_bytes(), path.stat().st_ino)
+        for path in target.iterdir()
+        if path.is_file()
+    }
+    position = dict(journal)
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SOURCE_MUTATION_INDEX_CONFLICT"
+    assert journal == position
+    assert before == {
+        path.name: (path.read_bytes(), path.stat().st_ino)
+        for path in target.iterdir()
+        if path.is_file()
+    }
+
+
 def test_source_mutation_preserves_original_and_recovers_after_rename_crash(checkout, monkeypatch):
     from app.source_mutation import driver as mutation_driver
 

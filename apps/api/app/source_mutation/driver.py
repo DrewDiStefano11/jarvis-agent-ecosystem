@@ -289,6 +289,9 @@ def verify_base_index(driver, policy, creation_plan, target):
         refuse("SOURCE_MUTATION_INDEX_CONFLICT")
     if digest(entries) != creation_plan.inventory_digest:
         refuse("SOURCE_MUTATION_INDEX_CONFLICT")
+    expected_flags = b"".join(b"H " + item[2].encode("utf-8") + b"\0" for item in entries)
+    if driver.invoke(policy, "index_flags", creation_plan, target) != expected_flags:
+        refuse("SOURCE_MUTATION_INDEX_CONFLICT")
 
 
 def verify_creation_marker(checkout, creation_plan):
@@ -313,6 +316,58 @@ class SourceMutationDriver:
     def __init__(self, checkout_driver):
         self.checkout_driver = checkout_driver
         self.authority_check = checkout_driver.authority_check
+
+    def before_intent(self, policy, creation_plan, owner, persist):
+        """Read-only preflight; retain metadata pins through intent persistence."""
+        self.authority_check()
+        try:
+            with ExitStack() as stack:
+                root_path = Path(policy.checked().worktree_root)
+                root = open_directory(stack, Path(root_path.anchor), internal=True)
+                for leaf in root_path.parts[1:]:
+                    root = open_directory(stack, root.path / leaf, root, leaf, internal=True)
+                target = root.path / creation_plan.workspace_id
+                checkout = open_directory(stack, target, root, target.name, internal=True)
+                private_name = ".jarvis-owner-" + creation_plan.workspace_id
+                private = open_directory(
+                    stack, root.path / private_name, root, private_name, internal=True
+                )
+                for name in ("owner.json", "target.json"):
+                    stack.enter_context(pinned_metadata_file(private.path / name))
+                with open_file(private, "owner.json", os.O_RDONLY, internal=True) as fd:
+                    if json.loads(read_bytes(fd, 4096)) != owner:
+                        refuse("SOURCE_MUTATION_OWNERSHIP_CONFLICT")
+                info = os.stat(windows_native_path(target), follow_symlinks=False)
+                claim = dict(
+                    workspaceId=creation_plan.workspace_id,
+                    ownershipDigest=digest(owner),
+                    device=info.st_dev,
+                    inode=info.st_ino,
+                )
+                with open_file(private, "target.json", os.O_RDONLY, internal=True) as fd:
+                    if json.loads(read_bytes(fd, 4096)) != claim:
+                        refuse("SOURCE_MUTATION_OWNERSHIP_CONFLICT")
+                for name in (".git", ".jarvis-workspace.json"):
+                    stack.enter_context(pinned_metadata_file(target / name))
+                check_metadata = pin_read_tree(
+                    stack,
+                    Path(policy.primary_root) / ".git",
+                    self.authority_check,
+                    maximum=creation_plan.maximum_initial_metadata_nodes
+                    + creation_plan.metadata_growth_reserve,
+                )
+                self.checkout_driver.validate_existing_target(
+                    stack, root, target, policy, creation_plan
+                )
+                verify_creation_marker(checkout, creation_plan)
+                verify_base_index(self.checkout_driver, policy, creation_plan, target)
+                check_metadata()
+                self.authority_check()
+                return persist(check_metadata)
+        except OSError:
+            refuse("SOURCE_MUTATION_NATIVE_CONFLICT")
+        except (ValueError, KeyError):
+            refuse("SOURCE_MUTATION_OWNERSHIP_CONFLICT")
 
     def apply(
         self,
