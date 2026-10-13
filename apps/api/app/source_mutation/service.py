@@ -292,6 +292,8 @@ class SourceMutationService:
         )
 
     def prepare(self, actor, request):
+        if not driver.supports_mutation():
+            refuse("SOURCE_MUTATION_PLATFORM_UNAVAILABLE")
         with self.repository.leases._write() as session:
             row, plan, _, _, _ = self.fence(actor, request, session)
             stored = session.get(SourceMutationRow, request.editing_record_id)
