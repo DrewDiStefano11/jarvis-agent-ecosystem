@@ -472,6 +472,8 @@ class SourceMutationService:
             refuse("SOURCE_MUTATION_REQUEST_INVALID")
 
     def _apply(self, actor, request):
+        if not driver.supports_mutation():
+            refuse("SOURCE_MUTATION_PLATFORM_UNAVAILABLE")
         record = self.prepare(actor, request)
         record, proposal, creation, nonce = self.current(actor, request)
         if record.state != "finalizing":

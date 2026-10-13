@@ -174,6 +174,27 @@ def test_source_mutation_service_has_exact_checkpoint_and_transactional_outbox(e
     assert len(measured) == 5 and measured[-1].checkpoint_id == result.checkpoint_id
 
 
+def test_unsupported_source_mutation_platform_refuses_before_durable_intent(editing, monkeypatch):
+    from app.source_mutation import driver as mutation_driver
+    from app.source_mutation.repository import SourceMutationRow
+
+    app, actor, _, service, request, target, _ = editing
+    before = service.runtime.checkpoints_authorized("run-1", actor)
+    monkeypatch.setattr(mutation_driver, "supports_mutation", lambda: False)
+    with pytest.raises(DomainError) as failure:
+        service.apply(actor, request)
+    assert failure.value.code == "SOURCE_MUTATION_PLATFORM_UNAVAILABLE"
+    with service.repository.sessions() as session:
+        assert session.get(SourceMutationRow, request.editing_record_id) is None
+        assert not session.scalar(
+            select(AuditEventRow.id).where(
+                AuditEventRow.event_type.like("self_build.source_mutation.prepared%")
+            )
+        )
+    assert service.runtime.checkpoints_authorized("run-1", actor) == before
+    assert (target / "source.py").read_bytes() == b"value = 1\n"
+
+
 @pytest.mark.parametrize(
     "boundary",
     ["hash", "approval", "lease", "permission", "stop", "self_approval", "foreign_actor"],
