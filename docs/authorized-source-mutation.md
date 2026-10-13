@@ -138,7 +138,7 @@ validation plan must still receive independently measured validation evidence.
 Human review and passing exact-head CI remain publication requirements. Native
 source mutation and any later validation execution are separate authorities.
 
-Application refuses unsupported native platforms before persisting mutation
+Preparation and application refuse unsupported native platforms before persisting mutation
 intent or acknowledging a checkpoint. An unavailable execution platform cannot
 consume the workspace's sole mutation lineage without performing an edit.
 
@@ -159,3 +159,14 @@ PR #122: deterministic publication stages must be absent for completed entries,
 pending published after-states, deletes, and final completion under the namespace
 watch. Unclaimed stages are preserved and refused, never hidden by measurements.
 PR #122 retains additional adversarial regression coverage and documentation.
+
+Modify/delete originals retain deny-write/delete read pins from their move into
+the deterministic backup through file acknowledgement and final completion.
+The rename-capable handle transfers to a read-only pin only after rechecking the
+same device/inode and approved original bytes; replacement during that transfer
+refuses before further publication or acknowledgement. Recovery pins and verifies
+existing originals before accepting pending or completed positions. File and final
+acknowledgement guards reverify those handles, bytes and exact backup paths.
+Read-only pins can coexist with whole-tree completion pins while preserving their
+deny-write/delete guarantees. Pins release after the operation returns; this does
+not grant cleanup authority or claim permanent native artifact ownership.
