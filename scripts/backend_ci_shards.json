@@ -63,7 +63,8 @@
     "tests/test_remote_tls.py",
     "tests/test_tool_filesystem.py"
   ],
-  "system": ["tests/test_git_process.py",
+  "system": [
+    "tests/test_git_process.py",
     "tests/test_git_change_verifier.py",
     "tests/test_git_commit_preparation.py",
     "tests/test_git_commit_authorization.py",
@@ -93,6 +94,18 @@
     "tests/test_owned_process.py",
     "tests/test_workspace_creation_service.py",
     "tests/test_checkout_driver.py",
-    "tests/test_materialization.py"
+    "tests/test_materialization.py",
+    "tests/test_git_commit_capacity.py",
+    "tests/test_git_commit_completion.py",
+    "tests/test_git_commit_runner.py",
+    "tests/test_native_commit_api.py",
+    "tests/test_native_validation_state.py",
+    "tests/test_git_commit_execution.py",
+    "tests/test_git_commit_metadata.py",
+    "tests/test_git_commit_namespace.py",
+    "tests/test_git_commit_objects.py",
+    "tests/test_git_commit_position.py",
+    "tests/test_git_commit_recovery.py",
+    "tests/test_git_object_install.py"
   ]
 }

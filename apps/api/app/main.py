@@ -84,12 +84,15 @@ from app.remote_control.router import router as remote_control_router
 from app.remote_control.service import RemoteControlService
 from app.repositories.sqlalchemy import IdempotencyResult, SqlAlchemyRepository
 from app.repositories.task_leases import TaskLeaseRepository
+from app.self_build.commit_execution import NativeCommitService
 from app.self_build.commit_router import operator_router as commit_operator_router
 from app.self_build.commit_router import router as commit_router
 from app.self_build.commit_service import CommitPreparationService
 from app.self_build.creation_service import WorkspaceCreationService
 from app.self_build.git_operator_router import router as git_operator_router
 from app.self_build.git_service import GitInspectionService
+from app.self_build.native_commit_router import operator_router as native_commit_operator_router
+from app.self_build.native_commit_router import router as native_commit_router
 from app.self_build.router import router as self_build_router
 from app.self_build.service import WorkspaceService
 from app.self_improvement.router import router as self_improvement_router
@@ -312,6 +315,7 @@ def create_app(
         app.include_router(remote_control_router)
         app.include_router(git_operator_router)
         app.include_router(commit_operator_router)
+        app.include_router(native_commit_operator_router)
     app.state.model_router = build_model_router(settings)
     app.state.model_execution_repository = ModelExecutionRepository(
         session_factory,
@@ -340,8 +344,10 @@ def create_app(
     app.state.self_build_git_service = GitInspectionService(app)
     app.state.self_build_creation_service = WorkspaceCreationService(app)
     app.state.self_build_commit_service = CommitPreparationService(app)
+    app.state.self_build_native_commit_service = NativeCommitService(app)
     app.include_router(self_build_router)
     app.include_router(commit_router)
+    app.include_router(native_commit_router)
     app.include_router(self_improvement_router)
     app.include_router(tool_execution_router)
     app.include_router(agent_runtime_router)
