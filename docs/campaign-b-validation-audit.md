@@ -114,9 +114,11 @@ signing, bounded redacted diagnostic artifact retrieval (codes/hashes alone do n
 explain a traceback), Campaign A proposal dispatch and approved mutation, durable
 cross-source repair iteration budgets, command interruption/reconciliation against
 real guest identities, resource-bounded parallel gates and policy-proven component
-reuse. The baseline improvement adapter distinguishes confirmed transient retries;
-a future automatic dispatcher must also keep nontransient infrastructure and unknown
-diagnoses away from product-source repair. Final publication needs real mandatory
+reuse. The improvement adapter now routes infrastructure, dependency, CI, watchdog
+and unknown failures to reliability observations even without a confirmed transient
+code. Regression tests verify they produce evidence-gated retry-policy proposals
+rather than product handler or test-coverage changes. A future automatic dispatcher
+must preserve this distinction. Final publication needs real mandatory
 exact-state measurements and Campaign C's independent authority, not this stored
 historical verdict alone.
 
@@ -144,3 +146,8 @@ history, checkpoint acknowledgement, stale-source denial, immutable historical r
 and unconditional runner denial. Exact-head hosted CI and independent review remain
 pending an approved push/PR. Secure execution, actual broken/fixed isolated-code
 acceptance, and autonomous source repair remain unfinished.
+
+Follow-up classification validation: 148 repair, self-improvement and evidence tests
+passed, along with backend Ruff formatting/lint and frontend typecheck, ESLint,
+234 Vitest tests and production build. These checks cover the reliability routing
+change; the full-shard results above belong to the preceding journal milestone.

@@ -277,7 +277,7 @@ def test_repair_disposition_follows_higher_sequence_after_clock_regression():
 
 
 @pytest.mark.parametrize(
-    "failure_kind", ["infrastructure", "ci_environment", "dependency", "watchdog"]
+    "failure_kind", ["infrastructure", "ci_environment", "dependency", "watchdog", "unknown"]
 )
 def test_unconfirmed_transient_kind_retains_failure_diagnosis(failure_kind):
     plan = build_execution_plan(state())
@@ -291,8 +291,18 @@ def test_unconfirmed_transient_kind_retains_failure_diagnosis(failure_kind):
         expected_execution_plan_hash=plan.execution_plan_hash,
         now=NOW,
     ).collect()
-    assert facts[0].category == "execution"
+    assert facts[0].category == "reliability"
     assert report([signed]).findings[0].recommendation == "diagnose_failure"
+    baseline = create_baseline(
+        repo_sha=state().head_sha,
+        configuration_fingerprint="c" * 64,
+        safety_fingerprint="d" * 64,
+        sources=(provenance,),
+        observations=facts,
+    )
+    proposals = analyze(baseline).proposals
+    assert proposals and all(p.category == "retry_policy" for p in proposals)
+    assert all(p.status == "needs_evidence" for p in proposals)
 
 
 def test_source_aliases_cannot_replay_same_measured_artifact():
