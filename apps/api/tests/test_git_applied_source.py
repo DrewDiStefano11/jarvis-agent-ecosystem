@@ -409,3 +409,44 @@ def test_native_artifacts_must_match_completed_history(applied, tamper):
         for path in target.iterdir()
         if path.is_file()
     }
+
+
+def test_same_bytes_foreign_backup_is_refused(applied):
+    from app.self_build.native_artifacts import mutation_artifacts
+
+    _, actor, binding, workspace_id, request, _, target = applied
+    source = binding.preparation.source_record(actor, workspace_id, request.source_edit_record_id)
+    artifact = mutation_artifacts(binding.preparation.app, actor, source).artifacts[0]
+    backup = target / artifact.path
+    content = backup.read_bytes()
+    original = backup.stat()
+    retained = target.parent / (workspace_id + "-retained-original")
+    backup.replace(retained)
+    try:
+        backup.write_bytes(content)
+        replacement = backup.stat()
+        assert replacement.st_ino != original.st_ino
+        with pytest.raises(DomainError) as failure:
+            binding.bind(actor, workspace_id, request)
+        assert failure.value.code == "SELF_BUILD_CHANGE_PROTECTED"
+        assert backup.read_bytes() == content
+        assert backup.stat().st_ino == replacement.st_ino
+    finally:
+        backup.unlink()
+        retained.replace(backup)
+
+
+def test_derived_backup_path_preserves_source_parent_bound():
+    from app.models.git_changes import NativeArtifact
+
+    parent = "a" * 118 + "/" + "b" * 118
+    path = parent + "/.jarvis-edit-" + "a" * 64 + ".before"
+    artifact = NativeArtifact(
+        path=path,
+        kind="source_backup",
+        sha256="a" * 64,
+        byte_count=0,
+        provenance_digest="b" * 64,
+    )
+    assert len(path) > 240
+    assert artifact.path == path

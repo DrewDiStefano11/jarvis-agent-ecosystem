@@ -7,7 +7,6 @@ from pydantic import Field, field_validator, model_serializer, model_validator
 from app.models.self_build import Commit, Contract, Digest, Identifier
 from app.models.source_change import canonical_path, source_path
 from app.self_build.policy import digest
-from app.tool_execution.filesystem import relative_parts
 
 
 class FileIdentity(Contract):
@@ -51,18 +50,40 @@ class IndexFile(Contract):
 
 
 class NativeArtifact(Contract):
-    path: str
+    path: str = Field(max_length=512)
     kind: Literal["git_pointer", "workspace_marker", "source_backup"]
     sha256: Digest
     byte_count: int = Field(ge=0, le=8388608)
     provenance_digest: Digest
+    device: int | None = Field(default=None, ge=0, strict=True)
+    inode: int | None = Field(default=None, ge=1, strict=True)
+
+    @model_serializer(mode="wrap")
+    def original_shape(self, handler):
+        value = handler(self)
+        if self.device is None and self.inode is None:
+            value.pop("device", None)
+            value.pop("inode", None)
+        return value
+
+    @property
+    def parts(self):
+        # The model validates ordinary parents and the derived leaf separately.
+        return tuple(self.path.split("/"))
 
     @model_validator(mode="after")
     def exact_path(self):
         import re
 
-        canonical_path(self.path)
-        segments = relative_parts(self.path)
+        if (self.device is None) != (self.inode is None):
+            raise ValueError("native identity requires both device and inode")
+        if self.kind != "source_backup" and self.device is not None:
+            raise ValueError("only source backups carry checkpointed identity")
+        segments = self.parts
+        if self.kind == "source_backup":
+            canonical_path(segments[-1])
+        else:
+            canonical_path(self.path)
         exact = {
             "git_pointer": ".git",
             "workspace_marker": ".jarvis-workspace.json",
@@ -76,7 +97,7 @@ class NativeArtifact(Contract):
         if len(segments) > 16:
             raise ValueError("native artifact exceeds path depth")
         if len(segments) > 1:
-            source_path("/".join(segments[:-1]) + "/placeholder")
+            source_path("/".join(segments[:-1]) + "/x")
             if any(part.casefold().startswith(".jarvis-") for part in segments[:-1]):
                 raise ValueError("native backup parents must remain ordinary source directories")
         return self

@@ -96,6 +96,8 @@ def test_source_file_limit_excludes_late_native_and_backup_artifacts(verified, m
         sha256=sha256(b"").hexdigest(),
         byte_count=0,
         provenance_digest=record.ownership_digest,
+        device=(target / backup).stat().st_dev,
+        inode=(target / backup).stat().st_ino,
     )
     native_walk = os.walk
 
@@ -244,3 +246,34 @@ def test_component_collisions_are_rejected(paths):
 def test_unmerged_or_truncated_index_refused(raw):
     with pytest.raises(DomainError):
         index_entries(raw)
+
+
+def test_long_derived_backup_is_measured_under_native_pins(verified):
+    from app.models.git_changes import NativeArtifact
+    from app.tool_execution.filesystem import windows_native_path
+
+    verifier, policy, record, nonce, target, _, _ = verified
+    target = Path(windows_native_path(target))
+    parent = "a" * 118 + "/" + "b" * 118
+    path = parent + "/.jarvis-edit-" + "a" * 64 + ".before"
+    backup = target / path
+    backup.parent.mkdir(parents=True)
+    backup.write_bytes(b"original")
+    native = backup.stat()
+    artifact = NativeArtifact(
+        path=path,
+        kind="source_backup",
+        sha256=sha256(b"original").hexdigest(),
+        byte_count=8,
+        provenance_digest=record.ownership_digest,
+        device=native.st_dev,
+        inode=native.st_ino,
+    )
+    result = verifier.inspect(policy, record, nonce, native_artifacts=(artifact,))
+    assert artifact in result.internal_inventory
+    assert path not in {item.path for item in result.current_inventory}
+    assert backup.stat().st_ino == native.st_ino
+    unclaimed = NativeArtifact.model_validate(artifact.model_dump(exclude={"device", "inode"}))
+    with pytest.raises(DomainError) as failure:
+        verifier.inspect(policy, record, nonce, native_artifacts=(unclaimed,))
+    assert failure.value.code == "SELF_BUILD_CHANGE_PROTECTED"

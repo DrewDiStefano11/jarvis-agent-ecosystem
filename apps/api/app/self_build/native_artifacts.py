@@ -48,6 +48,14 @@ def mutation_artifacts(app, actor, source):
             "Complete acknowledged source history is required.",
             409,
         )
+    originals = {item.change_index: item for item in record.original_identities}
+    required = {index for index, change in enumerate(changes) if change.before is not None}
+    if originals.keys() != required:
+        raise DomainError(
+            "GIT_COMMIT_APPLIED_SOURCE_REQUIRED",
+            "Checkpointed original identities are required for retained backups.",
+            409,
+        )
     provenance = intent_digest(record)
     result = []
     for index, change in enumerate(changes):
@@ -63,6 +71,8 @@ def mutation_artifacts(app, actor, source):
                 sha256=change.before.digest,
                 byte_count=change.before.byte_count,
                 provenance_digest=provenance,
+                device=originals[index].device,
+                inode=originals[index].inode,
             )
         )
     return ArtifactManifest(tuple(sorted(result, key=lambda value: value.path)), provenance)

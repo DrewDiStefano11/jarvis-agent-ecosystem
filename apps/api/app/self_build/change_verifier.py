@@ -27,6 +27,7 @@ from app.tool_execution.filesystem import (
     read_bytes,
     relative_parts,
     repository_parts,
+    windows_native_path,
 )
 
 MAX_NODES = 65538
@@ -55,7 +56,7 @@ def path_nodes(paths, *, artifacts=()):
     nodes = {}
     for path, is_file in paths:
         if path in artifacts and is_file:
-            segments = relative_parts(path)
+            segments = artifacts[path].parts
         else:
             source_path(path)
             segments = repository_parts(path)
@@ -107,7 +108,10 @@ class ChangeVerifier:
     def inspect(self, policy, record, nonce, *, finalize=None, native_artifacts=()):
         native_artifacts = tuple(NativeArtifact.model_validate(item) for item in native_artifacts)
         if (
-            any(item.kind != "source_backup" for item in native_artifacts)
+            any(
+                item.kind != "source_backup" or item.device is None or item.inode is None
+                for item in native_artifacts
+            )
             or len(native_artifacts) > 64
         ):
             fail(
@@ -230,14 +234,17 @@ class ChangeVerifier:
                 def walk_error(error):
                     raise error
 
+                walk_root = Path(windows_native_path(target))
                 for directory, children, files in os.walk(
-                    target, followlinks=False, onerror=walk_error
+                    walk_root, followlinks=False, onerror=walk_error
                 ):
                     self.guard()
                     for leaf in children:
-                        directories.append((Path(directory) / leaf).relative_to(target).as_posix())
+                        directories.append(
+                            (Path(directory) / leaf).relative_to(walk_root).as_posix()
+                        )
                     for leaf in files:
-                        path = (Path(directory) / leaf).relative_to(target).as_posix()
+                        path = (Path(directory) / leaf).relative_to(walk_root).as_posix()
                         if path == ".jarvis-workspace.lock":
                             with open_file(checkout, leaf, os.O_RDONLY, internal=True) as fd:
                                 if os.fstat(fd).st_size != 1 or read_bytes(fd, 1) != b"0":
@@ -255,8 +262,10 @@ class ChangeVerifier:
                         with ExitStack() as file_stack:
                             parent_directory = checkout
                             segments = (
-                                relative_parts(path)
-                                if internal or artifact
+                                artifact.parts
+                                if artifact
+                                else relative_parts(path)
+                                if internal
                                 else repository_parts(path)
                             )
                             for segment in segments[:-1]:
@@ -277,6 +286,16 @@ class ChangeVerifier:
                                     if internal
                                     else plan.maximum_file_bytes
                                 )
+                                if artifact:
+                                    native = os.fstat(fd)
+                                    if (native.st_dev, native.st_ino) != (
+                                        artifact.device,
+                                        artifact.inode,
+                                    ):
+                                        fail(
+                                            "SELF_BUILD_CHANGE_PROTECTED",
+                                            "Native backup identity differs from history.",
+                                        )
                                 content = read_bytes(fd, maximum)
                         if internal or artifact:
                             content_hash = sha256(content).hexdigest()
