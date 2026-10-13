@@ -14,13 +14,13 @@ test('matching child stays visible with parent context and unknown assignment ID
  render(<TaskIndex {...props()}/>);await userEvent.type(screen.getByRole('searchbox'),'Child research');const table=screen.getByRole('table');expect(within(table).getByText('unknown-identity')).toBeInTheDocument();expect(within(table).getByRole('button',{name:'Root request'})).toBeInTheDocument();await userEvent.click(screen.getByRole('button',{name:'Open Child research'}));expect(inspect).toHaveBeenCalledWith('child')
 })
 test('completed lookup searches real results without claiming verified execution',async()=>{
- render(<TaskIndex {...props()}/>);await userEvent.selectOptions(screen.getByLabelText('View'),'completed');await userEvent.type(screen.getByRole('searchbox'),'Recorded report');expect(screen.getByText(/1 of 1 matching/)).toBeInTheDocument();await userEvent.click(screen.getByText('Result preview for Completed report'));expect(screen.getByText('Recorded report text')).toBeVisible();expect(screen.getByText(/Runtime verification is inspected in Planning/)).toBeInTheDocument()
+ render(<TaskIndex {...props()}/>);await userEvent.click(screen.getByRole('button',{name:'Filters'}));await userEvent.selectOptions(screen.getByLabelText('View'),'completed');await userEvent.type(screen.getByRole('searchbox'),'Recorded report');expect(screen.getByText(/1 of 1 matching/)).toBeInTheDocument();await userEvent.click(screen.getByText('Result preview for Completed report'));expect(screen.getByText('Recorded report text')).toBeVisible();expect(screen.getByText(/Runtime verification is inspected in Planning/)).toBeInTheDocument()
 })
 test('attention counts pending records and excludes old approved IDs',async()=>{
- render(<TaskIndex {...props()}/>);await userEvent.selectOptions(screen.getByLabelText('View'),'attention');expect(screen.getByText(/2 of 2 matching/)).toBeInTheDocument();expect(screen.getByText('0 blockers · 1 pending approval records')).toBeInTheDocument();expect(screen.queryByText('Completed report')).not.toBeInTheDocument()
+ render(<TaskIndex {...props()}/>);await userEvent.click(screen.getByRole('button',{name:'Filters'}));await userEvent.selectOptions(screen.getByLabelText('View'),'attention');expect(screen.getByText(/2 of 2 matching/)).toBeInTheDocument();expect(screen.getByText('0 blockers · 1 pending approval records')).toBeInTheDocument();expect(screen.queryByText('Completed report')).not.toBeInTheDocument()
 })
 test('stable status and selected assignment survive refreshed records',async()=>{
- const p=props();const v=render(<TaskIndex {...p}/>);await userEvent.selectOptions(screen.getByLabelText('Status'),'failed');await userEvent.selectOptions(screen.getByLabelText('Assigned agent'),'agent:unknown-identity');v.rerender(<TaskIndex {...p} tasks={[root,done]}/>);expect(screen.getByLabelText('Status')).toHaveValue('failed');expect(screen.getByLabelText('Assigned agent')).toHaveValue('agent:unknown-identity');expect(screen.getByText('No task records match these filters.')).toBeInTheDocument()
+ const p=props();const v=render(<TaskIndex {...p}/>);await userEvent.click(screen.getByRole('button',{name:'Filters'}));await userEvent.selectOptions(screen.getByLabelText('Status'),'failed');await userEvent.selectOptions(screen.getByLabelText('Assigned agent'),'agent:unknown-identity');v.rerender(<TaskIndex {...p} tasks={[root,done]}/>);expect(screen.getByLabelText('Status')).toHaveValue('failed');expect(screen.getByLabelText('Assigned agent')).toHaveValue('agent:unknown-identity');expect(screen.getByText('No task records match these filters.')).toBeInTheDocument()
 })
 test('result preview is inert bounded text and correction context uses actual source',async()=>{
  render(<TaskIndex {...props([{...done,correctionOfTaskId:'root',result:'<script>test()</script>'+ 'x'.repeat(5000)},root])}/>);await userEvent.click(screen.getByText('Result preview for Completed report'));expect(screen.getByText(/Result truncated to 4,000/)).toBeVisible();expect(document.querySelector('pre')?.textContent?.length).toBe(4000);expect(document.querySelector('pre')).toHaveTextContent('<script>');expect(screen.getByText(/Corrected follow-up to/)).toBeInTheDocument()
@@ -28,13 +28,35 @@ test('result preview is inert bounded text and correction context uses actual so
 test('all child links and retry counts remain record evidence',async()=>{
  render(<TaskIndex {...props()}/>);await userEvent.click(screen.getByText('1 subtasks'));await userEvent.click(screen.getByRole('button',{name:'Child research'}));expect(inspect).toHaveBeenCalledWith('child');expect(screen.getByText('1/2 retries')).toBeInTheDocument();expect(screen.queryByText(/attempts/)).not.toBeInTheDocument()
 })
-test('rows are bounded, sorting does not mutate shared data and filters reset the bound',async()=>{
- const user=userEvent.setup();const tasks=Array.from({length:205},(_,i)=>({...done,id:`record-${i}`,title:`Record ${i}`,result:null}));const original=[...tasks];render(<TaskIndex {...props(tasks)}/>);const table=screen.getByRole('table',{name:'Task record index'});const rendered=()=>table.querySelectorAll('button[aria-label^="Open Record"]').length;expect(rendered()).toBe(50);for(let i=0;i<3;i++)await user.click(screen.getByRole('button',{name:'Show 50 more records'}));expect(rendered()).toBe(200);expect(screen.getByText(/Display limited to 200/)).toBeInTheDocument();expect(tasks).toEqual(original);const search=screen.getByRole('searchbox');await user.click(search);await user.paste('Record 204');expect(rendered()).toBe(1);await user.clear(search);expect(rendered()).toBe(50)
+test('rows are bounded, sorting does not mutate shared data and filters reset the bound', async () => {
+ const user = userEvent.setup()
+ const tasks = Array.from({ length: 205 }, (_, i) => ({ ...done, id: `record-${i}`, title: `Record ${i}`, result: null }))
+ const original = [...tasks]
+ render(<TaskIndex {...props(tasks)}/>)
+ const table = screen.getByRole('table', { name: 'Task record index' })
+ // Resolve controls once before pagination grows the evidence table. Repeated
+ // document-wide role queries needlessly recompute hundreds of row names.
+ const more = screen.getByRole('button', { name: 'Show 50 more records' })
+ const search = screen.getByRole('searchbox')
+ const rendered = () => table.querySelectorAll('button[aria-label^="Open Record"]').length
+ expect(rendered()).toBe(50)
+ for (const count of [100, 150, 200]) {
+  await user.click(more)
+  expect(rendered()).toBe(count)
+ }
+ expect(screen.getByText(/Display limited to 200/)).toBeInTheDocument()
+ expect(more).not.toBeInTheDocument()
+ expect(tasks).toEqual(original)
+ await user.click(search)
+ await user.paste('Record 204')
+ expect(rendered()).toBe(1)
+ await user.clear(search)
+ expect(rendered()).toBe(50)
 })
 test('stale and unknown collection stays distinct from confirmed empty with shared refresh',async()=>{
  const p=props([]);const v=render(<TaskIndex {...p} stale/>);expect(screen.getByText('Task records have not been confirmed.')).toBeInTheDocument();await userEvent.click(screen.getByRole('button',{name:'Refresh state'}));expect(p.onRefresh).toHaveBeenCalledOnce();v.rerender(<TaskIndex {...p}/>);expect(screen.getByText('No task records are available.')).toBeInTheDocument()
 })
 
 test('blocked and awaiting approval views use reported record evidence',async()=>{
- render(<TaskIndex {...props([{...root,blockedBy:['dependency-id']},child,done])}/>);await userEvent.selectOptions(screen.getByLabelText('View'),'blocked');expect(screen.getByText(/1 of 1 matching/)).toBeInTheDocument();await userEvent.selectOptions(screen.getByLabelText('View'),'approval');expect(screen.getByText(/1 of 1 matching/)).toBeInTheDocument();expect(screen.getByRole('button',{name:'Open Root request'})).toBeInTheDocument()
+ render(<TaskIndex {...props([{...root,blockedBy:['dependency-id']},child,done])}/>);await userEvent.click(screen.getByRole('button',{name:'Filters'}));await userEvent.selectOptions(screen.getByLabelText('View'),'blocked');expect(screen.getByText(/1 of 1 matching/)).toBeInTheDocument();await userEvent.selectOptions(screen.getByLabelText('View'),'approval');expect(screen.getByText(/1 of 1 matching/)).toBeInTheDocument();expect(screen.getByRole('button',{name:'Open Root request'})).toBeInTheDocument()
 })

@@ -7,6 +7,8 @@ balances, API keys, and unknown quota estimates never authorize spending.
 
 See the [activation and acceptance checklist](campaign-d-activation.md) for
 provider-specific independent evidence, human gates and safe shutdown procedures.
+The [local validation record](campaign-d-validation.md) distinguishes implementation
+testing from pending remote CI, independent review and live acceptance.
 
 ## Deployment state and discovery
 
@@ -21,6 +23,10 @@ discovery-only; no execution adapter is claimed. Implemented inference routes ar
 Codex app-server, ChatGPT OAuth Responses, Gemini compatible HTTP, Groq, exact
 OpenRouter `:free` models, Cloudflare Workers AI compatible HTTP, and optional
 loopback Ollama. No large locally running model is required for hosted planning.
+
+The doctor reports `free_only` eligibility as blocked/degraded pending account
+evidence and persistent quota inspection. It performs no cloud probe and never
+equates a configured allowance with independently verified live capacity.
 
 ## Operator-owned eligibility
 

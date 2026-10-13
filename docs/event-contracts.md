@@ -3,7 +3,8 @@
 Campaign D records physical dispatch identity in `model.call.started`,
 `model.retry.started`, and `model.fallback.started`, with provider/model,
 `dispatchKind`, and durable `requestCount`. `model.call.failed` records sanitized
-`failureCategory` before switching. These append-only audit/outbox records contain
+`failureCategory` for each failed physical attempt before retrying or switching.
+These append-only audit/outbox records contain
 no prompt, output, credential, or raw provider body. Existing envelope versions
 and sequence semantics are preserved. See [zero-cost AI](zero-cost-ai.md).
 

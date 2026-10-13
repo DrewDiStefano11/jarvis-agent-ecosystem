@@ -88,6 +88,7 @@ class ChatGPTPlanProvider(ProviderBase):
         )
 
     async def list_models(self) -> tuple[str, ...] | None:
+        self.session.require_plan_usage(self.grant.session_identity or self.grant.account_id)
         require_allowance(self.grant, self.default_model)
         client = self.client or httpx.AsyncClient(
             trust_env=False, follow_redirects=False, timeout=30

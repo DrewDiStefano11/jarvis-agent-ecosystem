@@ -74,7 +74,7 @@ class CodexStdioTransport:
     rejects inherited integrations, and never calls any billing or credit RPC.
     """
 
-    async def infer(self, request: ModelExecutionRequest, grant: FreeAllowance) -> str:
+    async def infer(self, request: ModelExecutionRequest, grant: FreeAllowance) -> dict:
         executable = shutil.which("codex")
         if executable is None:
             raise ProviderUnavailableError("Codex CLI is not installed")
@@ -305,7 +305,7 @@ class CodexStdioTransport:
                 if params.get("toModel") not in grant.models:
                     raise ProviderExecutionDisabledError("Codex rerouted to an unverified model")
             elif message.get("method") == "turn/completed":
-                if params["turn"]["status"] != "completed" or not text:
+                if params["turn"]["status"] != "completed" or not (final_content or text):
                     raise ProviderUnavailableError("Codex inference did not complete")
                 return {
                     "content": final_content or "".join(text),

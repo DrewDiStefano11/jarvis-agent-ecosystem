@@ -108,10 +108,62 @@ def completion(request):
     )
 
 
-@pytest.mark.parametrize("mode", ["disabled", "free_only"])
-def test_factory_requires_mode_and_credentials_even_with_allowance(capacity, monkeypatch, mode):
+def test_campaign_ci_quarantines_every_registered_trigger_and_job():
+    import yaml
+
+    root = Path(__file__).resolve().parents[3]
+    workflows = list((root / ".github" / "workflows").glob("*.y*ml"))
+    assert [path.name for path in workflows] == ["ci.yml"]
+    workflow = yaml.load(workflows[0].read_text(), Loader=yaml.BaseLoader)
+    assert set(workflow["on"]) == {"push", "pull_request"}
+    assert workflow["on"]["push"]["branches-ignore"] == ["codex/campaign-d-zero-cost"]
+    guard = (
+        "github.head_ref != 'codex/campaign-d-zero-cost' && "
+        "github.ref_name != 'codex/campaign-d-zero-cost'"
+    )
+    for name, job in workflow["jobs"].items():
+        expected = "always() && " + guard if name == "backend" else guard
+        assert job.get("if") == expected, f"Unfenced job: {name}"
+    # The explicit branch equality leaves all other heads eligible. A newly
+    # added trigger/workflow/job needs safety review before this gate can pass.
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_free_only_doctor_never_probes_or_claims_account_verification(configured):
+    from dataclasses import asdict
+    from types import SimpleNamespace
+
+    from app.diagnostics.checks import check_provider
+    from app.diagnostics.models import CheckStatus
+
+    settings = Settings(
+        _env_file=None,
+        JARVIS_MODEL_EXECUTION_MODE="free_only",
+        JARVIS_MODEL_FREE_ALLOWANCES_JSON=json.dumps(
+            [allowance().model_dump(mode="json")] if configured else []
+        ),
+    )
+
+    def forbidden_probe(_):
+        pytest.fail("read-only free capacity diagnostics must not contact a provider")
+
+    result = check_provider(SimpleNamespace(settings=settings), provider_health=forbidden_probe)
+    assert result.status == (CheckStatus.DEGRADED if configured else CheckStatus.BLOCKED)
+    assert "no cloud probe performed" in result.reason
+    assert result.identifiers["freeAllowanceRecords"] == int(configured)
+    assert "verified-account" not in json.dumps(asdict(result))
+
+
+@pytest.mark.parametrize(
+    "mode,has_key", [("disabled", False), ("disabled", True), ("free_only", False)]
+)
+def test_factory_requires_mode_and_credentials_even_with_allowance(
+    capacity, monkeypatch, mode, has_key
+):
     grant = allowance()
     monkeypatch.delenv(grant.credential_env, raising=False)
+    if has_key:
+        monkeypatch.setenv(grant.credential_env, "test-key")
     settings = Settings(
         _env_file=None,
         JARVIS_MODEL_EXECUTION_MODE=mode,
@@ -385,7 +437,8 @@ def chatgpt_session(**updates):
     )
 
 
-async def test_chatgpt_plan_responses_use_oauth_and_require_completed_event(capacity):
+@pytest.mark.parametrize("leak", [None, "access_token", "refresh_token", "id_token"])
+async def test_chatgpt_plan_responses_use_oauth_and_require_completed_event(capacity, leak):
     grant = allowance(integration="chatgpt")
     capacity.configure([grant])
     calls = []
@@ -407,13 +460,21 @@ async def test_chatgpt_plan_responses_use_oauth_and_require_completed_event(capa
                 "usage": {"input_tokens": 1, "output_tokens": 1},
             },
         }
+        if leak:
+            event["response"]["output"][0]["content"][0]["text"] = getattr(
+                chatgpt_session(), leak
+            ).get_secret_value()
         return httpx.Response(200, text="data: " + json.dumps(event) + "\n\n")
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(stream)) as client:
         adapter = ChatGPTPlanProvider(grant, capacity, chatgpt_session(), client=client)
-        assert (
-            await adapter.execute(ModelExecutionRequest(prompt="test", max_output_tokens=20))
-        ).content == "answer"
+        if leak:
+            with pytest.raises(MalformedProviderResponseError, match="contains a credential"):
+                await adapter.execute(ModelExecutionRequest(prompt="test", max_output_tokens=20))
+        else:
+            assert (
+                await adapter.execute(ModelExecutionRequest(prompt="test", max_output_tokens=20))
+            ).content == "answer"
         assert str(calls[0].url) == "https://api.openai.com/v1/responses"
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(lambda _: httpx.Response(200, text="data: {}\n\n"))
@@ -428,6 +489,21 @@ def test_identity_without_plan_scope_cannot_infer(capacity):
     session.scopes = frozenset({"openid"})
     with pytest.raises(AuthenticationError):
         ChatGPTPlanProvider(allowance(integration="chatgpt"), capacity, session)
+
+
+async def test_expired_session_blocks_catalog_before_network(capacity):
+    session = chatgpt_session()
+    calls = []
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda r: calls.append(r))
+    ) as client:
+        adapter = ChatGPTPlanProvider(
+            allowance(integration="chatgpt"), capacity, session, client=client
+        )
+        session.expires_at = time.time() - 1
+        with pytest.raises(AuthenticationError):
+            await adapter.list_models()
+    assert not calls
 
 
 async def test_subscription_stream_quota_failure_disables_shared_bucket(capacity):
@@ -593,7 +669,9 @@ async def test_oauth_cryptographically_rejects_untrusted_identity_and_permission
         assert "private-access" not in str(raised.value)
 
 
-@pytest.mark.parametrize("credit_status", ["absent", "unknown", "paid", "unlimited", "safe"])
+@pytest.mark.parametrize(
+    "credit_status", ["absent", "unknown", "paid", "unlimited", "safe", "no_delta"]
+)
 async def test_native_codex_rpc_checks_subscription_then_collects_final_usage(credit_status):
     from app.model_providers.codex_transport import CodexStdioTransport
 
@@ -689,7 +767,9 @@ async def test_native_codex_rpc_checks_subscription_then_collects_final_usage(cr
         stdin = Input()
         stdout = Output()
 
-    if credit_status != "safe":
+    if credit_status == "no_delta":
+        messages[:] = [m for m in messages if m.get("method") != "item/agentMessage/delta"]
+    if credit_status not in {"safe", "no_delta"}:
         with pytest.raises(ProviderExecutionDisabledError, match="credit status"):
             await CodexStdioTransport()._conversation(
                 Process(),
@@ -717,7 +797,10 @@ async def test_native_codex_rpc_checks_subscription_then_collects_final_usage(cr
     ]
 
 
-async def test_real_worker_switches_free_providers_without_local_model(tmp_path):
+@pytest.mark.parametrize("retry_same_provider", [False, True])
+async def test_real_worker_switches_free_providers_without_local_model(
+    tmp_path, retry_same_provider
+):
     from tests.test_autonomous_worker import VALID_RESULT, FakeRouter, worker_fixture
 
     app, client, _, worker = worker_fixture(
@@ -749,22 +832,57 @@ async def test_real_worker_switches_free_providers_without_local_model(tmp_path)
                 },
             )
 
-        adapters = [
-            provider(
-                first,
-                repository,
-                lambda _: httpx.Response(429, json={"error": {"code": "insufficient_quota"}}),
-            ),
-            provider(second, repository, plan),
-        ]
+        attempts = 0
+
+        def retry_plan(request):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                return httpx.Response(503, json={"error": {"code": "temporarily_unavailable"}})
+            return plan(request)
+
+        adapters = (
+            [provider(first, repository, retry_plan)]
+            if retry_same_provider
+            else [
+                provider(
+                    first,
+                    repository,
+                    lambda _: httpx.Response(429, json={"error": {"code": "insufficient_quota"}}),
+                ),
+                provider(second, repository, plan),
+            ]
+        )
         service.router = ModelRouter(
-            ProviderRegistry(adapters), RetryExecutor(RetryPolicy(maximum_attempts=1))
+            ProviderRegistry(adapters),
+            RetryExecutor(
+                RetryPolicy(
+                    maximum_attempts=2 if retry_same_provider else 1,
+                    initial_backoff_seconds=0,
+                    maximum_backoff_seconds=0,
+                )
+            ),
         )
         result = await service.run_once(worker.id)
         assert result.stage == "completed"
         assert result.requestCount == 2
-        assert result.provider == "second"
-        assert not repository.available(first, "fixture-model")
+        assert result.provider == ("local-fake" if retry_same_provider else "second")
+        assert repository.available(first, "fixture-model") == retry_same_provider
+        from sqlalchemy import select
+
+        from app.db.models import OutboxEventRow
+
+        with service.executions.sessions() as session:
+            failures = list(
+                session.scalars(
+                    select(OutboxEventRow).where(OutboxEventRow.event_type == "model.call.failed")
+                )
+            )
+            assert len(failures) == 1
+            assert failures[0].envelope["payload"]["requestCount"] == 1
+            assert failures[0].envelope["payload"]["failureCategory"] == (
+                "transient_provider_failure" if retry_same_provider else "hard_quota_exhausted"
+            )
         assert (
             app.state.agent_runtime_service.repository.load_run("run-free-switch").state
             == "succeeded"

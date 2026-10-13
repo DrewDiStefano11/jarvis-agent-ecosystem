@@ -166,14 +166,16 @@ class ModelRouter:
                 requirements.preferred_model or request.model or provider.default_model
             )
             routed_request = request.model_copy(update={"model": effective_model})
-            dispatched = False
 
             async def dispatch(provider=provider, routed_request=routed_request):
-                nonlocal dispatched
                 if before_dispatch is not None:
                     await before_dispatch(provider.name, routed_request.model)
-                dispatched = True
-                return await provider.execute(routed_request)
+                try:
+                    return await provider.execute(routed_request)
+                except ModelProviderError as exc:
+                    if after_failure is not None:
+                        await after_failure(provider.name, routed_request.model, exc.category.value)
+                    raise
 
             try:
                 response = await self.retry.execute(
@@ -214,8 +216,6 @@ class ModelRouter:
                 return response
             except ModelProviderError as exc:
                 failures.append(exc.category.value)
-                if after_failure is not None and dispatched:
-                    await after_failure(provider.name, effective_model, exc.category.value)
                 logger.info(
                     "model request failed provider=%s model=%s category=%s "
                     "task_id=%s correlation_id=%s",
