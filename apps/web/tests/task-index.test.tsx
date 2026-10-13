@@ -28,8 +28,30 @@ test('result preview is inert bounded text and correction context uses actual so
 test('all child links and retry counts remain record evidence',async()=>{
  render(<TaskIndex {...props()}/>);await userEvent.click(screen.getByText('1 subtasks'));await userEvent.click(screen.getByRole('button',{name:'Child research'}));expect(inspect).toHaveBeenCalledWith('child');expect(screen.getByText('1/2 retries')).toBeInTheDocument();expect(screen.queryByText(/attempts/)).not.toBeInTheDocument()
 })
-test('rows are bounded, sorting does not mutate shared data and filters reset the bound',async()=>{
- const user=userEvent.setup();const tasks=Array.from({length:205},(_,i)=>({...done,id:`record-${i}`,title:`Record ${i}`,result:null}));const original=[...tasks];render(<TaskIndex {...props(tasks)}/>);const table=screen.getByRole('table',{name:'Task record index'});const rendered=()=>table.querySelectorAll('button[aria-label^="Open Record"]').length;expect(rendered()).toBe(50);for(let i=0;i<3;i++)await user.click(screen.getByRole('button',{name:'Show 50 more records'}));expect(rendered()).toBe(200);expect(screen.getByText(/Display limited to 200/)).toBeInTheDocument();expect(tasks).toEqual(original);const search=screen.getByRole('searchbox');await user.click(search);await user.paste('Record 204');expect(rendered()).toBe(1);await user.clear(search);expect(rendered()).toBe(50)
+test('rows are bounded, sorting does not mutate shared data and filters reset the bound', async () => {
+ const user = userEvent.setup()
+ const tasks = Array.from({ length: 205 }, (_, i) => ({ ...done, id: `record-${i}`, title: `Record ${i}`, result: null }))
+ const original = [...tasks]
+ render(<TaskIndex {...props(tasks)}/>)
+ const table = screen.getByRole('table', { name: 'Task record index' })
+ // Resolve controls once before pagination grows the evidence table. Repeated
+ // document-wide role queries needlessly recompute hundreds of row names.
+ const more = screen.getByRole('button', { name: 'Show 50 more records' })
+ const search = screen.getByRole('searchbox')
+ const rendered = () => table.querySelectorAll('button[aria-label^="Open Record"]').length
+ expect(rendered()).toBe(50)
+ for (const count of [100, 150, 200]) {
+  await user.click(more)
+  expect(rendered()).toBe(count)
+ }
+ expect(screen.getByText(/Display limited to 200/)).toBeInTheDocument()
+ expect(more).not.toBeInTheDocument()
+ expect(tasks).toEqual(original)
+ await user.click(search)
+ await user.paste('Record 204')
+ expect(rendered()).toBe(1)
+ await user.clear(search)
+ expect(rendered()).toBe(50)
 })
 test('stale and unknown collection stays distinct from confirmed empty with shared refresh',async()=>{
  const p=props([]);const v=render(<TaskIndex {...p} stale/>);expect(screen.getByText('Task records have not been confirmed.')).toBeInTheDocument();await userEvent.click(screen.getByRole('button',{name:'Refresh state'}));expect(p.onRefresh).toHaveBeenCalledOnce();v.rerender(<TaskIndex {...p}/>);expect(screen.getByText('No task records are available.')).toBeInTheDocument()
