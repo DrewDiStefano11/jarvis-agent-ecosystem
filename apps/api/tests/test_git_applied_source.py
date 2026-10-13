@@ -17,6 +17,53 @@ from app.self_build.applied_source import AppliedSourceCommitService
 pytest_plugins = ["tests.test_workspace_creation_service"]
 
 
+@pytest.mark.parametrize("acknowledgement", ["workspace_creation", "source_mutation"])
+def test_applied_source_requires_real_creation_and_mutation_audit_acknowledgements(
+    applied, acknowledgement
+):
+    from sqlalchemy import select
+
+    from app.db.models import AuditEventRow
+    from app.source_mutation.repository import SourceMutationRow
+
+    app, actor, binding, workspace_id, request, mutation, target = applied
+    assert binding.source(actor, workspace_id, request.source_edit_record_id).mutation_operation_id
+    before = {
+        path.relative_to(target): (path.read_bytes(), path.stat().st_ino)
+        for path in target.rglob("*")
+        if path.is_file()
+    }
+    with binding.preparation.repository.leases._write() as session:
+        events = list(
+            session.scalars(
+                select(AuditEventRow).where(
+                    AuditEventRow.event_type
+                    == f"self_build.{acknowledgement}.checkpoint_acknowledged"
+                )
+            )
+        )
+        assert events
+        for event in events:
+            session.delete(event)
+    expected = (
+        "SOURCE_MUTATION_CREATION_CHECKPOINT_INVALID"
+        if acknowledgement == "workspace_creation"
+        else "GIT_COMMIT_APPLIED_SOURCE_REQUIRED"
+    )
+    with pytest.raises(DomainError) as failure:
+        binding.bind(actor, workspace_id, request)
+    assert failure.value.code == expected
+    with app.state.repository.session_factory() as session:
+        assert session.get(SourceMutationRow, request.source_edit_record_id).payload == (
+            mutation.model_dump(mode="json")
+        )
+    assert before == {
+        path.relative_to(target): (path.read_bytes(), path.stat().st_ino)
+        for path in target.rglob("*")
+        if path.is_file()
+    }
+
+
 @pytest.mark.parametrize(
     "path",
     [

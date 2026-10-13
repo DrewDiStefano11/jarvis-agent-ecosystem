@@ -10,3 +10,9 @@ Every response explicitly reports `current_source_measured: false` and `executio
 
 This PR explicitly depends on the authorized mutation adapter. It introduces no migrations, runtime orchestrator, checkpoint writer or shared checkout changes. Recovery remains governed by the adapter's original ownership, live lease/attempt fence, exact operator approval and filesystem verification.
 
+Creation acknowledgement requires the append-only creation audit event to match
+the task, operation, exact checkpoint ID and private intent digest. Mutation
+acknowledgement separately requires the exact task, operation, editing record,
+plan hash and intent digest in its audit event. Mutable payload checkpoint fields
+and native-only crash gaps do not establish either acknowledgement.
+
