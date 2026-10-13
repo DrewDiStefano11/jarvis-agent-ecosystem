@@ -94,6 +94,22 @@ def test_full_publication_requires_every_exact_suite():
     assert not assess(plan, values[:-1]).ready
 
 
+def test_independently_numbered_gate_streams_can_complete_publication():
+    plan = build_execution_plan(state(), boundary="publication")
+    values = [receipt(plan, command, sequence=1) for command in plan.commands]
+    assert assess(plan, values).ready
+
+
+def test_same_gate_sequence_conflict_and_cross_gate_command_replay_are_rejected():
+    plan = build_execution_plan(state(), boundary="publication")
+    first = receipt(plan, plan.commands[0])
+    conflict = receipt(plan, plan.commands[0], command_run_id="conflict")
+    replay = receipt(plan, plan.commands[1], command_run_id=first.measurement.command_run_id)
+    for duplicate in (conflict, replay):
+        with pytest.raises(ValueError, match="duplicate execution receipt"):
+            assess(plan, [first, duplicate])
+
+
 @pytest.mark.parametrize("outcome", ["failed", "cancelled", "interrupted", "unmeasured"])
 def test_nonpassing_receipts_never_pass(outcome):
     plan = build_execution_plan(state())
