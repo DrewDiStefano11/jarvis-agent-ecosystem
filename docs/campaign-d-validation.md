@@ -145,3 +145,36 @@ The earlier full-suite counts above are historical evidence from publication;
 this conflict resolution reran applicable regressions and collection, not the
 entire expanded backend suite. Remote CI remains intentionally skipped, and
 live cloud acceptance and independent review remain pending.
+
+## Codex review correction, 2026-10-13
+
+The cloud-authority finding is addressed with a separate environment-only
+`JARVIS_MODEL_VERIFIED_CLOUD_ENABLED=false` default. Allowance/quotas alone do not
+register hosted providers or allow worker/critic remote routing or fallback. Each
+physical hosted dispatch rechecks the switch, so revocation during selection
+prevents request reservation and inference. Enabling the switch requires
+`free_only`, account-specific records and separate owner approval after independent
+verification. `AGENTS.md` now records this narrowly authorized Campaign D policy;
+no live activation has been approved or performed.
+
+The reviewer recommendation to run remote CI is **not implemented**: the owner
+explicitly requires every remote workflow job to stay skipped until an enforceable
+$0 storage boundary is independently verified. The local pre-commit requirements
+and branch quarantine are now explicit in `AGENTS.md` and the workflow comments.
+The PR remains draft, remote CI acceptance remains pending, and the CI review
+finding stays visible as a blocked owner gate. Other PRs retain their CI.
+
+Validation for the correction: **271 affected backend tests passed**, covering
+activation absent/present/revoked, quotas, worker, critic, provider contracts and
+router behavior. Ruff lint/format and diff checks passed. Collection accounts for
+**3,055 tests** with no missing or duplicate file assignments; the expanded full
+backend suite was not rerun. Frontend typecheck, ESLint, **234 tests**, production
+build and office assets passed. An initial regression caught a nonzero fallback
+bound when activation was disabled; the bound was corrected to zero and the
+complete affected selection rerun. No safeguard was weakened.
+
+```text
+pytest tests/test_free_ai_capacity.py tests/test_autonomous_worker.py
+  tests/test_independent_verification.py tests/test_model_provider_contracts.py
+  tests/test_model_router.py -q --basetemp=../../.local/review-regressions-final --timeout=300
+```

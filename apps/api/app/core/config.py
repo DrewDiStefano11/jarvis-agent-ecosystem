@@ -135,6 +135,7 @@ class Settings(BaseSettings):
     model_execution_mode: Literal["disabled", "local_only", "free_only"] = Field(
         "disabled", alias="JARVIS_MODEL_EXECUTION_MODE"
     )
+    model_verified_cloud_enabled: bool = Field(False, alias="JARVIS_MODEL_VERIFIED_CLOUD_ENABLED")
     model_ollama_enabled: bool = Field(False, alias="JARVIS_MODEL_OLLAMA_ENABLED")
     model_ollama_name: str = Field(
         "ollama", alias="JARVIS_MODEL_OLLAMA_NAME", min_length=1, max_length=120
@@ -306,8 +307,18 @@ class Settings(BaseSettings):
         if len(priority) != len(set(priority)):
             raise ValueError("model provider priority cannot contain duplicates")
         self.parsed_model_pricing()
-        self.parsed_free_allowances()
+        grants = self.parsed_free_allowances()
+        if self.model_verified_cloud_enabled and (
+            self.model_execution_mode != "free_only" or not grants
+        ):
+            raise ValueError(
+                "cloud activation requires free_only and account-specific allowance records"
+            )
         return self
+
+    @property
+    def verified_cloud_execution_allowed(self) -> bool:
+        return self.model_execution_mode == "free_only" and self.model_verified_cloud_enabled
 
     def parsed_free_allowances(self):
         from pydantic import TypeAdapter

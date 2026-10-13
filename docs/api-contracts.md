@@ -3,7 +3,9 @@
 Campaign D adds `free_only` to `AutonomousWorkerStatus.modelExecutionMode` and
 updates the advertised database head to `20261013_free_ai`. Existing response
 envelopes and event schema versions are preserved. No HTTP endpoint accepts
-provider allowance evidence or tokens. An exhausted/unverified allowance pauses
+provider allowance evidence, tokens or cloud activation. The environment-only
+activation switch defaults to false and is separate from allowance evidence.
+An exhausted/unverified allowance pauses
 the native runtime with `free_capacity_unavailable`; task status follows the
 existing `under_review` path. See [zero-cost AI](zero-cost-ai.md).
 

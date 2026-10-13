@@ -155,7 +155,8 @@ def test_free_only_doctor_never_probes_or_claims_account_verification(configured
 
 
 @pytest.mark.parametrize(
-    "mode,has_key", [("disabled", False), ("disabled", True), ("free_only", False)]
+    "mode,has_key",
+    [("disabled", False), ("disabled", True), ("free_only", False), ("free_only", True)],
 )
 def test_factory_requires_mode_and_credentials_even_with_allowance(
     capacity, monkeypatch, mode, has_key
@@ -170,6 +171,31 @@ def test_factory_requires_mode_and_credentials_even_with_allowance(
         JARVIS_MODEL_FREE_ALLOWANCES_JSON=json.dumps([grant.model_dump(mode="json")]),
     )
     assert build_provider_registry(settings, capacity.sessions).list() == []
+    assert capacity.snapshot() == []
+
+
+@pytest.mark.parametrize("mode", ["disabled", "local_only", "free_only"])
+def test_cloud_activation_without_allowances_is_invalid(mode):
+    with pytest.raises(ValidationError, match="cloud activation requires"):
+        Settings(
+            _env_file=None,
+            JARVIS_MODEL_EXECUTION_MODE=mode,
+            JARVIS_MODEL_VERIFIED_CLOUD_ENABLED=True,
+        )
+
+
+def test_separate_activation_still_requires_credential(capacity, monkeypatch):
+    grant = allowance()
+    settings = Settings(
+        _env_file=None,
+        JARVIS_MODEL_EXECUTION_MODE="free_only",
+        JARVIS_MODEL_VERIFIED_CLOUD_ENABLED=True,
+        JARVIS_MODEL_FREE_ALLOWANCES_JSON=json.dumps([grant.model_dump(mode="json")]),
+    )
+    monkeypatch.delenv(grant.credential_env, raising=False)
+    assert build_provider_registry(settings, capacity.sessions).list() == []
+    monkeypatch.setenv(grant.credential_env, "test-key")
+    assert len(build_provider_registry(settings, capacity.sessions).list()) == 1
 
 
 @pytest.mark.parametrize("leak", ["content", "header", "model"])
@@ -798,8 +824,9 @@ async def test_native_codex_rpc_checks_subscription_then_collects_final_usage(cr
 
 
 @pytest.mark.parametrize("retry_same_provider", [False, True])
+@pytest.mark.parametrize("activation", ["disabled", "enabled", "revoked"])
 async def test_real_worker_switches_free_providers_without_local_model(
-    tmp_path, retry_same_provider
+    tmp_path, retry_same_provider, activation
 ):
     from tests.test_autonomous_worker import VALID_RESULT, FakeRouter, worker_fixture
 
@@ -810,6 +837,7 @@ async def test_real_worker_switches_free_providers_without_local_model(
     try:
         service = app.state.autonomous_worker_service
         service.settings.model_execution_mode = "free_only"
+        service.settings.model_verified_cloud_enabled = activation != "disabled"
         first = allowance("local-fake", integration="groq", models=["fixture-model"])
         second = allowance(
             "second", integration="gemini", account_id="second-account", models=["fixture-model"]
@@ -863,7 +891,22 @@ async def test_real_worker_switches_free_providers_without_local_model(
                 )
             ),
         )
+        if activation == "revoked":
+            original_health = adapters[0].health_check
+
+            async def revoke_during_selection():
+                health = await original_health()
+                service.settings.model_verified_cloud_enabled = False
+                return health
+
+            adapters[0].health_check = revoke_during_selection
         result = await service.run_once(worker.id)
+        if activation != "enabled":
+            assert result.failureCode in {"free_capacity_unavailable", "model_execution_disabled"}
+            assert result.requestCount == 0
+            assert repository.available(first, "fixture-model")
+            assert attempts == 0
+            return
         assert result.stage == "completed"
         assert result.requestCount == 2
         assert result.provider == ("local-fake" if retry_same_provider else "second")
@@ -907,6 +950,7 @@ async def test_all_failed_dispatches_keep_distinct_durable_evidence(tmp_path):
     try:
         service = app.state.autonomous_worker_service
         service.settings.model_execution_mode = "free_only"
+        service.settings.model_verified_cloud_enabled = True
         first = allowance("local-fake", models=["fixture-model"])
         second = allowance(
             "second", integration="gemini", account_id="second-account", models=["fixture-model"]

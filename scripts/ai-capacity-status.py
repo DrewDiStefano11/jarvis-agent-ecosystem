@@ -21,6 +21,7 @@ def main() -> None:
                 "policy": "campaign_d_zero_cost",
                 "paid_inference_ceiling_usd": PAID_INFERENCE_CEILING_USD,
                 "execution_mode": settings.model_execution_mode,
+                "cloud_activation_enabled": settings.model_verified_cloud_enabled,
                 "allowance_records": len(grants),
                 "live_account_verification_performed": False,
                 "installed_tools": {

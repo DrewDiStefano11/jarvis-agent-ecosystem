@@ -34,6 +34,13 @@ equates a configured allowance with independently verified live capacity.
 `free_only`. `JARVIS_MODEL_FREE_ALLOWANCES_JSON` defaults to `[]`. Only trusted
 operator configuration can establish `app.models.ai_capacity.FreeAllowance`
 records. Model text, manifests, and planning HTTP requests cannot establish them.
+Evidence and quota records alone do not activate hosted execution.
+`JARVIS_MODEL_VERIFIED_CLOUD_ENABLED` defaults to `false`; the owner must separately
+approve activation after independent verification before setting it to `true` in
+`free_only` mode. The factory, worker and critic retain loopback-only routing until
+that gate is enabled. Each physical hosted dispatch rechecks the activation gate,
+so revocation during provider selection prevents a request. No live activation has
+been approved for this campaign.
 Each record requires a provider name, supported integration, exact models,
 credential environment-variable name, canonical actual account ID/shared bucket,
 account-specific evidence reference, verification expiry, quota window/reset,

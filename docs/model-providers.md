@@ -213,6 +213,7 @@ All providers are disabled by default:
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `JARVIS_MODEL_EXECUTION_MODE` | `disabled` | Explicit `local_only` or verified `free_only` opt-in |
+| `JARVIS_MODEL_VERIFIED_CLOUD_ENABLED` | `false` | Separate owner activation after independent verification; quotas alone cannot enable hosted routing |
 | `JARVIS_MODEL_FREE_ALLOWANCES_JSON` | `[]` | Private operator-owned nonbillable evidence; no automatic verification |
 | `JARVIS_MODEL_OLLAMA_ENABLED` | `false` | Register Ollama metadata |
 | `JARVIS_MODEL_OLLAMA_NAME` | `ollama` | Stable registry name |

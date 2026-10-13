@@ -2,6 +2,8 @@ name: Phase 2A durable control-plane checks
 # Campaign D cannot use artifact/cache storage until its $0 boundary is verified.
 # Push filtering avoids a run; every job also fences PR events by their head branch.
 # Keep this scoped to Campaign D so other PRs retain every validation gate.
+# Owner policy in AGENTS.md requires local validation for every change while this
+# quarantine is active. Skipped contexts do not authorize CI acceptance or merge.
 on:
   push:
     branches-ignore: ['codex/campaign-d-zero-cost']

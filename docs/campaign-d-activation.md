@@ -72,7 +72,9 @@ excluded in `free_only`. Never download or provision hardware automatically.
 2. Keep execution disabled while installing protected credentials and validating
    the allowance schema, endpoint, fingerprint/session identity and migration.
    Apply Alembic through the normal deployment process; never startup `create_all`.
-3. Only after approval set `free_only` with that verified allowance. Worker enablement,
+3. Only after separate owner activation approval set `free_only` with that verified
+   allowance and `JARVIS_MODEL_VERIFIED_CLOUD_ENABLED=true`. Records alone cannot
+   enable hosted routing; the default switch is `false`. Worker enablement,
    task queuing, RBAC and exact-plan workspace approvals remain separate controls.
 4. Run a single minimal text inference with no tools or sensitive context. Compare
    native usage/billing before and after: no credit use, no charge and expected
@@ -87,7 +89,8 @@ excluded in `free_only`. Never download or provision hardware automatically.
 7. Re-disable execution after the bounded test. Live acceptance may be signed off
    only with genuine independent evidence for each tested account/integration.
 
-Emergency disable: use the existing emergency stop, set execution mode `disabled`,
+Emergency disable: use the existing emergency stop, set
+`JARVIS_MODEL_VERIFIED_CLOUD_ENABLED=false` and execution mode `disabled`,
 remove the affected allowance and stop/restart the worker through the normal
 operator procedure. Existing provider objects retain configuration until restarted.
 Revoke a compromised credential through the owner; no billing changes are needed.

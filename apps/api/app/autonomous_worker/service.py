@@ -134,6 +134,15 @@ class AutonomousWorkerService:
         if not providers and self.settings.model_execution_mode != "free_only":
             raise AutonomousWorkerError("NO_LOCAL_PROVIDER_AVAILABLE", status_code=503)
 
+    def assert_provider_activation(self, provider_name: str) -> None:
+        if (
+            not self.router.registry.get(provider_name).is_local
+            and not self.settings.verified_cloud_execution_allowed
+        ):
+            raise ProviderExecutionDisabledError(
+                "hosted execution requires separate operator activation", provider=provider_name
+            )
+
     async def run_once(
         self, worker_id: str, *, task_id: str | None = None
     ) -> ModelExecutionResult | ToolExecutionResult | CoordinationRecord | None:
@@ -930,6 +939,7 @@ class AutonomousWorkerService:
         async def before_dispatch(provider_name: str, model: str) -> None:
             nonlocal physical_count, previous_provider
             self._assert_live_policy(snapshot, actor, worker_id, lease_token)
+            self.assert_provider_activation(provider_name)
             current = self.executions.get(execution_id)
             if current.requestCount != physical_count:
                 raise AutonomousWorkerError("MODEL_DISPATCH_OUTCOME_UNKNOWN")
@@ -976,11 +986,13 @@ class AutonomousWorkerService:
             required_capability=ModelCapability.CHAT,
             preferred_model=request.model_name,
             prefer_local=self.settings.model_prefer_local,
-            allow_remote=self.settings.model_execution_mode == "free_only",
-            allow_fallback=self.settings.model_execution_mode == "free_only",
-            allow_quota_fallback=self.settings.model_execution_mode == "free_only",
+            allow_remote=self.settings.verified_cloud_execution_allowed,
+            allow_fallback=self.settings.verified_cloud_execution_allowed,
+            allow_quota_fallback=self.settings.verified_cloud_execution_allowed,
             maximum_fallbacks=(
-                min(20, max(0, len(self.router.registry.list()) - 1)) if free_mode else 0
+                min(20, max(0, len(self.router.registry.list()) - 1))
+                if self.settings.verified_cloud_execution_allowed
+                else 0
             ),
         )
         budget = TaskBudget(

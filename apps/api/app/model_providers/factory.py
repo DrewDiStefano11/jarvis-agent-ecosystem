@@ -52,7 +52,7 @@ def build_provider_registry(
             )
         )
     grants = settings.parsed_free_allowances()
-    if grants and settings.model_execution_mode == "free_only" and sessions is not None:
+    if grants and settings.verified_cloud_execution_allowed and sessions is not None:
         capacity = FreeCapacityRepository(sessions)
         capacity.configure(grants)
         for grant in grants:
