@@ -31,6 +31,12 @@ this contract. Output digests cover collector-captured output; retained output i
 bounded by the immutable command policy. Command adapters are identities only,
 not advertised executable capabilities.
 
+Collector sequence conflicts and latest-result selection are scoped to the
+runtime run, attempt and gate. Independent gates may each start at sequence one;
+command-run identities remain unique across gates within a run and attempt.
+Durable journals additionally require their own globally ordered command stream;
+that stricter journal reducer constraint does not apply to standalone collectors.
+
 Assessment verifies the packaged policy and receipt authentication, rejects
 replays/conflicting identities, future timestamps, incoherent exits and mismatched
 plans, and treats expired, interrupted, cancelled and unmeasured results as
