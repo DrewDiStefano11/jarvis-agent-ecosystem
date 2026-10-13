@@ -27,3 +27,20 @@ def test_partial_commit_selection_cannot_become_validation_state(monkeypatch):
 def test_reader_requires_trusted_command_binding():
     with pytest.raises(ValueError):
         state.NativeValidationStateReader(object(), None)
+
+
+def test_host_reader_uses_protected_workspace_primary_key(monkeypatch):
+    row = NS(id="owned-workspace", actor_id="owner")
+    session = object()
+
+    def bound(actual_row, actual_session):
+        assert actual_row is row and actual_session is session
+        return "protected-command"
+
+    reader = state.NativeValidationStateReader(object(), bound)
+    monkeypatch.setattr(
+        reader, "capture", lambda actor, workspace, command: (actor, workspace, command)
+    )
+    actor, workspace, command = reader(row, session)
+    assert actor.actor_id == row.actor_id
+    assert (workspace, command) == (row.id, "protected-command")

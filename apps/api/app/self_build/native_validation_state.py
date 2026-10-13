@@ -59,4 +59,4 @@ class NativeValidationStateReader:
 
         command_id = self.command_for_workspace(row, session)
         actor = RuntimeActorContext(actor_id=row.actor_id, stable_key="native-validation-owner")
-        return self.capture(actor, row.workspace_id, command_id)
+        return self.capture(actor, row.id, command_id)
