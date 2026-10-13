@@ -42,10 +42,27 @@ class MutationHistoryReader:
             native_creation, creation_identifier, _ = self.service.creation.checkpoint(
                 actor, creation, creation_digest
             )
+            creation_payload = AuditEventRow.payload["payload"]
+            creation_acknowledged = (
+                session.scalar(
+                    select(AuditEventRow.id)
+                    .where(
+                        AuditEventRow.task_id == row.task_id,
+                        AuditEventRow.event_type
+                        == "self_build.workspace_creation.checkpoint_acknowledged",
+                        creation_payload["operationId"].as_string() == creation.operation_id,
+                        creation_payload["checkpointId"].as_string() == creation_identifier,
+                        creation_payload["intentDigest"].as_string() == creation_digest,
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
             if (
                 creation.state != "ready"
                 or native_creation is None
                 or creation.checkpoint_id != creation_identifier
+                or not creation_acknowledged
             ):
                 refuse("SOURCE_MUTATION_CREATION_CHECKPOINT_INVALID")
             try:

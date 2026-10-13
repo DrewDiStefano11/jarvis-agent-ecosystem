@@ -295,6 +295,56 @@ def test_source_mutation_same_bytes_foreign_stage_replacement_is_not_published(
     assert substituted[0].read_bytes() == plan.changes[0].after.text.encode()
 
 
+@pytest.mark.parametrize("operation", ["add", "modify"])
+@pytest.mark.parametrize("recover", [False, True])
+def test_source_mutation_publication_pinned_through_file_acknowledgement(
+    checkout, monkeypatch, operation, recover
+):
+    from app.source_mutation import driver as mutation_driver
+
+    filename = "new.txt" if operation == "add" else "hello.txt"
+    target, plan, journal, apply = editing_fixture(checkout, operation, filename)
+    if recover:
+        rename = mutation_driver.rename_pinned
+
+        def crash(fd, leaf):
+            rename(fd, leaf)
+            if leaf == filename:
+                raise RuntimeError("publication interruption")
+
+        monkeypatch.setattr(mutation_driver, "rename_pinned", crash)
+        with pytest.raises(RuntimeError, match="publication interruption"):
+            apply()
+        monkeypatch.setattr(mutation_driver, "rename_pinned", rename)
+
+    native = mutation_driver.SourceMutationDriver.apply
+    checked = []
+    replacement = target.parent / "foreign-ack-replacement.txt"
+    replacement.write_bytes(plan.changes[0].after.text.encode())
+
+    def guarded(self, *args, **kwargs):
+        acknowledge = kwargs["acknowledge"]
+
+        def ack(count, prefix):
+            destination = target / filename
+            inode = destination.stat().st_ino
+            assert journal["stage"][1] == inode
+            with pytest.raises(PermissionError):
+                replacement.replace(destination)
+            with pytest.raises(PermissionError):
+                destination.write_bytes(b"foreign")
+            acknowledge(count, prefix)
+            assert destination.stat().st_ino == inode
+            checked.append(True)
+
+        return native(self, *args, **(kwargs | {"acknowledge": ack}))
+
+    monkeypatch.setattr(mutation_driver.SourceMutationDriver, "apply", guarded)
+    apply()
+    assert checked and journal["completed"] == 1
+    assert (target / filename).read_bytes() == plan.changes[0].after.text.encode()
+
+
 def test_source_mutation_final_publication_holds_deny_write_pins(checkout, monkeypatch):
     from app.source_mutation.driver import SourceMutationDriver
 
@@ -725,3 +775,50 @@ def test_unapproved_empty_directory_is_preserved_without_ready_publication(check
         )
     assert failure.value.code == "SELF_BUILD_MATERIALIZATION_CONFLICT"
     assert (target / "node_modules").is_dir() and not published
+
+
+@pytest.mark.parametrize("phase", ["published_pending", "complete"])
+def test_source_mutation_recovery_refuses_foreign_publication_stage(checkout, monkeypatch, phase):
+    from app.source_mutation import driver as mutation_driver
+
+    target, plan, journal, apply = editing_fixture(checkout)
+    native = mutation_driver.rename_pinned
+    if phase == "published_pending":
+
+        def interrupted(fd, leaf):
+            native(fd, leaf)
+            if leaf == "hello.txt":
+                raise RuntimeError("crash after publication")
+
+        monkeypatch.setattr(mutation_driver, "rename_pinned", interrupted)
+        with pytest.raises(RuntimeError, match="after publication"):
+            apply()
+        monkeypatch.setattr(mutation_driver, "rename_pinned", native)
+    else:
+        apply()
+    before, after = mutation_driver.staging_names("fixture-operation", 0)
+    stage = target / after
+    stage.write_bytes(b"foreign publication artifact")
+    position = dict(journal)
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SOURCE_MUTATION_FOREIGN_ARTIFACT"
+    assert journal == position
+    assert stage.read_bytes() == b"foreign publication artifact"
+    assert (target / before).read_bytes() == b"hello\n"
+    assert (target / "hello.txt").read_bytes() == plan.changes[0].after.text.encode()
+
+
+def test_source_mutation_delete_foreign_stage_refuses_before_original_effect(checkout):
+    from app.source_mutation import driver as mutation_driver
+
+    target, _, journal, apply = editing_fixture(checkout, "delete")
+    _, after = mutation_driver.staging_names("fixture-operation", 0)
+    stage = target / after
+    stage.write_bytes(b"foreign deletion artifact")
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SOURCE_MUTATION_FOREIGN_ARTIFACT"
+    assert journal == dict(completed=0, pending=None, stage=None)
+    assert stage.read_bytes() == b"foreign deletion artifact"
+    assert (target / "hello.txt").read_bytes() == b"hello\n"

@@ -29,7 +29,13 @@ from app.self_build.policy import digest
 from app.self_build.workspace_namespace import owned_namespace
 from app.source_change.planner import identity, verify_source_plan
 from app.source_mutation.native import pinned_file, read_pin, rename_pinned, staging_file
-from app.tool_execution.filesystem import check_stat, open_directory, open_file, read_bytes
+from app.tool_execution.filesystem import (
+    check_stat,
+    open_directory,
+    open_file,
+    read_bytes,
+    windows_native_path,
+)
 
 RESERVED = {".git", ".jarvis-workspace.json", ".jarvis-workspace.lock"}
 
@@ -80,6 +86,15 @@ def measured(path, mode):
 def staging_names(operation_id, index):
     key = sha256(f"{operation_id}:{index}".encode()).hexdigest()
     return ".jarvis-edit-" + key + ".before", ".jarvis-edit-" + key + ".after"
+
+
+def require_stage_absent(path):
+    """Only native file-not-found establishes a missing publication artifact."""
+    try:
+        with read_pin(path):
+            refuse("SOURCE_MUTATION_FOREIGN_ARTIFACT")
+    except FileNotFoundError:
+        return
 
 
 def observe(stack, checkout, source_plan, modes, ignored=()):
@@ -462,6 +477,8 @@ class SourceMutationDriver:
                     self.authority_check()
                     backup, stage = staging_names(operation_id, index)
                     parent_path = owned.joinpath(*change.path.split("/")[:-1])
+                    if index < completed or change.after is None:
+                        require_stage_absent(parent_path / stage)
                     backup_identity = measured(parent_path / backup, modes[change.path])
                     if backup_identity is not None and backup_identity != change.before:
                         refuse("SOURCE_MUTATION_BACKUP_CONFLICT")
@@ -504,17 +521,23 @@ class SourceMutationDriver:
                         stage,
                         staging_identity if index == pending else None,
                         lambda device_inode, index=index: claim_stage(index, device_inode),
-                    )
-                    acknowledge(
-                        index + 1,
-                        digest(
-                            [
-                                item.model_dump(mode="json")
-                                for item in source_plan.preview[: index + 1]
-                            ]
+                        lambda index=index: acknowledge(
+                            index + 1,
+                            digest(
+                                [
+                                    item.model_dump(mode="json")
+                                    for item in source_plan.preview[: index + 1]
+                                ]
+                            ),
                         ),
                     )
                 check_source = pin_source_tree(stack, owned, self.authority_check)
+                # Recheck after the final namespace watch is armed. A foreign
+                # stage may have appeared after a completed-prefix probe; never
+                # silently exclude it from the completion measurement.
+                for index, change in enumerate(source_plan.changes):
+                    _, stage = staging_names(operation_id, index)
+                    require_stage_absent(owned.joinpath(*change.path.split("/")[:-1], stage))
                 final, _ = observe(stack, checkout, source_plan, modes, ignored)
                 final_state, _ = measure_code_state(
                     stack,
@@ -540,7 +563,7 @@ class SourceMutationDriver:
                 self.authority_check()
                 return finalize(digest(final.model_dump(mode="json")), publication_guard)
 
-    def _file(self, parent, change, backup, stage, staging_identity, claim_stage):
+    def _file(self, parent, change, backup, stage, staging_identity, claim_stage, acknowledge):
         before, after = change.before, identity(change.after)
         leaf = change.path.split("/")[-1]
         current = measured(parent.path / leaf, (before or after).mode)
@@ -548,6 +571,7 @@ class SourceMutationDriver:
         if saved is not None and saved != before:
             refuse("SOURCE_MUTATION_BACKUP_CONFLICT")
         if current == after and (before is None or saved == before):
+            require_stage_absent(parent.path / stage)
             if after is not None:
                 # A pending publication is owned only by the stage identity in
                 # the validated checkpoint. Matching bytes alone grant nothing.
@@ -559,6 +583,9 @@ class SourceMutationDriver:
                         refuse("SOURCE_MUTATION_STAGE_CONFLICT")
                     if content(read_bytes(fd, MAX_FILE_BYTES), after.mode) != change.after:
                         refuse("SOURCE_MUTATION_AFTER_CONFLICT")
+                    acknowledge()
+            else:
+                acknowledge()
             return
         if current != before and not (current is None and saved == before and before is not None):
             refuse("SOURCE_MUTATION_BEFORE_CONFLICT")
@@ -594,6 +621,8 @@ class SourceMutationDriver:
                 self.authority_check()
                 rename_pinned(fd, backup)
         if change.after:
+            # Keep the publishing handle through the durable file acknowledgement.
+            # Reopening by name after _file returns would leave an adoption race.
             with pinned_file(parent.path / stage) as fd:
                 staged_info = os.fstat(fd)
                 if (staged_info.st_dev, staged_info.st_ino) != device_inode:
@@ -603,5 +632,11 @@ class SourceMutationDriver:
                     refuse("SOURCE_MUTATION_STAGE_CONFLICT")
                 self.authority_check()
                 rename_pinned(fd, leaf)
-        if measured(parent.path / leaf, (before or after).mode) != after:
+                published = os.stat(windows_native_path(parent.path / leaf), follow_symlinks=False)
+                if (published.st_dev, published.st_ino) != device_inode:
+                    refuse("SOURCE_MUTATION_STAGE_CONFLICT")
+                acknowledge()
+            return
+        if measured(parent.path / leaf, before.mode) != after:
             refuse("SOURCE_MUTATION_AFTER_CONFLICT")
+        acknowledge()

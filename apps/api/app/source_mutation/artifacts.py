@@ -5,6 +5,7 @@ from pathlib import Path
 
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.core.errors import DomainError
 from app.models import source_artifacts as contracts
 from app.models.source_artifacts import ArtifactExpectation, ExpectedArtifactManifest
 from app.models.source_edit_planning import EditingPlan
@@ -123,12 +124,20 @@ class ArtifactManifestReader:
     def read(self, actor, editing_record_id):
         try:
             history = self.history.read(actor, editing_record_id)
+            if history.record.state != "complete":
+                refuse("SOURCE_ARTIFACTS_INCOMPLETE")
+            if not history.native_checkpoint_present or not history.journal_checkpoint_acknowledged:
+                refuse("SOURCE_ARTIFACTS_POSITION_INVALID")
             proposal = self.history.service.planning.read(actor, editing_record_id)
             if proposal.record_id != history.record.plan.editing_record_id:
                 refuse("SOURCE_ARTIFACTS_LINEAGE_INVALID")
             return plan_expected_artifacts(history.record, proposal.plan)
         except SQLAlchemyError:
             refuse("SOURCE_ARTIFACTS_STORAGE_FAILED")
+        except DomainError as error:
+            if error.code in {"SOURCE_MUTATION_STORAGE_FAILED", "SOURCE_EDIT_STORAGE_FAILED"}:
+                refuse("SOURCE_ARTIFACTS_STORAGE_FAILED")
+            raise
 
 
 def verify_expected_artifacts(manifest, record, editing_plan):
