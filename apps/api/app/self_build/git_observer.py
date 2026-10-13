@@ -20,6 +20,7 @@ from app.tool_execution.filesystem import (
     check_stat,
     open_directory,
     repository_parts,
+    windows_native_path,
 )
 
 COMMIT = re.compile(r"[a-f0-9]{40}\Z")
@@ -98,7 +99,7 @@ def pinned_metadata_file(path):
     close = kernel.CloseHandle
     close.argtypes = [wintypes.HANDLE]
     close.restype = wintypes.BOOL
-    handle = create(str(path), 0x80000000, 1, None, 3, 0x00200000, None)
+    handle = create(windows_native_path(path), 0x80000000, 1, None, 3, 0x00200000, None)
     if handle == ctypes.c_void_p(-1).value:
         raise OSError(ctypes.get_last_error(), "Cannot pin Git metadata file")
     try:
@@ -112,9 +113,9 @@ def pinned_metadata_file(path):
         if not length or length >= len(buffer):
             raise OSError("Cannot resolve metadata handle")
         observed = buffer.value.removeprefix("\\\\?\\")
-        if os.path.normcase(observed) != os.path.normcase(str(path)):
+        if os.path.normcase(observed) != os.path.normcase(str(path).removeprefix("\\\\?\\")):
             raise OSError("Metadata handle escaped its pinned path")
-        check_stat(path.lstat(), internal=True)
+        check_stat(Path(windows_native_path(path)).lstat(), internal=True)
         yield
     finally:
         close(handle)
