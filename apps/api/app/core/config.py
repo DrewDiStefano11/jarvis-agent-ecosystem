@@ -132,7 +132,7 @@ class Settings(BaseSettings):
     autonomous_worker_max_repair_calls: int = Field(
         1, alias="JARVIS_AUTONOMOUS_WORKER_MAX_REPAIR_CALLS", ge=0, le=1
     )
-    model_execution_mode: Literal["disabled", "local_only"] = Field(
+    model_execution_mode: Literal["disabled", "local_only", "free_only"] = Field(
         "disabled", alias="JARVIS_MODEL_EXECUTION_MODE"
     )
     model_ollama_enabled: bool = Field(False, alias="JARVIS_MODEL_OLLAMA_ENABLED")
@@ -222,6 +222,9 @@ class Settings(BaseSettings):
     tool_execution_enabled: bool = Field(False, alias="JARVIS_TOOL_EXECUTION_ENABLED")
     tool_workspaces_json: str = Field("{}", alias="JARVIS_TOOL_WORKSPACES_JSON", max_length=20000)
     model_pricing_json: str = Field("{}", alias="JARVIS_MODEL_PRICING_JSON", max_length=100_000)
+    model_free_allowances_json: str = Field(
+        "[]", alias="JARVIS_MODEL_FREE_ALLOWANCES_JSON", max_length=100_000, repr=False
+    )
     web_origin: str = Field(
         "http://localhost:5173", alias="WEB_ORIGIN", min_length=1, max_length=2048
     )
@@ -229,10 +232,10 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_model_provider_settings(self) -> Settings:
         if self.autonomous_worker_enabled:
-            if self.model_execution_mode != "local_only":
+            if self.model_execution_mode not in {"local_only", "free_only"}:
                 raise ValueError(
                     "JARVIS_AUTONOMOUS_WORKER_ENABLED requires "
-                    "JARVIS_MODEL_EXECUTION_MODE=local_only"
+                    "JARVIS_MODEL_EXECUTION_MODE=local_only or free_only"
                 )
             if not self.autonomous_worker_actor_id.strip():
                 raise ValueError(
@@ -303,7 +306,31 @@ class Settings(BaseSettings):
         if len(priority) != len(set(priority)):
             raise ValueError("model provider priority cannot contain duplicates")
         self.parsed_model_pricing()
+        self.parsed_free_allowances()
         return self
+
+    def parsed_free_allowances(self):
+        from pydantic import TypeAdapter
+
+        from app.models.ai_capacity import FreeAllowance
+
+        try:
+            grants = TypeAdapter(list[FreeAllowance]).validate_json(self.model_free_allowances_json)
+        except ValueError:
+            raise ValueError("invalid nonbillable allowance configuration") from None
+        if len(grants) > 20 or len({g.provider for g in grants}) != len(grants):
+            raise ValueError("allowances require at most 20 unique provider names")
+        accounts = {}
+        for grant in grants:
+            family = (
+                "openai_subscription"
+                if grant.integration in {"codex", "chatgpt"}
+                else grant.integration
+            )
+            if family in accounts and accounts[family] != grant.account_id:
+                raise ValueError("automatic account rotation within a provider is prohibited")
+            accounts[family] = grant.account_id
+        return grants
 
     def parsed_model_pricing(self) -> dict[str, dict[str, dict[str, float]]]:
         try:

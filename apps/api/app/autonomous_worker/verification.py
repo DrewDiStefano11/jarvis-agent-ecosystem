@@ -389,7 +389,8 @@ class IndependentVerifier:
                                     preferred_model=request.model_name,
                                     required_capability=ModelCapability.CHAT,
                                     prefer_local=True,
-                                    allow_remote=False,
+                                    allow_remote=self.worker.settings.model_execution_mode
+                                    == "free_only",
                                     allow_fallback=False,
                                 ),
                                 budget=TaskBudget(

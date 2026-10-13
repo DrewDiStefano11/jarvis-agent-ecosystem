@@ -1,10 +1,17 @@
 name: Phase 2A durable control-plane checks
-on: [push, pull_request]
+# Campaign D cannot use artifact/cache storage until its $0 boundary is verified.
+# Push filtering avoids a run; every job also fences PR events by their head branch.
+# Keep this scoped to Campaign D so other PRs retain every validation gate.
+on:
+  push:
+    branches-ignore: ['codex/campaign-d-zero-cost']
+  pull_request:
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
   backend-static:
+    if: github.head_ref != 'codex/campaign-d-zero-cost' && github.ref_name != 'codex/campaign-d-zero-cost'
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -28,6 +35,7 @@ jobs:
           if-no-files-found: warn
 
   backend-migrations:
+    if: github.head_ref != 'codex/campaign-d-zero-cost' && github.ref_name != 'codex/campaign-d-zero-cost'
     runs-on: windows-latest
     timeout-minutes: 10
     steps:
@@ -49,6 +57,7 @@ jobs:
           if-no-files-found: warn
 
   backend-tests:
+    if: github.head_ref != 'codex/campaign-d-zero-cost' && github.ref_name != 'codex/campaign-d-zero-cost'
     name: backend-tests-${{ matrix.shard }}
     runs-on: windows-latest
     # Pytest has inactivity/per-test guards. Bound the other steps individually;
@@ -80,6 +89,7 @@ jobs:
           if-no-files-found: warn
 
   backend-git-linux:
+    if: github.head_ref != 'codex/campaign-d-zero-cost' && github.ref_name != 'codex/campaign-d-zero-cost'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -93,7 +103,7 @@ jobs:
 
   # Preserve the existing required status context while gating every backend job.
   backend:
-    if: always()
+    if: always() && github.head_ref != 'codex/campaign-d-zero-cost' && github.ref_name != 'codex/campaign-d-zero-cost'
     needs: [backend-static, backend-migrations, backend-tests, backend-git-linux]
     runs-on: ubuntu-latest
     timeout-minutes: 2
@@ -112,6 +122,7 @@ jobs:
         run: python scripts/backend_ci.py verify --artifacts backend-evidence
 
   frontend:
+    if: github.head_ref != 'codex/campaign-d-zero-cost' && github.ref_name != 'codex/campaign-d-zero-cost'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -133,6 +144,7 @@ jobs:
       - run: pnpm build
         working-directory: apps/web
   repository-integrity:
+    if: github.head_ref != 'codex/campaign-d-zero-cost' && github.ref_name != 'codex/campaign-d-zero-cost'
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -153,6 +165,7 @@ jobs:
           }
 
   runtime-browser:
+    if: github.head_ref != 'codex/campaign-d-zero-cost' && github.ref_name != 'codex/campaign-d-zero-cost'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

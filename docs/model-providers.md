@@ -7,7 +7,9 @@ authorized Phase 2C local planning worker. It provides contracts, adapter mappin
 registration, deterministic routing, retry/fallback policy, per-execution budgets, safe error
 normalization, and configuration factories.
 
-Construction remains side-effect-free and does not create an HTTP client or contact a provider.
+Legacy construction remains side-effect-free and does not create an HTTP client or contact a provider.
+The opt-in Campaign D factory initializes verified shared quota rows through an
+explicit transaction; it still makes no network request during construction.
 Application startup builds safe provider metadata and a router; only the separate, explicitly
 enabled autonomous worker invokes it. Ordinary API handlers, the simulator, tools, and the office
 do not generate model traffic.
@@ -25,6 +27,11 @@ This change does **not** add:
 
 ## Current phase gate
 
+Campaign D adds explicit `free_only` execution with account-specific nonbillable
+evidence, persistent shared quotas, subscription/free integrations and safe pause.
+Execution remains disabled by default. See [zero-cost AI](zero-cost-ai.md).
+Pricing and task budgets never establish spending authority.
+
 `JARVIS_MODEL_EXECUTION_MODE` is `disabled` by default. In that mode:
 
 - adapter execution raises `ProviderExecutionDisabledError` before client creation;
@@ -33,7 +40,7 @@ This change does **not** add:
 - enabling provider configuration registers safe metadata only; and
 - application startup does not contact a provider.
 
-`local_only` is the only enabling mode. It requires a structurally loopback provider, disables
+The legacy `local_only` mode requires a structurally loopback provider, disables
 redirect following and proxy-environment inheritance in production clients, and is usable only
 through the disabled-by-default autonomous worker. Remote URLs, private LAN hosts, Docker names,
 and deceptive localhost names remain ineligible; `JARVIS_MODEL_ALLOW_REMOTE` does not override
