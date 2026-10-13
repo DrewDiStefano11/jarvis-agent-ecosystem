@@ -83,3 +83,10 @@ trusted reference passed to receipt assessment; the journal plan alone cannot
 supply approval. Historical read-only assessment does not renew expired authority
 or grant permission for new effects. Explicit renewal still preserves original
 provenance and each write requires a present valid grant.
+
+Main integration also retains the separately reviewed validation runner contracts
+from PR #110. That PR reached the evidence feature branch after PR #108 reached
+main, so the runner implementation is absent from main. This PR targets main
+with the runner and journal contracts explicitly included in its reviewed diff.
+Invocation identity and catalog digests remain bound to independently approved
+plans; untrusted repository command execution remains disabled.
