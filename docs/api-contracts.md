@@ -288,3 +288,29 @@ When authenticated remote operator service is disabled, persisted creation appro
 return `SELF_BUILD_APPROVAL_UNAVAILABLE` before intent or native effects. Windows
 inventory validation rejects aliased path components and file/directory collisions
 with `SELF_BUILD_MATERIALIZATION_UNSAFE` before target/branch registration.
+
+
+## Development admission and source review
+
+OpenAPI now describes authenticated POST endpoints under
+`/api/development/workspaces/{workspace_id}`: `admission/preview`,
+`admission/read`, `iterations`, and `iterations/{dispatch_id}/source-review`.
+They preserve TypedApiResponse envelopes and native runtime actor authentication.
+Admission preview/read require the original native creation authority, lease and
+bounded selection. Source review returns a protected native EditingPlanRecord;
+requests cannot import repository observations, model responses or validation
+results. Plan content is available only under the original task/owner fences.
+
+Independent approval is POST
+`/api/remote/development/workspaces/{workspace_id}/admission/approve`, registered
+only when remote control is enabled. It uses the existing bearer/secure-transport
+operator authentication and resolves the requested execution actor through native
+runtime authentication. Current operator, independent exact preview hash,
+repository ownership, original lease/run/attempt and source pins are rechecked
+by the admission service. A body never supplies permissions or filesystem evidence.
+
+Production `iterations` returns DEVELOPMENT_EXECUTION_DISABLED before reservation
+or provider dispatch. There is no HTTP model-response importer or activation flag.
+No OpenAI API key is read; future Codex app-server activation remains contingent
+on Campaign D's independent billing/credit/recharge safeguards. Admission and
+review alone do not approve native source mutation, validate code or publish it.
