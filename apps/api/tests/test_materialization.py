@@ -345,6 +345,147 @@ def test_source_mutation_publication_pinned_through_file_acknowledgement(
     assert (target / filename).read_bytes() == plan.changes[0].after.text.encode()
 
 
+@pytest.mark.parametrize("operation", ["modify", "delete"])
+@pytest.mark.parametrize("boundary", ["file_ack", "final_pins"])
+@pytest.mark.parametrize("attack", ["delete", "write", "same_bytes_replace"])
+def test_source_mutation_retained_original_is_pinned_before_completion(
+    checkout, monkeypatch, operation, boundary, attack
+):
+    from app.source_mutation import driver as mutation_driver
+
+    target, _, journal, apply = editing_fixture(checkout, operation)
+    before, _ = mutation_driver.staging_names("fixture-operation", 0)
+    backup = target / before
+    replacement = target.parent / "foreign-original.txt"
+    replacement.write_bytes(b"hello\n")
+    checked = []
+
+    def adversary():
+        original_inode = backup.stat().st_ino
+        with pytest.raises(PermissionError):
+            if attack == "delete":
+                backup.unlink()
+            elif attack == "write":
+                backup.write_bytes(b"foreign")
+            else:
+                replacement.replace(backup)
+        assert backup.read_bytes() == b"hello\n" and backup.stat().st_ino == original_inode
+        checked.append(True)
+
+    if boundary == "file_ack":
+        native = mutation_driver.SourceMutationDriver.apply
+
+        def guarded(self, *args, **kwargs):
+            ack = kwargs["acknowledge"]
+
+            def acknowledge(*values):
+                adversary()
+                return ack(*values)
+
+            return native(self, *args, **(kwargs | {"acknowledge": acknowledge}))
+
+        monkeypatch.setattr(mutation_driver.SourceMutationDriver, "apply", guarded)
+    else:
+        native = mutation_driver.pin_source_tree
+
+        def final_pins(*args, **kwargs):
+            adversary()
+            return native(*args, **kwargs)
+
+        monkeypatch.setattr(mutation_driver, "pin_source_tree", final_pins)
+    apply()
+    assert checked == [True] and journal["completed"] == 1
+    assert backup.read_bytes() == b"hello\n"
+    # Successful completion releases these operation pins; no cleanup is granted.
+    backup.write_bytes(b"later operator edit")
+
+
+@pytest.mark.parametrize("operation", ["modify", "delete"])
+def test_source_mutation_original_pin_transfer_refuses_same_bytes_foreign_inode(
+    checkout, monkeypatch, operation
+):
+    from contextlib import contextmanager
+
+    from app.source_mutation import driver as mutation_driver
+    from app.tool_execution.filesystem import windows_native_path
+
+    target, _, journal, apply = editing_fixture(checkout, operation)
+    before, _ = mutation_driver.staging_names("fixture-operation", 0)
+    backup = target / before
+    displaced = target / "displaced-original.txt"
+    native = mutation_driver.pinned_file
+    replaced = []
+
+    @contextmanager
+    def transfer(path, *, rename=True):
+        if (
+            Path(windows_native_path(path)) == backup
+            and not rename
+            and backup.exists()
+            and not replaced
+        ):
+            original_inode = backup.stat().st_ino
+            # Keep the old inode allocated while substituting a new exact-byte
+            # file within the pinned parent, avoiding filesystem inode reuse.
+            with native(path) as fd:
+                mutation_driver.rename_pinned(fd, displaced.name)
+            backup.write_bytes(b"hello\n")
+            assert backup.stat().st_ino != original_inode
+            replaced.append(True)
+        with native(path, rename=rename) as fd:
+            yield fd
+
+    monkeypatch.setattr(mutation_driver, "pinned_file", transfer)
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SOURCE_MUTATION_BACKUP_CONFLICT"
+    assert replaced == [True] and journal["completed"] == 0
+    assert backup.read_bytes() == b"hello\n"
+    assert displaced.read_bytes() == b"hello\n"
+
+
+@pytest.mark.parametrize("operation", ["modify", "delete"])
+@pytest.mark.parametrize("recovery", ["pending", "completed"])
+def test_source_mutation_recovered_original_stays_pinned_through_finalization(
+    checkout, monkeypatch, operation, recovery
+):
+    from app.source_mutation import driver as mutation_driver
+
+    target, _, journal, apply = editing_fixture(checkout, operation)
+    before, _ = mutation_driver.staging_names("fixture-operation", 0)
+    backup = target / before
+    if recovery == "pending":
+        native_rename = mutation_driver.rename_pinned
+
+        def interrupted(fd, leaf):
+            native_rename(fd, leaf)
+            if leaf == before:
+                raise RuntimeError("original move interruption")
+
+        monkeypatch.setattr(mutation_driver, "rename_pinned", interrupted)
+        with pytest.raises(RuntimeError, match="original move interruption"):
+            apply()
+        monkeypatch.setattr(mutation_driver, "rename_pinned", native_rename)
+    else:
+        apply()
+    original_inode = backup.stat().st_ino
+    native = mutation_driver.pin_source_tree
+    checked = []
+
+    def final_pins(*args, **kwargs):
+        with pytest.raises(PermissionError):
+            backup.write_bytes(b"foreign")
+        with pytest.raises(PermissionError):
+            backup.unlink()
+        checked.append(True)
+        return native(*args, **kwargs)
+
+    monkeypatch.setattr(mutation_driver, "pin_source_tree", final_pins)
+    apply()
+    assert checked == [True] and journal["completed"] == 1
+    assert backup.read_bytes() == b"hello\n" and backup.stat().st_ino == original_inode
+
+
 def test_source_mutation_final_publication_holds_deny_write_pins(checkout, monkeypatch):
     from app.source_mutation.driver import SourceMutationDriver
 
