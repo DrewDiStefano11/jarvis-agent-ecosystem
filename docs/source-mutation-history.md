@@ -22,11 +22,18 @@ a legitimate native-only interruption remains readable as unacknowledged.
 Every returned journal position also requires append-only preparation and phase
 proof. Reconstructing the initial prepared position binds operation identity,
 original approval, creation time and immutable plan to the transaction that
-created them. The latest prepared/phase audit event in durable sequence order
+created them. The latest prepared/phase audit event in durable session and sequence order
 must match the current position digest, so rehashing a substituted row or rolling
 it back to an older valid phase cannot make it trusted history. Legitimate pending
 and staged positions remain readable when checkpoint acknowledgement was
 interrupted; read access still grants no execution authority.
+
+Event sequence numbers restart when the simulator resets its event session.
+The supported SQLite backend's append-only audit storage ordinal establishes
+session chronology, and sequence numbers establish order within each session.
+Historical reads therefore accept legitimate later phases after reset without
+trusting wall clocks or random session identifiers. A session with no matching
+mutation phase does not hide the latest recorded phase from an earlier session.
 
 Both native checkpoint lookups translate malformed persisted JSON or invalid
 checkpoint contracts into fixed creation/mutation checkpoint refusal codes.

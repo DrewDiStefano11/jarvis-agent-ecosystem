@@ -130,6 +130,64 @@ def editing(creation, request):
     return app, actor, operator, service, request, Path(windows_native_path(target)), scope
 
 
+def test_history_phase_order_survives_event_session_resets(editing, monkeypatch):
+    from app.source_mutation.artifacts import ArtifactManifestReader
+
+    app, actor, _, service, request, _, _ = editing
+    handle = service.runtime.handle_authorized
+
+    def interrupted(command, *args, **kwargs):
+        result = handle(command, *args, **kwargs)
+        if command.state_reference.startswith(
+            "source-mutation:"
+        ) and command.resume_cursor.endswith("staged"):
+            raise RuntimeError("after staged checkpoint")
+        return result
+
+    monkeypatch.setattr(service.runtime, "handle_authorized", interrupted)
+    with pytest.raises(RuntimeError, match="after staged checkpoint"):
+        service.apply(actor, request)
+    monkeypatch.setattr(service.runtime, "handle_authorized", handle)
+
+    def reset_session():
+        # Exercise the repository's actual reset cursor and its durable update,
+        # preserving the non-demo workflow data/lease while changing sessions.
+        app.state.repository.reset_sequence()
+        with service.repository.leases._write() as session:
+            state = session.get(SystemStateRow, 1)
+            state.event_session_id = app.state.repository.event_session_id
+            state.current_sequence_number = 0
+
+    reset_session()
+    completed = service.apply(actor, request)
+    current_session = app.state.repository.event_session_id
+    with service.repository.sessions() as session:
+        phases = list(
+            session.scalars(
+                select(AuditEventRow).where(
+                    AuditEventRow.event_type == "self_build.source_mutation.phase_recorded"
+                )
+            )
+        )
+        older = [
+            event.sequence_number for event in phases if event.event_session_id != current_session
+        ]
+        newer = [
+            event.sequence_number for event in phases if event.event_session_id == current_session
+        ]
+        assert max(older) > max(newer)
+    evidence = history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert evidence.record == completed and evidence.journal_checkpoint_acknowledged
+    assert ArtifactManifestReader(app).read(actor, request.editing_record_id).artifacts
+    # No mutation phase exists in this further session; history still uses the
+    # latest completed session rather than requiring the current session.
+    reset_session()
+    assert (
+        history.MutationHistoryReader(app).read(actor, request.editing_record_id).record
+        == completed
+    )
+
+
 def test_source_mutation_service_has_exact_checkpoint_and_transactional_outbox(editing):
     from app.source_mutation.repository import SourceMutationRow
     from app.source_mutation.service import SourceMutationService, intent_digest
