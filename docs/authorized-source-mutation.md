@@ -195,6 +195,15 @@ private artifacts remain prohibited. The adapter initializes/reuses the shared
 lock, validates its single canonical byte, and retains a deny-write/delete pin
 plus the byte lock through completion. Busy or malformed locks refuse before
 file intent. This coordination file grants no source or cleanup authority.
+
+Before a new mutation intent is persisted, a read-only native preflight verifies
+the existing owner/target claim, creation marker, Git registration, exact staged
+inventory and default `H` index flags. Metadata read pins remain held through the
+intent transaction, preventing index replacement in the admission gap. Foreign
+`assume-unchanged` and `skip-worktree` flags refuse without consuming a lineage;
+clearing them permits the same approved request. The adapter rechecks flags before
+fresh or recovered file effects. Preflight creates no marker, lock or workspace,
+and its native reads finish before the database write transaction begins.
 Read-only pins can coexist with whole-tree completion pins while preserving their
 deny-write/delete guarantees. Pins release after the operation returns; this does
 not grant cleanup authority or claim permanent native artifact ownership.
