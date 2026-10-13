@@ -153,3 +153,9 @@ Per-file progress advances in the same journal transaction as its checkpoint
 acknowledgement audit event. A crash before the runtime checkpoint or journal
 acknowledgement retains the prior pending position and staging device/inode;
 recovery must validate that identity before acknowledging the proposed progress.
+
+The foundational mutation driver also includes the safety checks reviewed in
+PR #122: deterministic publication stages must be absent for completed entries,
+pending published after-states, deletes, and final completion under the namespace
+watch. Unclaimed stages are preserved and refused, never hidden by measurements.
+PR #122 retains additional adversarial regression coverage and documentation.
