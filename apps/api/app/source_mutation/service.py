@@ -363,7 +363,7 @@ class SourceMutationService:
             refuse("SOURCE_MUTATION_CHECKPOINT_INVALID")
         return found[0] if found else None, identifier, cursor, metadata
 
-    def acknowledge(self, actor, request, record, publication_guard=None):
+    def acknowledge(self, actor, request, record, publication_guard=None, *, previous=None):
         found, identifier, cursor, metadata = self.checkpoint(actor, record)
         if record.checkpoint_id is not None and (
             found is None or record.checkpoint_id != identifier
@@ -379,7 +379,11 @@ class SourceMutationService:
                 current = self.intent(
                     session.get(SourceMutationRow, request.editing_record_id), plan, session
                 )
-                if intent_digest(current) != intent_digest(record):
+                if (
+                    current != previous
+                    if previous is not None
+                    else intent_digest(current) != intent_digest(record)
+                ):
                     refuse("SOURCE_MUTATION_POSITION_CONFLICT")
 
             self.runtime.handle_authorized(
@@ -410,8 +414,20 @@ class SourceMutationService:
             row, plan, _, _, _ = self.fence(actor, request, session)
             stored = session.get(SourceMutationRow, request.editing_record_id)
             current = self.intent(stored, plan, session)
-            if intent_digest(current) != intent_digest(record):
+            if (
+                current != previous
+                if previous is not None
+                else intent_digest(current) != intent_digest(record)
+            ):
                 refuse("SOURCE_MUTATION_POSITION_CONFLICT")
+            if previous is not None:
+                # Advancing file progress must never discard the claimed native
+                # identity before its checkpoint acknowledgement commits. Until
+                # this transaction succeeds, recovery sees the original pending
+                # record and verifies the publishing inode again.
+                current = record
+                stored.integrity_digest = intent_digest(current)
+                self.event(session, row, actor, current, "phase_recorded", request.approval_id)
             if current.checkpoint_id is None:
                 current = current.model_copy(
                     update={
@@ -452,13 +468,24 @@ class SourceMutationService:
                 | dict(checkpoint_id=None, updated_at=datetime.now(UTC))
             )
             updated = MutationRecord.model_validate(payload)
-            stored.payload, stored.integrity_digest = (
-                updated.model_dump(mode="json"),
-                intent_digest(updated),
-            )
-            self.event(session, row, actor, updated, "phase_recorded", request.approval_id)
+            advancing = updated.completed_count > current.completed_count
+            if advancing:
+                if (
+                    updated.completed_count != current.completed_count + 1
+                    or current.pending_index != current.completed_count
+                    or updated.pending_index is not None
+                ):
+                    refuse("SOURCE_MUTATION_POSITION_CONFLICT")
+            else:
+                stored.payload, stored.integrity_digest = (
+                    updated.model_dump(mode="json"),
+                    intent_digest(updated),
+                )
+                self.event(session, row, actor, updated, "phase_recorded", request.approval_id)
         self.repository.leases.repository.refresh_event_cursor()
-        return self.acknowledge(actor, request, updated, publication_guard)
+        return self.acknowledge(
+            actor, request, updated, publication_guard, previous=current if advancing else None
+        )
 
     def apply(self, actor, request):
         try:
@@ -472,6 +499,8 @@ class SourceMutationService:
             refuse("SOURCE_MUTATION_REQUEST_INVALID")
 
     def _apply(self, actor, request):
+        if not driver.supports_mutation():
+            refuse("SOURCE_MUTATION_PLATFORM_UNAVAILABLE")
         record = self.prepare(actor, request)
         record, proposal, creation, nonce = self.current(actor, request)
         if record.state != "finalizing":
