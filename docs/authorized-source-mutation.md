@@ -170,3 +170,11 @@ acknowledgement guards reverify those handles, bytes and exact backup paths.
 Read-only pins can coexist with whole-tree completion pins while preserving their
 deny-write/delete guarantees. Pins release after the operation returns; this does
 not grant cleanup authority or claim permanent native artifact ownership.
+
+Whole-source measurement and final source pinning reject reserved directory
+components case-insensitively, including empty `.jarvis-*` directories below
+unselected source directories. Namespace absence cannot be inferred from file
+bytes alone. Authorized root marker files and private ownership directories
+outside the checkout retain their existing verification paths; ordinary source
+directories remain valid. Late insertion after final pinning is still covered by
+the namespace watcher, and refused directories are preserved without cleanup.
