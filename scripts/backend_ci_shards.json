@@ -65,7 +65,9 @@
     "tests/test_remote_tls.py",
     "tests/test_tool_filesystem.py"
   ],
-  "system": ["tests/test_github_publication_readiness.py",
+  "system": [
+    "tests/test_github_git_protocol.py",
+    "tests/test_github_publication_readiness.py",
     "tests/test_github_publication_transport.py",
     "tests/test_github_publication_collector.py",
     "tests/test_git_process.py",
