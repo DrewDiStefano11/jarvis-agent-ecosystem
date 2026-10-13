@@ -12,7 +12,15 @@ TRANSIENT_CODES = frozenset({"dependency_unavailable", "timeout"})
 
 
 def build_repair_evidence(
-    current_state, plan, receipts, verifier, *, now, retry_budget=2, max_age_seconds=3600
+    current_state,
+    plan,
+    receipts,
+    verifier,
+    *,
+    now,
+    expected_execution_plan_hash,
+    retry_budget=2,
+    max_age_seconds=3600,
 ):
     if type(retry_budget) is not int or not 0 <= retry_budget <= 2:
         raise ValueError("retry budget must be operator-bounded to at most two")
@@ -21,7 +29,13 @@ def build_repair_evidence(
     receipts = tuple(islice(receipts, 513))
     # Assessment rejects unauthenticated, replayed, wrong-plan or future receipts.
     assess_receipts(
-        plan.code_state, plan, receipts, verifier, now=now, max_age_seconds=max_age_seconds
+        plan.code_state,
+        plan,
+        receipts,
+        verifier,
+        now=now,
+        max_age_seconds=max_age_seconds,
+        expected_execution_plan_hash=expected_execution_plan_hash,
     )
     source_changed = (
         digest(current_state.model_dump(mode="json")) != plan.validation.code_state_hash

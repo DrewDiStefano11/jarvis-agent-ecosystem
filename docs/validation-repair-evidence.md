@@ -71,3 +71,11 @@ Author-performed local review checked receipt authentication, source-state/age
 invalidation, conservative tied failures, retry counts, canonical report hashing,
 collector-rotation deduplication, preserved CI error behavior and incomplete
 provenance. This is not hosted independent review. Exact final-head CI is required.
+
+Repair construction and `ValidationExecutionSource` require the separately trusted
+host/operator-approved execution-plan hash. Receipts, model text and candidate
+plan fields cannot supply that approval reference. Narrowing browser requirements,
+test mappings or validation boundaries requires a new independent approval.
+The source provenance pairs `jarvis-development-validation-v1` with the actual
+development-validation policy digest; collector command policy fingerprints remain
+in each authenticated measurement rather than naming a different policy digest.

@@ -2,21 +2,43 @@
 
 from itertools import islice
 
-from app.development_validation.planner import digest
+from app.development_validation.planner import POLICY_VERSION, digest
 from app.development_validation.repair import build_repair_evidence
 from app.models.self_improvement import SourceProvenance
 from app.self_improvement.adapters import observation
 
 
 class ValidationExecutionSource:
-    def __init__(self, source_id, current_state, plan, receipts, verifier, *, now):
+    """Trusted host adapter; approval reference must come from outside candidate input.
+
+    Neither a receipt nor model-selected plan can supply its own approval hash.
+    This is an internal advisory projection, not an HTTP authority endpoint.
+    """
+
+    def __init__(
+        self,
+        source_id,
+        current_state,
+        plan,
+        receipts,
+        verifier,
+        *,
+        now,
+        expected_execution_plan_hash,
+    ):
         self.source_id = source_id
         self.state, self.plan, self.receipts = current_state, plan, tuple(islice(receipts, 513))
         self.verifier, self.now = verifier, now
+        self.expected_execution_plan_hash = expected_execution_plan_hash
 
     def collect(self):
         report = build_repair_evidence(
-            self.state, self.plan, self.receipts, self.verifier, now=self.now
+            self.state,
+            self.plan,
+            self.receipts,
+            self.verifier,
+            now=self.now,
+            expected_execution_plan_hash=self.expected_execution_plan_hash,
         )
         source = SourceProvenance(
             source_type="validation_execution",
@@ -35,7 +57,7 @@ class ValidationExecutionSource:
             repo_sha=self.plan.code_state.head_sha,
             suite_version="validation-gates-1",
             suite_digest=digest([c.suite_digest for c in self.plan.commands]),
-            policy_version="validation-collector-1",
+            policy_version=POLICY_VERSION,
             policy_digest=self.plan.validation.policy_digest,
             case_ids=tuple(f.gate for f in report.findings),
             configuration_digest=None,

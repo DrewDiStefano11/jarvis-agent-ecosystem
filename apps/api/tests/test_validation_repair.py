@@ -20,7 +20,15 @@ def verifier():
 
 def report(values, *, current=None, now=NOW, **options):
     plan = build_execution_plan(state())
-    return build_repair_evidence(current or state(), plan, values, verifier(), now=now, **options)
+    return build_repair_evidence(
+        current or state(),
+        plan,
+        values,
+        verifier(),
+        now=now,
+        expected_execution_plan_hash=plan.execution_plan_hash,
+        **options,
+    )
 
 
 def failed(**changes):
@@ -38,6 +46,49 @@ def test_exact_reproduction_and_no_mutation_authority():
     assert finding.reproduction.code_state_hash == signed.measurement.code_state_hash
     assert finding.reproduction.suite_digest == signed.measurement.command.suite_digest
     assert not result.execution_authorized and not result.source_mutation_authorized
+
+
+def test_validation_source_policy_version_names_the_provenance_digest():
+    from app.development_validation.planner import POLICY_DIGEST, POLICY_VERSION
+
+    plan = build_execution_plan(state())
+    provenance, _ = ValidationExecutionSource(
+        "policy-run",
+        state(),
+        plan,
+        [failed()],
+        verifier(),
+        now=NOW,
+        expected_execution_plan_hash=plan.execution_plan_hash,
+    ).collect()
+    assert (provenance.policy_version, provenance.policy_digest) == (POLICY_VERSION, POLICY_DIGEST)
+
+
+def test_repair_and_source_require_original_host_approved_scope():
+    approved = build_execution_plan(state(), boundary="publication", browser_required=True)
+    reduced = build_execution_plan(state(), boundary="publication")
+    values = [receipt(reduced, command, sequence=1) for command in reduced.commands]
+    with pytest.raises(ValueError, match="approved execution plan"):
+        build_repair_evidence(
+            state(),
+            reduced,
+            values,
+            verifier(),
+            now=NOW,
+            expected_execution_plan_hash=approved.execution_plan_hash,
+        )
+    with pytest.raises(ValueError, match="approved execution plan"):
+        ValidationExecutionSource(
+            "reduced",
+            state(),
+            reduced,
+            values,
+            verifier(),
+            now=NOW,
+            expected_execution_plan_hash=approved.execution_plan_hash,
+        ).collect()
+    with pytest.raises(TypeError, match="expected_execution_plan_hash"):
+        build_repair_evidence(state(), reduced, values, verifier(), now=NOW)
 
 
 @pytest.mark.parametrize("outcome", ["interrupted", "cancelled", "unmeasured"])
@@ -137,7 +188,13 @@ def test_forged_replayed_and_wrong_plan_evidence_rejected():
 def test_existing_improvement_engine_accepts_measured_failure_with_incomplete_provenance():
     plan = build_execution_plan(state())
     source = ValidationExecutionSource(
-        "validation-run", state(), plan, [failed()], verifier(), now=NOW
+        "validation-run",
+        state(),
+        plan,
+        [failed()],
+        verifier(),
+        expected_execution_plan_hash=plan.execution_plan_hash,
+        now=NOW,
     )
     provenance, facts = source.collect()
     assert provenance.source_type == "validation_execution" and not provenance.complete
@@ -158,7 +215,13 @@ def test_existing_improvement_engine_accepts_measured_failure_with_incomplete_pr
 def test_expired_evidence_is_unmeasured_in_improvement_projection():
     plan = build_execution_plan(state())
     source = ValidationExecutionSource(
-        "validation-run", state(), plan, [failed()], verifier(), now=NOW + timedelta(seconds=3601)
+        "validation-run",
+        state(),
+        plan,
+        [failed()],
+        verifier(),
+        expected_execution_plan_hash=plan.execution_plan_hash,
+        now=NOW + timedelta(seconds=3601),
     )
     _, facts = source.collect()
     assert facts[0].actual is None and not facts[0].measured
@@ -177,7 +240,13 @@ def test_transient_failures_produce_retry_diagnoses_without_product_repairs(fail
         diagnostic_codes=("timeout",),
     )
     provenance, facts = ValidationExecutionSource(
-        "transient-run", state(), plan, [signed], verifier(), now=NOW
+        "transient-run",
+        state(),
+        plan,
+        [signed],
+        verifier(),
+        expected_execution_plan_hash=plan.execution_plan_hash,
+        now=NOW,
     ).collect()
     assert facts[0].category == "reliability"
     baseline = create_baseline(
@@ -213,7 +282,13 @@ def test_unconfirmed_transient_kind_retains_failure_diagnosis(failure_kind):
     plan = build_execution_plan(state())
     signed = receipt(plan, outcome="failed", exit_code=1, failure_kind=failure_kind)
     provenance, facts = ValidationExecutionSource(
-        "unconfirmed-run", state(), plan, [signed], verifier(), now=NOW
+        "unconfirmed-run",
+        state(),
+        plan,
+        [signed],
+        verifier(),
+        expected_execution_plan_hash=plan.execution_plan_hash,
+        now=NOW,
     ).collect()
     assert facts[0].category == "execution"
     assert report([signed]).findings[0].recommendation == "diagnose_failure"
@@ -222,8 +297,24 @@ def test_unconfirmed_transient_kind_retains_failure_diagnosis(failure_kind):
 def test_source_aliases_cannot_replay_same_measured_artifact():
     plan = build_execution_plan(state())
     payload = [failed()]
-    left = ValidationExecutionSource("left", state(), plan, payload, verifier(), now=NOW)
-    right = ValidationExecutionSource("right", state(), plan, payload, verifier(), now=NOW)
+    left = ValidationExecutionSource(
+        "left",
+        state(),
+        plan,
+        payload,
+        verifier(),
+        expected_execution_plan_hash=plan.execution_plan_hash,
+        now=NOW,
+    )
+    right = ValidationExecutionSource(
+        "right",
+        state(),
+        plan,
+        payload,
+        verifier(),
+        expected_execution_plan_hash=plan.execution_plan_hash,
+        now=NOW,
+    )
     a, x = left.collect()
     b, y = right.collect()
     assert a.digest == b.digest
@@ -245,8 +336,15 @@ def test_report_digest_uses_canonical_validated_timestamp_serialization():
 def test_validation_baseline_head_must_match_measured_execution():
     from app.self_improvement.service import ImprovementService
 
+    plan = build_execution_plan(state())
     source = ValidationExecutionSource(
-        "validation-run", state(), build_execution_plan(state()), [failed()], verifier(), now=NOW
+        "validation-run",
+        state(),
+        plan,
+        [failed()],
+        verifier(),
+        expected_execution_plan_hash=plan.execution_plan_hash,
+        now=NOW,
     )
     with pytest.raises(ValueError, match="Validation evidence head differs"):
         ImprovementService(None).analyze(
@@ -277,9 +375,21 @@ def test_collector_key_rotation_cannot_replay_same_execution_as_distinct_artifac
     rotated = SignedReceipt(**envelope, authentication_tag=tag)
     trusted = ReceiptVerifier({("fixture", "key-1"): KEY, ("fixture", "key-2"): KEY})
     a, _ = ValidationExecutionSource(
-        "original", state(), plan, [original], trusted, now=NOW
+        "original",
+        state(),
+        plan,
+        [original],
+        trusted,
+        expected_execution_plan_hash=plan.execution_plan_hash,
+        now=NOW,
     ).collect()
     b, _ = ValidationExecutionSource(
-        "rotated", state(), plan, [rotated], trusted, now=NOW
+        "rotated",
+        state(),
+        plan,
+        [rotated],
+        trusted,
+        expected_execution_plan_hash=plan.execution_plan_hash,
+        now=NOW,
     ).collect()
     assert a.digest == b.digest
