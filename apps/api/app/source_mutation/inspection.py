@@ -38,7 +38,13 @@ from app.source_mutation.driver import (
 )
 from app.source_mutation.history import MutationHistoryReader
 from app.source_mutation.native import read_pin
-from app.tool_execution.filesystem import open_directory, open_file, read_bytes, windows_native_path
+from app.tool_execution.filesystem import (
+    LOCK,
+    open_directory,
+    open_file,
+    read_bytes,
+    windows_native_path,
+)
 
 
 class MutationInspector:
@@ -139,7 +145,7 @@ class MutationInspector:
                 refuse("SOURCE_MUTATION_INSPECTION_PATH_COLLISION")
             for name in names:
                 path = (Path(parent) / name).relative_to(target).as_posix()
-                if path in {".git", ".jarvis-workspace.json"}:
+                if path in {".git", ".jarvis-workspace.json", LOCK}:
                     continue
                 if path in ignored and name in files:
                     continue
@@ -202,8 +208,14 @@ class MutationInspector:
                 + creation.plan.metadata_growth_reserve,
             )
             # Pin every source and marker before any source measurement. No lock
-            # file is opened/created, and no creation-capable namespace API is used.
+            # is acquired/created, and no creation-capable namespace API is used.
             check_source = pin_source_tree(stack, target, driver.authority_check)
+            try:
+                with open_file(checkout, LOCK, os.O_RDONLY, internal=True) as fd:
+                    if os.fstat(fd).st_size != 1 or read_bytes(fd, 1) != b"0":
+                        refuse("SOURCE_MUTATION_FOREIGN_ARTIFACT")
+            except FileNotFoundError:
+                pass
             verify_creation_marker(checkout, creation.plan)
             verify_base_index(driver, policy, creation.plan, target)
             base = {}

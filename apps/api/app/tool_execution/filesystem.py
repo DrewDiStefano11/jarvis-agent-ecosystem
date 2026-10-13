@@ -274,9 +274,10 @@ def read_bytes(fd, maximum):
 
 
 @contextmanager
-def workspace_lock(root):
-    with open_file(root, LOCK, os.O_RDWR | os.O_CREAT, internal=True) as fd:
-        if os.fstat(fd).st_size == 0:
+def workspace_lock(root, *, existing_read_only=False):
+    flags = os.O_RDONLY if existing_read_only else os.O_RDWR | os.O_CREAT
+    with open_file(root, LOCK, flags, internal=True) as fd:
+        if not existing_read_only and os.fstat(fd).st_size == 0:
             os.write(fd, b"0")
         os.lseek(fd, 0, os.SEEK_SET)
         try:

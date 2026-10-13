@@ -30,11 +30,13 @@ from app.self_build.workspace_namespace import owned_namespace
 from app.source_change.planner import identity, verify_source_plan
 from app.source_mutation.native import pinned_file, read_pin, rename_pinned, staging_file
 from app.tool_execution.filesystem import (
+    LOCK,
     check_stat,
     open_directory,
     open_file,
     read_bytes,
     windows_native_path,
+    workspace_lock,
 )
 
 RESERVED = {".git", ".jarvis-workspace.json", ".jarvis-workspace.lock"}
@@ -138,7 +140,7 @@ def observe(stack, checkout, source_plan, modes, ignored=()):
         with os.scandir(directory.path) as listing:
             for item in listing:
                 path = prefix + "/" + item.name if prefix else item.name
-                if path in ignored:
+                if path in ignored or path == LOCK:
                     continue
                 info = os.stat(directory.name(item.name), follow_symlinks=False)
                 kind = "directory" if stat.S_ISDIR(info.st_mode) else "file"
@@ -209,7 +211,7 @@ def measure_code_state(stack, checkout, source, base, plan, ignored, authority_c
             open_directory(stack, parent.path / name, parent, name, internal=True)
         for name in files:
             path = (parent.path / name).relative_to(checkout.path).as_posix()
-            if path in ignored or path in {".git", ".jarvis-workspace.json"}:
+            if path in ignored or path in {".git", ".jarvis-workspace.json", LOCK}:
                 continue
             if any(part.casefold().startswith(".jarvis-") for part in path.split("/")):
                 refuse("SOURCE_MUTATION_FOREIGN_ARTIFACT")
@@ -433,6 +435,17 @@ class SourceMutationDriver:
                 stack.enter_context(pinned_metadata_file(owned / ".jarvis-workspace.json"))
                 verify_creation_marker(checkout, creation_plan)
                 verify_base_index(driver, policy, creation_plan, owned)
+                self.authority_check()
+                # Initialize/reuse the same coordination file as approved reads.
+                # Transfer to a deny-write/delete pin before reacquiring its byte
+                # lock read-only, so final tree pins coexist with the lock handle.
+                with workspace_lock(checkout):
+                    pass
+                lock_fd = stack.enter_context(pinned_file(owned / LOCK, rename=False))
+                if os.fstat(lock_fd).st_size != 1 or read_bytes(lock_fd, 1) != b"0":
+                    refuse("SOURCE_MUTATION_FOREIGN_ARTIFACT")
+                stack.enter_context(workspace_lock(checkout, existing_read_only=True))
+                self.authority_check()
                 modes = {
                     change.path: change.before.mode if change.before else change.after.mode
                     for change in source_plan.changes
@@ -623,8 +636,10 @@ class SourceMutationDriver:
                 # stage may have appeared after a completed-prefix probe; never
                 # silently exclude it from the completion measurement.
                 for index, change in enumerate(source_plan.changes):
-                    _, stage = staging_names(operation_id, index)
+                    backup, stage = staging_names(operation_id, index)
                     require_stage_absent(owned.joinpath(*change.path.split("/")[:-1], stage))
+                    if change.before is None:
+                        require_stage_absent(owned.joinpath(*change.path.split("/")[:-1], backup))
                 final, _ = observe(stack, checkout, source_plan, modes, ignored)
                 final_state, _ = measure_code_state(
                     stack,

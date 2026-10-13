@@ -22,9 +22,11 @@ source inspection, and exactly two ordered measurements per approved change:
   file-not-found establishes absence; access denial is a refusal.
 
 The existing creation owner/claim, checkout registration, branch, HEAD, raw base
-index, creation marker, metadata and source pins remain required. Foreign artifacts,
-including a checkout-root `.jarvis-workspace.lock`, are refused and preserved. The
-source adapter's actual lock stays in its private owner directory outside checkout.
+index, creation marker, metadata and source pins remain required. Foreign artifacts
+are refused and preserved. An existing canonical checkout-root
+`.jarvis-workspace.lock` is pinned and byte-validated as coordination metadata;
+verification never creates or acquires it. Nested, aliased or malformed locks
+remain foreign artifacts. This recognition grants no lock or cleanup authority.
 Native identity measurement uses the extended Windows path spelling, including for
 derived siblings longer than the canonical source path. Results contain digests and
 bounded metadata, never source text, lease tokens or private owner nonces.

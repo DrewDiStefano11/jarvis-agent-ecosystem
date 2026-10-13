@@ -2529,6 +2529,30 @@ def test_native_artifact_verification_refuses_foreign_artifacts_without_cleanup(
     assert (target / "source.py").read_bytes() == b"value = 2\n"
 
 
+def test_native_inspection_accepts_read_tool_coordination_metadata_without_locking(editing):
+    from app.models.tool_execution import ToolScope, ToolStep
+    from app.source_mutation.inspection import MutationInspector
+    from app.tool_execution.filesystem import WorkspaceToolRegistry
+
+    app, actor, _, service, request, target, _ = editing
+    completed = service.apply(actor, request)
+    creation = service.current(actor, request)[2]
+    configured = Path(service.workspace.policies.get("jarvis").worktree_root) / target.name
+    registry = WorkspaceToolRegistry(json.dumps({creation.workspace_id: str(configured)}))
+    scope = ToolScope(
+        workspaceId=creation.workspace_id,
+        allowedTools=list(creation.plan.allowed_tools),
+        readPrefixes=list(creation.plan.read_prefixes),
+    )
+    registry.execute(ToolStep(tool="workspace.read", path="source.py"), scope)
+    lock = target / ".jarvis-workspace.lock"
+    identity = (lock.stat().st_dev, lock.stat().st_ino)
+    result = MutationInspector(app).verify_artifacts(actor, request)
+    assert result.native_artifacts_verified and result.source_inspection.matches_completed_mutation
+    assert result.manifest.operation_id == completed.operation_id
+    assert lock.read_bytes() == b"0" and (lock.stat().st_dev, lock.stat().st_ino) == identity
+
+
 def test_native_artifact_verification_drift_does_not_claim_completed_source_freshness(editing):
     from app.source_mutation.inspection import MutationInspector
 

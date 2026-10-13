@@ -23,7 +23,11 @@ cannot substitute for acknowledged completion.
 
 Completed mutations retain one `.before` file for each change with a before identity, including deletes. Its exact sibling basename is `.jarvis-edit-` plus SHA-256 of `operation_id:index` plus `.before`; `index` is the immutable source plan change index. Additions have no retained original. The corresponding `.after` file must be absent after completion. Derive the exact bounded list from the protected complete record and original source plan, and verify original byte count/digest; never use glob exclusions.
 
-The mutation adapter's namespace lock is under `.jarvis-owner-<workspaceId>/.jarvis-workspace.lock`, outside the source checkout. It does not create or allowlist a checkout-root `.jarvis-workspace.lock`. An unexpected root lock remains a protected foreign artifact and is preserved on refusal.
+The mutation adapter retains its private ownership lock and coordinates with
+approved workspace reads using the canonical checkout-root `.jarvis-workspace.lock`.
+Inspection pins and validates an existing root lock's single canonical byte as
+metadata. It does not create or acquire that lock. Nested, aliased or malformed
+locks remain protected foreign artifacts and are preserved on refusal.
 
 Retained-byte verification does not establish deletion or rollback authority. Original backup inode provenance is not a durable cleanup contract, and matching bytes alone must not authorize artifact removal. No reader or inspector grants cleanup, chaining or commit authority.
 

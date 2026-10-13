@@ -183,6 +183,18 @@ and pending destinations; identical bytes in a foreign inode do not establish
 ownership. Claims remain immutable through acknowledgement and completion and
 grant no cleanup authority. Empty claims preserve legacy serialized records and
 their hashes, but legacy pending originals without a claim refuse recovery.
+
+Finalization checks both publication-stage absence and the absence of a retained
+original for every add after arming the namespace watch. Foreign add backups
+cannot be excluded from measurement and then acknowledged as completed.
+
+Mutation also coordinates with approved workspace reads through the canonical
+checkout-root `.jarvis-workspace.lock`. Only this exact root metadata path is
+excluded from source observations; planned edits, nested locks, aliases and other
+private artifacts remain prohibited. The adapter initializes/reuses the shared
+lock, validates its single canonical byte, and retains a deny-write/delete pin
+plus the byte lock through completion. Busy or malformed locks refuse before
+file intent. This coordination file grants no source or cleanup authority.
 Read-only pins can coexist with whole-tree completion pins while preserving their
 deny-write/delete guarantees. Pins release after the operation returns; this does
 not grant cleanup authority or claim permanent native artifact ownership.
