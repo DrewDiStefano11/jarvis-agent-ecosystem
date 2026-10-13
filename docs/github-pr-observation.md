@@ -27,6 +27,22 @@ exceptions are excluded from domain error diagnostics. Native credential buffers
 are cleared before returning them to Windows. No candidate/test subprocess is
 given a broker or token.
 
+`collect` requires an explicit nonempty, unique tuple of positive numeric
+`publisher_ids` (at most 256), resolved from the complete persisted publication
+authority by its trusted caller. Omitting or weakening that input refuses before
+provider access; the collector cannot infer completeness from review payloads.
+The PR author and every supplied publisher remain excluded from independent review.
+Headerless HTTP 403 secondary rate limits are recognized from the bounded JSON
+error message and produce a 60-second durable retry request. Ordinary access denial
+remains an access error, and provider prose never enters returned diagnostics.
+
+PR #126 review follow-up: 87 collector/transport/readiness tests passed, including
+mandatory publisher authority, a distinct publisher's approval, headerless limits,
+ordinary access errors, bounded bodies and credential-safe errors. Ruff, the isolated
+migration roundtrip, frontend typecheck/ESLint, 234 Vitest tests and build passed.
+CI collection covers 2,702 cases after these additions. The prior full-suite CI
+baseline is `b480beb`; current-head hosted CI must rerun after publication.
+
 The private transport uses only `https://api.github.com`, disables redirects,
 environment proxy/netrc credentials and reused cookies, limits response size and
 pagination, and validates the configured repository identity independently.

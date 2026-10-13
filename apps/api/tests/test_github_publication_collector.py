@@ -118,10 +118,10 @@ def client(
     return GitHubReader(TARGET, Broker(), transport=httpx.MockTransport(handle))
 
 
-def observed(**changes):
+def observed(*, publisher_ids=(10,), **changes):
     reader = client(**changes)
     try:
-        return collect(reader, 12, OLD)
+        return collect(reader, 12, OLD, publisher_ids=publisher_ids)
     finally:
         reader.close()
 
@@ -255,3 +255,32 @@ def test_unknown_check_conclusion_is_not_success():
     assert not assess(
         observed(checks=[{**CHECK, "conclusion": "new-provider-conclusion"}])
     ).ready_for_manual_merge
+
+
+def test_publisher_identity_is_required_before_any_provider_read():
+    reader = client()
+    try:
+        with pytest.raises(TypeError, match="publisher_ids"):
+            collect(reader, 12, OLD)
+    finally:
+        reader.close()
+
+
+@pytest.mark.parametrize(
+    "identities", [(), None, [], (True,), (0,), (-1,), ("11",), (11, 11), tuple(range(1, 258))]
+)
+def test_invalid_publisher_authority_refuses_before_provider_read(identities):
+    class Unreadable:
+        def repository(self):
+            pytest.fail("Invalid authority must refuse before provider access")
+
+    with pytest.raises(DomainError) as caught:
+        collect(Unreadable(), 12, OLD, publisher_ids=identities)
+    assert caught.value.code == "GITHUB_PUBLISHER_AUTHORITY_REQUIRED"
+
+
+def test_distinct_publisher_approval_cannot_count_as_independent_review():
+    observation = observed(publisher_ids=(10, 11))
+    assert not observation.reviews[0].independent
+    assert "independent_review_missing" in assess(observation).blockers
+    assert assess(observed(publisher_ids=(10, 12))).ready_for_manual_merge

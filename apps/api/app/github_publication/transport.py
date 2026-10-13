@@ -157,6 +157,22 @@ class GitHubReader:
                         503,
                     )
                 if response.status_code == 403:
+                    # GitHub can omit rate headers for a secondary limit. Read
+                    # only bounded provider data and retain no diagnostic prose.
+                    payload = bytearray()
+                    for chunk in response.iter_bytes():
+                        if len(payload) + len(chunk) > 1048576:
+                            raise DomainError(
+                                "GITHUB_RESPONSE_LIMIT", "GitHub response exceeded its bound.", 502
+                            )
+                        payload.extend(chunk)
+                    try:
+                        error = json.loads(payload)
+                    except (ValueError, UnicodeError):
+                        error = None
+                    message = error.get("message") if isinstance(error, dict) else None
+                    if isinstance(message, str) and "secondary rate limit" in message.casefold():
+                        raise GitHubRetry(60)
                     raise DomainError(
                         "GITHUB_ACCESS_DENIED", "GitHub repository access denied.", 403
                     )

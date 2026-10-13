@@ -109,6 +109,55 @@ def test_rate_limit_requests_durable_retry_without_busy_replay(status, headers, 
         client.close()
 
 
+def test_headerless_secondary_rate_limit_yields_bounded_retry_without_replay():
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(
+            403, json={"message": "You have exceeded a secondary rate limit. private-credential"}
+        )
+
+    client = reader(handle)
+    try:
+        with pytest.raises(GitHubRetry) as caught:
+            client.repository()
+        assert caught.value.retry_after_seconds == 60
+        assert len(calls) == 1
+        assert "private-credential" not in str(caught.value)
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"message": "Resource not accessible by integration"},
+        {"documentation_url": "secondary rate limit"},
+        ["secondary rate limit"],
+        {"message": 403},
+    ],
+)
+def test_headerless_permission_denial_never_becomes_a_retry(payload):
+    client = reader(lambda request: httpx.Response(403, json=payload))
+    try:
+        with pytest.raises(DomainError) as caught:
+            client.repository()
+        assert caught.value.code == "GITHUB_ACCESS_DENIED"
+    finally:
+        client.close()
+
+
+def test_headerless_secondary_limit_response_is_size_bounded():
+    client = reader(lambda request: httpx.Response(403, content=b"x" * 1048577))
+    try:
+        with pytest.raises(DomainError) as caught:
+            client.repository()
+        assert caught.value.code == "GITHUB_RESPONSE_LIMIT"
+    finally:
+        client.close()
+
+
 def test_bounded_pagination_does_not_follow_provider_urls():
     calls = []
 

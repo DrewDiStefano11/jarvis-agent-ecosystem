@@ -75,12 +75,27 @@ def required_policy(protection, rules):
     return tuple(required.values()), approvals, tuple(sorted(set(blockers)))
 
 
-def collect(reader: GitHubReader, number: int, approved_base_sha: str, *, publisher_ids=()):
+def collect(reader: GitHubReader, number: int, approved_base_sha: str, *, publisher_ids):
     """Caller must supply base and publisher identities from persisted authority.
 
     The result is observation, not permission to publish or merge. No model/caller
     evidence is accepted as an authenticated GitHub response.
     """
+    # This set is resolved by the trusted caller from persisted publication
+    # authority, never inferred from reviews or supplied by a model. An empty or
+    # malformed set cannot establish reviewer independence. Require a bounded
+    # concrete tuple rather than accepting an unbounded iterator.
+    if (
+        not isinstance(publisher_ids, tuple)
+        or not 1 <= len(publisher_ids) <= 256
+        or any(type(identity) is not int or identity <= 0 for identity in publisher_ids)
+        or len(set(publisher_ids)) != len(publisher_ids)
+    ):
+        raise DomainError(
+            "GITHUB_PUBLISHER_AUTHORITY_REQUIRED",
+            "Complete persisted numeric publisher identities are required.",
+            409,
+        )
     reader.repository()
 
     def verify(pr):
