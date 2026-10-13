@@ -39,9 +39,12 @@ class MutationHistoryReader:
             row = self.service.repository.lookup(session, proposal.plan.workspace_id)
             reservation = self.service.repository.contract(row)
             creation, _, creation_digest = self.service.creation.intent(row)
-            native_creation, creation_identifier, _ = self.service.creation.checkpoint(
-                actor, creation, creation_digest
-            )
+            try:
+                native_creation, creation_identifier, _ = self.service.creation.checkpoint(
+                    actor, creation, creation_digest
+                )
+            except (ValueError, TypeError, AttributeError, KeyError):
+                refuse("SOURCE_MUTATION_CREATION_CHECKPOINT_INVALID")
             creation_payload = AuditEventRow.payload["payload"]
             creation_acknowledged = (
                 session.scalar(
@@ -120,6 +123,61 @@ class MutationHistoryReader:
                     or MutationPlan.model_validate(original.payload["payload"]["plan"]) != plan
                 ):
                     raise ValueError("historical approval mismatch")
+                # The mutable row and its rehash cannot establish provenance.
+                # Reconstruct its initial position to bind immutable references
+                # to the original append-only preparation transaction.
+                initial = record.model_copy(
+                    update=dict(
+                        state="prepared",
+                        completed_count=0,
+                        pending_index=None,
+                        staging_device=None,
+                        staging_inode=None,
+                        prefix_digest=None,
+                        final_observation_digest=None,
+                        checkpoint_id=None,
+                    )
+                )
+                audit_payload = AuditEventRow.payload["payload"]
+                prepared = session.scalar(
+                    select(AuditEventRow.id)
+                    .where(
+                        AuditEventRow.task_id == plan.task_id,
+                        AuditEventRow.event_type == "self_build.source_mutation.prepared",
+                        audit_payload["operationId"].as_string() == record.operation_id,
+                        audit_payload["editingRecordId"].as_string() == editing_record_id,
+                        audit_payload["planHash"].as_string() == plan.plan_hash,
+                        audit_payload["intentDigest"].as_string() == intent_digest(initial),
+                        audit_payload["authorizationApprovalId"].as_string()
+                        == record.original_approval_id,
+                    )
+                    .limit(1)
+                )
+                # Sequence order is authoritative even when clocks regress.
+                # Older valid phases cannot authorize a projection rollback.
+                latest = session.scalar(
+                    select(AuditEventRow)
+                    .where(
+                        AuditEventRow.task_id == plan.task_id,
+                        AuditEventRow.event_type.in_(
+                            (
+                                "self_build.source_mutation.prepared",
+                                "self_build.source_mutation.phase_recorded",
+                            )
+                        ),
+                        audit_payload["editingRecordId"].as_string() == editing_record_id,
+                        audit_payload["planHash"].as_string() == plan.plan_hash,
+                    )
+                    .order_by(AuditEventRow.sequence_number.desc())
+                    .limit(1)
+                )
+                if (
+                    prepared is None
+                    or latest is None
+                    or latest.payload["payload"]["operationId"] != record.operation_id
+                    or latest.payload["payload"]["intentDigest"] != intent_digest(record)
+                ):
+                    raise ValueError("historical journal audit mismatch")
             except (ValueError, AttributeError, TypeError, KeyError):
                 refuse("SOURCE_MUTATION_HISTORY_INVALID")
             # checkpoint_id is deliberately outside the native intent digest.
@@ -142,8 +200,13 @@ class MutationHistoryReader:
                 )
                 is not None
             )
-        checkpoint, identifier, _, _ = self.service.checkpoint(actor, record)
+        try:
+            checkpoint, identifier, _, _ = self.service.checkpoint(actor, record)
+        except (ValueError, TypeError, AttributeError, KeyError):
+            refuse("SOURCE_MUTATION_CHECKPOINT_INVALID")
         claimed = record.checkpoint_id is not None
+        if audit_acknowledged and not claimed:
+            refuse("SOURCE_MUTATION_CHECKPOINT_INVALID")
         if claimed and (checkpoint is None or record.checkpoint_id != identifier):
             refuse("SOURCE_MUTATION_CHECKPOINT_INVALID")
         return MutationHistory(
