@@ -1,0 +1,153 @@
+/* Shared Jarvis foundations. Feature styles own layout; these tokens own appearance. */
+:root {
+  --bg: #0b0e16;
+  --surface: #131824;
+  --surface-1: #131824;
+  --surface-2: #1c2232;
+  --line: #2a3144;
+  --border: var(--line);
+  --text: #f1f2fa;
+  --muted: #adb6ce;
+  --accent: #bb9cff;
+  --accent-dim: #2c234a;
+  --danger: #ff9baf;
+  --warning: #f7ca80;
+  --success: #64dfc2;
+  --sidebar: 240px;
+  --radius: 12px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --ease: 160ms ease;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 15px;
+  color: var(--text);
+  background: var(--bg);
+}
+body { background: radial-gradient(ellipse at 70% -20%, #29214480, transparent 60%), var(--bg); line-height: 1.55; }
+button, input, select, textarea { font: inherit; }
+button, a { transition: background-color var(--ease), border-color var(--ease), color var(--ease); }
+:focus-visible { outline: 3px solid #ceb6ff; outline-offset: 3px; }
+button:disabled { opacity: .55; }
+input, select, textarea { background: #0e1320; border-color: var(--line); border-radius: 8px; min-height: 44px; }
+input::placeholder, textarea::placeholder { color: #919bb5; }
+.primary, .content a.primary { background: linear-gradient(135deg, #8054ee, #6841cb); color: #fff; border-color: #9671f1; border-radius: 8px; box-shadow: 0 3px 12px #673cb328; font-weight: 600; }
+.primary:hover, .content a.primary:hover { background: #7950dc; border-color: #c2a5ff; }
+.secondary { background: #1a2030; color: var(--text); border-radius: 8px; }
+.secondary:hover:not(:disabled) { background: #252b3e; }
+.panel, .mc-panel, .task-card, .agent-card, .approval-card { background: linear-gradient(125deg, #1a1c2e50, transparent 60%), var(--surface); border-color: var(--line); border-radius: var(--radius); }
+.panel h2, .mc-panel h2 { font-size: 1.12rem; letter-spacing: -.015em; }
+.status { font: 500 .8rem/1.4 'Segoe UI', system-ui, sans-serif; }
+.status-connected, .status-healthy, .status-current, .status-clear, .status-ready, .status-succeeded, .status-completed, .status-approved { color: var(--success); }
+.status-connected span, .status-healthy span, .status-current span, .status-clear span, .status-ready span, .status-succeeded span, .status-completed span, .status-approved span { color: var(--success); }
+.status-waiting_for_approval, .status-blocked, .status-paused { color: var(--warning); }
+.status-disabled { color: var(--muted); }
+.status-failed, .status-error, .status-offline, .status-rejected { color: var(--danger); }
+.drawer { background: var(--surface); }
+.action-drawer { position: fixed; inset: 0 0 0 auto; width: min(760px, 100%); height: 100dvh; max-height: 100dvh; margin: 0 0 0 auto; max-width: 100%; padding: 0; border: 0; border-left: 1px solid var(--line); color: var(--text); background: var(--surface); box-shadow: -20px 0 80px #0008; overflow-y: auto; overscroll-behavior: contain; }
+.action-drawer::backdrop { background: #070a13b8; backdrop-filter: blur(3px); }
+.action-drawer-header { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border-bottom: 1px solid var(--line); background: #151a29f5; }
+.action-drawer-header button { padding: 8px 12px; }
+.action-drawer-body { padding: 28px; }
+.action-drawer-body h1 { font-size: 1.7rem; line-height: 1.25; letter-spacing: -.025em; }
+.action-drawer-body fieldset { padding: 0; margin: 0; border: 0; min-width: 0; }
+.action-drawer-body .task-create-form { background: transparent; border: 0; padding: 0; margin-top: 28px; }
+.creation-success { display: flex; flex-wrap: wrap; gap: 12px; padding-top: 24px; }
+.creation-success>svg { color: var(--success); width: 40px; height: 40px; }
+.creation-success h2, .creation-success p { flex-basis: 100%; margin: 0; }
+.chips span { background: var(--accent-dim); color: #d2baff; }
+.empty { padding: clamp(24px, 5vw, 56px); border-radius: var(--radius); }
+.mission-shell .sidebar { padding: 24px 14px 16px; background: linear-gradient(180deg, #151629, #0e121c 40%, #161429); }
+.mission-shell .brand { margin: 0 10px 28px; align-items: flex-start; }
+.mission-shell .brand strong { color: #d1c0ff; font-size: 1.3rem; letter-spacing: .3em; font-weight: 650; }
+.mission-shell .brand small { color: #c0aedf; margin-top: 2px; font-size: .8rem; letter-spacing: .07em; }
+.mission-shell .collapse-button { min-height: 32px; min-width: 30px; background: #1d2031; margin-top: 2px; }
+.mission-shell .sidebar nav { overflow-y: auto; overscroll-behavior: contain; gap: 24px; padding-bottom: 20px; }
+.nav-group { display: grid; gap: 5px; }
+.nav-group-label { padding: 0 12px 6px; color: #949eba; font-size: .68rem; text-transform: uppercase; letter-spacing: .12em; font-weight: 600; }
+.mission-shell .sidebar nav a { font-size: .94rem; min-height: 46px; border: 1px solid transparent; border-radius: 8px; gap: 14px; }
+.mission-shell .sidebar nav a:hover { background: #242439; color: #fff; }
+.mission-shell .sidebar nav a.active { background: linear-gradient(110deg, #583694b0, #302449); border-color: #7854b9; color: #fff; box-shadow: inset 3px 0 #b896ff; }
+.nav-count { border-radius: 20px; background: #6942ac; color: #fff; font-size: .72rem; min-width: 22px; text-align: center; }
+.mission-shell .sidebar-foot { display: flex; align-items: center; gap: 12px; background: #191d2d; border: 1px solid var(--line); border-radius: 10px; padding: 14px 12px; }
+.sidebar-foot strong { font-size: .82rem; font-weight: 600; }
+.sidebar-foot small { font-size: .72rem; }
+.workspace-symbol { color: var(--accent); display: grid; place-items: center; }
+.mission-shell .topbar { height: 76px; padding: 0 32px; background: #101421eb; gap: 20px; }
+.mission-shell .system-summary { gap: 10px; margin-left: auto; white-space: nowrap; }
+.mission-shell .top-actions { flex-shrink: 0; }
+.mission-shell .emergency { min-height: 40px; border-color: #6e3647; color: #ffa9b7; background: #2a1823; font-size: .8rem; }
+.mission-shell .emergency:hover:not(:disabled) { background: #402030; }
+.mission-shell .content { padding: 28px 32px 48px; max-width: 2060px; }
+.mission-shell .content p, .action-drawer-body p { overflow-wrap: anywhere; }
+.mission-shell .page-title { margin-bottom: 24px; }
+.mission-shell .page-title h1 { font-size: clamp(1.8rem, 2.5vw, 2.3rem); font-weight: 650; letter-spacing: -.035em; }
+.mission-shell .page-title p { font-size: .96rem; }
+.mission-shell .mc-panel { padding: 22px; }
+.mission-shell .mc-note { font-size: .82rem; line-height: 1.6; }
+.mission-shell .mc-heading>a { font-size: .83rem; }
+.mission-shell .mc-health>div { background: transparent; border-inline: 0; padding: 12px 2px; font-size: .87rem; }
+.mission-shell .runtime-empty { min-height: 240px; background: radial-gradient(ellipse at center, #4c2f782c, transparent 70%); }
+.mission-shell .runtime-empty>svg { color: var(--accent); background: #36255b; border-radius: 14px; }
+.mission-shell .runtime-empty strong { font-size: 1.04rem; }
+.mission-shell .runtime-empty p { font-size: .9rem; }
+.mission-shell .mc-records { border: 0; }
+.mission-shell .mc-records button, .mission-shell .mc-records a { background: transparent; padding: 14px 0; }
+.mission-shell .mc-records strong, .mission-shell .mc-activity strong { font-size: .91rem; }
+.mission-shell .mc-records small, .mission-shell .mc-activity time { font-size: .8rem; }
+.mission-shell .attention-panel { background: linear-gradient(100deg, #30233f70, #131824); }
+.mission-shell .attention-panel p { font-size: .91rem; }
+.mission-shell .attention-panel .mc-note { font-size: .81rem; }
+.mission-shell .attention-needed { border-color: #82633d; }
+.mission-shell .demo-disclosure { padding: 16px 22px; font-size: .91rem; }
+.mission-shell .demo-disclosure summary span { font-size: .81rem; }
+.sidebar-collapsed { --sidebar: 80px; }
+.sidebar-collapsed .nav-group-label { display: none; }
+.sidebar-collapsed .nav-group + .nav-group { border-top: 1px solid var(--line); padding-top: 16px; }
+.sidebar-collapsed .brand strong { font-size: .64rem; letter-spacing: .05em; }
+.mission-shell.sidebar-collapsed .sidebar-foot { display: none; }
+.shell-loading { padding: clamp(24px, 5vw, 72px); max-width: 1600px; margin: auto; }
+.loading-brand { color: var(--accent); letter-spacing: .25em; font-weight: 650; }
+.loading-brand span { display: block; letter-spacing: .05em; color: var(--muted); font-size: .85rem; }
+.shell-loading h1 { margin-top: 48px; }
+.shell-loading p { color: var(--muted); }
+.shell-skeleton { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; margin-top: 32px; }
+.shell-skeleton>div { height: 220px; border-radius: var(--radius); background: linear-gradient(110deg, #171b29, #23263b, #171b29); background-size: 200% 100%; animation: skeleton-shimmer 2s ease-in-out infinite; }
+@keyframes skeleton-shimmer { to { background-position: -200% 0; } }
+@media (min-width: 761px) and (max-width: 1100px) {
+  .mission-shell { --sidebar: 80px; }
+  .mission-shell .nav-group-label { display: none; }
+  .mission-shell .sidebar-foot { display: none; }
+  .mission-shell .nav-group + .nav-group { padding-top: 12px; border-top: 1px solid var(--line); }
+  .mission-shell .brand strong { font-size: .64rem; letter-spacing: .05em; }
+  .mission-shell .topbar { padding: 0 22px; gap: 12px; }
+  .mission-shell .system-summary .desktop-only { display: none; }
+  .mission-shell .content { padding: 24px 22px 40px; }
+  .mission-shell .mc-panel { padding: 18px; }
+}
+@media (max-width: 760px) {
+  .mission-shell .topbar { height: 66px; padding: 0 16px; gap: 10px; }
+  .mission-shell .system-summary { display: none; }
+  .mission-shell .content { padding: 24px 16px 100px; }
+  .mission-shell .page-title { flex-wrap: wrap; gap: 14px; }
+  .mission-shell .page-title h1 { font-size: 1.8rem; }
+  .mission-shell .page-title p { font-size: .9rem; }
+  .mission-shell .mc-panel { padding: 18px; }
+  .mission-shell .runtime-empty { min-height: 200px; }
+  .mission-shell .mobile-nav { background: #101421f5; }
+  .shell-skeleton { grid-template-columns: 1fr; }
+  .shell-skeleton>div { height: 160px; }
+}
+@media (max-width: 390px) {
+  .action-drawer-body { padding: 20px 16px; }
+  .mission-shell .topbar { padding-inline: 12px; gap: 8px; }
+  .mission-shell .emergency { font-size: .73rem; padding: 8px; }
+  .mission-shell .content { padding-inline: 12px; }
+  .mission-shell .page-title h1 { font-size: 1.65rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shell-skeleton>div { animation: none; background: var(--surface-2); }
+}

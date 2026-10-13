@@ -1,8 +1,11 @@
+import { NewTaskButton } from '../components/NewTaskButton'
+import { NavIcon } from '../components/NavIcon'
+import '../styles/planning-workspace.css'
 import { RuntimeRunHistory } from '../components/RuntimeRunHistory'
 import { CoordinatedWork } from '../components/CoordinatedWork'
 import { request } from '../api/client'
 import { useEffect, useState } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { useSearchParams } from 'react-router-dom'
 import { ToolExecutionHistory, ToolExecutionPanel } from '../components/ToolExecutionPanel'
 import { newPlanningSubmission, submitPlanning, type PlanningSubmission } from '../api/planning'
 import { useAppStore } from '../state/AppStore'
@@ -10,10 +13,10 @@ import { Status } from '../components/Status'
 import { PlannedWork } from '../components/PlannedWork'
 import { forgetPlanningSubmission, readPlanningRecovery, rememberPlanningSubmission, restorePlanningSubmission, type SavedPlanningSubmission } from '../state/planningRecovery'
 
-export function Runtime() {
+export function Runtime({ onInspectTask, onCreateTask, onCorrectTask, lockedTaskId }: { lockedTaskId?: string; onInspectTask?: (id: string) => void; onCreateTask?: () => void; onCorrectTask?: (id: string) => void } = {}) {
   const [searchParams] = useSearchParams()
   const [mode, setMode] = useState<'planning' | 'workspace'>(searchParams.get('mode') === 'workspace' ? 'workspace' : 'planning')
-  const { runtime, tools, tasks, system, refresh, selectTask, decomposition, coordination } = useAppStore()
+  const { runtime, tools, tasks, system, refresh, selectTask, decomposition, coordination, loading, error, connection, resyncRequired } = useAppStore()
   const { identities, loadIdentities, actorId, selectActor, taskId, setTaskId, executions, refreshRuntime } = runtime
   const [targetId, setTargetId] = useState('')
   const [message, setMessage] = useState('')
@@ -23,6 +26,7 @@ export function Runtime() {
   const [storageWarning, setStorageWarning] = useState('')
   const [taskPreparedState, setTaskPreparedState] = useState<{ id: string; prepared: boolean } | null>(null)
   const taskPrepared = taskPreparedState?.id === taskId ? taskPreparedState.prepared : null
+  const stale = Boolean(loading || !system || error || resyncRequired || connection !== 'connected')
   const worker = system?.autonomousWorker
   useEffect(() => {
     let active = true
@@ -43,6 +47,10 @@ export function Runtime() {
   const workerActorId = worker?.workerActorId
   const workerActor = active.find(identity => identity.id === workerActorId)
   const task = tasks.find(item => item.id === taskId)
+  const taskScopeMatches = (!lockedTaskId || lockedTaskId === taskId)
+    && (!pending || pending.task.id === taskId)
+  const scopedRecovery = recovery.items.filter(saved => !lockedTaskId || saved.taskId === lockedTaskId)
+  useEffect(() => { if (lockedTaskId && taskId !== lockedTaskId) setTaskId(lockedTaskId) }, [lockedTaskId, taskId, setTaskId])
   const identityBlock = !workerActorId
     ? 'Configure JARVIS_AUTONOMOUS_WORKER_ACTOR_ID and restart the local services before queueing a plan.'
     : !workerActor
@@ -54,11 +62,15 @@ export function Runtime() {
           ? 'The configured worker identity changed. Inspect history and clear this submission before queueing with the current worker.'
           : 'Select the configured worker identity to queue a plan. Other identities remain available for authorized history.'
         : null
-  const canQueue = !busy && !identityBlock && Boolean(actorId && targetId && task)
+  const canQueue = !busy && !stale && taskScopeMatches && !identityBlock && Boolean(actorId && targetId && task)
     && Boolean(task && ['queued', 'retrying'].includes(task.status))
     && Boolean(worker?.enabled && worker.providerReady) && !system?.emergencyStop
   const recover = async (saved: SavedPlanningSubmission) => {
     if (busy || pending) return
+    if (lockedTaskId && saved.taskId !== lockedTaskId) {
+      setMessage('This saved submission belongs to a different task. Open its task to inspect or retry it.')
+      return
+    }
     const originalTask = tasks.find(item => item.id === saved.taskId)
     if (!originalTask) { setMessage('The saved task is not available. Refresh the Hub or inspect its durable history before creating replacement work.'); return }
     setBusy(true)
@@ -81,7 +93,7 @@ export function Runtime() {
     setMessage(warning ? 'The form was cleared, but its saved retry ID remains in browser storage.' : 'Saved retry ID forgotten. Existing work remains in durable history; this does not cancel a task or run.')
   }
   const prepare = async () => {
-    if (!task || busy) return
+    if (!task || busy || stale || !taskScopeMatches || system?.emergencyStop) return
     setBusy(true)
     setMessage('')
     try {
@@ -114,38 +126,46 @@ export function Runtime() {
       setMessage(error instanceof Error ? error.message : 'Planning submission failed')
     } finally { setBusy(false) }
   }
-  return <>
-    <header className="page-title"><div><p className="eyebrow">Local autonomous execution</p><h1>Planning workspace</h1><p>Queue a bounded model-assisted plan, follow its review, and inspect durable results.</p></div></header>
-    <section className="panel"><h2>Worker readiness</h2><Status value={worker?.status ?? 'unknown'}/>
-      <p>{worker?.enabled ? 'Local worker enabled' : 'Worker disabled — enable it using the local setup guide.'} · {worker?.providerReady ? 'Provider configured' : 'Provider not configured'}</p>
-      <p>Configured worker identity: {workerActor?.display_name ?? workerActorId ?? 'Not configured'}{workerActor && <> · <code>{workerActor.id}</code></>}</p>
+  return <div className="planning-workspace">
+    <header className="page-title"><div><h1>Planning workspace</h1><p>Prepare a request, review its plan, and inspect durable results.</p></div>{onCreateTask ? <button className="primary" disabled={busy || Boolean(pending)} onClick={onCreateTask}><NavIcon name="plus"/>New task</button> : <NewTaskButton disabled={busy || Boolean(pending)} onInspectTask={onInspectTask} onPlanTask={setTaskId}/>}</header>
+    <>{task && <div className="planning-task-context"><NavIcon name="tasks"/><div><strong>{task.title}</strong><span><Status value={task.status}/>{task.priority} priority</span></div></div>}</>
+    <div className="planning-availability"><NavIcon name="provider"/><strong>{!worker ? 'Execution status unavailable' : worker.enabled ? worker.status.replaceAll('_', ' ') : 'Local execution disabled'}</strong><span>{!worker ? 'Provider status unavailable' : worker.providerReady ? 'Provider configured' : 'Provider not configured'}</span></div>
+    <ol className="planning-steps" aria-label="Planning steps"><li className={task ? 'step-ready' : 'step-current'}><span>1</span><div><strong>Choose request</strong><small>{task ? 'Request selected' : 'Select the outcome to plan'}</small></div></li><li className={taskPrepared ? 'step-ready' : task ? 'step-current' : ''}><span>2</span><div><strong>Prepare planner</strong><small>{taskPrepared ? 'Prepared for this task' : 'Task-scoped identity setup'}</small></div></li><li className={canQueue ? 'step-current' : ''}><span>3</span><div><strong>Queue plan</strong><small>{pending ? 'Review uncertain submission' : canQueue ? 'Ready for explicit submission' : 'Readiness and permission required'}</small></div></li></ol>
+    {stale && <p className="planning-status" role="status">Last-known planning state. Reconnect and refresh before preparing or queueing work.</p>}
+    <div className="planning-main">
+    <section className="panel planning-readiness"><div className="planning-section-heading"><NavIcon name="provider"/><h2>Worker readiness</h2></div><Status value={worker?.status ?? 'unknown'}/>
+      <p>{!worker ? 'Worker status unavailable' : worker.enabled ? 'Local worker enabled' : 'Worker disabled — enable it using the local setup guide.'} · {!worker ? 'Provider status unavailable' : worker.providerReady ? 'Provider configured' : 'Provider not configured'}</p>
+      <p className="worker-identity">Configured worker identity: {workerActor?.display_name ?? workerActorId ?? 'Not configured'}{workerActor && <> · <code>{workerActor.id}</code></>}</p>
       {worker?.reasonCode && <p role="status">{worker.reasonCode}</p>}
       <dl className="details-grid"><div><dt>Queued eligible</dt><dd>{worker?.queuedEligibleRuntimeCount ?? '—'}</dd></div><div><dt>Executing</dt><dd>{worker?.activeExecutionCount ?? '—'}</dd></div><div><dt>Completed</dt><dd>{worker?.completedExecutionCount ?? '—'}</dd></div><div><dt>Needs review</dt><dd>{worker?.reviewRequiredCount ?? '—'}</dd></div></dl>
+      <details className="planning-setup-details"><summary>Local setup details</summary>{!workerActorId && identityBlock && <p>{identityBlock}</p>}<p>Configure the worker locally and preserve its task-scoped permissions. This page does not enable a worker or model.</p></details>
       <p className="muted">Planning produces a proposal. Workspace plans require separate authorization of exact actions and file contents before tools can run. Provider readiness describes configuration; successful inference appears in execution history.</p>
     </section>
-    <section className="panel"><h2>Queue a local plan</h2>
+    <section className="panel planning-request"><div className="planning-section-heading"><NavIcon name="planning"/><h2>Queue a local plan</h2></div>
       {(storageWarning || recovery.warning) && <p role="alert">{storageWarning || recovery.warning}</p>}
-      {recovery.items.some(item => item.id !== pending?.id) && <div className="callout"><h3>Unfinished submissions saved in this browser</h3><p>Only retry IDs and an input fingerprint are stored here. Task text and results stay in the Hub. Recovering a form never queues it automatically.</p>{recovery.items.filter(item => item.id !== pending?.id).map(saved => <article key={saved.id}><p>{tasks.find(item => item.id === saved.taskId)?.title ?? saved.taskId} · {new Date(saved.timestamp).toLocaleString()}</p><p>Run ID: <code>run-{saved.id}</code></p><button className="secondary" disabled={busy || Boolean(pending)} onClick={() => void recover(saved)}>Recover submission</button> <button className="secondary" disabled={busy} onClick={() => forget(saved.id)}>Forget saved retry ID</button></article>)}</div>}
-      <p>Queue as the configured worker identity, with its existing task permissions, or explicitly prepare it for the selected task. The target agent can be a different active identity. <Link to="/tasks">Create a task</Link> first.</p>
-      <label>Plan type<select value={mode} disabled={busy || Boolean(pending)} onChange={event => setMode(event.target.value as 'planning' | 'workspace')}><option value="planning">Planning advice</option><option value="workspace">Workspace actions and report</option></select></label>
-      <div className="filters"><label>Act as local identity<select value={actorId} disabled={busy || Boolean(pending)} onChange={event => selectActor(event.target.value)}><option value="">Select identity</option>{active.map(identity => <option key={identity.id} value={identity.id}>{identity.display_name}</option>)}</select></label>
-      <label>Target agent<select value={targetId} disabled={busy || Boolean(pending)} onChange={event => setTargetId(event.target.value)}><option value="">Select target</option>{active.map(identity => <option key={identity.id} value={identity.id}>{identity.display_name}</option>)}</select></label>
-      <label>Task and history<select value={taskId} disabled={busy || Boolean(pending)} onChange={event => setTaskId(event.target.value)}><option value="">Select task</option>{tasks.map(item => <option key={item.id} value={item.id}>{item.title} · {item.status}</option>)}</select></label></div>
+      {scopedRecovery.some(item => item.id !== pending?.id) && <div className="callout"><h3>Unfinished submissions saved in this browser</h3><p>Only retry IDs and an input fingerprint are stored here. Task text and results stay in the Hub. Recovering a form never queues it automatically.</p>{scopedRecovery.filter(item => item.id !== pending?.id).map(saved => <article key={saved.id}><p>{tasks.find(item => item.id === saved.taskId)?.title ?? saved.taskId} · {new Date(saved.timestamp).toLocaleString()}</p><p>Run ID: <code>run-{saved.id}</code></p><button className="secondary" disabled={busy || Boolean(pending)} onClick={() => void recover(saved)}>Recover submission</button> <button className="secondary" disabled={busy} onClick={() => forget(saved.id)}>Forget saved retry ID</button></article>)}</div>}
+      <p>Queue as the configured worker identity, with its existing task permissions, or explicitly prepare it for the selected task. The target agent can be a different active identity. Create a task first if its request is not yet saved.</p>
+      <label>Task and history<select aria-label="Task and history" value={taskId} disabled={busy || Boolean(pending) || Boolean(lockedTaskId)} onChange={event => setTaskId(event.target.value)}><option value="">Select task</option>{tasks.map(item => <option key={item.id} value={item.id}>{item.title} · {item.status}</option>)}</select></label>
+      <label className="plan-type-field">Plan type<select aria-label="Plan type" value={mode} disabled={busy || Boolean(pending)} onChange={event => setMode(event.target.value as 'planning' | 'workspace')}><option value="planning">Planning advice</option><option value="workspace">Workspace actions and report</option></select></label>
+      <div className="filters"><label>Act as local identity<select aria-label="Act as local identity" value={actorId} disabled={busy || Boolean(pending)} onChange={event => selectActor(event.target.value)}><option value="">Select identity</option>{active.map(identity => <option key={identity.id} value={identity.id}>{identity.display_name}</option>)}</select></label>
+      <label>Target agent<select aria-label="Target agent" value={targetId} disabled={busy || Boolean(pending)} onChange={event => setTargetId(event.target.value)}><option value="">Select target</option>{active.map(identity => <option key={identity.id} value={identity.id}>{identity.display_name}</option>)}</select></label>
+      </div>
       {!active.length && <p>No active identities found. Select a task and prepare its local planner below.</p>}
-      {identityBlock && <p role="status">{identityBlock}</p>}
+      {identityBlock && <p role="status">{!workerActorId ? 'The local worker identity is not configured. Review Worker readiness before queueing.' : identityBlock}</p>}
       {pending && task && !['queued', 'retrying'].includes(task.status) && <p role="status">This task is now {task.status}. Its saved submission cannot queue further work. Inspect runtime history and clear the form after confirming the original outcome.</p>}
       {workerActor && actorId !== workerActor.id && <p><button className="secondary" disabled={busy || Boolean(pending)} onClick={() => selectActor(workerActor.id)}>Use configured worker identity</button></p>}
       {task && <blockquote>{task.description}</blockquote>}
-      {task && ['under_review', 'failed', 'cancelled', 'completed'].includes(task.status) && <p><Link to={`/tasks?correct=${encodeURIComponent(task.id)}`}>Revise task input</Link> to create a linked follow-up, then explicitly prepare and queue its plan. The original result stays in history.</p>}
-      <p><button className="secondary" disabled={busy || Boolean(pending) || !task || !['queued', 'retrying'].includes(task.status)} onClick={() => void prepare()}>Prepare local planner for this task</button></p>
+      {task && ['under_review', 'failed', 'cancelled', 'completed'].includes(task.status) && <div className="planning-correction">{onCorrectTask ? <button className="link-button" disabled={busy || Boolean(pending)} onClick={() => onCorrectTask(task.id)}>Revise task input</button> : <NewTaskButton key={task.id} source={task} label="Revise task input" disabled={busy || Boolean(pending)} onInspectTask={onInspectTask} onPlanTask={setTaskId}/>} to create a linked follow-up, then explicitly prepare and queue its plan. The original result stays in history.</div>}
+      <p><button className="secondary" disabled={busy || stale || !taskScopeMatches || Boolean(system?.emergencyStop) || Boolean(pending) || !task || !['queued', 'retrying'].includes(task.status)} onClick={() => void prepare()}>Prepare local planner for this task</button></p>
       <p className="muted">This explicit setup grants runtime permissions for only this task. It preserves existing denials and never grants tools or enables a model.</p>
       <button className="primary" disabled={!canQueue} onClick={() => void queue()}>{busy ? 'Submitting…' : pending ? 'Retry same submission' : 'Queue local plan'}</button>
       {pending && !busy && <><p>Retry reuses the same context and command IDs, including after recovering this form following a reload. Inspect history before starting different work.</p><button className="secondary" onClick={() => forget(pending.id)}>Clear submission form</button></>}
       {message && <p role="status">{message}</p>}
     </section>
-    <section className="panel"><PlannedWork record={decomposition.record} error={decomposition.error} execution={coordination.record}/><CoordinatedWork record={coordination.record} error={coordination.error}/></section>
-    <RuntimeRunHistory/>
-    <section className="panel"><h2>Persisted model results</h2>{!taskId && <p>Select a task to inspect its results.</p>}
+    </div>
+    <section className="panel planning-evidence"><PlannedWork record={decomposition.record} error={decomposition.error} execution={coordination.record}/><CoordinatedWork record={coordination.record} error={coordination.error}/></section>
+    <RuntimeRunHistory onInspectTask={onInspectTask}/>
+    <section className="panel planning-results"><div className="planning-section-heading"><NavIcon name="approvals"/><h2>Persisted model results</h2></div>{!taskId && <p>Select a task to inspect its results.</p>}
       {executions.map(execution => <article className="runtime-result" key={execution.executionId}><h3>{execution.result?.summary ?? 'Execution in progress'}</h3><Status value={execution.stage}/><p>{execution.provider ?? 'Provider pending'} · {execution.model ?? 'Model pending'} · {execution.requestCount} request(s)</p><code>{execution.executionId}</code>
         {execution.failureCode && <p role="status">{execution.failureCode}</p>}
         {execution.result && <><p style={{ whiteSpace: 'pre-wrap' }}>{execution.result.analysis}</p><h4>Recommendations</h4><ul>{execution.result.recommendations.map((item, index) => <li key={index}><strong>{item.title}</strong> ({item.priority}) — {item.description}</li>)}</ul><h4>Risks</h4><ul>{execution.result.risks.map((item, index) => <li key={index}><strong>{item.title}</strong> ({item.severity}) — {item.description}<p>Mitigation: {item.mitigation}</p></li>)}</ul>
@@ -155,5 +175,5 @@ export function Runtime() {
       {taskId && actorId && !runtime.loading && !runtime.error && !executions.length && <p>No persisted model execution for this task yet.</p>}
     </section>
     {actorId && taskId && (mode === 'workspace' || tools.executions.length > 0) && <ToolExecutionHistory/>}
-  </>
+  </div>
 }

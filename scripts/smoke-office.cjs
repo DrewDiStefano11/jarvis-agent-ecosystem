@@ -67,19 +67,20 @@ const actor = process.env.SMOKE_ACTOR
     // Run a real worker execution through the existing task/planning UI.
     const nav = page.getByRole('navigation', { name: 'Primary', exact: true })
     await nav.getByRole('link', { name: 'Tasks', exact: true }).click()
-    await page.getByRole('button', { name: '+ New task' }).click()
+    await page.getByRole('button', { name: 'New task', exact: true }).click()
     await page.getByLabel('Title', { exact: true }).fill('Office observed planning')
     await page.getByLabel('Description', { exact: true }).fill('Verify office activity from real persisted worker execution.')
     const created = page.waitForResponse(response => response.url().endsWith('/api/tasks') && response.request().method() === 'POST')
     await page.getByRole('button', { name: 'Create task', exact: true }).click()
     const task = (await (await created).json()).data
     // The response precedes the shared-store refresh and task-created UI.
-    // Use the completed creation link, which also selects the task in runtime state.
-    await page.getByRole('link', { name: 'Open planning for this task', exact: true }).click()
+    // Use the completed creation action, which selects the task in shared runtime state.
+    await page.getByRole('button', { name: 'Open planning for this task', exact: true }).click()
     assert.equal(await page.getByLabel('Task and history').inputValue(), task.id)
     await page.getByRole('button', { name: 'Prepare local planner for this task', exact: true }).click()
     await page.getByText('Local planner prepared for this task. Queue the plan when ready.', { exact: true }).waitFor()
     await page.getByRole('button', { name: 'Queue local plan', exact: true }).click()
+    await page.keyboard.press('Escape')
     await nav.getByRole('link', { name: 'Office', exact: true }).click()
     await changeIdentity(actor)
     await page.getByRole('button', { name: 'Focus identity', exact: true }).click()
