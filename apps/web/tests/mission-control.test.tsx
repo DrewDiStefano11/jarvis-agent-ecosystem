@@ -151,11 +151,11 @@ function QueryNavigation() {
 }
 test('creation follows query navigation and Back while Tasks stays mounted', async () => {
   render(<MemoryRouter initialEntries={['/tasks']}><App/><QueryNavigation/></MemoryRouter>)
-  expect(screen.queryByLabelText('Title')).not.toBeInTheDocument()
+  expect(screen.queryByRole('dialog', { name: 'New task' })).not.toBeInTheDocument()
   await userEvent.click(screen.getByRole('link', { name: 'Creation deep link' }))
   expect(screen.getByLabelText('Title')).toBeInTheDocument()
   await userEvent.click(screen.getByRole('link', { name: 'Clear query' }))
-  expect(screen.queryByLabelText('Title')).not.toBeInTheDocument()
+  expect(screen.queryByRole('dialog', { name: 'New task' })).not.toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: 'History back' }))
   expect(screen.getByLabelText('Title')).toBeInTheDocument()
 })
