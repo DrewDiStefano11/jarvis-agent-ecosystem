@@ -11,3 +11,7 @@ class TestResizeObserver {
   disconnect() {}
 }
 Object.defineProperty(window, "ResizeObserver", { writable: true, value: TestResizeObserver })
+
+// Native dialog layout/focus containment is verified by the real browser harness.
+HTMLDialogElement.prototype.showModal = function () { this.setAttribute('open', '') }
+HTMLDialogElement.prototype.close = function () { this.removeAttribute('open'); this.dispatchEvent(new Event('close')) }

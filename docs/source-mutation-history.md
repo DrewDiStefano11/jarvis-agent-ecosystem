@@ -15,4 +15,21 @@ the task, operation, exact checkpoint ID and private intent digest. Mutation
 acknowledgement separately requires the exact task, operation, editing record,
 plan hash and intent digest in its audit event. Mutable payload checkpoint fields
 and native-only crash gaps do not establish either acknowledgement.
+An exact durable acknowledgement with a cleared journal checkpoint ID is
+inconsistent evidence and is refused with `SOURCE_MUTATION_CHECKPOINT_INVALID`;
+a legitimate native-only interruption remains readable as unacknowledged.
+
+Every returned journal position also requires append-only preparation and phase
+proof. Reconstructing the initial prepared position binds operation identity,
+original approval, creation time and immutable plan to the transaction that
+created them. The latest prepared/phase audit event in durable sequence order
+must match the current position digest, so rehashing a substituted row or rolling
+it back to an older valid phase cannot make it trusted history. Legitimate pending
+and staged positions remain readable when checkpoint acknowledgement was
+interrupted; read access still grants no execution authority.
+
+Both native checkpoint lookups translate malformed persisted JSON or invalid
+checkpoint contracts into fixed creation/mutation checkpoint refusal codes.
+Checkpoint decoding details never enter public errors. Storage and authorization
+failures retain their separate established refusal behavior.
 

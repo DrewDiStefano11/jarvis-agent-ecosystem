@@ -39,7 +39,7 @@ export function JarvisCommand() {
     if (open) {
       dialog.current?.showModal()
       searchInput.current?.focus()
-      void loadIdentities().catch(() => { /* Shared identity state exposes the error and preserves last-known data. */ })
+      void loadIdentities?.().catch(() => { /* Shared identity state exposes the error and preserves last-known data. */ })
     } else if (dialog.current?.open) dialog.current.close()
   }, [open,loadIdentities])
   useEffect(() => {
@@ -67,7 +67,7 @@ export function JarvisCommand() {
   const count = matched.reduce((sum,group)=>sum+group.items.length,0)
   const shown = matched.reduce((sum,group)=>sum+Math.min(8,group.items.length),0)
   return <>
-    <button className="jarvis-command-launcher" aria-label="Talk to Jarvis" aria-haspopup="dialog" aria-expanded={open} onClick={()=>{setEngaged(true);setOpen(true)}} disabled={Boolean(store.selectedAgentId || store.selectedTaskId)}><CommandIcon kind="search"/><span>Talk to Jarvis</span><kbd>Ctrl K</kbd></button>
+    <button className="jarvis-command-launcher" aria-label="Search Jarvis" aria-haspopup="dialog" aria-expanded={open} onClick={()=>{setEngaged(true);setOpen(true)}} disabled={Boolean(store.selectedAgentId || store.selectedTaskId)}><CommandIcon kind="search"/><span>Search tasks, agents, and pages...</span><kbd>Ctrl K</kbd></button>
     <dialog ref={dialog} className="jarvis-command-dialog" aria-labelledby="jarvis-command-title" aria-modal="true" onCancel={event=>{event.preventDefault();close()}} onClose={()=>{if(!dialog.current?.open)setOpen(false)}} onKeyDown={event=>{
       if(event.key==='Escape'){event.preventDefault();event.stopPropagation();close();return}
       if(event.key!=='Tab')return
@@ -77,8 +77,8 @@ export function JarvisCommand() {
       else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first?.focus()}
     }}>
       {engaged && <>
-      <header><h2 id="jarvis-command-title">Talk to Jarvis</h2><button aria-label="Close Talk to Jarvis" onClick={close}><CommandIcon kind="close"/></button></header>
-      <div className="jarvis-command-modes" role="group" aria-label="Command mode"><button aria-pressed={mode==='find'} onClick={()=>{setMode('find');requestAnimationFrame(()=>searchInput.current?.focus())}}>Find records</button><button aria-pressed={mode==='create'} onClick={()=>setMode('create')}>New request</button></div>
+      <header><h2 id="jarvis-command-title">Search Jarvis</h2><button aria-label="Close Search Jarvis" onClick={close}><CommandIcon kind="close"/></button></header>
+      <div className="jarvis-command-modes" role="group" aria-label="Command mode"><button aria-pressed={mode==='find'} onClick={()=>{setMode('find');requestAnimationFrame(()=>searchInput.current?.focus())}}>Find records</button><button aria-pressed={mode==='create'} onClick={()=>setMode('create')}>New task request</button></div>
       {stale && <button disabled={refreshing} onClick={async()=>{setRefreshing(true);try{await store.refresh()}finally{setRefreshing(false)}}}>{refreshing?'Refreshing…':'Refresh state'}</button>}
       <section hidden={mode!=='find'}>
         <label className="jarvis-command-search">Find records and pages<input ref={searchInput} type="search" placeholder="Search loaded records, pages, agents…" value={query} onChange={event=>setQuery(event.target.value)}/></label>

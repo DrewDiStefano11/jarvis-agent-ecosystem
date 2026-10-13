@@ -12,6 +12,7 @@ export function useRuntimeState(lastSync: string | null) {
   const [identities, setIdentities] = useState<RuntimeIdentity[]>([])
   const [identityError, setIdentityError] = useState<string | null>(null)
   const [identityLoading, setIdentityLoading] = useState(false)
+  const [identityLoaded, setIdentityLoaded] = useState(false)
   const [capabilities, setCapabilities] = useState<IdentityCapability[]>([])
   const [capabilityMembers, setCapabilityMembers] = useState<Record<string, string[]>>({})
   const identityGeneration = useRef(0)
@@ -32,7 +33,7 @@ export function useRuntimeState(lastSync: string | null) {
     setIdentityLoading(true)
     try {
       const data = await identityPages<RuntimeIdentity>('/api/identity/agents')
-      if (current === identityGeneration.current) { setIdentities(data); setIdentityError(null) }
+      if (current === identityGeneration.current) { setIdentities(data); setIdentityError(null); setIdentityLoaded(true) }
     } catch (caught) {
       if (current === identityGeneration.current) setIdentityError(caught instanceof Error ? caught.message : 'Cannot load identities')
       throw caught
@@ -185,7 +186,7 @@ export function useRuntimeState(lastSync: string | null) {
     return result.snapshot
   }, [refreshRuntime])
 
-  return { actorId, selectActor, identities, loadIdentities, identityError, identityLoading, createIdentity,
+  return { actorId, selectActor, identities, loadIdentities, identityError, identityLoading, identityLoaded, createIdentity,
     updateIdentity, transitionIdentity, capabilities, capabilityMembers, loadCapabilities, loadCapabilityMembers,
     runs, executions, taskId, setTaskId,
     error, loading, loadingMore, pagesLoaded, nextOffset, loadMoreRuns, refreshRuntime, command }

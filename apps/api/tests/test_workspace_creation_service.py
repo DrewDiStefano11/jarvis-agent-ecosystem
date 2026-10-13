@@ -1347,6 +1347,202 @@ def test_native_checkpoint_without_audit_acknowledgement_remains_unacknowledged(
     assert not result.journal_checkpoint_acknowledged
 
 
+def test_acknowledged_history_refuses_cleared_checkpoint_claim(editing):
+    app, actor, _, service, request, target, _ = editing
+    record = service.prepare(actor, request)
+    acknowledged = service.acknowledge(actor, request, record)
+    before = history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert before.record == acknowledged and before.journal_checkpoint_acknowledged
+    with service.repository.leases._write() as session:
+        stored = session.get(SourceMutationRow, request.editing_record_id)
+        stored.payload = stored.payload | {"checkpoint_id": None}
+        assert stored.integrity_digest == intent_digest(
+            acknowledged.model_copy(update={"checkpoint_id": None})
+        )
+    with pytest.raises(DomainError) as error:
+        history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert error.value.code == "SOURCE_MUTATION_CHECKPOINT_INVALID"
+    assert (target / "source.py").read_bytes() == b"value = 1\n"
+
+
+def history_position(editing, monkeypatch, position):
+    _, actor, _, service, request, _, _ = editing
+    if position == "prepared":
+        return service.prepare(actor, request)
+    if position == "complete":
+        return service.apply(actor, request)
+    native = service.runtime.handle_authorized
+
+    def interrupted(command, *args, **kwargs):
+        if (
+            command.state_reference.startswith("source-mutation:")
+            and command.checkpoint_metadata.get("pendingIndex") == 0
+            and bool(command.checkpoint_metadata.get("stagingInode")) == (position == "staged")
+        ):
+            raise RuntimeError("unacknowledged journal position")
+        return native(command, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(service.runtime, "handle_authorized", interrupted)
+        with pytest.raises(RuntimeError, match="unacknowledged journal position"):
+            service.apply(actor, request)
+    return service.current(actor, request)[0]
+
+
+@pytest.mark.parametrize("position", ["prepared", "pending"])
+@pytest.mark.parametrize(
+    "field", ["operation_id", "original_approval_id", "created_at", "position"]
+)
+def test_history_unacknowledged_intent_requires_immutable_audit_provenance(
+    editing, monkeypatch, position, field
+):
+    from app.models.source_mutation import ApproveSourceMutation
+
+    app, actor, operator, service, request, target, _ = editing
+    record = history_position(editing, monkeypatch, position)
+    if field == "operation_id":
+        changes = {field: "foreign-operation"}
+    elif field == "original_approval_id":
+        renewed = service.approve(
+            operator,
+            ApproveSourceMutation(
+                editing_record_id=request.editing_record_id,
+                expected_plan_hash=record.plan.plan_hash,
+            ),
+        )
+        assert renewed.approval_id != record.original_approval_id
+        changes = {field: renewed.approval_id}
+    elif field == "created_at":
+        changes = {field: record.created_at - timedelta(seconds=1)}
+    elif position == "prepared":
+        changes = {"state": "editing", "pending_index": 0}
+    else:
+        proposal = service.planning.read(actor, request.editing_record_id)
+        changes = {
+            "completed_count": 1,
+            "pending_index": None,
+            "prefix_digest": digest(
+                [item.model_dump(mode="json") for item in proposal.plan.source_plan.preview]
+            ),
+        }
+    altered = record.model_copy(update=changes)
+    with service.repository.leases._write() as session:
+        stored = session.get(SourceMutationRow, request.editing_record_id)
+        stored.operation_id = altered.operation_id
+        stored.payload = altered.model_dump(mode="json")
+        stored.integrity_digest = intent_digest(altered)
+    with pytest.raises(DomainError) as failure:
+        history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert failure.value.code == "SOURCE_MUTATION_HISTORY_INVALID"
+    assert (target / "source.py").read_bytes() == b"value = 1\n"
+
+
+def test_history_cannot_roll_back_to_an_earlier_audited_position(editing, monkeypatch):
+    app, actor, _, service, request, _, _ = editing
+    prepared = service.prepare(actor, request)
+    pending = history_position(editing, monkeypatch, "pending")
+    assert pending.pending_index == 0
+    with service.repository.leases._write() as session:
+        stored = session.get(SourceMutationRow, request.editing_record_id)
+        stored.payload = prepared.model_dump(mode="json")
+        stored.integrity_digest = intent_digest(prepared)
+    with pytest.raises(DomainError) as failure:
+        history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert failure.value.code == "SOURCE_MUTATION_HISTORY_INVALID"
+
+
+@pytest.mark.parametrize("position", ["prepared", "pending", "staged", "complete"])
+def test_history_accepts_actual_prepared_and_phase_audit_positions(editing, monkeypatch, position):
+    app, actor, _, _, request, _, _ = editing
+    record = history_position(editing, monkeypatch, position)
+    result = history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert result.record == record
+    assert not result.execution_authorized and not result.current_source_measured
+    assert result.journal_checkpoint_acknowledged == (position == "complete")
+
+
+@pytest.mark.parametrize("phase", ["phase_recorded", "checkpoint_acknowledged"])
+def test_history_advance_checkpoint_without_journal_commit_preserves_pending_position(
+    editing, monkeypatch, phase
+):
+    app, actor, _, service, request, target, _ = editing
+    native = service.event
+
+    def interrupted(session, row, principal, record, event_phase, approval_id):
+        if record.state == "editing" and record.completed_count == 1 and event_phase == phase:
+            raise RuntimeError("advance checkpoint before journal commit")
+        return native(session, row, principal, record, event_phase, approval_id)
+
+    monkeypatch.setattr(service, "event", interrupted)
+    with pytest.raises(RuntimeError, match="before journal commit"):
+        service.apply(actor, request)
+    pending = service.current(actor, request)[0]
+    assert (
+        pending.state == "editing" and pending.pending_index == 0 and pending.completed_count == 0
+    )
+    assert any(
+        item.metadata.get("completedCount") == 1
+        for item in service.runtime.checkpoints_authorized(pending.plan.runtime_run_id, actor)
+        if item.state_reference == "source-mutation:" + pending.operation_id
+    )
+    result = history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert result.record == pending and result.record.state != "complete"
+    assert not result.execution_authorized and not result.current_source_measured
+    assert (target / "source.py").read_bytes() == b"value = 2\n"
+
+
+@pytest.mark.parametrize("lookup", ["creation", "mutation"])
+@pytest.mark.parametrize("damage", ["json", "contract"])
+def test_malformed_native_checkpoint_history_has_fixed_refusal(
+    editing, monkeypatch, lookup, damage
+):
+    from app.db.models import AgentRuntimeCheckpointRow
+
+    app, actor, _, service, request, target, _ = editing
+    record = service.acknowledge(actor, request, service.prepare(actor, request))
+    reader = history.MutationHistoryReader(app)
+
+    def corrupt():
+        with service.repository.leases._write() as session:
+            if lookup == "mutation":
+                checkpoint = session.get(
+                    AgentRuntimeCheckpointRow, (record.checkpoint_id, record.plan.runtime_run_id)
+                )
+            else:
+                checkpoint = session.scalar(
+                    select(AgentRuntimeCheckpointRow)
+                    .where(AgentRuntimeCheckpointRow.run_id == record.plan.runtime_run_id)
+                    .order_by(AgentRuntimeCheckpointRow.checkpoint_sequence)
+                )
+            assert checkpoint is not None
+            checkpoint.contract_json = (
+                '{"private-fixture":'
+                if damage == "json"
+                else json.dumps({"private-fixture": "invalid-contract"})
+            )
+
+    if lookup == "creation":
+        corrupt()
+    else:
+        native = reader.service.creation.checkpoint
+
+        def creation_checkpoint(*args, **kwargs):
+            result = native(*args, **kwargs)
+            corrupt()
+            return result
+
+        monkeypatch.setattr(reader.service.creation, "checkpoint", creation_checkpoint)
+    with pytest.raises(DomainError) as failure:
+        reader.read(actor, request.editing_record_id)
+    assert failure.value.code == (
+        "SOURCE_MUTATION_CREATION_CHECKPOINT_INVALID"
+        if lookup == "creation"
+        else "SOURCE_MUTATION_CHECKPOINT_INVALID"
+    )
+    assert "private-fixture" not in str(failure.value) and failure.value.__suppress_context__
+    assert (target / "source.py").read_bytes() == b"value = 1\n"
+
+
 def test_rehashed_foreign_attempt_cannot_replace_historical_provenance(editing):
     app, actor, _, service, request, _, _ = editing
     record = service.prepare(actor, request)
@@ -2303,3 +2499,39 @@ def test_artifact_reader_translates_real_nested_database_read_errors(
         ArtifactManifestReader(app).read(actor, request.editing_record_id)
     assert failure.value.code == "SOURCE_ARTIFACTS_STORAGE_FAILED"
     assert "private" not in str(failure.value) and failure.value.__suppress_context__
+
+
+def test_source_mutation_published_recovery_foreign_stage_never_records_completion(
+    editing, monkeypatch
+):
+    from app.source_mutation import driver as mutation_driver
+
+    _, actor, _, service, request, target, _ = editing
+    native = mutation_driver.rename_pinned
+
+    def interrupted(fd, leaf):
+        native(fd, leaf)
+        if leaf == "source.py":
+            raise RuntimeError("interrupted published source")
+
+    monkeypatch.setattr(mutation_driver, "rename_pinned", interrupted)
+    with pytest.raises(RuntimeError, match="interrupted published source"):
+        service.apply(actor, request)
+    pending = service.current(actor, request)[0]
+    assert pending.state == "editing" and pending.pending_index == 0
+    _, after = mutation_driver.staging_names(pending.operation_id, 0)
+    stage = target / after
+    stage.write_bytes(b"foreign published recovery artifact")
+    monkeypatch.setattr(mutation_driver, "rename_pinned", native)
+    with pytest.raises(DomainError) as failure:
+        service.apply(actor, request)
+    assert failure.value.code == "SOURCE_MUTATION_FOREIGN_ARTIFACT"
+    refused = service.current(actor, request)[0]
+    assert refused == pending
+    assert stage.read_bytes() == b"foreign published recovery artifact"
+    assert (target / "source.py").read_bytes() == b"value = 2\n"
+    assert not any(
+        item.resume_cursor.startswith("complete")
+        for item in service.runtime.checkpoints_authorized(refused.plan.runtime_run_id, actor)
+        if item.state_reference.startswith("source-mutation:")
+    )
