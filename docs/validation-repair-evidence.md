@@ -96,3 +96,8 @@ the verifier, including when equivalent raw model-copy values require revalidati
 Retry consumption counts latest failed run/attempt/gate lineages; multiple sequence
 updates for one attempt do not spend multiple retry slots. Distinct failed attempts
 still exhaust the operator-bounded budget.
+
+Each finding binds the canonical latest receipt from every contributing attempt
+lineage in its supporting evidence, including older attempts that consume retries.
+Latest-result diagnosis remains timestamp/sequence based, while changing prior
+attempt evidence changes the report digest even if the latest failure is identical.

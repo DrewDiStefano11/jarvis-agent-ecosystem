@@ -598,3 +598,52 @@ def test_same_attempt_sequence_updates_do_not_consume_distinct_retries():
     finding = report(values).findings[0]
     assert finding.recommendation == "request_bounded_retry" and finding.retries_remaining == 2
     assert finding.reproduction.command_run_id == "revision-3"
+    assert finding.supporting_receipt_digests == (digest(values[-1].model_dump(mode="json")),)
+
+
+def test_retry_recommendation_binds_all_counted_attempt_evidence():
+    plan = build_execution_plan(state())
+    latest = receipt(
+        plan,
+        runtime_run_id="latest",
+        command_run_id="latest",
+        outcome="failed",
+        exit_code=1,
+        failure_kind="watchdog",
+        diagnostic_codes=("timeout",),
+    )
+    old = [
+        receipt(
+            plan,
+            runtime_run_id="older-" + str(index),
+            command_run_id="older-" + str(index),
+            outcome="failed",
+            exit_code=1,
+            failure_kind="watchdog",
+            diagnostic_codes=("timeout",),
+            started_at=NOW - timedelta(seconds=4),
+            finished_at=NOW - timedelta(seconds=3),
+        )
+        for index in (1, 2)
+    ]
+    alternate = receipt(
+        plan,
+        runtime_run_id="older-1",
+        command_run_id="alternate-1",
+        outcome="failed",
+        exit_code=2,
+        failure_kind="watchdog",
+        diagnostic_codes=("timeout",),
+        started_at=NOW - timedelta(seconds=4),
+        finished_at=NOW - timedelta(seconds=3),
+    )
+    original = report([*old, latest])
+    changed = report([alternate, old[1], latest])
+    finding = original.findings[0]
+    assert finding.recommendation == changed.findings[0].recommendation == "stop_retrying"
+    assert finding.reproduction == changed.findings[0].reproduction
+    assert set(finding.supporting_receipt_digests) == {
+        digest(item.model_dump(mode="json")) for item in [*old, latest]
+    }
+    assert original.report_digest != changed.report_digest
+    assert report([latest, *reversed(old)]) == original
