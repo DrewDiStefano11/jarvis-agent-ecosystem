@@ -156,7 +156,7 @@ def test_interrupted_step_reconciles_uncertain_without_invented_success(journal)
 
 
 def test_measured_journal_all_gates_and_finalization(journal, monkeypatch):
-    _, actor, _, service, workspace_id, request = journal
+    app, actor, _, service, workspace_id, request = journal
     current = service.prepare(actor, workspace_id, request)
     for index, command in enumerate(current.intent.plan.commands):
         reference = "command-" + str(index)
@@ -213,6 +213,45 @@ def test_measured_journal_all_gates_and_finalization(journal, monkeypatch):
     assert service.reconcile(actor, workspace_id, request, final.intent.journal_id) == final
     with pytest.raises(ValueError):
         advance(service, actor, workspace_id, request, final, "finalized")
+    # A coherent finalized journal cannot substitute for the original independent
+    # operator audit. Exercise actual stored approval provenance, not a plan hash echo.
+    from copy import deepcopy
+
+    with app.state.repository.session_factory() as session:
+        original = session.get(AuditEventRow, request.approval_id)
+        original_payload = deepcopy(original.payload)
+        original_task, original_actor, original_kind = (
+            original.task_id,
+            original.actor,
+            original.event_type,
+        )
+    for tamper in ("plan", "workspace", "task", "self_approval", "kind"):
+        with app.state.repository.session_factory.begin() as session:
+            original = session.get(AuditEventRow, request.approval_id)
+            payload = deepcopy(original_payload)
+            if tamper == "plan":
+                payload["payload"]["plan"] = {}
+            elif tamper == "workspace":
+                payload["payload"]["workspaceId"] = "foreign"
+            elif tamper == "task":
+                original.task_id = None
+            elif tamper == "self_approval":
+                original.actor = actor.actor_id
+            else:
+                original.event_type = "foreign"
+            original.payload = payload
+        with pytest.raises(DomainError) as failure:
+            service.assess(actor, workspace_id, final.intent.journal_id, now=datetime.now(UTC))
+        assert failure.value.code == "VALIDATION_APPROVAL_REQUIRED"
+        with app.state.repository.session_factory.begin() as session:
+            original = session.get(AuditEventRow, request.approval_id)
+            original.payload = deepcopy(original_payload)
+            original.task_id, original.actor, original.event_type = (
+                original_task,
+                original_actor,
+                original_kind,
+            )
+    assert service.assess(actor, workspace_id, final.intent.journal_id, now=datetime.now(UTC)).ready
     monkeypatch.setattr(service.runtime, "checkpoints_authorized", lambda *args: [])
     with pytest.raises(DomainError):
         service.assess(actor, workspace_id, final.intent.journal_id, now=datetime.now(UTC))

@@ -522,6 +522,30 @@ class ValidationJournalService:
         with self.repository.sessions() as session:
             row = session.get(DevelopmentWorkspaceRow, workspace_id)
             self.workspace.authorize(actor, row.task_id, session)
+            # Retrieve the original independent operator approval, not a hash
+            # echoed from submitted receipts or even the journal's plan alone.
+            owner = snapshot.intent.owner
+            approval = session.get(AuditEventRow, owner.approval_id)
+            try:
+                approved = approval.payload["payload"]
+                if (
+                    approval.event_type != "development_validation.approved"
+                    or approval.task_id != row.task_id
+                    or approved["workspaceId"] != workspace_id
+                    or owner.task_id != row.task_id
+                    or owner.runtime_run_id != row.runtime_run_id
+                    or approval.actor
+                    in {row.actor_id, self.repository.runtime(session, row.runtime_run_id).agent_id}
+                    or approved["plan"] != snapshot.intent.plan.model_dump(mode="json")
+                ):
+                    raise ValueError("historical approval differs")
+                approved_hash = approved["plan"]["execution_plan_hash"]
+            except (AttributeError, KeyError, TypeError, ValueError):
+                fail(
+                    "VALIDATION_APPROVAL_REQUIRED",
+                    "Original exact operator approval is required.",
+                    403,
+                )
             current_state = self.state_reader(row, session)
         receipts = tuple(step.receipt for step in snapshot.steps if step.receipt is not None)
         return assess_receipts(
@@ -530,5 +554,6 @@ class ValidationJournalService:
             receipts,
             self.verifier,
             now=now,
+            expected_execution_plan_hash=approved_hash,
             max_age_seconds=max_age_seconds,
         )

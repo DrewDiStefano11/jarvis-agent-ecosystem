@@ -71,3 +71,11 @@ Final follow-up validation: 34 focused regressions passed with no-cache Ruff.
 Historical replay checks recorded plan integrity without granting current policy
 authority. Old plans remain inspectable after upgrades; current approval and
 passing assessment continue to reconstruct and require current packaged policy.
+
+Final receipt assessment retrieves the original append-only operator approval
+using the journal owner's original approval ID and verifies event type, task,
+workspace, independent actor and exact plan. Its persisted approved hash is the
+trusted reference passed to receipt assessment; the journal plan alone cannot
+supply approval. Historical read-only assessment does not renew expired authority
+or grant permission for new effects. Explicit renewal still preserves original
+provenance and each write requires a present valid grant.
