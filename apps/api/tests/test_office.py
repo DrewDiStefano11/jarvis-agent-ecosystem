@@ -574,7 +574,7 @@ def test_migration_roundtrip_retains_identity_and_other_domain_data(office):
     with app.state.engine.connect() as connection:
         assert (
             connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "20261012_source_plans"
+            == "20261012_source_mutation"
         )
     assert "office_commands" in inspect(app.state.engine).get_table_names()
     assert repo.snapshot().placements == []
