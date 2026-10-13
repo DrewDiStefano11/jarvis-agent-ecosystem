@@ -39,4 +39,3 @@ Both native checkpoint lookups translate malformed persisted JSON or invalid
 checkpoint contracts into fixed creation/mutation checkpoint refusal codes.
 Checkpoint decoding details never enter public errors. Storage and authorization
 failures retain their separate established refusal behavior.
-
