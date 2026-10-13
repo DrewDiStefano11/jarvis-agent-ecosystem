@@ -12,7 +12,7 @@
   bounded-test authorization. All cloud connections remain disabled.
 - Independent PR review: pending. No paid or credit-consuming review is requested.
 
-The integrated base is `dc63ed220541adfa6ba3fb11fd665e4c4a52370d`
+The original publication base was `dc63ed220541adfa6ba3fb11fd665e4c4a52370d`
 (`origin/main` inspected during finalization). The draft PR records the published
 head and full changed-file list. Raw logs, fixture credentials and temporary
 databases remain in ignored local directories and are not committed.
@@ -116,3 +116,32 @@ unsuitable. No provider has passed these gates.
 For remote CI, the owner must separately establish a hard $0 Actions storage
 boundary before removing the Campaign D branch quarantine. A successful local
 suite or a skipped remote check never substitutes for that evidence.
+
+## Conflict resolution against newer main, 2026-10-13
+
+Merged `5e11d60545006eda9a0f5a77affcb5860e2c3926` into the Campaign D branch
+in an isolated checkout. The shared checkout's unrelated branch and staged work
+were preserved. Resolved both conflicts by retaining main's commit-operator router
+registration and Campaign D's session-backed model router, and assigning both
+the free-capacity and native-artifact test files to the models shard.
+
+Conflict validation: **119 targeted backend tests passed**, including API startup,
+all Campaign D guards, shard integrity and commit-operator OpenAPI/authentication.
+Complete collection contains **3,046 tests**, with every file assigned exactly once.
+Ruff lint/format, migration round-trip and diff whitespace checks passed. Frontend
+typecheck, ESLint, **234 Vitest tests**, production build and office assets passed.
+An initial test invocation lacked its temporary parent directory; setup was
+corrected and the complete targeted selection rerun successfully. No test or
+safety control was disabled. Commands used the existing repository venv with
+isolated temporary databases; the target selection was:
+
+```text
+pytest tests/test_api.py tests/test_free_ai_capacity.py tests/test_backend_ci.py
+  tests/test_git_commit_authorization.py::test_native_preparation_openapi_and_operator_authentication
+  -q --basetemp=../../.local/conflict-tests-final --timeout=300
+```
+
+The earlier full-suite counts above are historical evidence from publication;
+this conflict resolution reran applicable regressions and collection, not the
+entire expanded backend suite. Remote CI remains intentionally skipped, and
+live cloud acceptance and independent review remain pending.

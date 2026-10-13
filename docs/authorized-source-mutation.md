@@ -143,6 +143,14 @@ intent or acknowledging a checkpoint. An unavailable execution platform cannot
 consume the workspace's sole mutation lineage without performing an edit.
 
 Journal progress transitions accept only mutable position fields. Original approval, operation identity, creation time and plan references remain immutable. Every journal read verifies the original independent operator approval against the append-only audit plan and task; expired original approvals remain valid provenance, while live execution requires a current exact-plan approval.
+
+Protected recovery history reports journal checkpoint acknowledgement only when
+the append-only acknowledgement event matches the task, operation, editing record,
+plan hash and exact intent digest. A native checkpoint without that durable audit
+event remains a native-only crash gap, even if mutable journal payload fields
+claim the deterministic checkpoint ID. History reads do not repair or grant
+execution authority.
+
 Published add/modify handles remain pinned against foreign writes and deletion
 through per-file checkpoint acknowledgement. Recovery retains the handle whose
 device/inode matches the claimed staging identity through that acknowledgement;
