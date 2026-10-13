@@ -41,6 +41,8 @@
   "models": [
     "tests/test_development_validation.py",
     "tests/test_validation_evidence.py",
+    "tests/test_validation_journal.py",
+    "tests/test_validation_runner.py",
     "tests/test_validation_repair.py",
     "tests/test_agent_runtime_checkpoints.py",
     "tests/test_agent_runtime_parent_authorization.py",

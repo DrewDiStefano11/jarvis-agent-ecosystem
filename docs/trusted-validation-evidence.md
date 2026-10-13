@@ -43,8 +43,9 @@ not advertised executable capabilities.
 Collector sequence conflicts and latest-result selection are scoped to the
 runtime run, attempt and gate. Independent gates may each start at sequence one;
 command-run identities remain unique across gates within a run and attempt.
-Durable journals additionally require their own globally ordered command stream;
-that stricter journal reducer constraint does not apply to standalone collectors.
+Durable journal entries have a separate global sequence and exact ordered command
+stream. Collector measurement sequence remains gate-local inside those entries;
+it is not the command's plan position or the journal event sequence.
 
 Assessment verifies the packaged policy and receipt authentication, rejects
 replays/conflicting identities, future timestamps, incoherent exits and mismatched
