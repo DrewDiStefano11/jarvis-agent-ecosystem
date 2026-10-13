@@ -394,6 +394,18 @@ def test_native_artifacts_must_match_completed_history(applied, tamper):
     elif tamper == "foreign_private":
         (target / ".jarvis-edit-foreign.before").write_bytes(b"value = 1\n")
     else:
-        (target / ".jarvis-workspace.lock").write_bytes(b"0")
+        lock = target / ".jarvis-workspace.lock"
+        assert lock.read_bytes() == b"0"
+        lock.write_bytes(b"1")
+    before = {
+        path.name: (path.read_bytes(), path.stat().st_ino)
+        for path in target.iterdir()
+        if path.is_file()
+    }
     with pytest.raises(DomainError):
         binding.bind(actor, workspace_id, request)
+    assert before == {
+        path.name: (path.read_bytes(), path.stat().st_ino)
+        for path in target.iterdir()
+        if path.is_file()
+    }
