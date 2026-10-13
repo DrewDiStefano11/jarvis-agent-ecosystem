@@ -64,6 +64,7 @@
     "tests/test_tool_filesystem.py"
   ],
   "system": ["tests/test_git_process.py",
+    "tests/test_git_change_verifier.py",
     "tests/test_self_build_workspaces.py",
     "tests/test_self_build_git_observer.py",
     "tests/test_self_build_git_inspection.py",
@@ -74,6 +75,7 @@
     "tests/test_coordination.py",
     "tests/test_independent_verification.py",
     "tests/test_model_provider_contracts.py",
+    "tests/test_model_tool_calls.py",
     "tests/test_model_router.py",
     "tests/test_planning_http_golden_path.py",
     "tests/test_remote_system_control.py",
