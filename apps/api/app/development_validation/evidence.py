@@ -93,7 +93,7 @@ def assess_receipts(state, plan, receipts, verifier, *, now, max_age_seconds=360
     for receipt in receipts:
         m = verifier.verify(receipt)
         identity = (m.runtime_run_id, m.attempt_id, m.command_run_id)
-        sequence = (m.runtime_run_id, m.attempt_id, m.sequence)
+        sequence = (m.runtime_run_id, m.attempt_id, m.command.gate, m.sequence)
         if identity in seen or sequence in sequences:
             raise ValueError("duplicate execution receipt identity or sequence")
         seen.add(identity)
