@@ -1,7 +1,11 @@
-# Source recovery publication-stage refusal
+# Adversarial coverage for source publication-stage refusal
 
 This safety increment depends explicitly on PR #112 and retains its ancestry. It
 does not depend on the later history, inspection or expected-artifact contracts.
+The core stage-absence guards and pending/completed/deletion regressions are now
+backported to that foundation. This branch retains the additional native-error,
+final pin-boundary, late namespace-insertion and real service recovery coverage,
+without duplicating production changes in its parent-relative diff.
 
 An isolated regression demonstrated that a foreign regular file at the exact
 deterministic `.jarvis-edit-<hash>.after` name could be ignored during recovery.
@@ -30,3 +34,11 @@ lock contracts are unchanged. This changes the existing mutation implementation
 policy digest, so plans and grants from a different deployed policy continue to
 refuse under existing current-policy rules; it does not migrate or refresh their
 authority. No production database or workspace is modified by these tests.
+
+The integrated source-mutation repair retains the publishing handle through file
+acknowledgement and keeps pending staging identity durable when the runtime
+checkpoint or journal acknowledgement is interrupted. The pending published-file
+path still checks publication-stage absence before acknowledging that pinned inode.
+Completed-prefix and final-stage checks remain in place. A foreign same-byte
+destination and a recreated publication stage each refuse independently; neither
+can become completion evidence through recovery.
