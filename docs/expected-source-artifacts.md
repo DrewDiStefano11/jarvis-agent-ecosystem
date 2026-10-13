@@ -18,3 +18,9 @@ The protected artifact reader reports `SOURCE_ARTIFACTS_STORAGE_FAILED` for data
 failures, including failures already translated by the nested history or editing
 plan reader. Other domain errors, such as authorization or lineage refusals, retain
 their original codes. Storage errors suppress private database details.
+
+The protected reader requires acknowledged native completion before deriving a
+manifest. A coherently changed mutable record cannot turn a native-only completion
+crash gap into a completed artifact reference; missing durable acknowledgement
+refuses with `SOURCE_ARTIFACTS_POSITION_INVALID`. Incomplete intents retain
+`SOURCE_ARTIFACTS_INCOMPLETE`.

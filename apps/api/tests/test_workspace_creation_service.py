@@ -1382,6 +1382,32 @@ def test_expected_artifact_manifest_pending_intent_refuses_without_source_effect
     assert not list(target.glob(".jarvis-edit-*"))
 
 
+def test_artifact_reader_refuses_native_only_completion_crash_gap(editing, monkeypatch):
+    from app.source_mutation.artifacts import ArtifactManifestReader
+
+    app, actor, _, service, request, _, _ = editing
+    native = service.event
+
+    def crash_final_ack(session, row, actor, record, phase, approval_id):
+        if phase == "checkpoint_acknowledged" and record.state == "complete":
+            raise RuntimeError("final acknowledgement crash")
+        return native(session, row, actor, record, phase, approval_id)
+
+    monkeypatch.setattr(service, "event", crash_final_ack)
+    with pytest.raises(RuntimeError, match="final acknowledgement"):
+        service.apply(actor, request)
+    record = service.current(actor, request)[0]
+    assert record.state == "finalizing"
+    checkpoint, identifier, _, _ = service.checkpoint(actor, record)
+    assert checkpoint is not None
+    with service.repository.leases._write() as session:
+        stored = session.get(SourceMutationRow, request.editing_record_id)
+        stored.payload = stored.payload | {"state": "complete", "checkpoint_id": identifier}
+    with pytest.raises(DomainError) as failure:
+        ArtifactManifestReader(app).read(actor, request.editing_record_id)
+    assert failure.value.code == "SOURCE_ARTIFACTS_POSITION_INVALID"
+
+
 def test_expected_artifact_manifest_storage_error_does_not_expose_database_details():
     from types import SimpleNamespace
 

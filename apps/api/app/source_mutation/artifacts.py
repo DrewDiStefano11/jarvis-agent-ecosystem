@@ -124,6 +124,10 @@ class ArtifactManifestReader:
     def read(self, actor, editing_record_id):
         try:
             history = self.history.read(actor, editing_record_id)
+            if history.record.state != "complete":
+                refuse("SOURCE_ARTIFACTS_INCOMPLETE")
+            if not history.native_checkpoint_present or not history.journal_checkpoint_acknowledged:
+                refuse("SOURCE_ARTIFACTS_POSITION_INVALID")
             proposal = self.history.service.planning.read(actor, editing_record_id)
             if proposal.record_id != history.record.plan.editing_record_id:
                 refuse("SOURCE_ARTIFACTS_LINEAGE_INVALID")
