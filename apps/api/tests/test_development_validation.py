@@ -1907,3 +1907,349 @@ def test_artifact_manifest_descriptor_count_is_bounded_even_before_verification(
     payload["artifacts"] = [payload["artifacts"][0]] * 129
     with pytest.raises(ValidationError):
         ExpectedArtifactManifest.model_validate(payload)
+
+
+def review_inputs(old="old\n", new="new\n", operation="modify"):
+    before = content(old) if operation != "add" else None
+    after = content(new) if operation != "delete" else None
+    observed = observation(
+        SourceEntry(path="source.py", kind="file" if before else "absent", content=before)
+    )
+    selected = change(
+        "source.py", operation=operation, before=identity(before) if before else None, after=after
+    )
+    return plan_source_changes(intent(observed, selected), observed), observed
+
+
+@pytest.mark.parametrize("operation", ["add", "modify", "delete"])
+def test_source_text_review_is_exact_plan_bound_deterministic_and_not_authority(operation):
+    from app.source_edit_planning.review import preview_source_changes, verify_source_review
+
+    plan, observed = review_inputs(operation=operation)
+    result = preview_source_changes(plan, observed)
+    assert result.source_plan_hash == plan.plan_hash and result.references == plan.references
+    assert result.files[0].operation == operation
+    assert not result.current_source_measured and not result.execution_authorized
+    assert preview_source_changes(plan, observed) == result
+    assert verify_source_review(result, plan, observed) == result
+    assert "old\\n" not in repr(result) and "new\\n" not in repr(result)
+
+
+@pytest.mark.parametrize(
+    "old,new",
+    [
+        ("", "x"),
+        ("x", ""),
+        ("x", "x\n"),
+        ("x\n", "x"),
+        ("a\r\nb\r\n", "a\r\nc\n"),
+        ("a\rb", "a\rc"),
+        ("\n", ""),
+        ("", "\n"),
+        ("\U0001f600\n", "\U0001f601\r\n"),
+        ("a\u2028b\n", "a\u2028c\n"),
+        ("repeat\n" * 200, "repeat\n" * 100 + "change\n" + "repeat\n" * 99),
+        ("same\n" * 7 + "old\n" + "same\n" * 7, "same\n" * 7 + "new\n" + "same\n" * 7),
+    ],
+    ids=[
+        "empty-to-char",
+        "char-to-empty",
+        "append-lf",
+        "remove-lf",
+        "crlf",
+        "lone-cr",
+        "blank-to-empty",
+        "empty-to-blank",
+        "unicode",
+        "unicode-separator",
+        "repeated-lines",
+        "bounded-context",
+    ],
+)
+def test_source_text_review_hunk_reconstructs_exact_utf8_line_endings(old, new):
+    from app.source_edit_planning.review import lines, preview_source_changes
+
+    plan, observed = review_inputs(old, new)
+    item = preview_source_changes(plan, observed).files[0]
+    old_lines, new_lines = lines(old), lines(new)
+    start = item.old_start - 1 if item.old_count else item.old_start
+    removed = tuple(line.text for line in item.lines if line.kind != "add")
+    replacement = tuple(line.text for line in item.lines if line.kind != "remove")
+    assert old_lines[start : start + item.old_count] == removed
+    assert old_lines[:start] + replacement + old_lines[start + item.old_count :] == new_lines
+    assert item.before_final_newline == old.endswith("\n")
+    assert item.after_final_newline == new.endswith("\n")
+    assert "".join(new_lines).encode() == new.encode()
+
+
+@pytest.mark.parametrize("operation", ["add", "delete"])
+def test_source_text_review_preserves_empty_file_presence(operation):
+    from app.source_edit_planning.review import preview_source_changes
+
+    plan, observed = review_inputs("", "", operation)
+    item = preview_source_changes(plan, observed).files[0]
+    assert (item.before is None) == (operation == "add")
+    assert (item.after is None) == (operation == "delete")
+    assert item.lines == () and item.old_count == item.new_count == 0
+
+
+def test_source_text_review_mode_only_change_is_visible_without_invented_text():
+    from app.source_edit_planning.review import preview_source_changes
+
+    before, after = content("same\n"), content("same\n", "100755")
+    observed = observation(SourceEntry(path="source.py", kind="file", content=before))
+    plan = plan_source_changes(
+        intent(observed, change("source.py", before=identity(before), after=after)), observed
+    )
+    item = preview_source_changes(plan, observed).files[0]
+    assert item.before.mode == "100644" and item.after.mode == "100755"
+    assert all(line.kind == "context" for line in item.lines)
+
+
+def test_source_text_review_file_line_limit_refuses_before_hunk_construction(monkeypatch):
+    from app.source_edit_planning import review
+
+    plan, observed = review_inputs("old\n", "\n" * 4097)
+    monkeypatch.setattr(
+        review, "file_review", lambda *args: pytest.fail("over-limit hunk construction")
+    )
+    with pytest.raises(DomainError) as failure:
+        review.preview_source_changes(plan, observed)
+    assert failure.value.code == "SOURCE_REVIEW_FILE_LINE_LIMIT"
+
+
+def test_source_text_review_total_line_limit_refuses_before_hunk_construction(monkeypatch):
+    from app.source_edit_planning import review
+
+    plan, observed = review_inputs("old\n" * 4096, "new\n" * 4096)
+    monkeypatch.setattr(review, "MAX_REVIEW_LINES", 8191)
+    monkeypatch.setattr(
+        review, "file_review", lambda *args: pytest.fail("over-limit hunk construction")
+    )
+    with pytest.raises(DomainError) as failure:
+        review.preview_source_changes(plan, observed)
+    assert failure.value.code == "SOURCE_REVIEW_TOTAL_LINE_LIMIT"
+
+
+def test_source_text_review_serialized_bound_refuses_without_truncation(monkeypatch):
+    from app.source_edit_planning import review
+
+    plan, observed = review_inputs()
+    monkeypatch.setattr(review, "MAX_REVIEW_BYTES", 1)
+    with pytest.raises(DomainError) as failure:
+        review.preview_source_changes(plan, observed)
+    assert failure.value.code == "SOURCE_REVIEW_METADATA_LIMIT"
+
+
+@pytest.mark.parametrize("flag", ["execution_authorized", "current_source_measured"])
+def test_source_text_review_cannot_be_coerced_into_measured_execution_grant(flag):
+    from app.source_edit_planning.review import preview_source_changes, verify_source_review
+
+    plan, observed = review_inputs()
+    result = preview_source_changes(plan, observed).model_copy(update={flag: True})
+    with pytest.raises(DomainError) as failure:
+        verify_source_review(result, plan, observed)
+    assert failure.value.code == "SOURCE_REVIEW_INPUT_INVALID"
+
+
+def test_source_text_review_refuses_coherently_rehashed_text_substitution():
+    from app.source_edit_planning.review import preview_source_changes, verify_source_review
+
+    plan, observed = review_inputs()
+    result = preview_source_changes(plan, observed)
+    item = result.files[0]
+    replaced = item.lines[-1].model_copy(update={"text": "private fake text\n"})
+    item = item.model_copy(update={"lines": (*item.lines[:-1], replaced)})
+    changed = result.model_copy(update={"files": (item,)})
+    changed = changed.model_copy(
+        update={
+            "review_fingerprint": digest(
+                changed.model_dump(mode="json", exclude={"review_fingerprint"})
+            )
+        }
+    )
+    with pytest.raises(DomainError) as failure:
+        verify_source_review(changed, plan, observed)
+    assert failure.value.code == "SOURCE_REVIEW_CHANGED"
+    assert "private fake text" not in str(failure.value)
+
+
+def test_source_text_review_is_pure_after_import(monkeypatch):
+    from pathlib import Path
+
+    from app.source_edit_planning import review
+
+    plan, observed = review_inputs()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("pure review cannot access filesystem")
+
+    monkeypatch.setattr(Path, "read_text", forbidden)
+    assert review.preview_source_changes(plan, observed).files
+
+
+def test_source_text_review_protected_reader_uses_persisted_hash_and_has_no_events(
+    source_planning_prepared,
+):
+    from app.source_edit_planning.review import SourceEditingReviewReader
+
+    app, actor, planning, request, observed, original = source_planning_prepared
+    record = planning.persist(actor, request, observed, original)
+    before = count_events(app)
+    result = SourceEditingReviewReader(app).read(actor, record.record_id)
+    assert (
+        result.editing_record_id == record.record_id
+        and result.editing_plan_hash == record.plan.plan_hash
+    )
+    assert result.review.files[0].lines[0].text == "unpublished_code_payload\n"
+    assert not result.execution_authorized and not result.review.current_source_measured
+    after = count_events(app)
+    assert (
+        before[0] == after[0]
+        and len(before[1]) == len(after[1])
+        and len(before[2]) == len(after[2])
+    )
+
+
+def test_source_text_review_reader_storage_failures_hide_source_details():
+    from types import SimpleNamespace
+
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from app.source_edit_planning.review import SourceEditingReviewReader
+
+    def failed(*args):
+        raise SQLAlchemyError("private source payload")
+
+    reader = SourceEditingReviewReader.__new__(SourceEditingReviewReader)
+    reader.planning = SimpleNamespace(read=failed)
+    with pytest.raises(DomainError) as failure:
+        reader.read(None, "0" * 64)
+    assert failure.value.code == "SOURCE_REVIEW_STORAGE_FAILED"
+    assert "private source payload" not in str(failure.value) and failure.value.__suppress_context__
+
+
+@pytest.mark.parametrize(
+    "old,new", [("same\n" * 10, "same\n" * 10 + "tail"), ("same\n" * 10 + "tail", "same\n" * 10)]
+)
+def test_source_text_review_eof_range_keeps_only_bounded_context(old, new):
+    from app.source_edit_planning.review import lines, preview_source_changes
+
+    plan, observed = review_inputs(old, new)
+    item = preview_source_changes(plan, observed).files[0]
+    assert sum(line.kind == "context" for line in item.lines) == 3
+    assert item.old_start == item.new_start == 8
+    original = lines(old)
+    replacement = tuple(line.text for line in item.lines if line.kind != "remove")
+    assert original[:7] + replacement + original[7 + item.old_count :] == lines(new)
+
+
+@pytest.mark.parametrize("count", [2, 3])
+def test_source_text_review_multi_file_aggregate_is_checked_before_any_hunks(monkeypatch, count):
+    from app.source_edit_planning import review
+
+    before, after = content("old\n" * 2048), content("new\n" * 2048)
+    entries = [
+        SourceEntry(path=f"file{index}.py", kind="file", content=before) for index in range(count)
+    ]
+    observed = observation(*entries)
+    changes = [change(entry.path, before=identity(before), after=after) for entry in entries]
+    plan = plan_source_changes(intent(observed, *changes), observed)
+    if count == 2:
+        result = review.preview_source_changes(plan, observed)
+        assert sum(item.before_line_count + item.after_line_count for item in result.files) == 8192
+    else:
+        monkeypatch.setattr(
+            review, "file_review", lambda *args: pytest.fail("over-limit hunk construction")
+        )
+        with pytest.raises(DomainError) as failure:
+            review.preview_source_changes(plan, observed)
+        assert failure.value.code == "SOURCE_REVIEW_TOTAL_LINE_LIMIT"
+
+
+def test_source_text_review_maximum_file_count_is_stably_ordered():
+    from app.source_edit_planning.review import preview_source_changes
+
+    before, after = content("old"), content("new")
+    entries = [
+        SourceEntry(path=f"file{index:02}.py", kind="file", content=before) for index in range(64)
+    ]
+    observed = observation(*reversed(entries))
+    plan = plan_source_changes(
+        intent(
+            observed,
+            *(
+                change(entry.path, before=identity(before), after=after)
+                for entry in reversed(entries)
+            ),
+        ),
+        observed,
+    )
+    result = preview_source_changes(plan, observed)
+    assert len(result.files) == 64
+    assert [item.path for item in result.files] == sorted(item.path for item in result.files)
+    assert preview_source_changes(plan, observed) == result
+
+
+def test_source_text_review_reader_requires_workspace_permission_even_with_task_read(
+    source_planning_prepared, monkeypatch
+):
+    from types import SimpleNamespace
+
+    from app.source_edit_planning.review import SourceEditingReviewReader
+
+    app, actor, planning, request, observed, original = source_planning_prepared
+    record = planning.persist(actor, request, observed, original)
+    native = planning.workspace.identity.check_permission_resource_access
+
+    def denied(actor_id, permission_key, *args, **kwargs):
+        if permission_key == "self_build.workspace":
+            return SimpleNamespace(allowed=False)
+        return native(actor_id, permission_key, *args, **kwargs)
+
+    monkeypatch.setattr(planning.workspace.identity, "check_permission_resource_access", denied)
+    with pytest.raises(DomainError) as failure:
+        SourceEditingReviewReader(app).read(actor, record.record_id)
+    assert failure.value.code == "SOURCE_EDIT_PERMISSION_DENIED"
+    assert "unpublished_code_payload" not in str(failure.value)
+
+
+def test_source_text_review_reader_survives_stop_and_abandonment_without_authority(
+    source_planning_prepared,
+):
+    from app.db.models import DevelopmentWorkspaceRow, SystemStateRow
+    from app.source_edit_planning.review import SourceEditingReviewReader
+
+    app, actor, planning, request, observed, original = source_planning_prepared
+    record = planning.persist(actor, request, observed, original)
+    reader = SourceEditingReviewReader(app)
+    expected = reader.read(actor, record.record_id)
+    with app.state.repository.session_factory() as session:
+        session.get(SystemStateRow, 1).emergency_stop = True
+        session.get(DevelopmentWorkspaceRow, request.workspace_id).state = "abandoned"
+        session.commit()
+    assert reader.read(actor, record.record_id) == expected
+    assert not expected.execution_authorized and not expected.review.current_source_measured
+
+
+@pytest.mark.parametrize("target", ["plan", "observation"])
+def test_source_text_review_refuses_substituted_inputs_without_echoing_code(target):
+    from app.source_edit_planning.review import preview_source_changes
+
+    plan, observed = review_inputs()
+    if target == "plan":
+        selected = plan.changes[0].model_copy(
+            update={"after": content("private substituted code\n")}
+        )
+        plan = plan.model_copy(update={"changes": (selected,)})
+    else:
+        entry = observed.entries[0].model_copy(
+            update={"content": content("private substituted code\n")}
+        )
+        observed = observed.model_copy(update={"entries": (entry,)})
+    with pytest.raises(DomainError) as failure:
+        preview_source_changes(plan, observed)
+    assert failure.value.code == "SOURCE_REVIEW_INPUT_INVALID"
+    assert (
+        "private substituted code" not in str(failure.value) and failure.value.__suppress_context__
+    )

@@ -40,6 +40,7 @@
   ],
   "models": [
     "tests/test_development_validation.py",
+    "tests/test_validation_evidence.py",
     "tests/test_agent_runtime_checkpoints.py",
     "tests/test_agent_runtime_parent_authorization.py",
     "tests/test_agent_runtime_recovery.py",
@@ -62,6 +63,7 @@
     "tests/test_tool_filesystem.py"
   ],
   "system": ["tests/test_git_process.py",
+    "tests/test_git_change_verifier.py",
     "tests/test_self_build_workspaces.py",
     "tests/test_self_build_git_observer.py",
     "tests/test_self_build_git_inspection.py",
