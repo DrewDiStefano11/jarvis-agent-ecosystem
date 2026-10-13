@@ -172,3 +172,9 @@ collection-union check are pending. Full collection contains 2,768 cases. Five
 focused journal-lineage, missing-current-result and retained retry-budget
 regressions passed. The local commit does not claim the final shard has passed
 and does not enable execution or publication.
+
+Subsequent result: that system shard completed with 986 passes and one skip,
+bringing the integrated baseline total to 2,765 passes and three skips across
+2,768 collected cases. The portable isolation contract/collector milestone is
+documented in `validation-isolation-provisioning.md`; its focused local tests do
+not prove real isolated execution.
