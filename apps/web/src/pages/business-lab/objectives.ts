@@ -5,7 +5,7 @@ export type ObjectiveLane = (typeof OBJECTIVE_LANES)[number]
 export type ObjectiveSort = 'updated-desc' | 'updated-asc' | 'title'
 
 export const LANE_COPY: Record<ObjectiveLane, { title: string; detail: string }> = {
-  queued: { title: 'Queued', detail: 'Saved objectives. Planning has not started.' },
+  queued: { title: 'Queued', detail: 'Recorded as queued. Inspect history for earlier planning or execution.' },
   planning: { title: 'Planning', detail: 'Assigned or being planned. This status does not authorize execution.' },
   execution: { title: 'Work in progress or waiting', detail: 'Recorded as in progress, waiting, paused, or under review. This grouping does not establish approval or active execution.' },
   completed: { title: 'Completed', detail: 'Recorded as finished.' },

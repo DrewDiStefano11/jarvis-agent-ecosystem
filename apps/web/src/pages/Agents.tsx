@@ -96,7 +96,7 @@ export function Agents() {
       <div className="filters demo-toolbar">
         <label>Find a demonstration agent<input value={query} onChange={event => setQuery(event.target.value)} placeholder="Name, role, or description" autoComplete="off" /></label>
         <label>Recorded status<select aria-label="Demonstration status" value={status} onChange={event => setStatus(event.target.value)}><option value="">All statuses</option>{statuses.map(item => <option key={item} value={item}>{item.replaceAll('_', ' ')}</option>)}</select></label>
-        <label>Department<select aria-label="Demonstration department" value={departmentId} onChange={event => setDepartmentId(event.target.value)}><option value="">All departments</option>{departments.map(department => <option key={department.id} value={department.id}>{department.name}</option>)}</select></label>
+        <label>Department<select aria-label="Demonstration department" value={departmentId} onChange={event => setDepartmentId(event.target.value)}><option value="">All departments</option>{departmentId && !departments.some(department => department.id === departmentId) && <option value={departmentId}>Selected department (not in snapshot)</option>}{departments.map(department => <option key={department.id} value={department.id}>{department.name}</option>)}</select></label>
         <label>Record<select aria-label="Demonstration record" value={kind} onChange={event => setKind(event.target.value as DemonstrationKind)}><option value="">Permanent and temporary</option><option value="permanent">Permanent demonstration</option><option value="temporary">Temporary demonstration</option></select></label>
       </div>
       <p className="demo-meta" aria-live="polite">
@@ -111,7 +111,7 @@ export function Agents() {
         return <article className="agent-card demo-card" key={agent.id} aria-label={`${agent.name} demonstration`}>
           <button className="card-hit" type="button" onClick={() => selectAgent(agent.id)} aria-label={`Open ${agent.name}`} />
           <div className="agent-heading"><span className="avatar large" aria-hidden="true">{agent.name[0] ?? '?'}</span><div><h2>{agent.name}</h2><p>{agent.role}</p></div><Status value={agent.status} /></div>
-          <p>{department} Â· {agent.isTemporary ? 'Temporary' : 'Permanent'} demonstration Â· not a runtime identity</p>
+          <p>{department} · {agent.isTemporary ? 'Temporary' : 'Permanent'} demonstration · not a runtime identity</p>
           {agent.description && <p>{agent.description}</p>}
           <p className="demo-facts"><span>{agent.capabilities.length ? agent.capabilities.join(', ') : 'No capabilities recorded'}</span></p>
           <Progress value={agent.progress} label="Simulated progress" />
