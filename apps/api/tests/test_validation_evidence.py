@@ -77,6 +77,7 @@ def assess(plan, values, **kwargs):
         values,
         ReceiptVerifier({("fixture", "key-1"): KEY}),
         now=NOW,
+        expected_execution_plan_hash=plan.execution_plan_hash,
         **kwargs,
     )
 
@@ -98,6 +99,90 @@ def test_independently_numbered_gate_streams_can_complete_publication():
     plan = build_execution_plan(state(), boundary="publication")
     values = [receipt(plan, command, sequence=1) for command in plan.commands]
     assert assess(plan, values).ready
+
+
+def test_unapproved_reduced_browser_plan_cannot_authorize_receipt_assessment():
+    approved = build_execution_plan(state(), boundary="publication", browser_required=True)
+    reduced = build_execution_plan(state(), boundary="publication", browser_required=False)
+    values = [receipt(reduced, command, sequence=1) for command in reduced.commands]
+    with pytest.raises(ValueError, match="approved execution plan"):
+        assess_receipts(
+            state(),
+            reduced,
+            values,
+            ReceiptVerifier({("fixture", "key-1"): KEY}),
+            now=NOW,
+            expected_execution_plan_hash=approved.execution_plan_hash,
+        )
+
+
+def test_unapproved_narrow_test_mapping_and_boundary_are_refused():
+    backend_state = state().model_copy(
+        update={
+            "changes": (
+                FileChange(
+                    path="apps/api/app/services/example.py",
+                    before_hash=None,
+                    before_mode=None,
+                    after_hash="c" * 64,
+                    after_mode="100644",
+                ),
+            )
+        }
+    )
+    approved = build_execution_plan(
+        backend_state,
+        affected_backend_tests=("apps/api/tests/test_api.py", "apps/api/tests/test_runtime.py"),
+    )
+    reduced = build_execution_plan(
+        backend_state, affected_backend_tests=("apps/api/tests/test_api.py",)
+    )
+    publication = build_execution_plan(backend_state, boundary="publication")
+    for original, candidate in ((approved, reduced), (publication, reduced)):
+        with pytest.raises(ValueError, match="approved execution plan"):
+            assess_receipts(
+                backend_state,
+                candidate,
+                [],
+                ReceiptVerifier({}),
+                now=NOW,
+                expected_execution_plan_hash=original.execution_plan_hash,
+            )
+
+
+def test_receipt_assessment_requires_separate_approval_reference():
+    plan = build_execution_plan(state())
+    with pytest.raises(TypeError, match="expected_execution_plan_hash"):
+        assess_receipts(state(), plan, [receipt(plan)], ReceiptVerifier({}), now=NOW)
+
+
+def test_approved_browser_scope_assesses_only_after_all_required_gates():
+    plan = build_execution_plan(state(), boundary="publication", browser_required=True)
+    values = [receipt(plan, command, sequence=1) for command in plan.commands]
+    assert assess(plan, values).ready
+    assert not assess(
+        plan, [r for r in values if r.measurement.command.gate != "browser_acceptance"]
+    ).ready
+
+
+@pytest.mark.parametrize("bound", ["timeout", "memory"])
+def test_zero_exit_with_measured_policy_overrun_is_a_recordable_failure(bound):
+    plan = build_execution_plan(state())
+    command = plan.commands[0]
+    duration = command.timeout_seconds * 1000 + 1 if bound == "timeout" else 1000
+    signed = receipt(
+        plan,
+        outcome="failed",
+        exit_code=0,
+        failure_kind="watchdog",
+        started_at=NOW - timedelta(milliseconds=duration),
+        finished_at=NOW,
+        resources=ResourceMeasurements(
+            wall_time_ms=duration,
+            peak_memory_bytes=command.memory_limit_bytes + 1 if bound == "memory" else None,
+        ),
+    )
+    assert assess(plan, [signed]).failed == (command.gate,)
 
 
 def test_same_gate_sequence_conflict_and_cross_gate_command_replay_are_rejected():
@@ -132,7 +217,14 @@ def test_model_copy_forgery_untrusted_collector_and_revocation():
         with pytest.raises(ValueError):
             assess(plan, [forged])
     with pytest.raises(ValueError):
-        assess_receipts(state(), plan, [signed], ReceiptVerifier({}), now=NOW)
+        assess_receipts(
+            state(),
+            plan,
+            [signed],
+            ReceiptVerifier({}),
+            now=NOW,
+            expected_execution_plan_hash=plan.execution_plan_hash,
+        )
 
 
 def test_expired_and_future_receipts():
@@ -190,7 +282,12 @@ def test_source_changes_require_new_plan():
     )
     with pytest.raises(ValueError):
         assess_receipts(
-            changed, plan, [receipt(plan)], ReceiptVerifier({("fixture", "key-1"): KEY}), now=NOW
+            changed,
+            plan,
+            [receipt(plan)],
+            ReceiptVerifier({("fixture", "key-1"): KEY}),
+            now=NOW,
+            expected_execution_plan_hash=plan.execution_plan_hash,
         )
     with pytest.raises(ValueError):
         assess(build_execution_plan(changed), [receipt(plan)])
@@ -314,7 +411,14 @@ def test_receipt_bounds_and_trusted_clock_configuration():
     with pytest.raises(ValueError):
         assess(plan, [], max_age_seconds=0)
     with pytest.raises(ValueError):
-        assess_receipts(state(), plan, [], ReceiptVerifier({}), now=NOW.replace(tzinfo=None))
+        assess_receipts(
+            state(),
+            plan,
+            [],
+            ReceiptVerifier({}),
+            now=NOW.replace(tzinfo=None),
+            expected_execution_plan_hash=plan.execution_plan_hash,
+        )
 
 
 def test_backend_full_suite_budget_is_bounded_and_matches_measured_baseline():

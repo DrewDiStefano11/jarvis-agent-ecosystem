@@ -17,6 +17,7 @@ from app.models.validation_execution import ExecutionPlan, SignedReceipt
 
 
 def verify_plan(plan):
+    # Structural reconstruction is not approval of candidate derivation inputs.
     plan = ExecutionPlan.model_validate(plan.model_dump(mode="json"))
     expected = plan_validation(
         plan.code_state,
@@ -71,10 +72,15 @@ class ReceiptVerifier:
         return receipt.measurement
 
 
-def assess_receipts(state, plan, receipts, verifier, *, now, max_age_seconds=3600):
+def assess_receipts(
+    state, plan, receipts, verifier, *, now, expected_execution_plan_hash, max_age_seconds=3600
+):
     """Exact-state assessment only; invalid provenance fails the entire assessment.
 
-    Caller supplies trusted clock and collector configuration. Expired receipts
+    Caller supplies a separately trusted host/operator-approved plan hash, clock
+    and collector configuration. Never copy the expected hash from candidate
+    evidence or model text. Structural plan validation alone grants no authority.
+    Expired receipts
     project as unmeasured; interruption/cancellation never become a successful exit.
     Replay and conflicting command identities are rejected before planner selection.
     """
@@ -83,6 +89,8 @@ def assess_receipts(state, plan, receipts, verifier, *, now, max_age_seconds=360
     if type(max_age_seconds) is not int or not 1 <= max_age_seconds <= 86400:
         raise ValueError("invalid evidence lifetime")
     plan = verify_plan(plan)
+    if plan.execution_plan_hash != expected_execution_plan_hash:
+        raise ValueError("receipts require the independently approved execution plan")
     receipts = tuple(islice(receipts, 513))
     if len(receipts) > 512:
         raise ValueError("validation receipt bound exceeded")
