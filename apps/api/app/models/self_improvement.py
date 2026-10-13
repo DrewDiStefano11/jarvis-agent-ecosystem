@@ -20,6 +20,7 @@ SourceKind = Literal[
     "runtime_history",
     "runtime_doctor",
     "ci_run",
+    "validation_execution",
 ]
 Category = Literal[
     "reliability", "model_role", "planning", "execution", "system_runtime", "efficiency"
