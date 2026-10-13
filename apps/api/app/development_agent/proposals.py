@@ -112,7 +112,16 @@ class DevelopmentProposalService:
         self.plans = SourceEditingPlanService(app)
 
     def persist(
-        self, actor, workspace_id, authority, selection, command_id, proposal, *, allow_delete=False
+        self,
+        actor,
+        workspace_id,
+        authority,
+        selection,
+        command_id,
+        proposal,
+        *,
+        allow_delete=False,
+        commit_guard=None,
     ):
         # Re-measure after inference. A model's before hash is never native evidence.
         def finalize(context, guard):
@@ -125,6 +134,12 @@ class DevelopmentProposalService:
                 )
             intent = compile_proposal(proposal, context, references, allow_delete=allow_delete)
             guard()
+
+            def final_commit(session):
+                guard.in_transaction(session)
+                if commit_guard is not None:
+                    commit_guard(session)
+
             return self.plans.persist(
                 actor,
                 PersistEditingPlanRequest(
@@ -136,6 +151,7 @@ class DevelopmentProposalService:
                 ),
                 mutation_observation(context, (change.path for change in intent.changes)),
                 context.code_state,
+                commit_guard=final_commit,
             )
 
         return self.reader.inspect(

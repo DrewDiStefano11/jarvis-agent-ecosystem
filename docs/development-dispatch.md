@@ -1,8 +1,9 @@
 # Durable development admission and dispatch
 
-This milestone is explicitly stacked on Campaign A PR #130 (36cbd0f), which is
-stacked on #128. Origin/main is still dc63ed2; no unmerged source-history,
-validation runner or publication implementation has been imported.
+The execution milestone is stacked on Campaign A PR #133, #130 and #128.
+Origin/main 5e11d60 supplies merged source history/recovery, native artifact
+inspection, applied-source provenance and Git commit preparation. No private
+Campaign B runner or Campaign C publication implementation is imported.
 
 DevelopmentDispatchService is an internal application service. It creates no
 scheduler, HTTP route, model tool, provider traffic or filesystem mutation.
@@ -69,7 +70,9 @@ automatically. Reservation counts and output allowances are never refunded.
 
 The response path preserves normalized provider identity and complete usage,
 requires matching task/request/context/model and no model tool requests, and
-remeasures original source before commit. It records known provider evidence
+preserves the known receipt against its original protected request/context.
+Current native authority and deadline are rechecked at receipt commit; current
+source is independently remeasured when compiling a source plan. It records known provider evidence
 before source-plan interpretation. A schema-valid proposal with an incorrect
 before digest can therefore be repaired within the same root allowance; it does
 not become an uncertain physical call and does not gain source authority.
@@ -84,33 +87,51 @@ Late response commits recheck current native permission, operator, lease, runtim
 stop and elapsed budget. A restart must restore the same trusted operator
 configuration and pinned Git policy; those are not model-authored evidence.
 
-## Remaining Campaign A work
+## Execution, source approval and handoff
 
-A production dispatcher must consume fresh reservations exactly once, wire the
-separate opt-in provider/router, renew/cancel the native lease while waiting,
-persist sanitized terminal failure evidence and refuse uncertain recovery.
-The development workflow must then persist native source plans from durable
-responses, expose operator admission/mutation review, create validated task
-iterations and hand off completed mutation checkpoints and exact source state.
-Repeated source mutation requires the authoritative source-history prerequisite
-or explicitly authorized fresh workspace lineage. Real configured-model coding
-acceptance has not run. Fixture responses prove recovery boundaries only.
+DevelopmentExecutor consumes only fresh reservations, monitors/renews the original
+native lease, cancels its single provider operation on deadline/stop/cancellation,
+and persists sanitized failure categories without refunding reservations.
+Unknown outcomes block subsequent calls. Exact stored request bytes are retained;
+the outer execution deadline may shorten their timeout, never alter the request.
 
-Tests cover native admission independence, budget reuse across changed contexts,
-exact response/restart replay, commit/checkpoint crash gaps, uncertain dispatch
-refusal, revoked permission/emergency stop, original lease/deadline fences,
-projection tampering, context security and empty/populated migration behavior.
-Local verification: the development/context/navigation/provider package passes
-66 cases; the migration/persistence/context-security package passes 61 cases.
-A final nine-case run verifies the deadline at both reservation and response
-commit, missing admission checkpoint refusal and the context/migration package
-after the last hardening changes. Ruff lint/format, whitespace checks, frontend
-typecheck/ESLint/234 Vitest tests/build and exact CI assignment of all 2,818
-collected tests pass. Native Git fixture paths use a short isolated temp root;
-a longer ignored-venv path caused checkout refusal before any development ledger
-operation. The tests restore trusted native Git/operator configuration during
-application restart. No model inference has run.
+Known responses compile into native source-edit plans under a deterministic
+command identity. Final source-plan commits recheck native source pins, root
+budget, original response, configuration and authority in the same transaction.
+A crash between source-plan commit and binding reuses the protected native plan.
+Reservation, receipt, terminal failure and editing-binding checkpoint gaps recover
+without recalling a provider or rereading original source after mutation.
 
-The service is instantiated in app.state alongside the existing context/proposal
-services. Construction opens no provider connection and grants no execution
-capability; public admission/review and production dispatch are still pending.
+Model output never approves a mutation. `apply_approved` binds the recorded plan,
+original worker/lease and explicit native mutation approval. Native ownership,
+source state, effect journal/recovery, emergency stop and transaction fences remain
+authoritative. Recorded iteration status is distinct from fresh source evidence.
+
+`handoff` composes the merged MutationHistoryReader and MutationInspector. It
+requires acknowledged completed mutation history and an actual matching native
+artifact measurement, checks exact expected CodeState, and returns a versioned
+DevelopmentHandoff with requested validation. Validation passed, publication ready
+and execution authorized are all false. Campaign B's real isolated runner remains
+a separate requirement. No mocked command output becomes execution evidence.
+
+## Activation and remaining work
+
+Production dispatch is quarantined regardless of configuration. The factory
+constructs no router and reads no API key; the production executor refuses even
+an enabled injected router. Tests use a test-only subclass with deterministic
+MockTransport. Preferred future integration is Campaign D's native subscription-
+authenticated Codex app-server, contingent on independent included-only usage,
+purchased-credit exclusion and recharge safeguards. No live inference has run.
+
+Current bounded repair supports fresh proposals after known-response source
+conflicts within the original task budget. A new command consumes the next slot;
+replays and failures never reset that root. Repeated approved source effects still
+require a separately reviewed correction baseline/workspace lineage, rather than
+weakening the native one-mutation-per-workspace invariant. Operator-facing task
+admission/review orchestration and that correction lineage remain Campaign A work.
+Real coding acceptance remains separately gated and unperformed.
+
+Local deterministic tests exercise real native multi-file mutation, restart/replay,
+artifact handoff, source conflict repair, sanitized failure, cancellation/stop,
+disabled production dispatch and protected checkpoint crash recovery. These tests
+prove implementation boundaries, not real coding quality or independent validation.

@@ -381,7 +381,6 @@ def test_budget_deadline_is_rechecked_at_commit_and_missing_root_checkpoint_refu
     _, actor, _, authority, _, _, _, context = development
     service, root = admit(development)
     import app.development_agent.dispatch as dispatch
-    from app.development_agent.context import ContextCommitGuard
 
     original_datetime = dispatch.datetime
     original_builder = dispatch.request_builder.build_request
@@ -425,13 +424,15 @@ def test_budget_deadline_is_rechecked_at_commit_and_missing_root_checkpoint_refu
     assert error.value.code == "DEVELOPMENT_CHECKPOINT_REQUIRED"
     monkeypatch.setattr(service.runtime, "checkpoints_authorized", checkpoints)
 
-    original_guard = ContextCommitGuard.in_transaction
+    original_event = service.creation.git.event
 
-    def delayed_guard(guard, session):
-        original_guard(guard, session)
-        monkeypatch.setattr(dispatch, "datetime", FutureDateTime)
+    def delayed_event(session, row, principal, event_type, payload):
+        event = original_event(session, row, principal, event_type, payload)
+        if event_type == "development.dispatch.received":
+            monkeypatch.setattr(dispatch, "datetime", FutureDateTime)
+        return event
 
-    monkeypatch.setattr(ContextCommitGuard, "in_transaction", delayed_guard)
+    monkeypatch.setattr(service.creation.git, "event", delayed_event)
     with pytest.raises(DomainError) as error:
         service.receive(
             actor, context.workspace_id, authority, record.reservation.dispatch_id, result(record)

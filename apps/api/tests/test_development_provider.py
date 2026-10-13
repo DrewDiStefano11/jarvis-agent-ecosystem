@@ -326,25 +326,26 @@ async def test_factory_is_separate_disabled_and_side_effect_free(monkeypatch):
     enabled = DevelopmentProviderSettings(
         enabled=True, provider="openai", model="coding-model", OPENAI_API_KEY=KEY, _env_file=None
     )
-    router = build_development_router(enabled, existing)
+    assert build_development_router(enabled, existing) is None
     assert existing.registry.list() == []
-    engine = router.registry.get("openai-development")
-    assert (await engine.health_check()).status.value == "configuration_only"
     requirements = development_routing(enabled)
-    assert requirements.allow_remote and not requirements.allow_fallback
+    assert not requirements.allow_remote and not requirements.allow_fallback
+    assert "openai_api_key" not in DevelopmentProviderSettings.model_fields
     assert KEY not in repr(enabled) and KEY not in enabled.model_dump_json()
 
 
-def test_enabled_configuration_requires_explicit_model_and_independent_key(monkeypatch):
+def test_configuration_requires_explicit_model_but_never_loads_api_key(monkeypatch):
     from pydantic import ValidationError
 
     from app.development_agent.config import DevelopmentProviderSettings
 
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.delenv("JARVIS_DEVELOPMENT_OPENAI_API_KEY", raising=False)
-    with pytest.raises(ValidationError):
+    assert (
         DevelopmentProviderSettings(
-            enabled=True, provider="openai", model="coding-model", _env_file=None
-        )
+            enabled=True, provider="codex_app_server", model="coding-model", _env_file=None
+        ).provider
+        == "codex_app_server"
+    )
     with pytest.raises(ValidationError):
         DevelopmentProviderSettings(enabled=True, provider="local", model="", _env_file=None)

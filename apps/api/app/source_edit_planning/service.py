@@ -108,15 +108,17 @@ class SourceEditingPlanService:
         except (ValueError, TypeError, AttributeError, DomainError):
             refuse("SOURCE_EDIT_RECORD_INVALID")
 
-    def persist(self, actor, request, observation, original_code_state):
+    def persist(self, actor, request, observation, original_code_state, *, commit_guard=None):
         try:
-            return self._persist(actor, request, observation, original_code_state)
+            return self._persist(
+                actor, request, observation, original_code_state, commit_guard=commit_guard
+            )
         except SQLAlchemyError:
             # Database exceptions can contain bound source payloads in their SQL
             # parameters. Never pass those exceptions or chains to public/log output.
             refuse("SOURCE_EDIT_STORAGE_FAILED")
 
-    def _persist(self, actor, request, observation, original_code_state):
+    def _persist(self, actor, request, observation, original_code_state, *, commit_guard=None):
         # Internal trusted observation/state arguments. No model/API importer exists.
         try:
             request = PersistEditingPlanRequest.model_validate(
@@ -169,6 +171,8 @@ class SourceEditingPlanService:
                 result = self.record(existing)
                 if result.request_hash != request_hash:
                     refuse("SOURCE_EDIT_COMMAND_CONFLICT")
+                if commit_guard is not None:
+                    commit_guard(session)
                 return result
             count = session.scalar(
                 select(func.count())
@@ -237,6 +241,8 @@ class SourceEditingPlanService:
                     "evidenceStatus": "unmeasured",
                 },
             )
+            if commit_guard is not None:
+                commit_guard(session)
         self.repository.leases.repository.refresh_event_cursor()
         return result
 

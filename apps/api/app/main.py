@@ -340,13 +340,22 @@ def create_app(
     app.state.self_build_git_service = GitInspectionService(app)
     app.state.self_build_creation_service = WorkspaceCreationService(app)
     app.state.self_build_commit_service = CommitPreparationService(app)
+    from app.development_agent.config import DevelopmentProviderSettings, build_development_router
     from app.development_agent.context import RepositoryContextReader
     from app.development_agent.dispatch import DevelopmentDispatchService
+    from app.development_agent.execution import DevelopmentExecutor
     from app.development_agent.proposals import DevelopmentProposalService
 
     app.state.development_context_reader = RepositoryContextReader(app)
     app.state.development_proposal_service = DevelopmentProposalService(app)
     app.state.development_dispatch_service = DevelopmentDispatchService(app)
+    app.state.development_provider_settings = DevelopmentProviderSettings()
+    app.state.development_model_router = build_development_router(
+        app.state.development_provider_settings, app.state.model_router
+    )
+    app.state.development_executor = DevelopmentExecutor(
+        app, app.state.development_provider_settings, app.state.development_model_router
+    )
     app.include_router(self_build_router)
     app.include_router(commit_router)
     app.include_router(self_improvement_router)

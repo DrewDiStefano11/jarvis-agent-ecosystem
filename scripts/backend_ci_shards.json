@@ -100,6 +100,7 @@
     "tests/test_materialization.py",
     "tests/test_development_agent.py",
     "tests/test_development_dispatch.py",
+    "tests/test_development_execution.py",
     "tests/test_development_request.py",
     "tests/test_development_navigation.py"
   ]

@@ -24,7 +24,9 @@ from app.models.development_dispatch import (
     DevelopmentAdmission,
     DevelopmentDispatch,
     DevelopmentLimits,
+    DispatchFailure,
     DispatchReservation,
+    EditingBinding,
 )
 from app.models.domain import Task
 from app.self_build.policy import digest
@@ -210,10 +212,20 @@ class DevelopmentDispatchService:
             admissionDigest=reservation.admission_digest,
             auditId=reservation.audit_id,
         )
-        if phase == "received":
+        if phase in {"received", "planned"}:
             result.update(
                 responseDigest=digest(record.response.model_dump(mode="json")),
                 responseAuditId=record.response_audit_id,
+            )
+        if phase == "planned":
+            result.update(
+                editingRecordId=record.editing_binding.editing_record_id,
+                editingPlanHash=record.editing_binding.editing_plan_hash,
+                bindingAuditId=record.editing_binding.audit_id,
+            )
+        if phase == "failed":
+            result.update(
+                failureCategory=record.failure.category, failureAuditId=record.failure.audit_id
             )
         return result
 
@@ -253,12 +265,8 @@ class DevelopmentDispatchService:
                 reservation.context.runtime_attempt_id,
             )
             slot = reservation.dispatch_id
-            phase = "received" if record.response is not None else "reserved"
-            protected_digest = (
-                digest(record.model_dump(mode="json"))
-                if phase == "received"
-                else digest(reservation.model_dump(mode="json"))
-            )
+            phase = self.phase(record)
+            protected_digest = self.phase_digest(record, phase)
             metadata = self.dispatch_metadata(record, phase)
         existing, identifier = self.checkpoint(
             actor,
@@ -285,11 +293,7 @@ class DevelopmentDispatchService:
                 else:
                     stored = session.get(DevelopmentDispatchRow, slot)
                     current = self.dispatch_record(session, row, stored, current_root, root_digest)
-                    current_digest = (
-                        digest(current.model_dump(mode="json"))
-                        if phase == "received"
-                        else digest(current.reservation.model_dump(mode="json"))
-                    )
+                    current_digest = self.phase_digest(current, phase)
                     if current_digest != protected_digest:
                         refuse("DEVELOPMENT_DISPATCH_CONFLICT")
 
@@ -422,6 +426,36 @@ class DevelopmentDispatchService:
                 ),
             )
             self.validate_response(record, root, record.response)
+        if record.failure is not None:
+            self.audit(
+                session,
+                record.failure.audit_id,
+                row,
+                "development.dispatch.failed",
+                root.plan.actor_id,
+                dict(dispatchId=stored.id, category=record.failure.category, outcome="unknown"),
+            )
+        if record.editing_binding is not None:
+            binding = record.editing_binding
+            editing = self.validate_editing(session, root, record, binding.editing_record_id)
+            if (
+                binding.editing_plan_hash != editing.plan.plan_hash
+                or binding.response_digest != digest(record.response.model_dump(mode="json"))
+            ):
+                refuse("DEVELOPMENT_EDITING_PLAN_CONFLICT")
+            self.audit(
+                session,
+                binding.audit_id,
+                row,
+                "development.dispatch.planned",
+                root.plan.actor_id,
+                dict(
+                    dispatchId=stored.id,
+                    editingRecordId=binding.editing_record_id,
+                    editingPlanHash=binding.editing_plan_hash,
+                    responseDigest=binding.response_digest,
+                ),
+            )
         return record
 
     def require_reserved(self, actor, record):
@@ -453,15 +487,27 @@ class DevelopmentDispatchService:
         else:
             self.require_reserved(actor, record)
             reservation = record.reservation
-            phase = "received" if record.response else "reserved"
+            if record.response is not None:
+                if (
+                    self.checkpoint(
+                        actor,
+                        reservation.context.runtime_run_id,
+                        reservation.context.runtime_attempt_id,
+                        reservation.dispatch_id,
+                        "received",
+                        self.received_digest(record),
+                        self.dispatch_metadata(record, "received"),
+                    )[0]
+                    is None
+                ):
+                    refuse("DEVELOPMENT_CHECKPOINT_REQUIRED")
+            phase = self.phase(record)
             values = (
                 reservation.context.runtime_run_id,
                 reservation.context.runtime_attempt_id,
                 reservation.dispatch_id,
                 phase,
-                digest(record.model_dump(mode="json"))
-                if record.response
-                else digest(reservation.model_dump(mode="json")),
+                self.phase_digest(record, phase),
                 self.dispatch_metadata(record, phase),
             )
         if self.checkpoint(actor, *values)[0] is None:
@@ -613,30 +659,26 @@ class DevelopmentDispatchService:
 
     @protected_storage
     def receive(self, actor, workspace_id, authority, dispatch_id, response):
-        with self.repository.sessions() as session:
+        # A provider receipt acknowledges the original protected request. It is
+        # never current filesystem evidence; source planning remeasures separately.
+        with self.repository.leases._write() as session:
             row, _, _ = self.creation.fence(actor, workspace_id, authority, session)
             root, root_digest = self.root(session, actor, row, authority)
             self.require_acknowledged(actor, root, root=True)
-            current = self.dispatch_record(
+            previous = self.dispatch_record(
                 session, row, session.get(DevelopmentDispatchRow, dispatch_id), root, root_digest
             )
-        response = self.validate_response(current, root, response)
-
-        def finalize(context, guard):
-            with self.repository.leases._write() as session:
-                row, _, attempt = self.creation.fence(actor, workspace_id, authority, session)
-                root, root_digest = self.root(session, actor, row, authority)
-                self.require_acknowledged(actor, root, root=True)
-                stored = session.get(DevelopmentDispatchRow, dispatch_id)
-                previous = self.dispatch_record(session, row, stored, root, root_digest)
-                if attempt != root.plan.attempt_id or previous.reservation.context != context:
-                    refuse("DEVELOPMENT_OWNER_CHANGED")
-                if previous.response is not None:
-                    if previous.response != response:
-                        refuse("DEVELOPMENT_DISPATCH_CONFLICT")
-                    return previous
+            self.require_reserved(actor, previous)
+            response = self.validate_response(previous, root, response)
+            if previous.failure is not None:
+                refuse("DEVELOPMENT_DISPATCH_OUTCOME_UNKNOWN")
+            if previous.response is not None:
+                if previous.response != response:
+                    refuse("DEVELOPMENT_DISPATCH_CONFLICT")
+                record = previous
+            else:
                 self.remaining_seconds(root)
-                self.require_acknowledged(actor, previous)
+                row = self.repository.lookup(session, workspace_id)
                 event = self.creation.git.event(
                     session,
                     row,
@@ -650,20 +692,11 @@ class DevelopmentDispatchService:
                 record = DevelopmentDispatch(
                     reservation=previous.reservation, response=response, response_audit_id=event.id
                 )
+                stored = session.get(DevelopmentDispatchRow, dispatch_id)
                 stored.payload = record.model_dump(mode="json")
                 stored.integrity_digest = digest(stored.payload)
-                guard.in_transaction(session)
+                self.creation.fence(actor, workspace_id, authority, session)
                 self.remaining_seconds(root)
-            return record
-
-        record = self.reader.inspect(
-            actor,
-            workspace_id,
-            authority,
-            current.reservation.context.selection,
-            expected_hash=current.reservation.context.context_hash,
-            finalize=finalize,
-        )
         self.repository.leases.repository.refresh_event_cursor()
         self.acknowledge(actor, authority, workspace_id, record)
         return record
@@ -679,3 +712,205 @@ class DevelopmentDispatchService:
             )
         self.require_acknowledged(actor, record)
         return record
+
+    def received_digest(self, record):
+        # Optional future phases do not rewrite the original received checkpoint.
+        return digest(record.model_dump(mode="json", exclude={"failure", "editing_binding"}))
+
+    def phase(self, record):
+        if record.editing_binding is not None:
+            return "planned"
+        if record.failure is not None:
+            return "failed"
+        return "received" if record.response is not None else "reserved"
+
+    def phase_digest(self, record, phase):
+        if phase == "reserved":
+            return digest(record.reservation.model_dump(mode="json"))
+        if phase == "received":
+            return self.received_digest(record)
+        return digest(record.model_dump(mode="json"))
+
+    @protected_storage
+    def admission(self, actor, workspace_id, authority, *, advancing=False):
+        with self.repository.sessions() as session:
+            row, _, _ = self.creation.fence(actor, workspace_id, authority, session)
+            root, _ = self.root(session, actor, row, authority)
+            self.require_acknowledged(actor, root, root=True)
+            if advancing:
+                self.remaining_seconds(root)
+            return root
+
+    def check_in_session(
+        self, actor, workspace_id, authority, dispatch_id, session, *, advancing=False
+    ):
+        row, _, _ = self.creation.fence(actor, workspace_id, authority, session)
+        root, root_digest = self.root(session, actor, row, authority)
+        self.require_acknowledged(actor, root, root=True)
+        record = self.dispatch_record(
+            session, row, session.get(DevelopmentDispatchRow, dispatch_id), root, root_digest
+        )
+        self.require_acknowledged(actor, record)
+        if advancing:
+            self.remaining_seconds(root)
+        return root, record
+
+    @protected_storage
+    def check(self, actor, workspace_id, authority, dispatch_id, *, advancing=False):
+        with self.repository.sessions() as session:
+            return self.check_in_session(
+                actor, workspace_id, authority, dispatch_id, session, advancing=advancing
+            )
+
+    @protected_storage
+    def record_failure(self, actor, workspace_id, authority, dispatch_id, category):
+        with self.repository.leases._write() as session:
+            root, previous = self.check_in_session(
+                actor, workspace_id, authority, dispatch_id, session
+            )
+            if previous.response is not None:
+                refuse("DEVELOPMENT_DISPATCH_CONFLICT")
+            if previous.failure is not None:
+                if previous.failure.category != category:
+                    refuse("DEVELOPMENT_DISPATCH_CONFLICT")
+                record = previous
+            else:
+                row = self.repository.lookup(session, workspace_id)
+                event = self.creation.git.event(
+                    session,
+                    row,
+                    actor,
+                    "development.dispatch.failed",
+                    dict(dispatchId=dispatch_id, category=category, outcome="unknown"),
+                )
+                record = DevelopmentDispatch(
+                    reservation=previous.reservation,
+                    failure=DispatchFailure(
+                        category=category, observed_at=datetime.now(UTC), audit_id=event.id
+                    ),
+                )
+                stored = session.get(DevelopmentDispatchRow, dispatch_id)
+                stored.payload = record.model_dump(mode="json")
+                stored.integrity_digest = digest(stored.payload)
+            self.creation.fence(actor, workspace_id, authority, session)
+        self.repository.leases.repository.refresh_event_cursor()
+        self.acknowledge(actor, authority, workspace_id, record)
+        return record
+
+    def plan_command(self, dispatch_id):
+        return "development-plan-" + dispatch_id
+
+    def validate_editing(self, session, root, record, editing_record_id):
+        from app.development_agent.proposals import compile_proposal, mutation_observation
+        from app.models.source_change import PlanReferences
+        from app.source_change.planner import plan_source_changes
+        from app.source_edit_planning.repository import SourceEditingPlanRow
+        from app.source_edit_planning.service import SourceEditingPlanService
+
+        stored = session.get(SourceEditingPlanRow, editing_record_id)
+        if stored is None or record.response is None:
+            refuse("DEVELOPMENT_EDITING_PLAN_REQUIRED")
+        editing = SourceEditingPlanService.record(stored)
+        context = record.reservation.context
+        proposal = DevelopmentProposal.model_validate_json(record.response.content)
+        intent = compile_proposal(
+            proposal,
+            context,
+            PlanReferences(
+                original_plan_hash=root.plan.workspace_plan_hash,
+                authorization_reference=root.plan.workspace_approval_id,
+            ),
+            allow_delete=root.plan.limits.allow_delete,
+        )
+        expected = plan_source_changes(
+            intent, mutation_observation(context, (change.path for change in intent.changes))
+        )
+        if (
+            editing.actor_id != root.plan.actor_id
+            or editing.command_id != self.plan_command(record.reservation.dispatch_id)
+            or editing.plan.workspace_id != root.plan.workspace_id
+            or editing.plan.task_id != root.plan.task_id
+            or editing.plan.runtime_run_id != root.plan.runtime_run_id
+            or editing.plan.runtime_attempt_id != root.plan.attempt_id
+            or editing.plan.workspace_plan_hash != root.plan.workspace_plan_hash
+            or editing.plan.original_code_state != context.code_state
+            or editing.plan.source_plan != expected
+        ):
+            refuse("DEVELOPMENT_EDITING_PLAN_CONFLICT")
+        return editing
+
+    @protected_storage
+    def bind_editing(self, actor, workspace_id, authority, dispatch_id, editing_record_id):
+        with self.repository.leases._write() as session:
+            root, previous = self.check_in_session(
+                actor, workspace_id, authority, dispatch_id, session, advancing=True
+            )
+            editing = self.validate_editing(session, root, previous, editing_record_id)
+            if previous.editing_binding is not None:
+                if previous.editing_binding.editing_record_id != editing_record_id:
+                    refuse("DEVELOPMENT_EDITING_PLAN_CONFLICT")
+                record = previous
+            else:
+                row = self.repository.lookup(session, workspace_id)
+                payload = dict(
+                    dispatchId=dispatch_id,
+                    editingRecordId=editing_record_id,
+                    editingPlanHash=editing.plan.plan_hash,
+                    responseDigest=digest(previous.response.model_dump(mode="json")),
+                )
+                event = self.creation.git.event(
+                    session, row, actor, "development.dispatch.planned", payload
+                )
+                record = DevelopmentDispatch(
+                    reservation=previous.reservation,
+                    response=previous.response,
+                    response_audit_id=previous.response_audit_id,
+                    editing_binding=EditingBinding(
+                        editing_record_id=editing_record_id,
+                        editing_plan_hash=editing.plan.plan_hash,
+                        response_digest=payload["responseDigest"],
+                        audit_id=event.id,
+                    ),
+                )
+                stored = session.get(DevelopmentDispatchRow, dispatch_id)
+                stored.payload = record.model_dump(mode="json")
+                stored.integrity_digest = digest(stored.payload)
+            self.creation.fence(actor, workspace_id, authority, session)
+            self.remaining_seconds(root)
+        self.repository.leases.repository.refresh_event_cursor()
+        self.acknowledge(actor, authority, workspace_id, record)
+        return record
+
+    @protected_storage
+    def editing(self, actor, workspace_id, authority, dispatch_id):
+        with self.repository.sessions() as session:
+            root, record = self.check_in_session(
+                actor, workspace_id, authority, dispatch_id, session
+            )
+            if record.editing_binding is None:
+                refuse("DEVELOPMENT_EDITING_PLAN_REQUIRED")
+            return record, self.validate_editing(
+                session, root, record, record.editing_binding.editing_record_id
+            )
+
+    @protected_storage
+    def recover(self, actor, workspace_id, authority, dispatch_id):
+        """Acknowledge persisted phases in order; no source read or provider recall."""
+        with self.repository.sessions() as session:
+            row, _, _ = self.creation.fence(actor, workspace_id, authority, session)
+            root, root_digest = self.root(session, actor, row, authority)
+            self.require_acknowledged(actor, root, root=True)
+            record = self.dispatch_record(
+                session, row, session.get(DevelopmentDispatchRow, dispatch_id), root, root_digest
+            )
+        reserved = DevelopmentDispatch(reservation=record.reservation)
+        self.acknowledge(actor, authority, workspace_id, reserved)
+        if record.response is not None:
+            received = DevelopmentDispatch(
+                reservation=record.reservation,
+                response=record.response,
+                response_audit_id=record.response_audit_id,
+            )
+            self.acknowledge(actor, authority, workspace_id, received)
+        self.acknowledge(actor, authority, workspace_id, record)
+        return self.read(actor, workspace_id, authority, dispatch_id)
