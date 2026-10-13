@@ -135,3 +135,9 @@ Mock/quarantined receipts, historical verdicts, manual developer tests and ordin
 GitHub CI cannot establish the real isolated execution prerequisite for publication.
 Publishing this milestone also requires explicit push approval and confirmation
 that hosted CI/storage adds no charge; no new hosted run is triggered here.
+
+The operator requested draft publication. Its publication tip uses `[skip ci]`
+because the current workflow uploads artifacts/caches and account storage budget
+has not been independently established. This suppresses push/pull-request runs,
+not any required-check policy: required hosted checks remain pending and the
+draft is not merge-ready. Commits `21efe49` and `d3fa66d` remain intact ancestors.
