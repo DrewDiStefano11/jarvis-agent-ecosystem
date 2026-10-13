@@ -20,4 +20,10 @@ its content is read. Native count regressions exercise both boundaries.
 This branch also retains PR #122's foreign staging refusal in its ancestry.
 Completed recovery cannot return a legitimate source receipt while an unexpected
 publication stage remains. Merge the source history and staging prerequisites
-before this integration; the Git authorization foundation is already merged.
+before this integration. Git preparation #109 and authorization #117 were merged
+into feature branches after their parent branches had been merged into main;
+those implementations are absent from main. This integration retains both
+foundations and must be reviewed against main before human merging. Its complete
+diff includes the missing preparation and authorization contracts and tests;
+merging into the old authorization feature branch alone does not integrate them
+into main. Synchronize and revalidate after source prerequisites reach main.

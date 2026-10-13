@@ -24,7 +24,7 @@ function Evidence({ run }: { run: RuntimeRun }) {
     {run.pause_reason && <><dt>Pause reason</dt><dd>{run.pause_reason.code}: {bounded(run.pause_reason.detail, 4000)}</dd><dt>Pause recorded</dt><dd>{recorded(run.pause_reason.timestamp)}</dd></>}
   </dl>}</details>
 }
-export function RuntimeRunHistory() {
+export function RuntimeRunHistory({ onInspectTask }: { onInspectTask?: (id: string) => void } = {}) {
   const { runtime, tasks, selectTask } = useAppStore()
   const [query, setQuery] = useState('')
   const [view, setView] = useState('All')
@@ -51,7 +51,7 @@ export function RuntimeRunHistory() {
       <td data-label="State"><span className={`run-history-state state-${run.state}`}>{label(run.state)}</span>{(run.status_detail || run.failure?.detail || run.blocking_reason?.detail || run.pause_reason?.detail) && <span>{bounded(run.status_detail || run.failure?.detail || run.blocking_reason?.detail || run.pause_reason?.detail)}</span>}</td>
       <td data-label="Target">{identityNames.get(run.specification.agent_id) ?? run.specification.agent_id}</td><td data-label="Attempts">{run.attempt_count}</td>
       <td data-label="Recorded times"><span>Created {recorded(run.created_at)}</span>{run.completed_at && <span>Completed {recorded(run.completed_at)}</span>}</td>
-      <td data-label="Inspect"><button className="secondary" disabled={!taskNames.has(run.specification.task_id)} onClick={() => selectTask(run.specification.task_id)}>Open task</button>{!taskNames.has(run.specification.task_id) && <span>Task not loaded</span>}</td>
+      <td data-label="Inspect"><button className="secondary" disabled={!taskNames.has(run.specification.task_id)} onClick={() => (onInspectTask ?? selectTask)(run.specification.task_id)}>Open task</button>{!taskNames.has(run.specification.task_id) && <span>Task not loaded</span>}</td>
     </tr><tr className="run-history-detail-row"><td colSpan={6}><Evidence run={run}/></td></tr></Fragment>)}</tbody></table>}
     {runtime.actorId && !runtime.loading && !runtime.error && !visible.length && <p>{runtime.runs.length ? 'No loaded runs match these filters.' : runtime.nextOffset !== null ? 'No authorized runs in the loaded pages. More pages are available.' : 'No authorized runs in this selection.'}</p>}
     {runtime.actorId && <footer><span>{runtime.runs.length} loaded runs · {runtime.pagesLoaded} of {RUNTIME_HISTORY_PAGE_LIMIT} page requests used<br/>Filters search loaded records only · Oldest records first</span>{runtime.nextOffset !== null && runtime.pagesLoaded < RUNTIME_HISTORY_PAGE_LIMIT && <button className="secondary" disabled={runtime.loading} onClick={() => void runtime.loadMoreRuns()}>Load next page</button>}{runtime.nextOffset !== null && runtime.pagesLoaded >= RUNTIME_HISTORY_PAGE_LIMIT && <p>History is bounded to four pages (up to 200 runs). Select a task to narrow the scope, or refresh to start again.</p>}</footer>}
