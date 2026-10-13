@@ -182,6 +182,13 @@ def expected_observation(original, changes, completed, *, pending_absent=False):
     )
 
 
+def require_source_directory(name):
+    """Reserved authority/artifact names cannot become source directories."""
+    folded = name.casefold()
+    if folded in RESERVED or folded.startswith(".jarvis-"):
+        refuse("SOURCE_MUTATION_FOREIGN_ARTIFACT")
+
+
 def measure_code_state(stack, checkout, source, base, plan, ignored, authority_check):
     """Measure the whole bounded checkout without filters, shell or index writes."""
     actual, sizes, total, nodes = {}, {}, 0, 0
@@ -198,6 +205,7 @@ def measure_code_state(stack, checkout, source, base, plan, ignored, authority_c
         if nodes > 8192:
             refuse("SOURCE_MUTATION_INVENTORY_LIMIT")
         for name in directories:
+            require_source_directory(name)
             open_directory(stack, parent.path / name, parent, name, internal=True)
         for name in files:
             path = (parent.path / name).relative_to(checkout.path).as_posix()
@@ -255,6 +263,7 @@ def pin_source_tree(stack, target, authority_check):
         if nodes > 8192:
             refuse("SOURCE_MUTATION_INVENTORY_LIMIT")
         for name in directories:
+            require_source_directory(name)
             open_directory(stack, Path(parent) / name, internal=True)
         for name in files:
             stack.enter_context(read_pin(Path(parent) / name))
