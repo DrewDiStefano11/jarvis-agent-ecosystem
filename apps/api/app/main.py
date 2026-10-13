@@ -97,7 +97,7 @@ from app.team_selection.router import router as team_selection_router
 from app.tool_execution.router import router as tool_execution_router
 from app.tool_execution.service import ToolExecutionService
 
-DATABASE_REVISION = "20261012_source_plans"
+DATABASE_REVISION = "20261012_source_mutation"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
