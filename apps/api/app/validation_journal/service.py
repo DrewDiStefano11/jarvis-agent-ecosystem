@@ -627,6 +627,10 @@ class ValidationJournalService:
             now=now,
             expected_execution_plan_hash=approved_hash,
             max_age_seconds=max_age_seconds,
+            current_lineage=(
+                snapshot.intent.owner.runtime_run_id,
+                snapshot.intent.owner.attempt_id,
+            ),
         )
 
     def record_verdict(self, actor, workspace_id, request, journal_id, *, expected_journal_digest):
@@ -679,6 +683,7 @@ class ValidationJournalService:
                 self.verifier,
                 now=now,
                 expected_execution_plan_hash=approved_hash,
+                current_lineage=(owner.runtime_run_id, owner.attempt_id),
             )
             provisional = ValidationVerdict(
                 workspace_id=workspace_id,

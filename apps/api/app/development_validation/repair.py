@@ -22,6 +22,7 @@ def build_repair_evidence(
     expected_execution_plan_hash,
     retry_budget=2,
     max_age_seconds=3600,
+    current_lineage=None,
 ):
     if type(retry_budget) is not int or not 0 <= retry_budget <= 2:
         raise ValueError("retry budget must be operator-bounded to at most two")
@@ -69,8 +70,29 @@ def build_repair_evidence(
                 lineages[lineage] = (signed, measured)
         failures = sum(m.outcome == "failed" for _, m in lineages.values())
         remaining = max(0, retry_budget - max(0, failures - 1))
-        latest = max(m.finished_at for _, m in lineages.values())
-        tied = [(r, m) for r, m in lineages.values() if m.finished_at == latest]
+        if current_lineage is not None:
+            # The acknowledged journal owns the recovery position. Collector
+            # timestamps may regress across native runtime attempts.
+            tied = [lineages[current_lineage]] if current_lineage in lineages else []
+            if not tied:
+                findings.append(
+                    RepairFinding(
+                        gate=command.gate,
+                        disposition="stale" if source_changed else "missing",
+                        recommendation="revalidate" if source_changed else "gather_evidence",
+                        retries_remaining=remaining,
+                        supporting_receipt_digests=tuple(
+                            sorted(
+                                digest(item.model_dump(mode="json"))
+                                for item, _ in lineages.values()
+                            )
+                        ),
+                    )
+                )
+                continue
+        else:
+            latest = max(m.finished_at for _, m in lineages.values())
+            tied = [(r, m) for r, m in lineages.values() if m.finished_at == latest]
         # Failure wins tied outcomes; interruption/unknown wins a tied pass.
         priority = {"failed": 0, "interrupted": 1, "cancelled": 2, "unmeasured": 3, "passed": 4}
         r, m = min(
@@ -120,11 +142,20 @@ def build_repair_evidence(
                 if transient
                 else "diagnose_failure"
             )
+        # Equal-time failures have no authoritative temporal ordering. Keep the
+        # chosen exact reproduction, but do not turn conflicting classifications
+        # into a product repair merely because one measurement wins the digest tie.
+        failure_kinds = {item.failure_kind for _, item in tied if item.outcome == "failed"}
+        failure_kind = (
+            (m.failure_kind if len(failure_kinds) == 1 else "unknown")
+            if disposition == "failed"
+            else None
+        )
         findings.append(
             RepairFinding(
                 gate=command.gate,
                 disposition=disposition,
-                failure_kind=m.failure_kind if disposition == "failed" else None,
+                failure_kind=failure_kind,
                 diagnostic_codes=m.diagnostic_codes,
                 reproduction=reference,
                 supporting_receipt_digests=tuple(

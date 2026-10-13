@@ -43,6 +43,9 @@ code. They cannot generate product handler or test-coverage repair proposals.
 Their diagnosis remains required unless authenticated allowlisted transient codes
 and the bounded history support a retry request. This routing grants no retry
 authority and preserves the existing operator and runtime attempt budgets.
+Equal-time failed attempts with different failure kinds retain all supporting
+receipt references and an exact reproduction, but classify the aggregate as
+unknown. Digest ordering cannot choose a product repair from conflicting evidence.
 Repair disposition selects the highest authenticated sequence within each run and
 attempt before timestamp comparison, consistent with validation assessment even
 when the collector clock regresses. Historical failures still count toward the
