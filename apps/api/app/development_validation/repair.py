@@ -68,7 +68,7 @@ def build_repair_evidence(
         priority = {"failed": 0, "interrupted": 1, "cancelled": 2, "unmeasured": 3, "passed": 4}
         r, m = min(
             tied,
-            key=lambda pair: (priority[pair[1].outcome], digest(pair[0].model_dump(mode="json"))),
+            key=lambda pair: (priority[pair[1].outcome], digest(pair[1].model_dump(mode="json"))),
         )
         disposition = (
             "stale"

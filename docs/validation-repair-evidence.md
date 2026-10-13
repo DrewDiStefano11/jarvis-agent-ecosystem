@@ -79,3 +79,8 @@ test mappings or validation boundaries requires a new independent approval.
 The source provenance pairs `jarvis-development-validation-v1` with the actual
 development-validation policy digest; collector command policy fingerprints remain
 in each authenticated measurement rather than naming a different policy digest.
+
+Simultaneous latest lineages select outcomes conservatively and break remaining
+ties using measurement content, independent of collector key IDs or signatures.
+Key rotation may change authenticated envelope references but cannot change the
+selected measured failure or exported facts under an unchanged measurement digest.

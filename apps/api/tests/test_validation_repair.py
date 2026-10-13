@@ -393,3 +393,59 @@ def test_collector_key_rotation_cannot_replay_same_execution_as_distinct_artifac
         now=NOW,
     ).collect()
     assert a.digest == b.digest
+
+
+def test_key_rotation_cannot_change_tied_measurement_facts_under_same_provenance():
+    import hmac
+    import json
+    from hashlib import sha256
+
+    from app.models.validation_execution import SignedReceipt
+
+    plan = build_execution_plan(state())
+    original = [
+        receipt(plan, outcome="failed", exit_code=1, failure_kind="test", runtime_run_id="run-a"),
+        receipt(
+            plan, outcome="failed", exit_code=1, failure_kind="dependency", runtime_run_id="run-b"
+        ),
+    ]
+    original_order = digest(original[0].model_dump(mode="json")) < digest(
+        original[1].model_dump(mode="json")
+    )
+    # Find an authenticated rotation that reverses envelope ordering while
+    # retaining exactly the same independently measured executions.
+    for index in range(128):
+        key_id = "rotated-" + str(index)
+        rotated = []
+        for value in original:
+            envelope = value.model_dump(mode="json", exclude={"authentication_tag"})
+            envelope["key_id"] = key_id
+            tag = hmac.new(
+                KEY,
+                b"jarvis-validation-receipt-v1\0"
+                + json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode(),
+                sha256,
+            ).hexdigest()
+            rotated.append(SignedReceipt(**envelope, authentication_tag=tag))
+        rotated_order = digest(rotated[0].model_dump(mode="json")) < digest(
+            rotated[1].model_dump(mode="json")
+        )
+        if rotated_order != original_order:
+            break
+    else:
+        pytest.fail("No reversed authenticated envelope ordering in rotation fixture")
+    trusted = ReceiptVerifier({("fixture", "key-1"): KEY, ("fixture", key_id): KEY})
+    sources = [
+        ValidationExecutionSource(
+            "rotation",
+            state(),
+            plan,
+            values,
+            trusted,
+            now=NOW,
+            expected_execution_plan_hash=plan.execution_plan_hash,
+        ).collect()
+        for values in (original, rotated, list(reversed(rotated)))
+    ]
+    assert all(value[0].digest == sources[0][0].digest for value in sources)
+    assert all(value[1] == sources[0][1] for value in sources)
