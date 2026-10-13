@@ -1,0 +1,102 @@
+"""Protected development admission and dispatch evidence. No mutation authority."""
+
+from datetime import UTC, datetime
+from typing import Literal
+
+from pydantic import Field, field_validator, model_validator
+
+from app.model_providers.contracts import (
+    ModelExecutionRequest,
+    ModelExecutionResponse,
+    validate_safe_identifier,
+)
+from app.models.development_agent import ContextSelection, RepositoryContext
+from app.models.development_validation import Contract, Digest
+from app.models.self_build import Identifier
+
+
+class DevelopmentLimits(Contract):
+    provider: Identifier
+    model: str = Field(pattern=r"^[A-Za-z0-9_.:-]{1,200}$")
+    completion_criteria: tuple[str, ...] = Field(min_length=1, max_length=16, repr=False)
+    maximum_dispatches: int = Field(default=2, ge=1, le=8, strict=True)
+    maximum_reserved_output_tokens: int = Field(default=8192, ge=1, le=131072, strict=True)
+    output_tokens_per_dispatch: int = Field(default=4096, ge=1, le=16384, strict=True)
+    maximum_seconds: int = Field(default=600, ge=1, le=3600, strict=True)
+    allow_delete: bool = Field(default=False, strict=True)
+
+    _safe_identifiers = field_validator("provider", "model")(validate_safe_identifier)
+
+    @model_validator(mode="after")
+    def bounded(self):
+        if (
+            self.output_tokens_per_dispatch > self.maximum_reserved_output_tokens
+            or any(not text.strip() for text in self.completion_criteria)
+            or len("\n".join(self.completion_criteria)) > 2000
+        ):
+            raise ValueError("DEVELOPMENT_LIMITS_INVALID")
+        return self
+
+
+class AdmissionPlan(Contract):
+    schema_version: Literal["1.0"] = "1.0"
+    task_id: Identifier
+    task_fingerprint: Digest
+    runtime_run_id: Identifier
+    attempt_id: Identifier
+    workspace_id: Identifier
+    creation_operation_id: Identifier
+    creation_plan_hash: Digest
+    workspace_plan_hash: Digest
+    workspace_approval_id: Identifier
+    actor_id: Identifier
+    worker_id: Identifier
+    lease_fingerprint: Digest
+    initial_context_hash: Digest
+    selection: ContextSelection
+    limits: DevelopmentLimits
+    policy_digest: Digest
+    plan_hash: Digest
+
+
+def utc(value):
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("DEVELOPMENT_TIMESTAMP_INVALID")
+    return value.astimezone(UTC)
+
+
+class DevelopmentAdmission(Contract):
+    plan: AdmissionPlan
+    approval_id: Identifier
+    approved_by: Identifier
+    admitted_at: datetime
+
+    _utc = field_validator("admitted_at")(utc)
+
+
+class DispatchReservation(Contract):
+    schema_version: Literal["1.0"] = "1.0"
+    dispatch_id: Digest
+    command_id: Identifier
+    ordinal: int = Field(ge=1, le=8, strict=True)
+    admission_digest: Digest
+    context: RepositoryContext = Field(repr=False)
+    request: ModelExecutionRequest = Field(repr=False)
+    context_manifest: dict = Field(repr=False)
+    request_digest: Digest
+    audit_id: Identifier
+    reserved_at: datetime
+
+    _utc = field_validator("reserved_at")(utc)
+
+
+class DevelopmentDispatch(Contract):
+    reservation: DispatchReservation
+    response: ModelExecutionResponse | None = Field(default=None, repr=False)
+    response_audit_id: Identifier | None = None
+
+    @model_validator(mode="after")
+    def response_shape(self):
+        if (self.response is None) != (self.response_audit_id is None):
+            raise ValueError("DEVELOPMENT_RESPONSE_INCOMPLETE")
+        return self

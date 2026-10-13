@@ -19,6 +19,20 @@ def refuse(code):
     raise DomainError(code, "Development context failed a required evidence check.", 409) from None
 
 
+class ContextCommitGuard:
+    """Recheck native pins using the caller's transaction without a nested writer."""
+
+    def __init__(self, publication_guard, transaction_guard):
+        self.publication_guard = publication_guard
+        self.transaction_guard = transaction_guard
+
+    def __call__(self):
+        self.publication_guard()
+
+    def in_transaction(self, session):
+        self.transaction_guard(session)
+
+
 class RepositoryContextReader:
     """Internal only. Every read needs the original live lease and creation approval."""
 
@@ -42,10 +56,20 @@ class RepositoryContextReader:
         if record.state != "ready" or checkpoint is None:
             refuse("DEVELOPMENT_CHECKPOINT_REQUIRED")
 
+        transaction_session = None
+
         def authority_check():
-            current, current_nonce, current_digest = self.creation.current(
-                actor, workspace_id, authority
-            )
+            if transaction_session is None:
+                current, current_nonce, current_digest = self.creation.current(
+                    actor, workspace_id, authority
+                )
+            else:
+                row, plan, attempt = self.creation.fence(
+                    actor, workspace_id, authority, transaction_session
+                )
+                current, current_nonce, current_digest = self.creation.intent(row)
+                if current.plan != plan or current.attempt_id != attempt:
+                    refuse("DEVELOPMENT_OWNER_CHANGED")
             if (current, current_nonce, current_digest) != (record, nonce, private_digest):
                 refuse("DEVELOPMENT_OWNER_CHANGED")
             if self.creation.checkpoint(actor, current, current_digest)[0] is None:
@@ -166,7 +190,19 @@ class RepositoryContextReader:
             if expected_hash is not None and expected_hash != context.context_hash:
                 refuse("DEVELOPMENT_CONTEXT_STALE")
             publication_guard()
-            result = context if finalize is None else finalize(context, publication_guard)
+
+            def transaction_guard(session):
+                nonlocal transaction_session
+                if transaction_session is not None:
+                    refuse("DEVELOPMENT_TRANSACTION_CONFLICT")
+                transaction_session = session
+                try:
+                    publication_guard()
+                finally:
+                    transaction_session = None
+
+            guard = ContextCommitGuard(publication_guard, transaction_guard)
+            result = context if finalize is None else finalize(context, guard)
             publication_guard()
             return result
 
