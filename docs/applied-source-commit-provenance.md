@@ -12,6 +12,12 @@ The applied-source receipt is an internal contract, not an HTTP or model executi
 
 Tests exercise a real native source mutation, protected history, independent approved measurement, durable preparation and replay without source execution. They also cover pending or forged history, current-source drift, and corrupted, missing or foreign private artifacts. Temporary databases and generated Git worktrees are isolated from runtime state.
 
+Returning a current measurement requires live authority after the last protected
+history/creation read and after the final source, Git metadata and ownership pin
+checks. Late emergency stop, expired approval or revoked permission refuses the
+return while pins remain held. Native transaction callbacks still use their own
+in-session authority fence and do not open a nested SQLite writer.
+
 The source-file limit counts ordinary source files only. The Git pointer, workspace
 marker and authenticated retained backups are independently verified even when
 enumerated after 4,096 source files; a 4,097th source file still refuses before

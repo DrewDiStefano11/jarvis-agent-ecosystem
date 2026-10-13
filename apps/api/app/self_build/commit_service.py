@@ -274,7 +274,7 @@ class CommitPreparationService:
                 original_references=source.plan.source_plan.references,
             )
 
-        def guard():
+        def authority_guard():
             with self.repository.leases._write() as session:
                 current, current_attempt, _, current_creation, current_nonce = self.live(
                     actor, workspace_id, session, request=request
@@ -288,12 +288,17 @@ class CommitPreparationService:
                 self.inspection_approval(actor, current, inspection_plan, body, session)
                 if request is not None and bound[0] is not None:
                     self.approval(actor, current, bound[0], request, session)
+
+        def guard():
+            authority_guard()
             if self.source_record(actor, workspace_id, body.source_edit_record_id) != source:
                 fail("GIT_COMMIT_SOURCE_RECORD_INVALID")
             if mutation_artifacts(self.app, actor, source) != artifacts:
                 fail("GIT_COMMIT_SOURCE_RECORD_INVALID")
             if self.creation.read(actor, workspace_id) != creation:
                 fail("GIT_COMMIT_WORKSPACE_INVALID")
+            # Protected evidence reads may outlive their opening authority check.
+            authority_guard()
 
         bound = [None]
 

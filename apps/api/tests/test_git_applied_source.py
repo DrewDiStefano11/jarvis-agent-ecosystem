@@ -227,6 +227,111 @@ def test_pending_source_mutation_cannot_become_applied_evidence(editing):
     assert failure.value.code == "GIT_COMMIT_APPLIED_SOURCE_REQUIRED"
 
 
+@pytest.mark.parametrize("boundary", ["creation_read", "owner_pin"])
+@pytest.mark.parametrize("revocation", ["stop", "approval", "permission"])
+def test_final_applied_measurement_refuses_late_authority_revocation(
+    applied, monkeypatch, boundary, revocation
+):
+    from contextlib import contextmanager
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import select
+
+    from app.db.models import (
+        AgentPermissionAssignmentRow,
+        AuditEventRow,
+        IdentityPermissionRow,
+        SystemStateRow,
+    )
+    from app.models.git_applied_source import AppliedCommitPreparation
+    from app.self_build import change_verifier
+
+    _, actor, binding, workspace_id, request, _, target = applied
+    preparation = binding.preparation
+    before = {
+        path.relative_to(target): (path.read_bytes(), path.stat().st_ino)
+        for path in target.rglob("*")
+        if path.is_file()
+    }
+    armed = [False]
+    revoked = [False]
+    measured = preparation.measured
+
+    def final_measurement(actor, workspace_id, body, callback=None, **kwargs):
+        def completed(*args):
+            result = callback(*args)
+            armed[0] = isinstance(result, AppliedCommitPreparation)
+            return result
+
+        return measured(actor, workspace_id, body, completed, **kwargs)
+
+    def revoke():
+        if not armed[0] or revoked[0]:
+            return
+        revoked[0] = True
+        with preparation.repository.leases._write() as session:
+            if revocation == "stop":
+                session.get(SystemStateRow, 1).emergency_stop = True
+            elif revocation == "approval":
+                event = session.get(AuditEventRow, request.approval_id)
+                event.payload = event.payload | {
+                    "payload": event.payload["payload"]
+                    | {"expiresAt": (datetime.now(UTC) - timedelta(seconds=1)).isoformat()}
+                }
+            else:
+                assignments = list(
+                    session.scalars(
+                        select(AgentPermissionAssignmentRow)
+                        .join(
+                            IdentityPermissionRow,
+                            AgentPermissionAssignmentRow.permission_id == IdentityPermissionRow.id,
+                        )
+                        .where(
+                            AgentPermissionAssignmentRow.agent_id == actor.actor_id,
+                            IdentityPermissionRow.stable_key == "self_build.git.commit.prepare",
+                        )
+                    )
+                )
+                assert len(assignments) == 1
+                for assignment in assignments:
+                    assignment.effect = "deny"
+
+    monkeypatch.setattr(preparation, "measured", final_measurement)
+    if boundary == "creation_read":
+        native = preparation.creation.read
+
+        def read(*args, **kwargs):
+            result = native(*args, **kwargs)
+            revoke()
+            return result
+
+        monkeypatch.setattr(preparation.creation, "read", read)
+    else:
+        native = change_verifier.namespace_watch
+
+        @contextmanager
+        def watch(*args, **kwargs):
+            with native(*args, **kwargs) as check:
+
+                def checked():
+                    check()
+                    revoke()
+
+                yield checked
+
+        monkeypatch.setattr(change_verifier, "namespace_watch", watch)
+    with pytest.raises(DomainError) as failure:
+        binding.bind(actor, workspace_id, request)
+    if revocation == "permission":
+        assert failure.value.code == "GIT_COMMIT_PREPARATION_PERMISSION_DENIED"
+    assert armed[0] and revoked[0]
+    assert before == {
+        path.relative_to(target): (path.read_bytes(), path.stat().st_ino)
+        for path in target.rglob("*")
+        if path.is_file()
+    }
+
+
 def test_historical_complete_edit_does_not_authorize_drifted_current_source(applied):
     _, actor, binding, workspace_id, request, _, target = applied
     (target / "source.py").write_bytes(b"drift after completed mutation\n")

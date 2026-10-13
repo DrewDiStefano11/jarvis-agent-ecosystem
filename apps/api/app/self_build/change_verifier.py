@@ -411,6 +411,8 @@ class ChangeVerifier:
                     source_check()
                     metadata_check()
                     owner_check()
+                    if check_authority:
+                        self.guard()
 
                 publication_guard()
                 result = measured if finalize is None else finalize(measured, publication_guard)
