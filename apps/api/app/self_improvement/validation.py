@@ -50,7 +50,8 @@ class ValidationExecutionSource:
                     "plan": self.plan.execution_plan_hash,
                     "state": current_state.model_dump(mode="json"),
                     "receipts": sorted(
-                        digest(r.measurement.model_dump(mode="json")) for r in self.receipts
+                        digest(self.verifier.verify(r).model_dump(mode="json"))
+                        for r in self.receipts
                     ),
                     "dispositions": [(f.gate, f.disposition) for f in report.findings],
                 }

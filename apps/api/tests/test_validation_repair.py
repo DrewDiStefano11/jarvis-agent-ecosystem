@@ -136,6 +136,7 @@ def test_transient_retry_budget_is_bounded_by_recorded_failures():
                 failure_kind="watchdog",
                 diagnostic_codes=("timeout",),
                 command_run_id="command-" + str(i),
+                attempt_id="attempt-" + str(i),
                 sequence=i + 1,
                 started_at=NOW - timedelta(seconds=4 - i),
                 finished_at=NOW - timedelta(seconds=3 - i),
@@ -535,3 +536,65 @@ def test_reordered_model_copy_state_cannot_alias_the_same_measured_artifact():
             sources=(a, b),
             observations=(*x, *y),
         )
+
+
+def test_equivalent_model_copy_timestamp_cannot_alias_verified_measurement():
+    plan = build_execution_plan(state())
+    signed = failed()
+    aliased = signed.model_copy(
+        update={
+            "measurement": signed.measurement.model_copy(
+                update={
+                    "started_at": signed.measurement.started_at.isoformat(),
+                }
+            )
+        }
+    )
+    assert verifier().verify(aliased) == verifier().verify(signed)
+    assert report([aliased]) == report([signed])
+    a, x = ValidationExecutionSource(
+        "canonical",
+        state(),
+        plan,
+        [signed],
+        verifier(),
+        now=NOW,
+        expected_execution_plan_hash=plan.execution_plan_hash,
+    ).collect()
+    b, y = ValidationExecutionSource(
+        "aliased",
+        state(),
+        plan,
+        [aliased],
+        verifier(),
+        now=NOW,
+        expected_execution_plan_hash=plan.execution_plan_hash,
+    ).collect()
+    assert a.digest == b.digest
+    with pytest.raises(ValueError):
+        create_baseline(
+            repo_sha=state().head_sha,
+            configuration_fingerprint="c" * 64,
+            safety_fingerprint="d" * 64,
+            sources=(a, b),
+            observations=(*x, *y),
+        )
+
+
+def test_same_attempt_sequence_updates_do_not_consume_distinct_retries():
+    plan = build_execution_plan(state())
+    values = [
+        receipt(
+            plan,
+            command_run_id="revision-" + str(sequence),
+            sequence=sequence,
+            outcome="failed",
+            exit_code=1,
+            failure_kind="watchdog",
+            diagnostic_codes=("timeout",),
+        )
+        for sequence in (1, 2, 3)
+    ]
+    finding = report(values).findings[0]
+    assert finding.recommendation == "request_bounded_retry" and finding.retries_remaining == 2
+    assert finding.reproduction.command_run_id == "revision-3"

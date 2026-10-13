@@ -5,6 +5,7 @@ from itertools import islice
 from app.development_validation.evidence import assess_receipts, verify_plan
 from app.development_validation.planner import digest
 from app.models.development_validation import CodeState
+from app.models.validation_execution import SignedReceipt
 from app.models.validation_repair import RepairEvidence, RepairFinding, ReproductionReference
 
 TRANSIENT_KINDS = frozenset({"infrastructure", "ci_environment", "dependency", "watchdog"})
@@ -42,12 +43,14 @@ def build_repair_evidence(
     source_changed = (
         digest(current_state.model_dump(mode="json")) != plan.validation.code_state_hash
     )
-    measurements = tuple((r, verifier.verify(r)) for r in receipts)
+    measurements = tuple(
+        (SignedReceipt.model_validate(r.model_dump(mode="json")), verifier.verify(r))
+        for r in receipts
+    )
     findings = []
     for command in plan.commands:
         candidates = [(r, m) for r, m in measurements if m.command == command]
-        failures = sum(m.outcome == "failed" for _, m in candidates)
-        remaining = max(0, retry_budget - max(0, failures - 1))
+        remaining = retry_budget
         if not candidates:
             findings.append(
                 RepairFinding(
@@ -64,6 +67,8 @@ def build_repair_evidence(
             previous = lineages.get(lineage)
             if previous is None or measured.sequence > previous[1].sequence:
                 lineages[lineage] = (signed, measured)
+        failures = sum(m.outcome == "failed" for _, m in lineages.values())
+        remaining = max(0, retry_budget - max(0, failures - 1))
         latest = max(m.finished_at for _, m in lineages.values())
         tied = [(r, m) for r, m in lineages.values() if m.finished_at == latest]
         # Failure wins tied outcomes; interruption/unknown wins a tied pass.

@@ -90,3 +90,9 @@ construction rejects policy-blocked assessments before exporting gate findings o
 improvement observations. Source provenance hashes the same revalidated canonical
 current code state used by repair assessment; reordering a model-copy change tuple
 cannot turn the same measured artifact into multiple evidence sources.
+
+Source receipt identities hash canonical authenticated measurements returned by
+the verifier, including when equivalent raw model-copy values require revalidation.
+Retry consumption counts latest failed run/attempt/gate lineages; multiple sequence
+updates for one attempt do not spend multiple retry slots. Distinct failed attempts
+still exhaust the operator-bounded budget.
