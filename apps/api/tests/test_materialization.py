@@ -18,7 +18,9 @@ from tests.test_self_build_git_observer import repository as repository
 
 
 # Source mutation native regressions use only these disposable Git fixtures.
-def editing_fixture(checkout, operation="modify", filename="hello.txt"):
+def editing_fixture(
+    checkout, operation="modify", filename="hello.txt", *, unselected_directory=False
+):
     from types import SimpleNamespace
 
     from app.models.development_validation import CodeState
@@ -37,6 +39,8 @@ def editing_fixture(checkout, operation="modify", filename="hello.txt"):
     driver.create(policy, creation, owner)
     materialize(driver, policy, creation, owner, acknowledge=lambda *args: None)
     target = Path(policy.worktree_root) / creation.workspace_id
+    if unselected_directory:
+        (target / "unselected").mkdir()
     before = content(b"hello\n", "100644") if operation != "add" else None
     after = content("edited \U0001f600\r\n".encode(), "100644") if operation != "delete" else None
     change = SourceChange(
@@ -916,6 +920,101 @@ def test_unapproved_empty_directory_is_preserved_without_ready_publication(check
         )
     assert failure.value.code == "SELF_BUILD_MATERIALIZATION_CONFLICT"
     assert (target / "node_modules").is_dir() and not published
+
+
+@pytest.mark.parametrize("reader", ["measure", "pin"])
+@pytest.mark.parametrize("name", [".jarvis-empty", ".JaRvIs-Foreign", ".git"])
+def test_source_mutation_unselected_reserved_empty_directory_is_refused(checkout, reader, name):
+    from app.source_mutation import driver as mutation_driver
+
+    target, plan, _, _ = editing_fixture(checkout, unselected_directory=True)
+    foreign = target / "unselected" / "nested" / name
+    foreign.mkdir(parents=True)
+    inode = foreign.stat().st_ino
+    creation = checkout[3]
+    native_target = Path(checkout[1].worktree_root) / creation.workspace_id
+    with ExitStack() as stack:
+        with pytest.raises(DomainError) as failure:
+            if reader == "measure":
+                root = open_directory(stack, native_target, internal=True)
+                mutation_driver.measure_code_state(
+                    stack,
+                    root,
+                    plan.source,
+                    {"hello.txt": (sha256(b"hello\n").hexdigest(), "100644")},
+                    creation,
+                    set(),
+                    lambda: None,
+                )
+            else:
+                mutation_driver.pin_source_tree(stack, native_target, lambda: None)
+    assert failure.value.code == "SOURCE_MUTATION_FOREIGN_ARTIFACT"
+    assert foreign.is_dir() and foreign.stat().st_ino == inode and not list(foreign.iterdir())
+    assert (target / "hello.txt").read_bytes() == b"hello\n"
+
+
+@pytest.mark.parametrize("boundary", ["before_pins", "after_pins"])
+def test_source_mutation_late_reserved_empty_directory_never_finalizes(
+    checkout, monkeypatch, boundary
+):
+    from app.source_mutation import driver as mutation_driver
+
+    target, plan, journal, apply = editing_fixture(checkout, unselected_directory=True)
+    foreign = target / "unselected" / ".JaRvIs-Late"
+    inserted, finalized = [], []
+
+    def insert():
+        foreign.mkdir()
+        inserted.append(True)
+
+    if boundary == "before_pins":
+        native = mutation_driver.pin_source_tree
+
+        def pin(*args, **kwargs):
+            insert()
+            return native(*args, **kwargs)
+
+        monkeypatch.setattr(mutation_driver, "pin_source_tree", pin)
+    else:
+        native = mutation_driver.observe
+
+        def observe(*args, **kwargs):
+            result = native(*args, **kwargs)
+            if journal["completed"] == 1 and not inserted:
+                insert()
+            return result
+
+        monkeypatch.setattr(mutation_driver, "observe", observe)
+    native_apply = mutation_driver.SourceMutationDriver.apply
+
+    def guarded(self, *args, **kwargs):
+        final = kwargs["finalize"]
+
+        def finalize(*values):
+            finalized.append(True)
+            return final(*values)
+
+        return native_apply(self, *args, **(kwargs | {"finalize": finalize}))
+
+    monkeypatch.setattr(mutation_driver.SourceMutationDriver, "apply", guarded)
+    with pytest.raises(DomainError):
+        apply()
+    assert inserted == [True] and not finalized
+    assert foreign.is_dir() and not list(foreign.iterdir())
+    assert journal["completed"] == 1
+    assert (target / "hello.txt").read_bytes() == plan.changes[0].after.text.encode()
+
+
+def test_source_mutation_ordinary_unselected_directory_and_private_markers_remain_valid(checkout):
+    target, _, journal, apply = editing_fixture(checkout, unselected_directory=True)
+    ordinary = target / "unselected"
+    inode = ordinary.stat().st_ino
+    private = target.parent / (".jarvis-owner-" + target.name)
+    markers = {path.name: path.read_bytes() for path in private.iterdir() if path.is_file()}
+    apply()
+    assert journal["completed"] == 1 and apply()
+    assert ordinary.is_dir() and ordinary.stat().st_ino == inode
+    assert markers == {path.name: path.read_bytes() for path in private.iterdir() if path.is_file()}
 
 
 @pytest.mark.parametrize("phase", ["published_pending", "complete"])
