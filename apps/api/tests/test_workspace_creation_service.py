@@ -1108,6 +1108,33 @@ def test_source_mutation_coherently_rehashed_foreign_original_approval_refuses(e
     assert (target / "source.py").read_bytes() == b"value = 1\n"
 
 
+@pytest.mark.parametrize(
+    "field", ["operationId", "checkpointId", "intentDigest", "task_id", "missing_event"]
+)
+def test_history_requires_exact_creation_acknowledgement_audit(editing, field):
+    app, actor, _, service, request, _, _ = editing
+    service.prepare(actor, request)
+    with service.repository.leases._write() as session:
+        event = session.scalar(
+            select(AuditEventRow)
+            .where(
+                AuditEventRow.event_type == "self_build.workspace_creation.checkpoint_acknowledged"
+            )
+            .order_by(AuditEventRow.sequence_number.desc())
+        )
+        if field == "missing_event":
+            event.event_type = "fixture.unrelated"
+        elif field == "task_id":
+            event.task_id = None
+        else:
+            event.payload = event.payload | {
+                "payload": event.payload["payload"] | {field: "foreign"}
+            }
+    with pytest.raises(DomainError) as failure:
+        history.MutationHistoryReader(app).read(actor, request.editing_record_id)
+    assert failure.value.code == "SOURCE_MUTATION_CREATION_CHECKPOINT_INVALID"
+
+
 def test_protected_complete_history_survives_stop_without_claiming_current_source(editing):
     app, actor, _, service, request, _, _ = editing
     completed = service.apply(actor, request)
