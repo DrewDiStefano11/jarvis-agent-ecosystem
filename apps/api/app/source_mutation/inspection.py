@@ -311,6 +311,10 @@ class MutationInspector:
                 measured_at=datetime.now(UTC),
             )
             if not artifacts:
+                # Protected history reads, namespace checks and result assembly
+                # may outlive the preceding fence. Keep every native pin held
+                # while checking current authority immediately before return.
+                driver.authority_check()
                 return result
             payload = dict(
                 schema_version="1.0",
@@ -322,7 +326,9 @@ class MutationInspector:
                 deletion_authorized=False,
                 durable_artifact_ownership_verified=False,
             )
-            return NativeArtifactVerification(
+            verification = NativeArtifactVerification(
                 **(payload | {"source_inspection": result}),
                 verification_fingerprint=digest(payload),
             )
+            driver.authority_check()
+            return verification

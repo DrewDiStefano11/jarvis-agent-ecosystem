@@ -26,3 +26,10 @@ Completed mutations retain one `.before` file for each change with a before iden
 The mutation adapter's namespace lock is under `.jarvis-owner-<workspaceId>/.jarvis-workspace.lock`, outside the source checkout. It does not create or allowlist a checkout-root `.jarvis-workspace.lock`. An unexpected root lock remains a protected foreign artifact and is preserved on refusal.
 
 Retained-byte verification does not establish deletion or rollback authority. Original backup inode provenance is not a durable cleanup contract, and matching bytes alone must not authorize artifact removal. No reader or inspector grants cleanup, chaining or commit authority.
+
+After the final protected-history read, native namespace checks and typed result
+assembly, inspection rechecks the original live authority immediately before
+returning. Source, metadata and ownership pins remain held through that fence.
+Emergency stop, permission revocation or lease expiry during any final check
+therefore refuses both source inspection and artifact verification; historical
+read-only evidence does not extend measurement authority.

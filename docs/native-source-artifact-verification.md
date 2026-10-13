@@ -51,3 +51,8 @@ does not establish native evidence; this model is not an operator authorization 
 a persisted evidence receipt. Bounds include 64 changes, 128 measurements, 64 KiB
 per retained file, 1 MiB of approved aggregate original bytes, and fixed-width native
 device/inode integers.
+
+The shared inspector repeats its live authority fence after protected history,
+metadata/source namespace checks and result construction, while all native pins
+remain held. A stop, permission revocation or lease expiry in that final interval
+cannot return a current artifact measurement.

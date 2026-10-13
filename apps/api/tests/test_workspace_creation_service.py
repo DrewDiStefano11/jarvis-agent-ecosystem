@@ -1763,6 +1763,96 @@ def test_native_source_inspection_revocation_during_scan_never_returns_measureme
     assert (target / "source.py").read_bytes() == b"value = 2\n"
 
 
+@pytest.mark.parametrize("method", ["inspect", "verify_artifacts"])
+@pytest.mark.parametrize("loss", ["stop", "permission", "lease"])
+def test_native_inspection_final_history_authority_loss_never_returns_measurement(
+    editing, monkeypatch, method, loss
+):
+    from datetime import UTC
+
+    from app.db.models import TaskLeaseRow
+    from app.source_mutation.inspection import MutationInspector
+
+    app, actor, _, service, request, target, scope = editing
+    service.apply(actor, request)
+    inspector = MutationInspector(app)
+    read = inspector.history.read
+    calls = 0
+
+    def revoked(*args):
+        nonlocal calls
+        result = read(*args)
+        calls += 1
+        if calls == 2:
+            if loss == "permission":
+                app.state.identity_service.assign_permission(
+                    actor.actor_id, AssignPermissionRequest(effect="deny", **scope)
+                )
+            else:
+                with service.repository.leases._write() as session:
+                    if loss == "stop":
+                        session.get(SystemStateRow, 1).emergency_stop = True
+                    else:
+                        session.get(TaskLeaseRow, result.record.plan.task_id).expires_at = (
+                            datetime.now(UTC) - timedelta(seconds=1)
+                        )
+        return result
+
+    monkeypatch.setattr(inspector.history, "read", revoked)
+    with pytest.raises(DomainError):
+        getattr(inspector, method)(actor, request)
+    assert calls == 2
+    assert (target / "source.py").read_bytes() == b"value = 2\n"
+
+
+@pytest.mark.parametrize("method", ["inspect", "verify_artifacts"])
+@pytest.mark.parametrize("pin_boundary", ["pin_read_tree", "pin_source_tree"])
+@pytest.mark.parametrize("stop", [True, False])
+def test_native_inspection_final_pin_checks_retain_pins_and_recheck_authority(
+    editing, monkeypatch, method, pin_boundary, stop
+):
+    from app.source_mutation import inspection
+
+    app, actor, _, service, request, target, _ = editing
+    service.apply(actor, request)
+    native = getattr(inspection, pin_boundary)
+    checked = False
+
+    def guarded(*args, **kwargs):
+        check = native(*args, **kwargs)
+
+        def final_check():
+            nonlocal checked
+            check()
+            private = target.parent / (".jarvis-owner-" + target.name)
+            for path in (
+                target / "source.py",
+                target / ".git",
+                target / ".jarvis-workspace.json",
+                private / "owner.json",
+                private / "target.json",
+            ):
+                with pytest.raises(PermissionError):
+                    with path.open("r+b") as stream:
+                        stream.write(b"foreign")
+            checked = True
+            if stop:
+                with service.repository.leases._write() as session:
+                    session.get(SystemStateRow, 1).emergency_stop = True
+
+        return final_check
+
+    monkeypatch.setattr(inspection, pin_boundary, guarded)
+    if stop:
+        with pytest.raises(DomainError):
+            getattr(inspection.MutationInspector(app), method)(actor, request)
+    else:
+        result = getattr(inspection.MutationInspector(app), method)(actor, request)
+        source = result if method == "inspect" else result.source_inspection
+        assert source.current_source_measured and source.matches_completed_mutation
+    assert checked and (target / "source.py").read_bytes() == b"value = 2\n"
+
+
 def test_native_source_inspection_rechecks_native_completion_checkpoint_before_return(
     editing, monkeypatch
 ):
