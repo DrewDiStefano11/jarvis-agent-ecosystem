@@ -76,7 +76,7 @@ def content(data, mode):
 
 def measured(path, mode):
     try:
-        with pinned_file(path) as fd:
+        with pinned_file(path, rename=False) as fd:
             data = read_bytes(fd, MAX_FILE_BYTES)
         return FileIdentity(digest=sha256(data).hexdigest(), byte_count=len(data), mode=mode)
     except FileNotFoundError:
@@ -86,6 +86,25 @@ def measured(path, mode):
 def staging_names(operation_id, index):
     key = sha256(f"{operation_id}:{index}".encode()).hexdigest()
     return ".jarvis-edit-" + key + ".before", ".jarvis-edit-" + key + ".after"
+
+
+def verify_original(fd, path, before, expected_identity):
+    """Reverify the retained single-link original through its deny-delete pin."""
+    info = os.fstat(fd)
+    check_stat(info, internal=True)
+    observed = os.stat(windows_native_path(path), follow_symlinks=False)
+    if (info.st_dev, info.st_ino) != expected_identity or (
+        observed.st_dev,
+        observed.st_ino,
+    ) != expected_identity:
+        refuse("SOURCE_MUTATION_BACKUP_CONFLICT")
+    os.lseek(fd, 0, os.SEEK_SET)
+    data = read_bytes(fd, MAX_FILE_BYTES)
+    if (
+        FileIdentity(digest=sha256(data).hexdigest(), byte_count=len(data), mode=before.mode)
+        != before
+    ):
+        refuse("SOURCE_MUTATION_BACKUP_CONFLICT")
 
 
 def require_stage_absent(path):
@@ -465,6 +484,28 @@ class SourceMutationDriver:
                 if unrelated != expected_unrelated:
                     refuse("SOURCE_MUTATION_BEFORE_CONFLICT")
                 # Pin every observed unrelated file against foreign content edits.
+                original_pins = {}
+
+                def retain_original(path, before, expected_identity=None):
+                    if path not in original_pins:
+                        fd = stack.enter_context(pinned_file(path, rename=False))
+                        info = os.fstat(fd)
+                        original_pins[path] = (
+                            fd,
+                            before,
+                            expected_identity or (info.st_dev, info.st_ino),
+                        )
+                    fd, original, owned_identity = original_pins[path]
+                    verify_original(fd, path, original, owned_identity)
+
+                def verify_originals():
+                    for path, (fd, before, owned_identity) in original_pins.items():
+                        verify_original(fd, path, before, owned_identity)
+
+                def acknowledge_file(count, prefix):
+                    verify_originals()
+                    return acknowledge(count, prefix)
+
                 for entry in observation.entries:
                     if (
                         entry.kind == "file"
@@ -482,6 +523,8 @@ class SourceMutationDriver:
                     backup_identity = measured(parent_path / backup, modes[change.path])
                     if backup_identity is not None and backup_identity != change.before:
                         refuse("SOURCE_MUTATION_BACKUP_CONFLICT")
+                    if backup_identity is not None:
+                        retain_original(parent_path / backup, change.before)
                     actual = measured(owned / change.path, modes[change.path])
                     after = identity(change.after)
                     if index < completed:
@@ -521,7 +564,7 @@ class SourceMutationDriver:
                         stage,
                         staging_identity if index == pending else None,
                         lambda device_inode, index=index: claim_stage(index, device_inode),
-                        lambda index=index: acknowledge(
+                        lambda index=index: acknowledge_file(
                             index + 1,
                             digest(
                                 [
@@ -529,6 +572,9 @@ class SourceMutationDriver:
                                     for item in source_plan.preview[: index + 1]
                                 ]
                             ),
+                        ),
+                        lambda owned_identity, path=parent_path / backup, before=change.before: (
+                            retain_original(path, before, owned_identity)
                         ),
                     )
                 check_source = pin_source_tree(stack, owned, self.authority_check)
@@ -556,6 +602,7 @@ class SourceMutationDriver:
                     refuse("SOURCE_MUTATION_AFTER_CONFLICT")
 
                 def publication_guard():
+                    verify_originals()
                     check_metadata()
                     check_source()
 
@@ -563,7 +610,17 @@ class SourceMutationDriver:
                 self.authority_check()
                 return finalize(digest(final.model_dump(mode="json")), publication_guard)
 
-    def _file(self, parent, change, backup, stage, staging_identity, claim_stage, acknowledge):
+    def _file(
+        self,
+        parent,
+        change,
+        backup,
+        stage,
+        staging_identity,
+        claim_stage,
+        acknowledge,
+        retain_original,
+    ):
         before, after = change.before, identity(change.after)
         leaf = change.path.split("/")[-1]
         current = measured(parent.path / leaf, (before or after).mode)
@@ -618,8 +675,13 @@ class SourceMutationDriver:
                 )
                 if actual != before:
                     refuse("SOURCE_MUTATION_BEFORE_CONFLICT")
+                info = os.fstat(fd)
+                original_identity = (info.st_dev, info.st_ino)
                 self.authority_check()
                 rename_pinned(fd, backup)
+            # Transfer from the rename-capable handle to a long-lived read pin.
+            # Any replacement in that handoff must fail native identity checking.
+            retain_original(original_identity)
         if change.after:
             # Keep the publishing handle through the durable file acknowledgement.
             # Reopening by name after _file returns would leave an adoption race.

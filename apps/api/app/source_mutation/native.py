@@ -91,7 +91,7 @@ def staging_file(path, expected_identity):
 
 
 @contextmanager
-def pinned_file(path):
+def pinned_file(path, *, rename=True):
     """Pin the exact regular, single-link file against foreign writes and deletion."""
     import msvcrt
 
@@ -106,7 +106,10 @@ def pinned_file(path):
         wintypes.HANDLE,
     ]
     kernel.CreateFileW.restype = wintypes.HANDLE
-    handle = kernel.CreateFileW(windows_native_path(path), 0x80010000, 1, None, 3, 0x00200000, None)
+    # Read-only pins deny foreign writes/deletion without requesting DELETE,
+    # allowing other deny-delete read pins to coexist through finalization.
+    access = 0x80010000 if rename else 0x80000000
+    handle = kernel.CreateFileW(windows_native_path(path), access, 1, None, 3, 0x00200000, None)
     if handle == ctypes.c_void_p(-1).value:
         code = ctypes.get_last_error()
         if code in {2, 3}:
