@@ -92,6 +92,8 @@
     "tests/test_owned_process.py",
     "tests/test_workspace_creation_service.py",
     "tests/test_checkout_driver.py",
-    "tests/test_materialization.py"
+    "tests/test_materialization.py",
+    "tests/test_development_agent.py",
+    "tests/test_development_navigation.py"
   ]
 }
