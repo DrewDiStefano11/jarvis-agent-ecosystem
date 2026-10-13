@@ -1,7 +1,11 @@
-# Source recovery publication-stage refusal
+# Adversarial coverage for source publication-stage refusal
 
 This safety increment depends explicitly on PR #112 and retains its ancestry. It
 does not depend on the later history, inspection or expected-artifact contracts.
+The core stage-absence guards and pending/completed/deletion regressions are now
+backported to that foundation. This branch retains the additional native-error,
+final pin-boundary, late namespace-insertion and real service recovery coverage,
+without duplicating production changes in its parent-relative diff.
 
 An isolated regression demonstrated that a foreign regular file at the exact
 deterministic `.jarvis-edit-<hash>.after` name could be ignored during recovery.
