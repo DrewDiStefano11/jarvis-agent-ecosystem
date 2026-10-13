@@ -19,6 +19,7 @@ from app.models.source_mutation import (
     MutationApproval,
     MutationPlan,
     MutationRecord,
+    OriginalIdentity,
 )
 from app.self_build.checkout_driver import CheckoutDriver
 from app.self_build.creation_service import (
@@ -271,6 +272,12 @@ class SourceMutationService:
                 or (record.state in {"complete", "finalizing"} and record.completed_count != total)
             ):
                 refuse("SOURCE_MUTATION_INTENT_INVALID")
+            if any(
+                item.change_index >= total
+                or proposal.plan.source_plan.changes[item.change_index].before is None
+                for item in record.original_identities
+            ):
+                refuse("SOURCE_MUTATION_INTENT_INVALID")
             return record, proposal, creation, nonce
 
     def event(self, session, row, actor, record, phase, approval_id):
@@ -294,6 +301,26 @@ class SourceMutationService:
     def prepare(self, actor, request):
         if not driver.supports_mutation():
             refuse("SOURCE_MUTATION_PLATFORM_UNAVAILABLE")
+        with self.repository.sessions() as session:
+            _, _, _, creation, nonce = self.fence(actor, request, session)
+            existing = session.get(SourceMutationRow, request.editing_record_id) is not None
+        if existing:
+            return self._prepare(actor, request)
+
+        def authority_check():
+            with self.repository.sessions() as session:
+                self.fence(actor, request, session)
+
+        checkout = CheckoutDriver(self.creation.git.tool(), authority_check)
+        policy = self.workspace.policies.get(creation.plan.workspace.repository_id)
+        return SourceMutationDriver(checkout).before_intent(
+            policy,
+            creation.plan,
+            ownership(creation, nonce),
+            lambda guard: self._prepare(actor, request, preparation_guard=guard),
+        )
+
+    def _prepare(self, actor, request, *, preparation_guard=None):
         with self.repository.leases._write() as session:
             row, plan, _, _, _ = self.fence(actor, request, session)
             stored = session.get(SourceMutationRow, request.editing_record_id)
@@ -330,6 +357,8 @@ class SourceMutationService:
                 self.event(session, row, actor, record, "prepared", request.approval_id)
             else:
                 record = self.intent(stored, plan, session)
+            if preparation_guard is not None:
+                preparation_guard()
         self.repository.leases.repository.refresh_event_cursor()
         return record
 
@@ -349,6 +378,21 @@ class SourceMutationService:
             stagingDevice=record.staging_device,
             stagingInode=record.staging_inode,
         )
+        if record.original_identities:
+            identity_digest = digest(
+                [item.model_dump(mode="json") for item in record.original_identities]
+            )
+            # A new identity claim is a distinct durable journal position.
+            suffix = "-originals-" + identity_digest[:16]
+            if record.staging_inode is not None:
+                cursor = cursor.removesuffix("-staged") + suffix + "-staged"
+                identifier = identifier.removesuffix("-staged") + suffix + "-staged"
+            else:
+                cursor += suffix
+                identifier += suffix
+            metadata["originalIdentities"] = [
+                item.model_dump(mode="json") for item in record.original_identities
+            ]
         found = [
             item
             for item in self.runtime.checkpoints_authorized(record.plan.runtime_run_id, actor)
@@ -454,12 +498,13 @@ class SourceMutationService:
             "pending_index",
             "staging_device",
             "staging_inode",
+            "original_identities",
             "prefix_digest",
             "final_observation_digest",
         }:
             refuse("SOURCE_MUTATION_TRANSITION_INVALID")
         with self.repository.leases._write() as session:
-            row, plan, _, _, _ = self.fence(actor, request, session)
+            row, plan, proposal, _, _ = self.fence(actor, request, session)
             stored = session.get(SourceMutationRow, request.editing_record_id)
             current = self.intent(stored, plan, session)
             if current != previous:
@@ -470,6 +515,18 @@ class SourceMutationService:
                 | dict(checkpoint_id=None, updated_at=datetime.now(UTC))
             )
             updated = MutationRecord.model_validate(payload)
+            old_originals = {item.change_index: item for item in current.original_identities}
+            new_originals = {item.change_index: item for item in updated.original_identities}
+            if any(new_originals.get(index) != value for index, value in old_originals.items()):
+                refuse("SOURCE_MUTATION_POSITION_CONFLICT")
+            added_originals = new_originals.keys() - old_originals.keys()
+            if added_originals and (
+                current.pending_index is not None
+                or added_originals != {current.completed_count}
+                or updated.pending_index != current.completed_count
+                or proposal.plan.source_plan.changes[current.completed_count].before is None
+            ):
+                refuse("SOURCE_MUTATION_POSITION_CONFLICT")
             advancing = updated.completed_count > current.completed_count
             if advancing:
                 if (
@@ -515,13 +572,32 @@ class SourceMutationService:
         mutator = SourceMutationDriver(checkout)
         policy = self.workspace.policies.get(creation.plan.workspace.repository_id)
 
-        def begin(index):
+        def begin(index, original_identity):
             nonlocal record
+            identities = {item.change_index: item for item in record.original_identities}
+            claimed = identities.get(index)
+            expected = (claimed.device, claimed.inode) if claimed else None
             if record.state == "complete" or record.pending_index == index:
+                if expected != original_identity:
+                    refuse("SOURCE_MUTATION_BACKUP_CONFLICT")
                 return
             if record.completed_count != index or record.pending_index is not None:
                 refuse("SOURCE_MUTATION_POSITION_CONFLICT")
-            record = self.transition(actor, request, record, state="editing", pending_index=index)
+            before = proposal.plan.source_plan.changes[index].before
+            if (before is None) != (original_identity is None):
+                refuse("SOURCE_MUTATION_BACKUP_CONFLICT")
+            if original_identity is not None:
+                identities[index] = OriginalIdentity(
+                    change_index=index, device=original_identity[0], inode=original_identity[1]
+                )
+            record = self.transition(
+                actor,
+                request,
+                record,
+                state="editing",
+                pending_index=index,
+                original_identities=tuple(identities[key] for key in sorted(identities)),
+            )
 
         def acknowledged(count, prefix):
             nonlocal record
@@ -582,6 +658,9 @@ class SourceMutationService:
             staging_identity=(record.staging_device, record.staging_inode)
             if record.staging_inode is not None
             else None,
+            original_identities={
+                item.change_index: (item.device, item.inode) for item in record.original_identities
+            },
             claim_stage=claim_stage,
             begin=begin,
             acknowledge=acknowledged,

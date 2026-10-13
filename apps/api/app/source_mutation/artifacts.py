@@ -61,6 +61,12 @@ def plan_expected_artifacts(record, editing_plan):
         if state != editing_plan.expected_code_state or validation != editing_plan.validation_plan:
             refuse("SOURCE_ARTIFACTS_LINEAGE_INVALID")
         total = len(source.changes)
+        checkpoint_id = f"checkpoint-{record.operation_id}-complete-{total}-None"
+        if record.original_identities:
+            identity_digest = digest(
+                [item.model_dump(mode="json") for item in record.original_identities]
+            )
+            checkpoint_id += "-originals-" + identity_digest[:16]
         if (
             record.completed_count != total
             or record.pending_index is not None
@@ -73,7 +79,7 @@ def plan_expected_artifacts(record, editing_plan):
                     mode="json"
                 )
             )
-            or record.checkpoint_id != f"checkpoint-{record.operation_id}-complete-{total}-None"
+            or record.checkpoint_id != checkpoint_id
         ):
             refuse("SOURCE_ARTIFACTS_POSITION_INVALID")
         artifacts = []

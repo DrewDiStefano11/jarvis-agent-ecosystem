@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, model_serializer, model_validator
 
 from app.models.development_validation import Contract, Digest
 from app.models.self_build import Identifier
@@ -46,6 +46,12 @@ class ApplySourceMutation(Contract):
     lease_token: str = Field(min_length=1, max_length=200, repr=False)
 
 
+class OriginalIdentity(Contract):
+    change_index: int = Field(ge=0, le=63, strict=True)
+    device: int = Field(ge=0, strict=True)
+    inode: int = Field(ge=1, strict=True)
+
+
 class MutationRecord(Contract):
     operation_id: Identifier
     plan: MutationPlan
@@ -55,14 +61,29 @@ class MutationRecord(Contract):
     pending_index: int | None = Field(default=None, ge=0, le=63, strict=True)
     staging_device: int | None = Field(default=None, ge=0, strict=True)
     staging_inode: int | None = Field(default=None, ge=0, strict=True)
+    original_identities: tuple[OriginalIdentity, ...] = Field(default=(), max_length=64)
     prefix_digest: Digest | None = None
     final_observation_digest: Digest | None = None
     checkpoint_id: Identifier | None = None
     created_at: datetime
     updated_at: datetime
 
+    @model_serializer(mode="wrap")
+    def legacy_shape(self, handler):
+        payload = handler(self)
+        if not self.original_identities:
+            # Preserve original serialized records and their checkpoint hashes.
+            payload.pop("original_identities", None)
+            payload.pop("originalIdentities", None)
+        return payload
+
     @model_validator(mode="after")
     def position(self):
+        indices = [item.change_index for item in self.original_identities]
+        if indices != sorted(set(indices)) or any(
+            index >= self.completed_count and index != self.pending_index for index in indices
+        ):
+            raise ValueError("SOURCE_MUTATION_ORIGINAL_IDENTITY_INVALID")
         if (self.staging_device is None) != (self.staging_inode is None) or (
             self.staging_inode is not None and self.pending_index is None
         ):

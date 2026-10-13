@@ -214,6 +214,26 @@ def test_real_applied_edit_is_bound_to_checkpointed_exact_preparation(applied, m
     assert binding.bind(actor, workspace_id, request) == result
 
 
+def test_applied_preparation_preserves_malformed_coordination_metadata(applied):
+    _, actor, binding, workspace_id, request, _, target = applied
+    lock = target / ".jarvis-workspace.lock"
+    assert lock.read_bytes() == b"0"
+    lock.write_bytes(b"foreign coordination metadata")
+    before = {
+        path.name: (path.read_bytes(), path.stat().st_ino)
+        for path in target.iterdir()
+        if path.is_file()
+    }
+    with pytest.raises(DomainError) as failure:
+        binding.bind(actor, workspace_id, request)
+    assert failure.value.code == "SELF_BUILD_CHANGE_UNSAFE"
+    assert before == {
+        path.name: (path.read_bytes(), path.stat().st_ino)
+        for path in target.iterdir()
+        if path.is_file()
+    }
+
+
 def test_pending_source_mutation_cannot_become_applied_evidence(editing):
     app, actor, _, mutation, request, _, _ = editing
     mutation.prepare(actor, request)

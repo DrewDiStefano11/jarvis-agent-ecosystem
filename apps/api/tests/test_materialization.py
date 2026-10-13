@@ -78,10 +78,12 @@ def editing_fixture(
         changes=(),
     )
     expected, _ = project_source_state(plan, original)
-    journal = dict(completed=0, pending=None, stage=None)
+    journal = dict(completed=0, pending=None, stage=None, originals={})
 
-    def begin(index):
+    def begin(index, original_identity):
         journal["pending"] = index
+        if original_identity is not None:
+            journal["originals"][index] = original_identity
 
     def claim(index, value):
         assert journal["pending"] == index
@@ -107,6 +109,7 @@ def editing_fixture(
             completed=journal["completed"],
             pending=journal["pending"],
             staging_identity=journal["stage"],
+            original_identities=journal["originals"],
             claim_stage=claim,
             begin=begin,
             acknowledge=acknowledge,
@@ -132,6 +135,57 @@ def test_source_mutation_native_add_modify_delete_and_exact_replay(checkout, ope
         assert (target / filename).read_bytes() == plan.changes[0].after.text.encode()
     assert (checkout[0] / "hello.txt").read_bytes() == before_primary
     assert (checkout[0] / ".git/index").read_bytes() == before_index
+
+
+@pytest.mark.parametrize("flag", ["assume-unchanged", "skip-worktree"])
+@pytest.mark.parametrize("phase", ["initial", "recovery"])
+def test_source_mutation_native_index_flags_refuse_without_file_effects(
+    checkout, monkeypatch, flag, phase
+):
+    from app.source_mutation import driver as mutation_driver
+
+    target, _, journal, apply = editing_fixture(checkout)
+    native = mutation_driver.rename_pinned
+    if phase == "recovery":
+
+        def interrupted(fd, leaf):
+            native(fd, leaf)
+            if leaf.endswith(".before"):
+                raise RuntimeError("after original rename")
+
+        monkeypatch.setattr(mutation_driver, "rename_pinned", interrupted)
+        with pytest.raises(RuntimeError, match="after original rename"):
+            apply()
+        monkeypatch.setattr(mutation_driver, "rename_pinned", native)
+    configured = Path(checkout[1].worktree_root) / checkout[3].workspace_id
+    subprocess.run(
+        [
+            str(checkout[2].executable),
+            "-C",
+            str(configured),
+            "update-index",
+            "--" + flag,
+            "--",
+            "hello.txt",
+        ],
+        check=True,
+        capture_output=True,
+    )
+    before = {
+        path.name: (path.read_bytes(), path.stat().st_ino)
+        for path in target.iterdir()
+        if path.is_file()
+    }
+    position = dict(journal)
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SOURCE_MUTATION_INDEX_CONFLICT"
+    assert journal == position
+    assert before == {
+        path.name: (path.read_bytes(), path.stat().st_ino)
+        for path in target.iterdir()
+        if path.is_file()
+    }
 
 
 def test_source_mutation_preserves_original_and_recovers_after_rename_crash(checkout, monkeypatch):
@@ -1017,6 +1071,60 @@ def test_source_mutation_ordinary_unselected_directory_and_private_markers_remai
     assert markers == {path.name: path.read_bytes() for path in private.iterdir() if path.is_file()}
 
 
+@pytest.mark.parametrize("tool,path", [("workspace.list", "."), ("workspace.read", "hello.txt")])
+def test_source_mutation_reuses_metadata_lock_after_actual_workspace_read(checkout, tool, path):
+    import json
+
+    from app.models.tool_execution import ToolScope, ToolStep
+    from app.tool_execution.filesystem import WorkspaceToolRegistry
+
+    target, _, journal, apply = editing_fixture(checkout)
+    creation = checkout[3]
+    scope = ToolScope(
+        workspaceId=creation.workspace_id,
+        allowedTools=list(creation.allowed_tools),
+        readPrefixes=list(creation.read_prefixes),
+    )
+    configured = Path(checkout[1].worktree_root) / creation.workspace_id
+    registry = WorkspaceToolRegistry(json.dumps({creation.workspace_id: str(configured)}))
+    registry.execute(ToolStep(tool=tool, path=path), scope)
+    lock = target / ".jarvis-workspace.lock"
+    native_identity = (lock.stat().st_dev, lock.stat().st_ino)
+    assert lock.read_bytes() == b"0"
+    apply()
+    assert journal["completed"] == 1 and apply()
+    assert (lock.stat().st_dev, lock.stat().st_ino) == native_identity
+    assert lock.read_bytes() == b"0"
+
+
+def test_source_mutation_refuses_busy_workspace_read_lock_before_file_intent(checkout):
+    from app.tool_execution.filesystem import workspace_lock
+
+    target, _, journal, apply = editing_fixture(checkout)
+    with ExitStack() as stack:
+        configured = Path(checkout[1].worktree_root) / checkout[3].workspace_id
+        root = open_directory(stack, configured, internal=True)
+        with workspace_lock(root):
+            with pytest.raises(DomainError) as failure:
+                apply()
+    assert failure.value.code == "TOOL_WORKSPACE_BUSY"
+    assert journal == dict(completed=0, pending=None, stage=None, originals={})
+    assert (target / "hello.txt").read_bytes() == b"hello\n"
+
+
+def test_source_mutation_preserves_malformed_root_lock_without_adoption(checkout):
+    target, _, journal, apply = editing_fixture(checkout)
+    lock = target / ".jarvis-workspace.lock"
+    lock.write_bytes(b"foreign metadata")
+    inode = lock.stat().st_ino
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SOURCE_MUTATION_FOREIGN_ARTIFACT"
+    assert journal == dict(completed=0, pending=None, stage=None, originals={})
+    assert lock.read_bytes() == b"foreign metadata" and lock.stat().st_ino == inode
+    assert (target / "hello.txt").read_bytes() == b"hello\n"
+
+
 @pytest.mark.parametrize("phase", ["published_pending", "complete"])
 def test_source_mutation_recovery_refuses_foreign_publication_stage(checkout, monkeypatch, phase):
     from app.source_mutation import driver as mutation_driver
@@ -1072,6 +1180,27 @@ def test_source_mutation_foreign_stage_at_final_pin_boundary_refuses_completion(
     assert (target / "hello.txt").read_bytes() == plan.changes[0].after.text.encode()
 
 
+def test_source_mutation_add_foreign_backup_at_final_pin_refuses_completion(checkout, monkeypatch):
+    from app.source_mutation import driver as mutation_driver
+
+    target, plan, journal, apply = editing_fixture(checkout, "add", "new.txt")
+    before, _ = mutation_driver.staging_names("fixture-operation", 0)
+    backup = target / before
+    native = mutation_driver.pin_source_tree
+
+    def introduced(stack, owned, authority_check):
+        backup.write_bytes(b"foreign add backup")
+        return native(stack, owned, authority_check)
+
+    monkeypatch.setattr(mutation_driver, "pin_source_tree", introduced)
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SOURCE_MUTATION_FOREIGN_ARTIFACT"
+    assert journal["completed"] == 1
+    assert backup.read_bytes() == b"foreign add backup"
+    assert (target / "new.txt").read_bytes() == plan.changes[0].after.text.encode()
+
+
 def test_source_mutation_delete_foreign_stage_refuses_before_original_effect(checkout):
     from app.source_mutation import driver as mutation_driver
 
@@ -1082,7 +1211,7 @@ def test_source_mutation_delete_foreign_stage_refuses_before_original_effect(che
     with pytest.raises(DomainError) as failure:
         apply()
     assert failure.value.code == "SOURCE_MUTATION_FOREIGN_ARTIFACT"
-    assert journal == dict(completed=0, pending=None, stage=None)
+    assert journal == dict(completed=0, pending=None, stage=None, originals={})
     assert stage.read_bytes() == b"foreign deletion artifact"
     assert (target / "hello.txt").read_bytes() == b"hello\n"
 

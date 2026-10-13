@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, literal_column, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db.models import AuditEventRow
@@ -133,6 +133,7 @@ class MutationHistoryReader:
                         pending_index=None,
                         staging_device=None,
                         staging_inode=None,
+                        original_identities=(),
                         prefix_digest=None,
                         final_observation_digest=None,
                         checkpoint_id=None,
@@ -153,10 +154,24 @@ class MutationHistoryReader:
                     )
                     .limit(1)
                 )
-                # Sequence order is authoritative even when clocks regress.
-                # Older valid phases cannot authorize a projection rollback.
+                # SQLite is the supported persistence backend. Its append-only
+                # audit storage ordinal establishes session chronology without
+                # trusting clocks or random session IDs. Sequence is local to
+                # that session and remains authoritative within it.
+                session_order = (
+                    select(
+                        AuditEventRow.event_session_id.label("event_session"),
+                        func.min(literal_column("audit_events.rowid")).label("first_append"),
+                    )
+                    .group_by(AuditEventRow.event_session_id)
+                    .subquery()
+                )
                 latest = session.scalar(
                     select(AuditEventRow)
+                    .join(
+                        session_order,
+                        session_order.c.event_session == AuditEventRow.event_session_id,
+                    )
                     .where(
                         AuditEventRow.task_id == plan.task_id,
                         AuditEventRow.event_type.in_(
@@ -168,7 +183,9 @@ class MutationHistoryReader:
                         audit_payload["editingRecordId"].as_string() == editing_record_id,
                         audit_payload["planHash"].as_string() == plan.plan_hash,
                     )
-                    .order_by(AuditEventRow.sequence_number.desc())
+                    .order_by(
+                        session_order.c.first_append.desc(), AuditEventRow.sequence_number.desc()
+                    )
                     .limit(1)
                 )
                 if (

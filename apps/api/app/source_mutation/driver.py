@@ -30,11 +30,13 @@ from app.self_build.workspace_namespace import owned_namespace
 from app.source_change.planner import identity, verify_source_plan
 from app.source_mutation.native import pinned_file, read_pin, rename_pinned, staging_file
 from app.tool_execution.filesystem import (
+    LOCK,
     check_stat,
     open_directory,
     open_file,
     read_bytes,
     windows_native_path,
+    workspace_lock,
 )
 
 RESERVED = {".git", ".jarvis-workspace.json", ".jarvis-workspace.lock"}
@@ -138,7 +140,7 @@ def observe(stack, checkout, source_plan, modes, ignored=()):
         with os.scandir(directory.path) as listing:
             for item in listing:
                 path = prefix + "/" + item.name if prefix else item.name
-                if path in ignored:
+                if path in ignored or path == LOCK:
                     continue
                 info = os.stat(directory.name(item.name), follow_symlinks=False)
                 kind = "directory" if stat.S_ISDIR(info.st_mode) else "file"
@@ -209,7 +211,7 @@ def measure_code_state(stack, checkout, source, base, plan, ignored, authority_c
             open_directory(stack, parent.path / name, parent, name, internal=True)
         for name in files:
             path = (parent.path / name).relative_to(checkout.path).as_posix()
-            if path in ignored or path in {".git", ".jarvis-workspace.json"}:
+            if path in ignored or path in {".git", ".jarvis-workspace.json", LOCK}:
                 continue
             if any(part.casefold().startswith(".jarvis-") for part in path.split("/")):
                 refuse("SOURCE_MUTATION_FOREIGN_ARTIFACT")
@@ -287,6 +289,9 @@ def verify_base_index(driver, policy, creation_plan, target):
         refuse("SOURCE_MUTATION_INDEX_CONFLICT")
     if digest(entries) != creation_plan.inventory_digest:
         refuse("SOURCE_MUTATION_INDEX_CONFLICT")
+    expected_flags = b"".join(b"H " + item[2].encode("utf-8") + b"\0" for item in entries)
+    if driver.invoke(policy, "index_flags", creation_plan, target) != expected_flags:
+        refuse("SOURCE_MUTATION_INDEX_CONFLICT")
 
 
 def verify_creation_marker(checkout, creation_plan):
@@ -312,6 +317,58 @@ class SourceMutationDriver:
         self.checkout_driver = checkout_driver
         self.authority_check = checkout_driver.authority_check
 
+    def before_intent(self, policy, creation_plan, owner, persist):
+        """Read-only preflight; retain metadata pins through intent persistence."""
+        self.authority_check()
+        try:
+            with ExitStack() as stack:
+                root_path = Path(policy.checked().worktree_root)
+                root = open_directory(stack, Path(root_path.anchor), internal=True)
+                for leaf in root_path.parts[1:]:
+                    root = open_directory(stack, root.path / leaf, root, leaf, internal=True)
+                target = root.path / creation_plan.workspace_id
+                checkout = open_directory(stack, target, root, target.name, internal=True)
+                private_name = ".jarvis-owner-" + creation_plan.workspace_id
+                private = open_directory(
+                    stack, root.path / private_name, root, private_name, internal=True
+                )
+                for name in ("owner.json", "target.json"):
+                    stack.enter_context(pinned_metadata_file(private.path / name))
+                with open_file(private, "owner.json", os.O_RDONLY, internal=True) as fd:
+                    if json.loads(read_bytes(fd, 4096)) != owner:
+                        refuse("SOURCE_MUTATION_OWNERSHIP_CONFLICT")
+                info = os.stat(windows_native_path(target), follow_symlinks=False)
+                claim = dict(
+                    workspaceId=creation_plan.workspace_id,
+                    ownershipDigest=digest(owner),
+                    device=info.st_dev,
+                    inode=info.st_ino,
+                )
+                with open_file(private, "target.json", os.O_RDONLY, internal=True) as fd:
+                    if json.loads(read_bytes(fd, 4096)) != claim:
+                        refuse("SOURCE_MUTATION_OWNERSHIP_CONFLICT")
+                for name in (".git", ".jarvis-workspace.json"):
+                    stack.enter_context(pinned_metadata_file(target / name))
+                check_metadata = pin_read_tree(
+                    stack,
+                    Path(policy.primary_root) / ".git",
+                    self.authority_check,
+                    maximum=creation_plan.maximum_initial_metadata_nodes
+                    + creation_plan.metadata_growth_reserve,
+                )
+                self.checkout_driver.validate_existing_target(
+                    stack, root, target, policy, creation_plan
+                )
+                verify_creation_marker(checkout, creation_plan)
+                verify_base_index(self.checkout_driver, policy, creation_plan, target)
+                check_metadata()
+                self.authority_check()
+                return persist(check_metadata)
+        except OSError:
+            refuse("SOURCE_MUTATION_NATIVE_CONFLICT")
+        except (ValueError, KeyError):
+            refuse("SOURCE_MUTATION_OWNERSHIP_CONFLICT")
+
     def apply(
         self,
         policy,
@@ -326,6 +383,7 @@ class SourceMutationDriver:
         completed,
         pending=None,
         staging_identity=None,
+        original_identities=None,
         claim_stage,
         begin,
         acknowledge,
@@ -362,6 +420,7 @@ class SourceMutationDriver:
                 completed=completed,
                 pending=pending,
                 staging_identity=staging_identity,
+                original_identities=original_identities,
                 claim_stage=claim_stage,
                 begin=begin,
                 acknowledge=acknowledge,
@@ -386,12 +445,14 @@ class SourceMutationDriver:
         completed,
         pending,
         staging_identity,
+        original_identities,
         claim_stage,
         begin,
         acknowledge,
         finalize,
     ):
         driver = self.checkout_driver
+        original_identities = dict(original_identities or {})
         root_path = Path(policy.worktree_root)
         target = root_path / creation_plan.workspace_id
         private = root_path / (".jarvis-owner-" + creation_plan.workspace_id)
@@ -429,6 +490,17 @@ class SourceMutationDriver:
                 stack.enter_context(pinned_metadata_file(owned / ".jarvis-workspace.json"))
                 verify_creation_marker(checkout, creation_plan)
                 verify_base_index(driver, policy, creation_plan, owned)
+                self.authority_check()
+                # Initialize/reuse the same coordination file as approved reads.
+                # Transfer to a deny-write/delete pin before reacquiring its byte
+                # lock read-only, so final tree pins coexist with the lock handle.
+                with workspace_lock(checkout):
+                    pass
+                lock_fd = stack.enter_context(pinned_file(owned / LOCK, rename=False))
+                if os.fstat(lock_fd).st_size != 1 or read_bytes(lock_fd, 1) != b"0":
+                    refuse("SOURCE_MUTATION_FOREIGN_ARTIFACT")
+                stack.enter_context(workspace_lock(checkout, existing_read_only=True))
+                self.authority_check()
                 modes = {
                     change.path: change.before.mode if change.before else change.after.mode
                     for change in source_plan.changes
@@ -533,7 +605,10 @@ class SourceMutationDriver:
                     if backup_identity is not None and backup_identity != change.before:
                         refuse("SOURCE_MUTATION_BACKUP_CONFLICT")
                     if backup_identity is not None:
-                        retain_original(parent_path / backup, change.before)
+                        claimed_original = original_identities.get(index)
+                        if claimed_original is None:
+                            refuse("SOURCE_MUTATION_BACKUP_CONFLICT")
+                        retain_original(parent_path / backup, change.before, claimed_original)
                     actual = measured(owned / change.path, modes[change.path])
                     after = identity(change.after)
                     if index < completed:
@@ -565,34 +640,61 @@ class SourceMutationDriver:
                     parent = directories[change.path.rpartition("/")[0]]
                     # The callback commits a per-file intent and native checkpoint
                     # BEFORE any staging, original rename or destination effect.
-                    begin(index)
-                    self._file(
-                        parent,
-                        change,
-                        backup,
-                        stage,
-                        staging_identity if index == pending else None,
-                        lambda device_inode, index=index: claim_stage(index, device_inode),
-                        lambda index=index: acknowledge_file(
-                            index + 1,
-                            digest(
-                                [
-                                    item.model_dump(mode="json")
-                                    for item in source_plan.preview[: index + 1]
-                                ]
+                    with ExitStack() as original_stack:
+                        original_fd = None
+                        original_identity = original_identities.get(index)
+                        if change.before is not None and backup_identity is None:
+                            if index == pending and original_identity is None:
+                                refuse("SOURCE_MUTATION_BACKUP_CONFLICT")
+                            original_fd = original_stack.enter_context(
+                                pinned_file(owned / change.path)
+                            )
+                            info = os.fstat(original_fd)
+                            captured = (info.st_dev, info.st_ino)
+                            verify_original(
+                                original_fd,
+                                owned / change.path,
+                                change.before,
+                                original_identity if original_identity is not None else captured,
+                            )
+                            original_identity = captured
+                        # Pin the original before the durable begin/checkpoint.
+                        # Recovery must use this claim, never adopt equal bytes.
+                        begin(index, original_identity)
+                        if original_identity is not None:
+                            original_identities[index] = original_identity
+                        self._file(
+                            parent,
+                            change,
+                            backup,
+                            stage,
+                            staging_identity if index == pending else None,
+                            lambda device_inode, index=index: claim_stage(index, device_inode),
+                            lambda index=index: acknowledge_file(
+                                index + 1,
+                                digest(
+                                    [
+                                        item.model_dump(mode="json")
+                                        for item in source_plan.preview[: index + 1]
+                                    ]
+                                ),
                             ),
-                        ),
-                        lambda owned_identity, path=parent_path / backup, before=change.before: (
-                            retain_original(path, before, owned_identity)
-                        ),
-                    )
+                            lambda owned_identity, path=parent_path / backup, before=change.before: (
+                                retain_original(path, before, owned_identity)
+                            ),
+                            original_fd=original_fd,
+                            release_original=original_stack.close,
+                            original_identity=original_identity,
+                        )
                 check_source = pin_source_tree(stack, owned, self.authority_check)
                 # Recheck after the final namespace watch is armed. A foreign
                 # stage may have appeared after a completed-prefix probe; never
                 # silently exclude it from the completion measurement.
                 for index, change in enumerate(source_plan.changes):
-                    _, stage = staging_names(operation_id, index)
+                    backup, stage = staging_names(operation_id, index)
                     require_stage_absent(owned.joinpath(*change.path.split("/")[:-1], stage))
+                    if change.before is None:
+                        require_stage_absent(owned.joinpath(*change.path.split("/")[:-1], backup))
                 final, _ = observe(stack, checkout, source_plan, modes, ignored)
                 final_state, _ = measure_code_state(
                     stack,
@@ -629,10 +731,18 @@ class SourceMutationDriver:
         claim_stage,
         acknowledge,
         retain_original,
+        *,
+        original_fd,
+        release_original,
+        original_identity,
     ):
         before, after = change.before, identity(change.after)
         leaf = change.path.split("/")[-1]
-        current = measured(parent.path / leaf, (before or after).mode)
+        if original_fd is not None:
+            verify_original(original_fd, parent.path / leaf, before, original_identity)
+            current = before
+        else:
+            current = measured(parent.path / leaf, (before or after).mode)
         saved = measured(parent.path / backup, (before or after).mode)
         if saved is not None and saved != before:
             refuse("SOURCE_MUTATION_BACKUP_CONFLICT")
@@ -677,17 +787,12 @@ class SourceMutationDriver:
         if current is not None:
             if saved is not None:
                 refuse("SOURCE_MUTATION_RECOVERY_CONFLICT")
-            with pinned_file(parent.path / leaf) as fd:
-                data = read_bytes(fd, MAX_FILE_BYTES)
-                actual = FileIdentity(
-                    digest=sha256(data).hexdigest(), byte_count=len(data), mode=before.mode
-                )
-                if actual != before:
-                    refuse("SOURCE_MUTATION_BEFORE_CONFLICT")
-                info = os.fstat(fd)
-                original_identity = (info.st_dev, info.st_ino)
-                self.authority_check()
-                rename_pinned(fd, backup)
+            if original_fd is None or original_identity is None:
+                refuse("SOURCE_MUTATION_BACKUP_CONFLICT")
+            verify_original(original_fd, parent.path / leaf, before, original_identity)
+            self.authority_check()
+            rename_pinned(original_fd, backup)
+            release_original()
             # Transfer from the rename-capable handle to a long-lived read pin.
             # Any replacement in that handoff must fail native identity checking.
             retain_original(original_identity)

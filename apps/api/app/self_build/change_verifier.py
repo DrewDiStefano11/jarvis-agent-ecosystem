@@ -238,6 +238,13 @@ class ChangeVerifier:
                         directories.append((Path(directory) / leaf).relative_to(target).as_posix())
                     for leaf in files:
                         path = (Path(directory) / leaf).relative_to(target).as_posix()
+                        if path == ".jarvis-workspace.lock":
+                            with open_file(checkout, leaf, os.O_RDONLY, internal=True) as fd:
+                                if os.fstat(fd).st_size != 1 or read_bytes(fd, 1) != b"0":
+                                    fail(
+                                        "SELF_BUILD_CHANGE_UNSAFE", "Invalid coordination metadata."
+                                    )
+                            continue
                         internal = path in INTERNAL
                         artifact = expected_artifacts.get(path)
                         # Refuse protected/private/deep paths before reading bytes.
