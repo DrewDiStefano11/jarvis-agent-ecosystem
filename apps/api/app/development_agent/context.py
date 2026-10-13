@@ -77,6 +77,9 @@ class RepositoryContextReader:
                 for leaf in files:
                     path = (Path(directory) / leaf).relative_to(target).as_posix()
                     if path in INTERNAL:
+                        # Native source plans retain sibling topology for the
+                        # verified creation marker/Git pointer, never their bytes.
+                        entries.append(SourceEntry(path=path, kind="file"))
                         continue
                     repository_parts(path)
                     if path not in contents:
@@ -111,7 +114,11 @@ class RepositoryContextReader:
                     entries.append(SourceEntry(path=path, kind="file", content=content))
                     if len(entries) > 4096:
                         refuse("DEVELOPMENT_CONTEXT_LIMIT")
-            if {entry.path for entry in entries if entry.kind == "file"} != set(contents):
+            if {
+                entry.path
+                for entry in entries
+                if entry.kind == "file" and entry.path not in INTERNAL
+            } != set(contents):
                 refuse("DEVELOPMENT_INVENTORY_CONFLICT")
             for path in selection.paths:
                 if path in directory_paths:

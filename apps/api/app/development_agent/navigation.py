@@ -2,6 +2,7 @@
 
 from app.development_agent.context import refuse
 from app.models.development_agent import RepositoryContext
+from app.self_build.change_verifier import INTERNAL
 from app.self_build.policy import digest
 
 
@@ -21,7 +22,8 @@ def search_references(context, term, *, maximum=128):
         entry for entry in context.observation.entries if entry.kind == "file" and entry.content
     )
     unread = sum(
-        entry.kind == "file" and entry.content is None for entry in context.observation.entries
+        entry.kind == "file" and entry.content is None and entry.path not in INTERNAL
+        for entry in context.observation.entries
     )
     matches = []
     limited = False

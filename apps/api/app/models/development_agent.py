@@ -24,6 +24,8 @@ class ContextSelection(Contract):
     def canonical_paths(cls, values):
         for path in values:
             source_path(path)
+            if any(part.casefold().startswith(".jarvis-") for part in path.split("/")):
+                raise ValueError("DEVELOPMENT_PATH_DENIED")
         if len({path.casefold() for path in values}) != len(values):
             raise ValueError("DEVELOPMENT_PATH_COLLISION")
         return tuple(sorted(values))

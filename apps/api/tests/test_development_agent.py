@@ -276,7 +276,96 @@ def test_hardlinks_and_binary_source_refuse(development):
     assert error.value.code == "DEVELOPMENT_SOURCE_ENCODING"
 
 
-@pytest.mark.parametrize("paths", [("../source.py",), (".env",), ("source.py", "SOURCE.py")])
+@pytest.mark.parametrize(
+    "paths",
+    [
+        ("../source.py",),
+        (".env",),
+        ("source.py", "SOURCE.py"),
+        (".jarvis-workspace.json",),
+        ("folder/.jarvis-artifact",),
+    ],
+)
 def test_selection_refuses_unsafe_paths(paths):
     with pytest.raises((ValueError, DomainError)):
         ContextSelection(paths=paths)
+
+
+def test_context_proposal_applies_real_native_changes_with_independent_approval(development):
+    from app.models.identity import CreatePermissionRequest
+    from app.models.source_mutation import ApplySourceMutation, ApproveSourceMutation
+    from app.source_mutation.service import SourceMutationService
+
+    app, actor, operator, authority, _, target, reader, context = development
+    (target / "docs").mkdir()
+    (target / "docs/context.txt").write_bytes(b"Unchanged reference material.\n")
+    selection = ContextSelection(paths=("source.py", "new.py", "docs/context.txt"))
+    context = reader.inspect(actor, context.workspace_id, authority, selection)
+    plans = DevelopmentProposalService(app)
+    record = plans.persist(
+        actor, context.workspace_id, authority, selection, "native-development", proposal(context)
+    )
+    observed_paths = {item.path for item in record.plan.observation.entries}
+    assert "docs" in observed_paths and "docs/context.txt" not in observed_paths
+    assert {".git", ".jarvis-workspace.json"} <= observed_paths
+    permission = app.state.identity_service.create_definition(
+        "permission",
+        CreatePermissionRequest(
+            stable_key="self_build.workspace.source_edit",
+            display_name="Approve bounded development edits",
+            resource_type="task",
+            action="source_edit",
+        ),
+    )
+    for principal in (actor, operator):
+        app.state.identity_service.assign_permission(
+            principal.actor_id,
+            AssignPermissionRequest(
+                permission_id=permission.id,
+                effect="allow",
+                resource_type="task",
+                resource_id="task-demo",
+            ),
+        )
+    mutations = SourceMutationService(app)
+    plan = mutations.preview(actor, record.record_id)
+    approval = mutations.approve(
+        operator,
+        ApproveSourceMutation(
+            editing_record_id=record.record_id, expected_plan_hash=plan.plan_hash
+        ),
+    )
+    request = ApplySourceMutation(
+        editing_record_id=record.record_id,
+        expected_plan_hash=plan.plan_hash,
+        approval_id=approval.approval_id,
+        worker_id=authority.worker_id,
+        lease_token=authority.lease_token,
+    )
+    with pytest.raises(DomainError):
+        mutations.apply(actor, request.model_copy(update={"approval_id": "foreign-approval"}))
+    assert (target / "source.py").read_bytes() == b"value = 1\n"
+    result = mutations.apply(actor, request)
+    assert result.state == "complete" and result.completed_count == 2 and result.checkpoint_id
+    assert (target / "source.py").read_bytes() == b"value = 2\n"
+    assert (target / "new.py").read_bytes().startswith(b"from source import value")
+    assert (target / "docs/context.txt").read_bytes() == b"Unchanged reference material.\n"
+    assert SourceMutationService(app).apply(actor, request) == result
+    from app.main import create_app
+
+    restarted = create_app(database_url=app.state.settings.database_url)
+    try:
+        restored = SourceEditingPlanService(restarted).read(actor, record.record_id)
+        assert restored == record and restored.plan.task_id == result.plan.task_id
+        from app.source_mutation.repository import SourceMutationRow
+
+        recovery = SourceMutationService(restarted)
+        with restarted.state.repository.session_factory() as session:
+            stored = session.get(SourceMutationRow, record.record_id)
+            acknowledged = recovery.intent(stored, result.plan, session)
+        assert acknowledged == result
+        assert recovery.checkpoint(actor, acknowledged)[0].checkpoint_id == result.checkpoint_id
+        assert (target / "source.py").read_bytes() == b"value = 2\n"
+        assert (target / "new.py").read_bytes().startswith(b"from source import value")
+    finally:
+        restarted.state.engine.dispose()

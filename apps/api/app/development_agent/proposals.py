@@ -10,11 +10,30 @@ from app.models.source_change import (
     SourceChange,
     SourceChangeIntent,
     SourceContent,
+    SourceObservation,
 )
 from app.models.source_edit_planning import PersistEditingPlanRequest
 from app.self_build.policy import digest
 from app.source_change.planner import observation_identity, plan_source_changes
 from app.source_edit_planning.service import SourceEditingPlanService
+
+
+def mutation_observation(context, changed_paths):
+    """Match native immediate-sibling observations without inventing source evidence."""
+    selected = set(changed_paths)
+    parents = {""}
+    for path in selected:
+        parts = path.split("/")
+        parents.update("/".join(parts[:depth]) for depth in range(1, len(parts)))
+    entries = tuple(
+        entry if entry.path in selected else entry.model_copy(update={"content": None})
+        for entry in context.observation.entries
+        if entry.path.rpartition("/")[0] in parents
+        and (entry.kind != "absent" or entry.path in selected)
+    )
+    return SourceObservation.model_validate(
+        context.observation.model_copy(update={"entries": entries}).model_dump(mode="json")
+    )
 
 
 def compile_proposal(proposal, context, references, *, allow_delete=False):
@@ -75,12 +94,13 @@ def compile_proposal(proposal, context, references, *, allow_delete=False):
             )
         except ValueError:
             refuse("DEVELOPMENT_PROPOSAL_INVALID")
+    observation = mutation_observation(context, (change.path for change in changes))
     intent = SourceChangeIntent(
-        source=observation_identity(context.observation),
+        source=observation_identity(observation),
         references=references,
         changes=tuple(changes),
     )
-    plan_source_changes(intent, context.observation)
+    plan_source_changes(intent, observation)
     return intent
 
 
@@ -114,7 +134,7 @@ class DevelopmentProposalService:
                     command_id=command_id,
                     source_intent=intent,
                 ),
-                context.observation,
+                mutation_observation(context, (change.path for change in intent.changes)),
                 context.code_state,
             )
 

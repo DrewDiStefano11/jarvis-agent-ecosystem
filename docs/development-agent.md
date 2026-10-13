@@ -16,8 +16,8 @@ and protected review interfaces also exist. Some older documents still describe
 pre-checkout capabilities; the implementation is authoritative.
 
 The audited main baseline does not implement a development inference loop, durable
-development iterations, repository search context or source mutation. PR #112 remains open
-against main with the mutation adapter; PR #114 remains open against #112 with
+development iterations, repository search context or source mutation. At that audit, PR #112 was open
+against main with the mutation adapter; PR #114 was open against #112 with
 recovery/artifact history. PR #118 merged into #114's feature branch, not main.
 Its native source inspection is consequently unavailable on this baseline.
 PR #119 separately owns Git preparation/authorization/publication provenance.
@@ -174,3 +174,37 @@ native checkout reads and application recreation against the persisted database.
 Backend Ruff lint/format, blank migration upgrade/downgrade/re-upgrade, frontend
 typecheck/ESLint/234 Vitest tests/build and Git whitespace checks pass.
 These are local checks; fresh hosted CI and human review are still required.
+
+
+## Merged mutation integration update
+
+Origin/main advanced to dc63ed2 on October 13 after #112 merged. That merged
+implementation is integrated into this feature branch; #114 remains a separate
+recovery-history dependency. The initial audit above describes the earlier base.
+
+The source-plan compiler now derives the native adapter's exact immediate-sibling
+observation from the larger repository context. It retains verified root marker
+and Git-pointer topology without reading or exposing their bytes, includes all
+siblings at affected ancestor levels, includes content only for proposed changes,
+and excludes unrelated absent candidate leaves. The complete native CodeState
+still retains unrelated source changes. Full repository context identity is
+rechecked before that narrower mutation observation is derived.
+
+
+Integrated dc63ed2 validation: all 306 development/native-proposal/source-planning
+cases pass. The two subsequently added private-metadata cases pass in the final
+five-case selection package; the final restart-strong native two-file case passes
+again. Final collection assigns all 2,768 tests. Integrated frontend typecheck,
+ESLint, 234 Vitest tests/build, Ruff lint/format and blank migrations pass.
+The full 2,634-pass/three-skip checkpoint above belongs to the earlier baseline;
+it is not represented as an uninterrupted full run on this integrated revision.
+
+The real native integration derives a multi-file proposal from measured source,
+retains unrelated nested context, rejects foreign approval, applies add/modify
+through the merged service and preserves source, completed mutation record and
+native checkpoint across API recreation. Its model output is a fixture and does
+not establish live AI coding quality. Provider/iteration/admission work remains.
+
+#114 is now merged into codex/source-mutation at 7d802481, but its reviewed head
+0481329a is not reachable from the freshly fetched origin/main dc63ed2. Recovery
+history/source inspection remains unavailable on main and is not imported here.
