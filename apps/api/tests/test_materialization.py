@@ -295,6 +295,56 @@ def test_source_mutation_same_bytes_foreign_stage_replacement_is_not_published(
     assert substituted[0].read_bytes() == plan.changes[0].after.text.encode()
 
 
+@pytest.mark.parametrize("operation", ["add", "modify"])
+@pytest.mark.parametrize("recover", [False, True])
+def test_source_mutation_publication_pinned_through_file_acknowledgement(
+    checkout, monkeypatch, operation, recover
+):
+    from app.source_mutation import driver as mutation_driver
+
+    filename = "new.txt" if operation == "add" else "hello.txt"
+    target, plan, journal, apply = editing_fixture(checkout, operation, filename)
+    if recover:
+        rename = mutation_driver.rename_pinned
+
+        def crash(fd, leaf):
+            rename(fd, leaf)
+            if leaf == filename:
+                raise RuntimeError("publication interruption")
+
+        monkeypatch.setattr(mutation_driver, "rename_pinned", crash)
+        with pytest.raises(RuntimeError, match="publication interruption"):
+            apply()
+        monkeypatch.setattr(mutation_driver, "rename_pinned", rename)
+
+    native = mutation_driver.SourceMutationDriver.apply
+    checked = []
+    replacement = target.parent / "foreign-ack-replacement.txt"
+    replacement.write_bytes(plan.changes[0].after.text.encode())
+
+    def guarded(self, *args, **kwargs):
+        acknowledge = kwargs["acknowledge"]
+
+        def ack(count, prefix):
+            destination = target / filename
+            inode = destination.stat().st_ino
+            assert journal["stage"][1] == inode
+            with pytest.raises(PermissionError):
+                replacement.replace(destination)
+            with pytest.raises(PermissionError):
+                destination.write_bytes(b"foreign")
+            acknowledge(count, prefix)
+            assert destination.stat().st_ino == inode
+            checked.append(True)
+
+        return native(self, *args, **(kwargs | {"acknowledge": ack}))
+
+    monkeypatch.setattr(mutation_driver.SourceMutationDriver, "apply", guarded)
+    apply()
+    assert checked and journal["completed"] == 1
+    assert (target / filename).read_bytes() == plan.changes[0].after.text.encode()
+
+
 def test_source_mutation_final_publication_holds_deny_write_pins(checkout, monkeypatch):
     from app.source_mutation.driver import SourceMutationDriver
 
