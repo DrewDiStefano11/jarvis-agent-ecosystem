@@ -19,6 +19,7 @@ from app.db.models import (
 )
 from app.development_validation.evidence import assess_receipts, build_execution_plan
 from app.development_validation.planner import digest
+from app.development_validation.repair import build_repair_evidence
 from app.models.agent_runtime import AgentRunAttempt, RecordCheckpointCommand
 from app.models.validation_journal import (
     JournalApproval,
@@ -26,6 +27,7 @@ from app.models.validation_journal import (
     JournalIntent,
     JournalOwner,
 )
+from app.models.validation_verdict import ValidationVerdict
 from app.validation_journal.reducer import ZERO_DIGEST, fold
 
 
@@ -509,8 +511,7 @@ class ValidationJournalService:
             )
         return snapshot
 
-    def assess(self, actor, workspace_id, journal_id, *, now, max_age_seconds=3600):
-        """Assess final acknowledged history; this grants no execution authority."""
+    def _final_snapshot(self, actor, workspace_id, journal_id):
         snapshot = self.read(actor, workspace_id, journal_id)
         if snapshot.state != "finalized":
             fail("VALIDATION_JOURNAL_NOT_FINALIZED", "Final validation dispositions are required.")
@@ -519,33 +520,41 @@ class ValidationJournalService:
                 "VALIDATION_RECOVERY_REQUIRED",
                 "Final validation history requires native acknowledgement.",
             )
+        return snapshot
+
+    def _approved_hash(self, session, row, snapshot):
+        # Approval is independently persisted authority, never a receipt echo.
+        owner = snapshot.intent.owner
+        approval = session.get(AuditEventRow, owner.approval_id)
+        try:
+            approved = approval.payload["payload"]
+            if (
+                approval.event_type != "development_validation.approved"
+                or approval.task_id != row.task_id
+                or approved["workspaceId"] != row.id
+                or owner.workspace_id != row.id
+                or owner.task_id != row.task_id
+                or owner.runtime_run_id != row.runtime_run_id
+                or approval.actor
+                in {row.actor_id, self.repository.runtime(session, row.runtime_run_id).agent_id}
+                or approved["plan"] != snapshot.intent.plan.model_dump(mode="json")
+            ):
+                raise ValueError("historical approval differs")
+            return approved["plan"]["execution_plan_hash"]
+        except (AttributeError, KeyError, TypeError, ValueError):
+            fail(
+                "VALIDATION_APPROVAL_REQUIRED",
+                "Original exact operator approval is required.",
+                403,
+            )
+
+    def assess(self, actor, workspace_id, journal_id, *, now, max_age_seconds=3600):
+        """Assess final acknowledged history; this grants no execution authority."""
+        snapshot = self._final_snapshot(actor, workspace_id, journal_id)
         with self.repository.sessions() as session:
             row = session.get(DevelopmentWorkspaceRow, workspace_id)
             self.workspace.authorize(actor, row.task_id, session)
-            # Retrieve the original independent operator approval, not a hash
-            # echoed from submitted receipts or even the journal's plan alone.
-            owner = snapshot.intent.owner
-            approval = session.get(AuditEventRow, owner.approval_id)
-            try:
-                approved = approval.payload["payload"]
-                if (
-                    approval.event_type != "development_validation.approved"
-                    or approval.task_id != row.task_id
-                    or approved["workspaceId"] != workspace_id
-                    or owner.task_id != row.task_id
-                    or owner.runtime_run_id != row.runtime_run_id
-                    or approval.actor
-                    in {row.actor_id, self.repository.runtime(session, row.runtime_run_id).agent_id}
-                    or approved["plan"] != snapshot.intent.plan.model_dump(mode="json")
-                ):
-                    raise ValueError("historical approval differs")
-                approved_hash = approved["plan"]["execution_plan_hash"]
-            except (AttributeError, KeyError, TypeError, ValueError):
-                fail(
-                    "VALIDATION_APPROVAL_REQUIRED",
-                    "Original exact operator approval is required.",
-                    403,
-                )
+            approved_hash = self._approved_hash(session, row, snapshot)
             current_state = self.state_reader(row, session)
         receipts = tuple(step.receipt for step in snapshot.steps if step.receipt is not None)
         return assess_receipts(
@@ -557,3 +566,198 @@ class ValidationJournalService:
             expected_execution_plan_hash=approved_hash,
             max_age_seconds=max_age_seconds,
         )
+
+    def _repair_history(self, actor, session, row, snapshot):
+        """Complete bounded same-plan history; callers cannot omit failed attempts."""
+        plan = snapshot.intent.plan
+        events = list(
+            session.scalars(
+                select(AuditEventRow)
+                .where(
+                    AuditEventRow.task_id == row.task_id,
+                    AuditEventRow.event_type == "development_validation.journal_entry",
+                    AuditEventRow.payload["payload"]["entry"]["kind"].as_string() == "intent",
+                    AuditEventRow.payload["payload"]["entry"]["intent"]["owner"][
+                        "workspace_id"
+                    ].as_string()
+                    == row.id,
+                    AuditEventRow.payload["payload"]["entry"]["intent"]["plan"][
+                        "execution_plan_hash"
+                    ].as_string()
+                    == plan.execution_plan_hash,
+                )
+                .order_by(AuditEventRow.sequence_number)
+                .limit(57)
+            )
+        )
+        # 56 journals * 9 gates stays within the 512-receipt assessment bound.
+        if len(events) > 56:
+            fail("VALIDATION_HISTORY_LIMIT", "Complete repair history exceeds safe bounds.")
+        receipts, seen = [], set()
+        for event in events:
+            identifier = event.payload["payload"]["journalId"]
+            if identifier in seen:
+                fail("VALIDATION_JOURNAL_INVALID", "Duplicate validation journal intent.")
+            seen.add(identifier)
+            prior = fold(self._entries(session, row.task_id, identifier))
+            if prior.intent.plan != plan:
+                fail("VALIDATION_JOURNAL_INVALID", "Recorded repair history changes plan.")
+            self._approved_hash(session, row, prior)
+            if self._checkpoint(actor, prior)[0] is None:
+                fail("VALIDATION_RECOVERY_REQUIRED", "Repair history requires acknowledgement.")
+            receipts.extend(s.receipt for s in prior.steps if s.receipt is not None)
+        if snapshot.intent.journal_id not in seen:
+            fail("VALIDATION_JOURNAL_INVALID", "Current journal is absent from complete history.")
+        return tuple(receipts)
+
+    def diagnose(self, actor, workspace_id, journal_id, *, now, max_age_seconds=3600):
+        """Read authenticated persisted history, never caller-submitted evidence."""
+        snapshot = self._final_snapshot(actor, workspace_id, journal_id)
+        with self.repository.sessions() as session:
+            row = session.get(DevelopmentWorkspaceRow, workspace_id)
+            self.workspace.authorize(actor, row.task_id, session)
+            approved_hash = self._approved_hash(session, row, snapshot)
+            current_state = self.state_reader(row, session)
+            receipts = self._repair_history(actor, session, row, snapshot)
+        return build_repair_evidence(
+            current_state,
+            snapshot.intent.plan,
+            receipts,
+            self.verifier,
+            now=now,
+            expected_execution_plan_hash=approved_hash,
+            max_age_seconds=max_age_seconds,
+        )
+
+    def record_verdict(self, actor, workspace_id, request, journal_id, *, expected_journal_digest):
+        """Atomically persist a current measured assessment and bounded diagnosis.
+
+        All inputs come from native source observation and acknowledged history.
+        The journal digest is the idempotency key. A lost response can be recovered
+        by read_verdict without re-executing or reclassifying any command.
+        """
+        snapshot = self._final_snapshot(actor, workspace_id, journal_id)
+        if snapshot.digest != expected_journal_digest:
+            fail("VALIDATION_JOURNAL_CONFLICT", "Assess the exact acknowledged journal.")
+        with self.repository.leases._write() as session:
+            row, run, plan = self._fence(actor, workspace_id, request, session)
+            owner = snapshot.intent.owner
+            if (
+                owner.task_id != row.task_id
+                or owner.workspace_id != workspace_id
+                or owner.runtime_run_id != run.run_id
+                or owner.attempt_id != run.active_attempt_id
+                or owner.worker_id != request.worker_id
+                or owner.lease_fingerprint != digest(request.lease_token)
+            ):
+                fail("VALIDATION_OWNER_MISMATCH", "Verdict requires the original live owner.")
+            if fold(self._entries(session, row.task_id, journal_id)) != snapshot:
+                fail("VALIDATION_JOURNAL_CONFLICT", "Journal changed before assessment.")
+            if plan != snapshot.intent.plan:
+                fail("VALIDATION_PLAN_CHANGED", "Journal differs from approved current source.")
+            approved_hash = self._approved_hash(session, row, snapshot)
+            current_state = self.state_reader(row, session)
+            if digest(current_state.model_dump(mode="json")) != plan.validation.code_state_hash:
+                fail("VALIDATION_SOURCE_MISMATCH", "Source changed during assessment.")
+            existing = self._verdict_event(session, row.task_id, workspace_id, journal_id)
+            if existing is not None:
+                return self._decode_verdict(existing, snapshot)
+            now = datetime.now(UTC)
+            receipts = tuple(s.receipt for s in snapshot.steps if s.receipt is not None)
+            assessment = assess_receipts(
+                current_state,
+                plan,
+                receipts,
+                self.verifier,
+                now=now,
+                expected_execution_plan_hash=approved_hash,
+            )
+            repair = build_repair_evidence(
+                current_state,
+                plan,
+                self._repair_history(actor, session, row, snapshot),
+                self.verifier,
+                now=now,
+                expected_execution_plan_hash=approved_hash,
+            )
+            provisional = ValidationVerdict(
+                workspace_id=workspace_id,
+                journal_id=journal_id,
+                journal_digest=snapshot.digest,
+                approval_id=snapshot.intent.owner.approval_id,
+                execution_plan_hash=plan.execution_plan_hash,
+                current_code_state_hash=plan.validation.code_state_hash,
+                observed_at=now,
+                assessment=assessment,
+                repair=repair,
+                verdict_digest=ZERO_DIGEST,
+            )
+            verdict = provisional.model_copy(
+                update={
+                    "verdict_digest": digest(
+                        provisional.model_dump(mode="json", exclude={"verdict_digest"})
+                    )
+                }
+            )
+            self._emit(
+                session,
+                actor,
+                row.task_id,
+                "verdict_recorded",
+                {
+                    "workspaceId": workspace_id,
+                    "journalId": journal_id,
+                    "authorizationApprovalId": request.approval_id,
+                    "verdict": verdict.model_dump(mode="json"),
+                },
+            )
+        self.repository.leases.repository.refresh_event_cursor()
+        return verdict
+
+    def _verdict_event(self, session, task_id, workspace_id, journal_id):
+        events = list(
+            session.scalars(
+                select(AuditEventRow)
+                .where(
+                    AuditEventRow.task_id == task_id,
+                    AuditEventRow.event_type == "development_validation.verdict_recorded",
+                    AuditEventRow.payload["payload"]["workspaceId"].as_string() == workspace_id,
+                    AuditEventRow.payload["payload"]["journalId"].as_string() == journal_id,
+                )
+                .limit(2)
+            )
+        )
+        if len(events) > 1:
+            fail("VALIDATION_VERDICT_INVALID", "Conflicting persisted validation verdicts.")
+        return events[0] if events else None
+
+    def _decode_verdict(self, event, snapshot):
+        try:
+            verdict = ValidationVerdict.model_validate(event.payload["payload"]["verdict"])
+            if (
+                digest(verdict.model_dump(mode="json", exclude={"verdict_digest"}))
+                != verdict.verdict_digest
+                or verdict.journal_digest != snapshot.digest
+                or verdict.journal_id != snapshot.intent.journal_id
+                or verdict.workspace_id != snapshot.intent.owner.workspace_id
+                or verdict.approval_id != snapshot.intent.owner.approval_id
+                or verdict.execution_plan_hash != snapshot.intent.plan.execution_plan_hash
+                or verdict.current_code_state_hash
+                != snapshot.intent.plan.validation.code_state_hash
+            ):
+                raise ValueError("verdict lineage differs")
+            return verdict
+        except (KeyError, TypeError, ValueError):
+            fail("VALIDATION_VERDICT_INVALID", "Persisted verdict integrity differs.")
+
+    def read_verdict(self, actor, workspace_id, journal_id):
+        """Historical read only; use assess for current source/policy/freshness."""
+        snapshot = self._final_snapshot(actor, workspace_id, journal_id)
+        with self.repository.sessions() as session:
+            row = session.get(DevelopmentWorkspaceRow, workspace_id)
+            self.workspace.authorize(actor, row.task_id, session)
+            self._approved_hash(session, row, snapshot)
+            event = self._verdict_event(session, row.task_id, workspace_id, journal_id)
+            if event is None:
+                fail("VALIDATION_VERDICT_NOT_FOUND", "No recorded verdict exists.", 404)
+            return self._decode_verdict(event, snapshot)

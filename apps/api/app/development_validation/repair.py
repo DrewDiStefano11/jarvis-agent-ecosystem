@@ -125,6 +125,7 @@ def build_repair_evidence(
                 gate=command.gate,
                 disposition=disposition,
                 failure_kind=m.failure_kind if disposition == "failed" else None,
+                diagnostic_codes=m.diagnostic_codes,
                 reproduction=reference,
                 supporting_receipt_digests=tuple(
                     sorted(digest(item.model_dump(mode="json")) for item, _ in lineages.values())
