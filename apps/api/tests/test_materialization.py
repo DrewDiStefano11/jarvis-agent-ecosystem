@@ -78,10 +78,12 @@ def editing_fixture(
         changes=(),
     )
     expected, _ = project_source_state(plan, original)
-    journal = dict(completed=0, pending=None, stage=None)
+    journal = dict(completed=0, pending=None, stage=None, originals={})
 
-    def begin(index):
+    def begin(index, original_identity):
         journal["pending"] = index
+        if original_identity is not None:
+            journal["originals"][index] = original_identity
 
     def claim(index, value):
         assert journal["pending"] == index
@@ -107,6 +109,7 @@ def editing_fixture(
             completed=journal["completed"],
             pending=journal["pending"],
             staging_identity=journal["stage"],
+            original_identities=journal["originals"],
             claim_stage=claim,
             begin=begin,
             acknowledge=acknowledge,
@@ -1082,7 +1085,7 @@ def test_source_mutation_delete_foreign_stage_refuses_before_original_effect(che
     with pytest.raises(DomainError) as failure:
         apply()
     assert failure.value.code == "SOURCE_MUTATION_FOREIGN_ARTIFACT"
-    assert journal == dict(completed=0, pending=None, stage=None)
+    assert journal == dict(completed=0, pending=None, stage=None, originals={})
     assert stage.read_bytes() == b"foreign deletion artifact"
     assert (target / "hello.txt").read_bytes() == b"hello\n"
 

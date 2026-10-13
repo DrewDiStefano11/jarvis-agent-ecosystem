@@ -167,6 +167,14 @@ same device/inode and approved original bytes; replacement during that transfer
 refuses before further publication or acknowledgement. Recovery pins and verifies
 existing originals before accepting pending or completed positions. File and final
 acknowledgement guards reverify those handles, bytes and exact backup paths.
+
+The original device/inode for every modify/delete is recorded in the pending
+journal position and native checkpoint while the original handle remains pinned,
+before its rename. Recovery requires that durable identity for retained originals
+and pending destinations; identical bytes in a foreign inode do not establish
+ownership. Claims remain immutable through acknowledgement and completion and
+grant no cleanup authority. Empty claims preserve legacy serialized records and
+their hashes, but legacy pending originals without a claim refuse recovery.
 Read-only pins can coexist with whole-tree completion pins while preserving their
 deny-write/delete guarantees. Pins release after the operation returns; this does
 not grant cleanup authority or claim permanent native artifact ownership.

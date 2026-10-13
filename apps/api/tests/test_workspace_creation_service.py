@@ -304,6 +304,86 @@ def test_source_mutation_durable_crash_gaps_recover_same_operation(editing, monk
     assert (target / "source.py").read_bytes() == b"value = 2\n"
 
 
+@pytest.mark.parametrize("editing", ["modify", "delete"], indirect=True)
+def test_recovery_refuses_foreign_original_after_pre_rename_crash(editing, monkeypatch):
+    from app.source_mutation import driver as mutation_driver
+    from app.source_mutation.service import SourceMutationService
+
+    _, actor, _, service, request, target, _ = editing
+    destination = target / "source.py"
+    original_bytes = destination.read_bytes()
+    original_inode = destination.stat().st_ino
+    rename = mutation_driver.rename_pinned
+
+    def interrupted(fd, leaf):
+        if leaf.endswith(".before"):
+            raise RuntimeError("before original rename")
+        return rename(fd, leaf)
+
+    monkeypatch.setattr(mutation_driver, "rename_pinned", interrupted)
+    with pytest.raises(RuntimeError, match="before original rename"):
+        service.apply(actor, request)
+    pending = service.current(actor, request)[0]
+    before, _ = mutation_driver.staging_names(pending.operation_id, 0)
+    backup = target / before
+    destination.replace(target.parent / "preserved-approved-original.py")
+    backup.write_bytes(original_bytes)
+    foreign_inode = backup.stat().st_ino
+    assert foreign_inode != original_inode
+    monkeypatch.setattr(mutation_driver, "rename_pinned", rename)
+    with pytest.raises(DomainError) as failure:
+        SourceMutationService(service.app).apply(actor, request)
+    assert failure.value.code == "SOURCE_MUTATION_BACKUP_CONFLICT"
+    assert service.current(actor, request)[0] == pending
+    assert not destination.exists()
+    assert backup.read_bytes() == original_bytes and backup.stat().st_ino == foreign_inode
+
+
+@pytest.mark.parametrize("editing", ["modify", "delete"], indirect=True)
+def test_original_identity_is_checkpointed_before_native_rename(editing, monkeypatch):
+    import os
+
+    from app.source_mutation import driver as mutation_driver
+
+    _, actor, _, service, request, _, _ = editing
+    rename = mutation_driver.rename_pinned
+    observed = []
+
+    def checked(fd, leaf):
+        if leaf.endswith(".before"):
+            pending = service.current(actor, request)[0]
+            claim = pending.original_identities[0]
+            info = os.fstat(fd)
+            assert claim.change_index == 0
+            assert (claim.device, claim.inode) == (info.st_dev, info.st_ino)
+            checkpoint, identifier, _, metadata = service.checkpoint(actor, pending)
+            assert checkpoint is not None and pending.checkpoint_id == identifier
+            assert metadata["originalIdentities"] == [claim.model_dump(mode="json")]
+            observed.append(claim)
+        return rename(fd, leaf)
+
+    monkeypatch.setattr(mutation_driver, "rename_pinned", checked)
+    completed = service.apply(actor, request)
+    assert completed.original_identities == tuple(observed) and len(observed) == 1
+    assert service.apply(actor, request) == completed
+
+
+def test_legacy_empty_original_claims_keep_the_serialized_record_hash(editing):
+    from app.models.source_mutation import MutationRecord
+    from app.self_build.policy import digest
+    from app.source_mutation.service import intent_digest
+
+    _, actor, _, service, request, _, _ = editing
+    prepared = service.prepare(actor, request)
+    legacy = prepared.model_dump(mode="json")
+    assert "original_identities" not in legacy
+    assert MutationRecord.model_validate(legacy).model_dump(mode="json") == legacy
+    old_digest = digest(
+        {key: value for key, value in legacy.items() if key not in {"checkpoint_id", "updated_at"}}
+    )
+    assert intent_digest(prepared) == old_digest
+
+
 @pytest.mark.parametrize("editing", ["add", "modify"], indirect=True)
 @pytest.mark.parametrize("gap", ["before_checkpoint", "before_journal_ack"])
 @pytest.mark.parametrize("foreign_replacement", [False, True])
