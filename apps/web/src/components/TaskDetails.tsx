@@ -34,7 +34,7 @@ export function TaskDetails() {
   const stale = Boolean(loading || !system || error || resyncRequired || connection !== 'connected')
   if (!task) return <ActionDrawer open title="Task unavailable" closeLabel="Close task details" onClose={close}><p>The selected task is not in the loaded snapshot. Refresh to confirm its availability.</p><button className="secondary" onClick={() => void refresh()}>Refresh state</button></ActionDrawer>
   const children = tasks.filter(item => item.parentTaskId === task.id)
-  const timeline = auditEvents.filter(event => event.taskId === task.id).sort((a, b) => b.timestamp.localeCompare(a.timestamp)).slice(0, 20)
+  const timeline = auditEvents.filter(event => event.taskId === task.id).sort((a, b) => b.sequenceNumber - a.sequenceNumber).slice(0, 20)
   const relatedApprovals = approvals.filter(approval => task.approvalIds.includes(approval.id))
   const pending = relatedApprovals.filter(approval => approval.status === 'pending')
   const closed = ['completed', 'failed', 'cancelled'].includes(task.status)
@@ -52,7 +52,7 @@ export function TaskDetails() {
   return <ActionDrawer open title={task.title} closeLabel="Close task details" onClose={close}>
     <div ref={content} className="task-detail-workspace">
       <div className="task-detail-navigation"><button className="secondary" aria-pressed={tab === 'summary'} onClick={() => show('summary')}><NavIcon name="tasks"/>Task summary</button><button className="secondary" aria-pressed={tab === 'planning'} onClick={plan}><NavIcon name="planning"/>Planning & runtime</button>{relatedApprovals.length > 0 && <button className="secondary" aria-pressed={tab === 'approvals'} onClick={() => show('approvals')}><NavIcon name="attention"/>Approvals {pending.length > 0 ? `(${pending.length} pending)` : ''}</button>}</div>
-      {tab === 'planning' ? <Suspense fallback={<p role="status">Loading planning...</p>}><Planning lockedTaskId={task.id} onInspectTask={inspect} onCreateTask={() => show('creation')} onCorrectTask={id => { selectTask(id); setView({ taskId: id, tab: 'correction' }) }}/></Suspense> : tab === 'approvals' ? <Suspense fallback={<p role="status">Loading approvals...</p>}><ApprovalInbox key={task.id} initialQuery={task.id} onInspectTask={inspect} onOpenPlanning={plan}/></Suspense> : tab === 'correction' || tab === 'creation' ? <>
+      {tab === 'planning' ? <Suspense fallback={<p role="status">Loading planning...</p>}><Planning lockedTaskId={task.id} onInspectTask={inspect} onCreateTask={() => show('creation')} onCorrectTask={id => { selectTask(id); setView({ taskId: id, tab: 'correction' }) }}/></Suspense> : tab === 'approvals' ? <Suspense fallback={<p role="status">Loading approvals...</p>}><ApprovalInbox key={task.id} lockedTaskId={task.id} onInspectTask={inspect} onOpenPlanning={plan}/></Suspense> : tab === 'correction' || tab === 'creation' ? <>
         <h2>{tab === 'correction' ? 'Revise the request' : 'Create a new request'}</h2>{stale && <p role="status">Reconnect and refresh before creating work.</p>}{tab === 'correction' && !correctable ? <p>This task is still active. Inspect its progress or cancel it before creating a correction.</p> : <fieldset disabled={stale}><TaskCreateForm key={`${task.id}:${tab}`} source={tab === 'correction' ? task : undefined} onCreated={(created, warning) => { setCreationWarning(warning); inspect(created.id) }}/></fieldset>}
       </> : <>
         {creationWarning && <p role="status">{creationWarning}</p>}

@@ -52,6 +52,12 @@ Recovery also rejects a foreign task before restoring it, and queue/retry requir
 the immutable pending submission's task to match the current shared selection.
 Changing task scope cannot replay another task's original command IDs.
 
+The embedded approval inbox uses an exact locked task ID independently of its
+editable search query. Clearing search cannot expose another task's decisions;
+decision submission also checks the locked scope. Task timelines order by durable
+audit sequence before selecting the latest 20 loaded records, so clock adjustments
+cannot displace the latest evidence.
+
 Campaign validation after reconciling current main: frontend typecheck, ESLint,
 232 Vitest tests and production build pass; API regressions pass (28 tests).
 The normal browser smoke exercises current drawer/button actions, including
