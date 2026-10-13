@@ -6,6 +6,15 @@ objects are internal projections, not authenticated proof. Use
 There is no HTTP importer, collector key, signing endpoint, command runner or
 new autonomous capability in this milestone.
 
+Receipt assessment requires `expected_execution_plan_hash` from a separately
+trusted host/operator-approved reference. Obtain it outside candidate receipts,
+model text and submitted plan fields; echoing a candidate hash is not approval.
+It binds the original boundary, browser requirement and affected-test mapping.
+`verify_plan` reconstructs packaged policy for structural inspection only; it
+does not approve embedded derivation inputs. No default approval reference or
+HTTP endpoint that lets a caller choose one is provided. Durable journal callers
+must retrieve the original append-only operator approval and match its exact plan.
+
 `build_execution_plan` binds the exact repository, HEAD, base, content/mode
 changes, deterministic validation plan, gate targets, suite identity, adapter
 contract identity and packaged budget policy into an immutable hash. Rehashing
@@ -77,6 +86,8 @@ Final follow-up validation: 243 focused regressions passed with no-cache Ruff.
 
 Measurement bounds retain signed POSIX and unsigned 32-bit Windows termination
 status. Failed executions may record budget overrun durations and large measured
-peaks; successful exits still must meet immutable command budgets. Repository
-identity is canonical and bounded. See [GetExitCodeProcess](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getexitcodeprocess)
+peaks; successful exits still must meet immutable command budgets.
+An explicitly classified failed observation may retain exit zero when its measured
+timeout or memory bound was exceeded; a bounded zero exit cannot claim failure.
+Repository identity is canonical and bounded. See [GetExitCodeProcess](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getexitcodeprocess)
 and [DWORD data type](https://learn.microsoft.com/en-us/windows/win32/winprog/windows-data-types).

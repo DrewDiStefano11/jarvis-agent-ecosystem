@@ -111,7 +111,11 @@ class ExecutionMeasurement(Contract):
         ):
             raise ValueError("pass requires a successful bounded measured exit")
         if self.outcome == "failed":
-            if self.exit_code == 0 or self.failure_kind is None:
+            exceeded_policy = elapsed > self.command.timeout_seconds * 1000 or (
+                self.resources.peak_memory_bytes is not None
+                and self.resources.peak_memory_bytes > self.command.memory_limit_bytes
+            )
+            if self.failure_kind is None or (self.exit_code == 0 and not exceeded_policy):
                 raise ValueError("failed measurement requires explicit classification")
         elif self.failure_kind is not None:
             raise ValueError("only failure has a failure classification")
