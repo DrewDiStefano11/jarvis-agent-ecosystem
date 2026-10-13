@@ -1020,6 +1020,60 @@ def test_source_mutation_ordinary_unselected_directory_and_private_markers_remai
     assert markers == {path.name: path.read_bytes() for path in private.iterdir() if path.is_file()}
 
 
+@pytest.mark.parametrize("tool,path", [("workspace.list", "."), ("workspace.read", "hello.txt")])
+def test_source_mutation_reuses_metadata_lock_after_actual_workspace_read(checkout, tool, path):
+    import json
+
+    from app.models.tool_execution import ToolScope, ToolStep
+    from app.tool_execution.filesystem import WorkspaceToolRegistry
+
+    target, _, journal, apply = editing_fixture(checkout)
+    creation = checkout[3]
+    scope = ToolScope(
+        workspaceId=creation.workspace_id,
+        allowedTools=list(creation.allowed_tools),
+        readPrefixes=list(creation.read_prefixes),
+    )
+    configured = Path(checkout[1].worktree_root) / creation.workspace_id
+    registry = WorkspaceToolRegistry(json.dumps({creation.workspace_id: str(configured)}))
+    registry.execute(ToolStep(tool=tool, path=path), scope)
+    lock = target / ".jarvis-workspace.lock"
+    native_identity = (lock.stat().st_dev, lock.stat().st_ino)
+    assert lock.read_bytes() == b"0"
+    apply()
+    assert journal["completed"] == 1 and apply()
+    assert (lock.stat().st_dev, lock.stat().st_ino) == native_identity
+    assert lock.read_bytes() == b"0"
+
+
+def test_source_mutation_refuses_busy_workspace_read_lock_before_file_intent(checkout):
+    from app.tool_execution.filesystem import workspace_lock
+
+    target, _, journal, apply = editing_fixture(checkout)
+    with ExitStack() as stack:
+        configured = Path(checkout[1].worktree_root) / checkout[3].workspace_id
+        root = open_directory(stack, configured, internal=True)
+        with workspace_lock(root):
+            with pytest.raises(DomainError) as failure:
+                apply()
+    assert failure.value.code == "TOOL_WORKSPACE_BUSY"
+    assert journal == dict(completed=0, pending=None, stage=None, originals={})
+    assert (target / "hello.txt").read_bytes() == b"hello\n"
+
+
+def test_source_mutation_preserves_malformed_root_lock_without_adoption(checkout):
+    target, _, journal, apply = editing_fixture(checkout)
+    lock = target / ".jarvis-workspace.lock"
+    lock.write_bytes(b"foreign metadata")
+    inode = lock.stat().st_ino
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SOURCE_MUTATION_FOREIGN_ARTIFACT"
+    assert journal == dict(completed=0, pending=None, stage=None, originals={})
+    assert lock.read_bytes() == b"foreign metadata" and lock.stat().st_ino == inode
+    assert (target / "hello.txt").read_bytes() == b"hello\n"
+
+
 @pytest.mark.parametrize("phase", ["published_pending", "complete"])
 def test_source_mutation_recovery_refuses_foreign_publication_stage(checkout, monkeypatch, phase):
     from app.source_mutation import driver as mutation_driver
@@ -1073,6 +1127,27 @@ def test_source_mutation_foreign_stage_at_final_pin_boundary_refuses_completion(
     assert journal["completed"] == 1
     assert stage.read_bytes() == b"foreign final artifact"
     assert (target / "hello.txt").read_bytes() == plan.changes[0].after.text.encode()
+
+
+def test_source_mutation_add_foreign_backup_at_final_pin_refuses_completion(checkout, monkeypatch):
+    from app.source_mutation import driver as mutation_driver
+
+    target, plan, journal, apply = editing_fixture(checkout, "add", "new.txt")
+    before, _ = mutation_driver.staging_names("fixture-operation", 0)
+    backup = target / before
+    native = mutation_driver.pin_source_tree
+
+    def introduced(stack, owned, authority_check):
+        backup.write_bytes(b"foreign add backup")
+        return native(stack, owned, authority_check)
+
+    monkeypatch.setattr(mutation_driver, "pin_source_tree", introduced)
+    with pytest.raises(DomainError) as failure:
+        apply()
+    assert failure.value.code == "SOURCE_MUTATION_FOREIGN_ARTIFACT"
+    assert journal["completed"] == 1
+    assert backup.read_bytes() == b"foreign add backup"
+    assert (target / "new.txt").read_bytes() == plan.changes[0].after.text.encode()
 
 
 def test_source_mutation_delete_foreign_stage_refuses_before_original_effect(checkout):
