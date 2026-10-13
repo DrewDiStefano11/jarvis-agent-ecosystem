@@ -1865,3 +1865,351 @@ def test_native_source_inspection_refuses_credential_names_before_content_reads(
         inspection.MutationInspector._check_namespace_names(tmp_path, set())
     assert failure.value.code == "TOOL_PATH_DENIED"
     assert ".env" not in str(failure.value)
+
+
+def test_expected_artifact_manifest_protected_read_survives_stop_without_native_claims(editing):
+    from app.source_mutation.artifacts import ArtifactManifestReader
+    from app.source_mutation.driver import staging_names
+
+    app, actor, _, service, request, target, _ = editing
+    completed = service.apply(actor, request)
+    reader = ArtifactManifestReader(app)
+    result = reader.read(actor, request.editing_record_id)
+    before, after = staging_names(completed.operation_id, 0)
+    assert [item.path for item in result.artifacts] == [before, after]
+    assert result.original_approval_id == completed.original_approval_id
+    assert result.checkpoint_id == completed.checkpoint_id
+    from hashlib import sha256
+
+    assert (
+        result.artifacts[0].expected_identity.digest
+        == sha256((target / before).read_bytes()).hexdigest()
+    )
+    assert not result.native_artifacts_verified and not result.deletion_authorized
+    assert not result.execution_authorized and not result.checkout_root_lock_allowed
+    with service.repository.leases._write() as session:
+        session.get(SystemStateRow, 1).emergency_stop = True
+    assert reader.read(actor, request.editing_record_id) == result
+    assert (target / "source.py").read_bytes() == b"value = 2\n"
+
+
+def test_expected_artifact_manifest_pending_intent_refuses_without_source_effects(editing):
+    from app.source_mutation.artifacts import ArtifactManifestReader
+
+    app, actor, _, service, request, target, _ = editing
+    service.prepare(actor, request)
+    with pytest.raises(DomainError) as failure:
+        ArtifactManifestReader(app).read(actor, request.editing_record_id)
+    assert failure.value.code == "SOURCE_ARTIFACTS_INCOMPLETE"
+    assert (target / "source.py").read_bytes() == b"value = 1\n"
+    assert not list(target.glob(".jarvis-edit-*"))
+
+
+def test_artifact_reader_refuses_native_only_completion_crash_gap(editing, monkeypatch):
+    from app.source_mutation.artifacts import ArtifactManifestReader
+
+    app, actor, _, service, request, _, _ = editing
+    native = service.event
+
+    def crash_final_ack(session, row, actor, record, phase, approval_id):
+        if phase == "checkpoint_acknowledged" and record.state == "complete":
+            raise RuntimeError("final acknowledgement crash")
+        return native(session, row, actor, record, phase, approval_id)
+
+    monkeypatch.setattr(service, "event", crash_final_ack)
+    with pytest.raises(RuntimeError, match="final acknowledgement"):
+        service.apply(actor, request)
+    record = service.current(actor, request)[0]
+    assert record.state == "finalizing"
+    checkpoint, identifier, _, _ = service.checkpoint(actor, record)
+    assert checkpoint is not None
+    with service.repository.leases._write() as session:
+        stored = session.get(SourceMutationRow, request.editing_record_id)
+        stored.payload = stored.payload | {"state": "complete", "checkpoint_id": identifier}
+    with pytest.raises(DomainError) as failure:
+        ArtifactManifestReader(app).read(actor, request.editing_record_id)
+    assert failure.value.code == "SOURCE_ARTIFACTS_POSITION_INVALID"
+
+
+def test_expected_artifact_manifest_storage_error_does_not_expose_database_details():
+    from types import SimpleNamespace
+
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from app.source_mutation.artifacts import ArtifactManifestReader
+
+    def failed(*args):
+        raise SQLAlchemyError("private source text and lease token")
+
+    reader = ArtifactManifestReader.__new__(ArtifactManifestReader)
+    reader.history = SimpleNamespace(read=failed)
+    with pytest.raises(DomainError) as failure:
+        reader.read(None, "0" * 64)
+    assert failure.value.code == "SOURCE_ARTIFACTS_STORAGE_FAILED"
+    assert "private" not in str(failure.value) and failure.value.__suppress_context__
+
+
+@pytest.mark.parametrize("editing", ["add", "modify", "delete"], indirect=True)
+def test_native_artifact_verification_measures_exact_bounded_contract_without_effects(
+    editing, monkeypatch
+):
+    from app.source_mutation.artifacts import ArtifactManifestReader
+    from app.source_mutation.inspection import MutationInspector
+
+    app, actor, _, service, request, target, _ = editing
+    service.apply(actor, request)
+    before = {
+        path.relative_to(target).as_posix(): path.read_bytes()
+        for path in target.rglob("*")
+        if path.is_file()
+    }
+    inspector = MutationInspector(app)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("artifact verification must not perform mutation")
+
+    for name in ("apply", "prepare", "transition", "acknowledge"):
+        monkeypatch.setattr(inspector.service, name, forbidden)
+    result = inspector.verify_artifacts(actor, request)
+    repeated = inspector.verify_artifacts(actor, request)
+    assert result.manifest == ArtifactManifestReader(app).read(actor, request.editing_record_id)
+    assert result.native_artifacts_verified and result.source_inspection.matches_completed_mutation
+    assert not result.execution_authorized and not result.deletion_authorized
+    assert not result.durable_artifact_ownership_verified
+    assert result.verification_fingerprint == repeated.verification_fingerprint
+    for actual in result.measurements:
+        path = target / actual.path
+        if actual.presence == "retained_original":
+            info = path.stat()
+            assert (actual.device, actual.inode, actual.byte_count) == (
+                info.st_dev,
+                info.st_ino,
+                info.st_size,
+            )
+        else:
+            assert not path.exists() and actual.inode is None and actual.digest is None
+    assert request.lease_token not in result.model_dump_json()
+    assert "value =" not in result.model_dump_json()
+    assert before == {
+        path.relative_to(target).as_posix(): path.read_bytes()
+        for path in target.rglob("*")
+        if path.is_file()
+    }
+
+
+@pytest.mark.parametrize(
+    ("event_type", "error_code"),
+    [
+        (
+            "self_build.workspace_creation.checkpoint_acknowledged",
+            "SOURCE_MUTATION_CREATION_CHECKPOINT_INVALID",
+        ),
+        (
+            "self_build.source_mutation.checkpoint_acknowledged",
+            "SOURCE_MUTATION_CHECKPOINT_INVALID",
+        ),
+    ],
+)
+def test_native_artifact_verification_requires_persisted_acknowledgement_audit(
+    editing, event_type, error_code
+):
+    from app.source_mutation.inspection import MutationInspector
+    from app.source_mutation.repository import SourceMutationRow
+
+    app, actor, _, service, request, target, _ = editing
+    completed = service.apply(actor, request)
+    inspector = MutationInspector(app)
+    assert inspector.verify_artifacts(actor, request).native_artifacts_verified
+    private = target.parent / (".jarvis-owner-" + target.name)
+
+    def files():
+        return {
+            str(path): (path.read_bytes(), path.stat().st_ino)
+            for directory in (target, private)
+            for path in directory.rglob("*")
+            if path.is_file()
+        }
+
+    before = files()
+    # Simulate missing durable evidence in this isolated database, keeping the
+    # native checkpoints and completed journal projection intact.
+    with service.repository.leases._write() as session:
+        event = session.scalar(
+            select(AuditEventRow)
+            .where(
+                AuditEventRow.event_type == event_type,
+                AuditEventRow.task_id == completed.plan.task_id,
+            )
+            .order_by(AuditEventRow.sequence_number.desc())
+        )
+        assert event is not None
+        removed_id = event.id
+        session.delete(event)
+    with service.repository.sessions() as session:
+        assert session.get(AuditEventRow, removed_id) is None
+    with pytest.raises(DomainError) as failure:
+        MutationInspector(app).verify_artifacts(actor, request)
+    assert failure.value.code == error_code
+    assert files() == before
+    with service.repository.sessions() as session:
+        assert session.get(
+            SourceMutationRow, request.editing_record_id
+        ).payload == completed.model_dump(mode="json")
+
+
+@pytest.mark.parametrize("loss", ["approval", "lease", "hash", "stop"])
+def test_native_artifact_verification_requires_current_original_authority(editing, loss):
+    from app.source_mutation.inspection import MutationInspector
+
+    app, actor, _, service, request, target, _ = editing
+    service.apply(actor, request)
+    if loss == "stop":
+        with service.repository.leases._write() as session:
+            session.get(SystemStateRow, 1).emergency_stop = True
+    else:
+        request = request.model_copy(
+            update={
+                "approval": {"approval_id": "foreign"},
+                "lease": {"lease_token": "foreign"},
+                "hash": {"expected_plan_hash": "0" * 64},
+            }[loss]
+        )
+    with pytest.raises(DomainError):
+        MutationInspector(app).verify_artifacts(actor, request)
+    assert (target / "source.py").read_bytes() == b"value = 2\n"
+
+
+@pytest.mark.parametrize("artifact", ["backup", "stage", "root_lock", "hardlink"])
+def test_native_artifact_verification_refuses_foreign_artifacts_without_cleanup(editing, artifact):
+    import os
+
+    from app.source_mutation.driver import staging_names
+    from app.source_mutation.inspection import MutationInspector
+
+    app, actor, _, service, request, target, _ = editing
+    completed = service.apply(actor, request)
+    before, after = staging_names(completed.operation_id, 0)
+    if artifact == "hardlink":
+        path = target / "alias.py"
+        os.link(target / before, path)
+    else:
+        path = (
+            target
+            / {"backup": before, "stage": after, "root_lock": ".jarvis-workspace.lock"}[artifact]
+        )
+        path.write_bytes(b"foreign")
+    content = path.read_bytes()
+    with pytest.raises(DomainError):
+        MutationInspector(app).verify_artifacts(actor, request)
+    assert path.read_bytes() == content
+    assert (target / "source.py").read_bytes() == b"value = 2\n"
+
+
+def test_native_artifact_verification_drift_does_not_claim_completed_source_freshness(editing):
+    from app.source_mutation.inspection import MutationInspector
+
+    app, actor, _, service, request, target, _ = editing
+    service.apply(actor, request)
+    (target / "source.py").write_bytes(b"later change\n")
+    result = MutationInspector(app).verify_artifacts(actor, request)
+    assert (
+        result.native_artifacts_verified and not result.source_inspection.matches_completed_mutation
+    )
+    assert not result.execution_authorized and not result.deletion_authorized
+    assert "later change" not in result.model_dump_json()
+
+
+def test_native_artifact_verification_rechecks_stop_after_backup_measurement(editing, monkeypatch):
+    from app.source_mutation.inspection import MutationInspector
+
+    app, actor, _, service, request, target, _ = editing
+    service.apply(actor, request)
+    inspector = MutationInspector(app)
+    native = inspector._read
+
+    def stopped(directory, name, limit):
+        data = native(directory, name, limit)
+        if name.endswith(".before"):
+            with service.repository.leases._write() as session:
+                session.get(SystemStateRow, 1).emergency_stop = True
+        return data
+
+    monkeypatch.setattr(inspector, "_read", stopped)
+    with pytest.raises(DomainError):
+        inspector.verify_artifacts(actor, request)
+    assert (target / "source.py").read_bytes() == b"value = 2\n"
+
+
+def test_native_artifact_verification_same_bytes_replacement_never_claims_durable_ownership(
+    editing,
+):
+    from app.source_mutation.driver import staging_names
+    from app.source_mutation.inspection import MutationInspector
+
+    app, actor, _, service, request, target, _ = editing
+    completed = service.apply(actor, request)
+    inspector = MutationInspector(app)
+    first = inspector.verify_artifacts(actor, request)
+    before, _ = staging_names(completed.operation_id, 0)
+    path = target / before
+    data = path.read_bytes()
+    # Retain the old inode in this isolated fixture to prevent filesystem reuse.
+    saved = target.parent / ("saved-original-" + target.name)
+    path.rename(saved)
+    path.write_bytes(data)
+    second = inspector.verify_artifacts(actor, request)
+    assert second.measurements[0].inode != first.measurements[0].inode
+    assert second.verification_fingerprint != first.verification_fingerprint
+    assert second.native_artifacts_verified and second.source_inspection.matches_completed_mutation
+    assert not second.durable_artifact_ownership_verified and not second.deletion_authorized
+    assert path.read_bytes() == saved.read_bytes() == data
+
+
+def test_native_artifact_verification_identity_stat_uses_extended_windows_path(
+    editing, monkeypatch
+):
+    from app.source_mutation import inspection
+
+    app, actor, _, service, request, _, _ = editing
+    service.apply(actor, request)
+    native = inspection.os.stat
+    observed = []
+
+    def guarded(path, *args, **kwargs):
+        if str(path).endswith(".before"):
+            assert str(path).startswith("\\\\?\\")
+            observed.append(str(path))
+        return native(path, *args, **kwargs)
+
+    monkeypatch.setattr(inspection.os, "stat", guarded)
+    assert (
+        inspection.MutationInspector(app).verify_artifacts(actor, request).native_artifacts_verified
+    )
+    assert observed
+
+
+@pytest.mark.parametrize("nested_reader", ["history", "planning"])
+def test_artifact_reader_translates_real_nested_database_read_errors(
+    editing, monkeypatch, nested_reader
+):
+    from sqlalchemy.exc import SQLAlchemyError
+    from sqlalchemy.orm import Session
+
+    from app.source_edit_planning.repository import SourceEditingPlanRow
+    from app.source_mutation.artifacts import ArtifactManifestReader
+
+    app, actor, _, service, request, _, _ = editing
+    service.prepare(actor, request)
+    entity = SourceMutationRow if nested_reader == "history" else SourceEditingPlanRow
+    native = Session.get
+
+    def storage_failure(session, model, *args, **kwargs):
+        if model is entity:
+            raise SQLAlchemyError("private source text and lease token")
+        return native(session, model, *args, **kwargs)
+
+    monkeypatch.setattr(Session, "get", storage_failure)
+    with pytest.raises(DomainError) as failure:
+        ArtifactManifestReader(app).read(actor, request.editing_record_id)
+    assert failure.value.code == "SOURCE_ARTIFACTS_STORAGE_FAILED"
+    assert "private" not in str(failure.value) and failure.value.__suppress_context__
