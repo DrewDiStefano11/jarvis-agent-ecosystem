@@ -155,7 +155,8 @@ def test_interrupted_step_reconciles_uncertain_without_invented_success(journal)
     assert len(entries(app)) == 4
 
 
-def test_measured_journal_all_gates_and_finalization(journal, monkeypatch):
+@pytest.mark.parametrize("gate_local_sequence", [True, False])
+def test_measured_journal_all_gates_and_finalization(journal, monkeypatch, gate_local_sequence):
     app, actor, _, service, workspace_id, request = journal
     current = service.prepare(actor, workspace_id, request)
     for index, command in enumerate(current.intent.plan.commands):
@@ -191,7 +192,7 @@ def test_measured_journal_all_gates_and_finalization(journal, monkeypatch):
             runtime_run_id=current.intent.owner.runtime_run_id,
             attempt_id=current.intent.owner.attempt_id,
             command_run_id=reference,
-            sequence=index + 1,
+            sequence=1 if gate_local_sequence else index + 1,
             started_at=current.updated_at,
             finished_at=finished,
             resources=ResourceMeasurements(wall_time_ms=elapsed),
@@ -207,6 +208,20 @@ def test_measured_journal_all_gates_and_finalization(journal, monkeypatch):
             command_run_id=reference,
             receipt=signed,
         )
+        if index == 0:
+            before = len(entries(app))
+            with pytest.raises(ValueError, match="identity cannot be reused"):
+                advance(
+                    service,
+                    actor,
+                    workspace_id,
+                    request,
+                    current,
+                    "step_intent",
+                    gate=current.intent.plan.commands[1].gate,
+                    command_run_id=reference,
+                )
+            assert len(entries(app)) == before
     final = advance(service, actor, workspace_id, request, current, "finalized")
     assert final.state == "finalized" and all(s.state == "measured" for s in final.steps)
     assert service.assess(actor, workspace_id, final.intent.journal_id, now=datetime.now(UTC)).ready

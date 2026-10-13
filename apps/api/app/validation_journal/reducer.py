@@ -106,7 +106,6 @@ def fold(entries):
                     or m.task_id != owner.task_id
                     or m.runtime_run_id != owner.runtime_run_id
                     or m.attempt_id != owner.attempt_id
-                    or m.sequence != len(steps)
                     or m.started_at < snapshot.updated_at
                     or m.finished_at > entry.timestamp
                 ):

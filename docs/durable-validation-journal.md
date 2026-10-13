@@ -26,6 +26,10 @@ journal history stays readable through the authorized read-only path.
 
 Every journal entry requires a native runtime checkpoint with its exact hash,
 attempt, plan identity and monotonic sequence before the next step can advance.
+The journal entry sequence orders durable transitions globally; receipt sequence
+orders collector measurements within a run/attempt/gate. Each gate may start at
+receipt sequence one. Gate order, one result per planned gate, unique command IDs,
+receipt authentication and exact original owner/plan remain enforced independently.
 Intent is committed before checkpoint publication. A crash between these commits
 is recovered by replaying acknowledgement against the original persisted entry;
 the existing native idempotency and version fences control checkpoint commits.
