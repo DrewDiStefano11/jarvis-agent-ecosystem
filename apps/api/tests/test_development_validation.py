@@ -1909,6 +1909,164 @@ def test_artifact_manifest_descriptor_count_is_bounded_even_before_verification(
         ExpectedArtifactManifest.model_validate(payload)
 
 
+def artifact_verification_payload():
+    from app.models.source_mutation_inspection import MutationInspection
+    from app.source_mutation.artifacts import plan_expected_artifacts
+
+    record, editing = artifact_inputs()
+    manifest = plan_expected_artifacts(record, editing)
+    source = MutationInspection(
+        operation_id=record.operation_id,
+        mutation_plan_hash=record.plan.plan_hash,
+        checkpoint_id=record.checkpoint_id,
+        code_state=editing.expected_code_state,
+        source_observation_digest=record.final_observation_digest,
+        matches_completed_mutation=True,
+        inspection_fingerprint="1" * 64,
+        measured_at=datetime(2026, 10, 12, tzinfo=UTC),
+    )
+    measurements = [
+        dict(
+            path=item.path,
+            presence=item.presence,
+            digest=item.expected_identity.digest if item.expected_identity else None,
+            byte_count=item.expected_identity.byte_count if item.expected_identity else None,
+            device=1 if item.expected_identity else None,
+            inode=2 if item.expected_identity else None,
+        )
+        for item in manifest.artifacts
+    ]
+    return dict(
+        manifest=manifest.model_dump(mode="json"),
+        source_inspection=source.model_dump(mode="json"),
+        measurements=measurements,
+        verification_fingerprint="2" * 64,
+    )
+
+
+@pytest.mark.parametrize(
+    "field", ["execution_authorized", "deletion_authorized", "durable_artifact_ownership_verified"]
+)
+def test_native_artifact_contract_cannot_be_coerced_to_effect_or_durable_ownership(field):
+    from app.models.source_artifact_verification import NativeArtifactVerification
+
+    payload = artifact_verification_payload()
+    payload[field] = True
+    with pytest.raises(ValidationError):
+        NativeArtifactVerification.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("device", -1),
+        ("inode", 0),
+        ("device", 2**64),
+        ("inode", 2**128),
+        ("byte_count", 65537),
+        ("device", True),
+        ("inode", "2"),
+    ],
+)
+def test_native_artifact_measurement_bounds_are_strict(field, value):
+    from app.models.source_artifact_verification import NativeArtifactVerification
+
+    payload = artifact_verification_payload()
+    payload["measurements"][0][field] = value
+    with pytest.raises(ValidationError):
+        NativeArtifactVerification.model_validate(payload)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("path", "../foreign"),
+        ("digest", "0" * 64),
+        ("byte_count", 0),
+        ("presence", "absent"),
+        ("inode", None),
+    ],
+)
+def test_native_artifact_contract_refuses_measurement_substitution(field, value):
+    from app.models.source_artifact_verification import NativeArtifactVerification
+
+    payload = artifact_verification_payload()
+    payload["measurements"][0][field] = value
+    with pytest.raises(ValidationError):
+        NativeArtifactVerification.model_validate(payload)
+
+
+@pytest.mark.parametrize("field", ["operation_id", "mutation_plan_hash", "checkpoint_id"])
+def test_native_artifact_contract_refuses_foreign_source_inspection(field):
+    from app.models.source_artifact_verification import NativeArtifactVerification
+
+    payload = artifact_verification_payload()
+    payload["source_inspection"][field] = "0" * 64 if field.endswith("hash") else "foreign"
+    with pytest.raises(ValidationError):
+        NativeArtifactVerification.model_validate(payload)
+
+
+@pytest.mark.parametrize("substitution", ["order", "missing", "overflow", "absent_identity"])
+def test_native_artifact_contract_requires_exact_closed_descriptor_vector(substitution):
+    from app.models.source_artifact_verification import NativeArtifactVerification
+
+    payload = artifact_verification_payload()
+    items = payload["measurements"]
+    if substitution == "order":
+        payload["measurements"] = list(reversed(items))
+    elif substitution == "missing":
+        payload["measurements"] = items[:1]
+    elif substitution == "overflow":
+        payload["measurements"] = items * 65
+    else:
+        items[1]["inode"] = 1
+    with pytest.raises(ValidationError):
+        NativeArtifactVerification.model_validate(payload)
+
+
+def test_native_artifact_contract_roundtrip_is_immutable_and_metadata_only():
+    from app.models.source_artifact_verification import NativeArtifactVerification
+
+    result = NativeArtifactVerification.model_validate(artifact_verification_payload())
+    assert NativeArtifactVerification.model_validate_json(result.model_dump_json()) == result
+    assert result.native_artifacts_verified and not result.manifest.native_artifacts_verified
+    with pytest.raises(ValidationError):
+        result.deletion_authorized = True
+    assert "original\\n" not in result.model_dump_json()
+    assert "replacement" not in result.model_dump_json()
+
+
+@pytest.mark.parametrize("field,value", [("digest", "0" * 64), ("byte_count", 0), ("device", 0)])
+def test_native_artifact_absence_cannot_carry_even_zero_identity(field, value):
+    from app.models.source_artifact_verification import NativeArtifactVerification
+
+    payload = artifact_verification_payload()
+    payload["measurements"][1][field] = value
+    with pytest.raises(ValidationError):
+        NativeArtifactVerification.model_validate(payload)
+
+
+def test_native_artifact_contract_supports_maximum_closed_manifest():
+    from app.models.source_artifact_verification import NativeArtifactVerification
+
+    payload = artifact_verification_payload()
+    expected, measured = [], []
+    for index in range(64):
+        for offset, suffix in enumerate(("before", "after")):
+            path = ".jarvis-edit-" + f"{index:064x}" + "." + suffix
+            expected.append(
+                payload["manifest"]["artifacts"][offset]
+                | {"change_index": index, "source_path": f"file{index}.py", "path": path}
+            )
+            measured.append(payload["measurements"][offset] | {"path": path})
+    payload["manifest"]["artifacts"] = expected
+    payload["manifest"]["retained_total_bytes"] *= 64
+    payload["measurements"] = measured
+    result = NativeArtifactVerification.model_validate(payload)
+    assert len(result.measurements) == len(result.manifest.artifacts) == 128
+    assert not result.deletion_authorized and not result.durable_artifact_ownership_verified
+
+
 def review_inputs(old="old\n", new="new\n", operation="modify"):
     before = content(old) if operation != "add" else None
     after = content(new) if operation != "delete" else None
