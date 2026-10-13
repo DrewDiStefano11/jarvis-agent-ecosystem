@@ -133,6 +133,7 @@ class MutationHistoryReader:
                         pending_index=None,
                         staging_device=None,
                         staging_inode=None,
+                        original_identities=(),
                         prefix_digest=None,
                         final_observation_digest=None,
                         checkpoint_id=None,
