@@ -80,10 +80,11 @@ timeout. Final checkpoint and parent/committed state-reader scenarios passed.
 API tests verify the default missing-consumer refusal.
 
 The earlier full backend baseline passed 2,993 tests, skipped three and had two
-source-dependency failures. The updated dependency fixes the invalid-lock case;
-the foreign-history test's earlier model rejection remains an upstream test
-expectation issue pending owner correction. This is not a green-full-suite or
-final-acceptance claim. Frontend checks passed with unchanged frontend source.
+source-dependency failures. Both failures now pass in focused native regression
+verification after integrating Campaign A's published fixture repair from PR
+#141. No runtime invariant was weakened and the long full suite was not repeated.
+This is not a fresh full-suite or final-acceptance claim. Frontend checks passed
+with unchanged frontend source.
 Hosted CI and independent review remain required before merge.
 
 No main push, automatic merge, arbitrary shell, credential access, source replay
