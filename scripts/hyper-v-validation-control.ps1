@@ -1,9 +1,12 @@
 # Fixed native management/telemetry protocol. No guest commands or result importer.
 param(
-    [Parameter(Mandatory)][ValidateSet('inspect','stop','unregister','absence')][string]$Operation,
+    [Parameter(Mandatory)][ValidateSet('inspect','stop','unregister','absence','attach_media','detach_media')][string]$Operation,
     [Parameter(Mandatory)][Guid]$VmId,
     [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{64}$')][string]$OwnershipDigest,
-    [Parameter(Mandatory)][Guid]$HostMachineGuid
+    [Parameter(Mandatory)][Guid]$HostMachineGuid,
+    [string]$MediaPath,
+    [ValidatePattern('^[a-f0-9]{64}$')][string]$MediaDigest,
+    [long]$MediaBytes
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
@@ -24,6 +27,43 @@ try {
     }
     $nativeVm = Get-VM -Id $VmId -ErrorAction Stop
     if ($nativeVm.Notes -cne "jarvis-validation-v1:$OwnershipDigest") { throw 'owner mismatch' }
+    if ($Operation -in @('attach_media','detach_media')) {
+        if ([string]$nativeVm.State -ne 'Off' -or $nativeVm.Generation -ne 2) { throw 'stopped generation 2 required' }
+        if (@(Get-VMNetworkAdapter -VM $nativeVm).Count -or @(Get-VMSnapshot -VM $nativeVm).Count -or
+            @(Get-VMIntegrationService -VM $nativeVm | Where-Object { $_.Enabled }).Count) { throw 'sharing or network enabled' }
+        if ([string]$nativeVm.AutomaticStartAction -ne 'Nothing' -or (Get-VMMemory -VM $nativeVm).DynamicMemoryEnabled) { throw 'unsafe startup configuration' }
+        if (-not $MediaPath -or [IO.Path]::GetFileName($MediaPath) -cne 'source.iso' -or
+            -not [IO.Path]::IsPathRooted($MediaPath) -or $MediaPath.StartsWith('\\') -or
+            $MediaBytes -le 0 -or $MediaBytes -gt 140000000 -or -not $MediaDigest) { throw 'invalid media binding' }
+        $selectedPath = [IO.Path]::GetFullPath($MediaPath)
+        $drives = @(Get-VMDvdDrive -VM $nativeVm -ErrorAction Stop)
+        if ($drives.Count -gt 1) { throw 'ambiguous media drives' }
+        if ($drives.Count -eq 1 -and $drives[0].Path -and
+            -not [string]::Equals([IO.Path]::GetFullPath($drives[0].Path), $selectedPath, [StringComparison]::OrdinalIgnoreCase)) { throw 'foreign media' }
+        if ($Operation -eq 'attach_media') {
+            $item = Get-Item -LiteralPath $selectedPath -ErrorAction Stop
+            if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'unsafe media' }
+            $mediaStream = [IO.File]::Open($selectedPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+            try {
+                if ($mediaStream.Length -ne $MediaBytes) { throw 'media length mismatch' }
+                $sha = [Security.Cryptography.SHA256]::Create()
+                try { $actualDigest = ([BitConverter]::ToString($sha.ComputeHash($mediaStream))).Replace('-','').ToLowerInvariant() }
+                finally { $sha.Dispose() }
+                if ($actualDigest -cne $MediaDigest) { throw 'media hash mismatch' }
+                if ($drives.Count -eq 0) { Add-VMDvdDrive -VM $nativeVm -Path $selectedPath -ErrorAction Stop | Out-Null }
+                else { Set-VMDvdDrive -VMDvdDrive $drives[0] -Path $selectedPath -ErrorAction Stop }
+                $drives = @(Get-VMDvdDrive -VM $nativeVm -ErrorAction Stop)
+                if ($drives.Count -ne 1 -or -not [string]::Equals([IO.Path]::GetFullPath($drives[0].Path), $selectedPath, [StringComparison]::OrdinalIgnoreCase)) { throw 'attachment uncertain' }
+            } finally { $mediaStream.Dispose() }
+        } elseif ($drives.Count -eq 1 -and $drives[0].Path) {
+            Set-VMDvdDrive -VMDvdDrive $drives[0] -Path $null -ErrorAction Stop
+            if (@(Get-VMDvdDrive -VM $nativeVm | Where-Object { $_.Path }).Count) { throw 'detachment uncertain' }
+        }
+        @{ vmId = [string]$VmId; ownershipDigest = $OwnershipDigest; hostMachineGuid = [string]$actualHostGuid;
+           mediaDigest = $MediaDigest; mediaBytes = $MediaBytes; mediaState = if ($Operation -eq 'attach_media') { 'attached' } else { 'detached' };
+           commandOutcome = 'unmeasured'; executionAuthorized = $false } | ConvertTo-Json -Compress
+        exit 0
+    }
     if ($Operation -eq 'stop') {
         Stop-VM -VM $nativeVm -TurnOff -Force -Confirm:$false -ErrorAction Stop
         $nativeVm = Get-VM -Id $VmId -ErrorAction Stop
