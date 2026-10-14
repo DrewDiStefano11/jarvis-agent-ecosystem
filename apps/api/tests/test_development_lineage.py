@@ -1,11 +1,15 @@
 """Actual two-workspace native source effects; fixture provider is not coding acceptance."""
 
 import json
+import subprocess
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
+from pydantic import SecretStr
 from sqlalchemy import select
 
 from app.core.errors import DomainError
@@ -22,10 +26,12 @@ from app.models.agent_runtime import (
 )
 from app.models.development_agent import ContextSelection
 from app.models.development_lineage import ApproveCorrectionWorkspace, PreviewCorrectionWorkspace
+from app.models.development_publication import PublicationSourceAnchor, PublicationSourceReference
 from app.models.git_inspection import ApproveRepositoryInspection, InspectRepositoryRequest
 from app.models.self_build import ApproveWorkspaceRequest, ReserveWorkspaceRequest, WorkspaceIntent
 from app.models.source_mutation import ApplySourceMutation, ApproveSourceMutation
 from app.models.workspace_creation import ApproveWorkspaceCreation, CreateWorkspaceRequest
+from app.self_build.policy import digest
 from tests.agent_runtime_testkit import make_spec, ts
 from tests.test_development_baselines import completed
 from tests.test_development_execution import executor, output
@@ -33,7 +39,7 @@ from tests.test_development_execution import executor, output
 pytest_plugins = ["tests.test_development_agent"]
 
 
-def fresh_workspace(development):
+def fresh_workspace(development, *, base_sha=None):
     app, actor, operator, authority, _, _, _, context = development
     runtime = app.state.agent_runtime_service
     spec = make_spec(agent_id=actor.actor_id, task_id=context.task_id).model_copy(
@@ -60,7 +66,9 @@ def fresh_workspace(development):
     )
     workspaces = app.state.self_build_workspace_service
     intent = WorkspaceIntent(
-        repository_id="jarvis", runtime_run_id="run-2", base_sha=context.code_state.base_sha
+        repository_id="jarvis",
+        runtime_run_id="run-2",
+        base_sha=base_sha or context.code_state.base_sha,
     )
     plan = workspaces.preview(actor, intent)
     approval = workspaces.approve(
@@ -138,9 +146,11 @@ def fresh_workspace(development):
 
 @pytest.mark.asyncio
 @pytest.mark.timeout(600)
+@pytest.mark.parametrize("committed_head", [False, True], ids=["original-base", "committed-head"])
 async def test_independent_lineage_preserves_first_work_and_budget_across_real_second_effect(
     development,
     monkeypatch,
+    committed_head,
 ):
     app, actor, operator, old_authority, _, old_target, _, context = development
     baselines, first, mutation = await completed(development)
@@ -149,13 +159,76 @@ async def test_independent_lineage_preserves_first_work_and_budget_across_real_s
     )
     with app.state.repository.session_factory() as session:
         origin_payload = session.get(DevelopmentAdmissionRow, context.task_id).payload
-    workspace_id, authority = fresh_workspace(development)
+    publication_reference = None
+    publication_anchor = None
+    advanced_head = None
+    if committed_head:
+        # Harness-only real Git commit in the isolated registered repository.
+        # The injected anchor remains a deterministic fixture, not Campaign C attestation.
+        policy = app.state.self_build_workspace_service.policies.get("jarvis")
+        primary = Path(policy.primary_root)
+        for item in baseline.snapshot.files:
+            assert item.content is not None
+            (primary / item.change.path).write_bytes(item.content.text.encode("utf-8"))
+
+        def git(*args):
+            return (
+                subprocess.run(
+                    [app.state.settings.self_build_git_executable, *args],
+                    cwd=primary,
+                    check=True,
+                    capture_output=True,
+                )
+                .stdout.decode()
+                .strip()
+            )
+
+        git("add", "--", "source.py", "new.py")
+        git("commit", "-m", "isolated committed baseline")
+        advanced_head = git("rev-parse", "HEAD")
+        git("update-ref", "refs/remotes/origin/main", advanced_head)
+        publication_reference = PublicationSourceReference(
+            publication_operation_id="fixture-publication",
+            expected_head_sha=advanced_head,
+            observation_digest="f" * 64,
+        )
+        snapshot = baseline.snapshot
+        publication_anchor = PublicationSourceAnchor(
+            reference=publication_reference,
+            task_id=snapshot.task_id,
+            workspace_id=context.workspace_id,
+            source_edit_record_id=snapshot.editing_record_id,
+            source_edit_plan_hash=snapshot.editing_plan_hash,
+            mutation_operation_id=snapshot.mutation_operation_id,
+            mutation_checkpoint_id=snapshot.mutation_checkpoint_id,
+            parent_code_state_hash=digest(snapshot.context.code_state.model_dump(mode="json")),
+            commit_sha=advanced_head,
+            tree_sha=git("rev-parse", "HEAD^{tree}"),
+            parent_sha=git("rev-parse", "HEAD^"),
+            native_checkpoint_id="fixture-publication-cp",
+            native_checkpoint_integrity="e" * 64,
+            link_hash="d" * 64,
+            observed_at=datetime.now(UTC),
+        )
+    workspace_id, authority = fresh_workspace(development, base_sha=advanced_head)
     service = DevelopmentLineageService(app)
     preview_request = PreviewCorrectionWorkspace(
         authority=authority,
         baseline_id=baseline.snapshot.baseline_id,
         repair_selection=ContextSelection(paths=("source.py",)),
+        publication_source=publication_reference,
     )
+    if committed_head:
+        with pytest.raises(DomainError) as unavailable:
+            service.preview(actor, workspace_id, preview_request)
+        assert unavailable.value.code == "DEVELOPMENT_PUBLICATION_LINK_UNAVAILABLE"
+
+        def fixture_link(operator_actor, original_workspace_id, reference):
+            assert operator_actor == actor and original_workspace_id == context.workspace_id
+            assert reference == publication_reference
+            return publication_anchor
+
+        app.state.development_publication_source_reader = SimpleNamespace(read=fixture_link)
     plan = service.preview(actor, workspace_id, preview_request)
     approve = ApproveCorrectionWorkspace(
         **preview_request.model_dump(),
@@ -185,6 +258,19 @@ async def test_independent_lineage_preserves_first_work_and_budget_across_real_s
         "Z", "+00:00"
     )
     assert service.approve(operator, actor, workspace_id, approve) == lineage
+    if committed_head:
+        reader = app.state.development_publication_source_reader
+        del app.state.development_publication_source_reader
+        with pytest.raises(DomainError) as unavailable:
+            service.recover(actor, workspace_id, authority)
+        assert unavailable.value.code == "DEVELOPMENT_PUBLICATION_LINK_UNAVAILABLE"
+        app.state.development_publication_source_reader = SimpleNamespace(
+            read=lambda *args: publication_anchor.model_copy(update={"link_hash": "0" * 64})
+        )
+        with pytest.raises(DomainError) as conflict:
+            service.recover(actor, workspace_id, authority)
+        assert conflict.value.code == "DEVELOPMENT_PUBLICATION_LINK_CONFLICT"
+        app.state.development_publication_source_reader = reader
     with pytest.raises(DomainError):
         service.approve(
             operator, actor, workspace_id, approve.model_copy(update={"baseline_id": "0" * 64})
@@ -202,9 +288,10 @@ async def test_independent_lineage_preserves_first_work_and_budget_across_real_s
 
     policy = app.state.self_build_workspace_service.policies.get("jarvis")
     target = Path(policy.worktree_root) / workspace_id
-    assert (target / "source.py").read_bytes() == b"value = 1\n" and not (
-        target / "new.py"
-    ).exists()
+    assert (target / "source.py").read_bytes() == (
+        b"value = 2\n" if committed_head else b"value = 1\n"
+    )
+    assert (target / "new.py").exists() == committed_head
     calls = []
 
     def transport(request):
@@ -229,6 +316,16 @@ async def test_independent_lineage_preserves_first_work_and_budget_across_real_s
         second = await engine.execute(actor, workspace_id, authority, context.selection, "correct")
         assert second.ordinal == 2 and len(calls) == 1
         plan = engine.mutations.preview(actor, second.editing_record_id)
+        if committed_head:
+            from app.source_edit_planning.service import SourceEditingPlanService
+
+            editing = SourceEditingPlanService(app).read(actor, second.editing_record_id)
+            assert editing.plan.original_code_state.head_sha == advanced_head
+            assert [change.path for change in editing.plan.source_plan.changes] == ["source.py"]
+            assert (
+                editing.plan.source_plan.changes[0].before.digest
+                == sha256(b"value = 2\n").hexdigest()
+            )
         grant = engine.mutations.approve(
             operator,
             ApproveSourceMutation(
@@ -250,6 +347,42 @@ async def test_independent_lineage_preserves_first_work_and_budget_across_real_s
             await engine.execute(actor, workspace_id, authority, context.selection, "correct")
         ).dispatch_id == second.dispatch_id
         assert len(calls) == 1
+        if committed_head:
+            from app.main import create_app
+            from app.remote_control.access import RemoteControlAccess
+
+            restarted = create_app(database_url=app.state.settings.database_url)
+            try:
+                for key in (
+                    "self_build_enabled",
+                    "self_build_repositories_json",
+                    "self_build_git_executable",
+                    "self_build_git_sha256",
+                ):
+                    setattr(restarted.state.settings, key, getattr(app.state.settings, key))
+                restarted.state.remote_control_service = SimpleNamespace(
+                    access=RemoteControlAccess(
+                        restarted.state.identity_service,
+                        operator.actor_id,
+                        SecretStr("x" * 48),
+                    )
+                )
+                recovered = executor(restarted, client)
+                with pytest.raises(DomainError) as unavailable:
+                    await recovered.execute(
+                        actor, workspace_id, authority, context.selection, "correct"
+                    )
+                assert unavailable.value.code == "DEVELOPMENT_PUBLICATION_LINK_UNAVAILABLE"
+                restarted.state.development_publication_source_reader = reader
+                replay = await recovered.execute(
+                    actor, workspace_id, authority, context.selection, "correct"
+                )
+                assert (
+                    replay.dispatch_id == second.dispatch_id and replay.state == "mutation_recorded"
+                )
+                assert len(calls) == 1
+            finally:
+                restarted.state.engine.dispose()
     with app.state.repository.session_factory() as session:
         assert session.get(DevelopmentAdmissionRow, context.task_id).payload == origin_payload
         assert len(session.scalars(select(DevelopmentLineageRow)).all()) == 1
