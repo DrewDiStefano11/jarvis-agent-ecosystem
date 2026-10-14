@@ -1,5 +1,5 @@
 name: Phase 2A durable control-plane checks
-on: [push, pull_request]
+on: [push, pull_request, workflow_dispatch]
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
