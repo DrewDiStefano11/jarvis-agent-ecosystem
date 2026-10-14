@@ -7,6 +7,7 @@ from pydantic import Field, field_validator
 
 from app.models.development_agent import ContextSelection
 from app.models.development_dispatch import AdmissionPlan, DevelopmentAdmission, utc
+from app.models.development_publication import PublicationSourceReference
 from app.models.development_validation import Contract, Digest
 from app.models.self_build import Identifier
 from app.models.workspace_creation import CreateWorkspaceRequest
@@ -33,6 +34,7 @@ class PreviewCorrectionWorkspace(Contract):
     authority: CreateWorkspaceRequest
     baseline_id: Digest
     repair_selection: ContextSelection
+    publication_source: PublicationSourceReference | None = None
 
 
 class ApproveCorrectionWorkspace(PreviewCorrectionWorkspace):

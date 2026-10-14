@@ -25,7 +25,14 @@ def correction_context_hash(baseline, destination, selection):
 
 
 def compile_correction(
-    proposal, baseline, destination, selection, references, *, allow_delete=False
+    proposal,
+    baseline,
+    destination,
+    selection,
+    references,
+    *,
+    allow_delete=False,
+    publication_source=None,
 ):
     """Validate logical edits against the baseline, render effects against real originals."""
     if (
@@ -38,14 +45,15 @@ def compile_correction(
         or baseline.context.workspace_id == destination.workspace_id
         or baseline.context.code_state.repository_identity
         != destination.code_state.repository_identity
-        or baseline.context.code_state.base_sha != destination.code_state.base_sha
-        or baseline.context.code_state.head_sha != destination.code_state.head_sha
         or destination.code_state.changes
         or not set(selection.paths).issubset(baseline.context.selection.paths)
         or not set(baseline.context.selection.paths).issubset(destination.selection.paths)
         or any(item.path not in selection.paths for item in proposal.files)
     ):
         refuse("DEVELOPMENT_CORRECTION_CONTEXT_INVALID")
+    from app.development_agent.publication import verify_destination
+
+    verify_destination(baseline, destination, publication_source)
     desired = {item.change.path: item.content for item in baseline.files}
     logical = DevelopmentProposal.model_validate(
         proposal.model_copy(update={"context_hash": baseline.context.context_hash}).model_dump(

@@ -893,6 +893,7 @@ class DevelopmentDispatchService:
                 root.plan.repair_selection,
                 references,
                 allow_delete=root.plan.limits.allow_delete,
+                publication_source=root.plan.publication_source,
             )
         expected = plan_source_changes(
             intent, mutation_observation(context, (change.path for change in intent.changes))

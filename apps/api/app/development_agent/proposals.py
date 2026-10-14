@@ -123,6 +123,7 @@ class DevelopmentProposalService:
         allow_delete=False,
         commit_guard=None,
         baseline=None,
+        publication_source=None,
         repair_selection=None,
         expected_native_context_hash=None,
     ):
@@ -147,6 +148,7 @@ class DevelopmentProposalService:
                     repair_selection,
                     references,
                     allow_delete=allow_delete,
+                    publication_source=publication_source,
                 )
             guard()
 
