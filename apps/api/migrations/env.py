@@ -9,6 +9,7 @@ from sqlalchemy import engine_from_config, pool
 
 from app.db import models  # noqa: F401
 from app.db.base import Base
+from app.development_agent import baseline_repository as baseline_models  # noqa: F401
 from app.development_agent import repository as development_models  # noqa: F401
 from app.self_improvement import repository as improvement_models  # noqa: F401
 from app.source_edit_planning import repository as source_plan_models  # noqa: F401

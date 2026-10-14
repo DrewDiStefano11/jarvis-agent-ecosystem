@@ -118,7 +118,7 @@ def test_development_upgrade_downgrade_and_reupgrade_preserve_existing_schema(tm
     with engine.connect() as connection:
         assert (
             connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "20261013_development_dispatch"
+            == "20261013_development_baselines"
         )
     engine.dispose()
 

@@ -314,3 +314,13 @@ or provider dispatch. There is no HTTP model-response importer or activation fla
 No OpenAI API key is read; future Codex app-server activation remains contingent
 on Campaign D's independent billing/credit/recharge safeguards. Admission and
 review alone do not approve native source mutation, validate code or publish it.
+
+
+### Development correction snapshot
+
+POST `/api/development/workspaces/{workspace_id}/iterations/{dispatch_id}/baseline`
+accepts `CaptureDevelopmentBaseline` (native creation authority plus exact approved
+mutation reference) and returns `TypedApiResponse[BaselineSummary]`. It is an
+owner/lease-fenced historical snapshot capture, with no provider dispatch or source
+effect. The private snapshot is not accepted from HTTP/model payloads. The summary
+explicitly grants no freshness, validation, execution or publication authority.
