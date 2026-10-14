@@ -251,7 +251,21 @@ def test_optical_source_guest_import_unavailable_on_development_windows(isolatio
 
 
 @pytest.mark.parametrize(
-    "case", ["attach", "detach", "network", "integration", "foreign", "running", "tamper"]
+    "case",
+    [
+        "attach",
+        "detach",
+        "network",
+        "integration",
+        "foreign",
+        "running",
+        "tamper",
+        "inspect-attached",
+        "inspect-detached",
+        "inspect-tamper",
+        "inspect-foreign",
+        "inspect-late-foreign",
+    ],
 )
 def test_native_powershell_media_protocol_uses_no_guest_services(tmp_path, isolation_bundle, case):
     import json
@@ -306,8 +320,26 @@ function Set-VMDvdDrive { param($VMDvdDrive,[string]$Path); $global:dvd.Path=$Pa
         code += "$global:dvd=[pscustomobject]@{Path='C:\\foreign.iso'}\n"
     elif case == "detach":
         code += "$global:dvd=[pscustomobject]@{Path=" + quote(path) + "}\n"
-    image_digest = "f" * 64 if case == "tamper" else sha256(medium).hexdigest()
-    action = "detach_media" if case == "detach" else "attach_media"
+    elif case in {"inspect-attached", "inspect-tamper"}:
+        code += "$global:dvd=[pscustomobject]@{Path=" + quote(path) + "}\n"
+    elif case == "inspect-foreign":
+        code += "$global:dvd=[pscustomobject]@{Path='C:\\foreign.iso'}\n"
+    elif case == "inspect-late-foreign":
+        code += "$global:reads=0\nfunction Get-VMDvdDrive { $global:reads++; "
+        code += "if ($global:reads -gt 1) { [pscustomobject]@{Path='C:\\foreign.iso'} } }\n"
+    if case.startswith("inspect-"):
+        # A read-only recovery must not call any mutating Hyper-V operation.
+        code += "function Add-VMDvdDrive { throw 'unexpected mutation' }\n"
+        code += "function Set-VMDvdDrive { throw 'unexpected mutation' }\n"
+        code += "function Start-VM { throw 'unexpected startup' }\n"
+    image_digest = "f" * 64 if case in {"tamper", "inspect-tamper"} else sha256(medium).hexdigest()
+    action = (
+        "inspect_media"
+        if case.startswith("inspect-")
+        else "detach_media"
+        if case == "detach"
+        else "attach_media"
+    )
     code += (
         "& "
         + quote(script)
@@ -324,10 +356,12 @@ function Set-VMDvdDrive { param($VMDvdDrive,[string]$Path); $global:dvd.Path=$Pa
         capture_output=True,
         timeout=20,
     )
-    if case in {"attach", "detach"}:
+    if case in {"attach", "detach", "inspect-attached", "inspect-detached"}:
         assert result.returncode == 0, result.stderr.decode(errors="replace")
         observed = json.loads(result.stdout)
-        assert observed["mediaState"] == ("attached" if case == "attach" else "detached")
+        assert observed["mediaState"] == (
+            "attached" if case in {"attach", "inspect-attached"} else "detached"
+        )
         assert observed["commandOutcome"] == "unmeasured" and not observed["executionAuthorized"]
     else:
         assert result.returncode != 0 and b"HYPERV_NATIVE_CONTROL_UNAVAILABLE" in result.stderr

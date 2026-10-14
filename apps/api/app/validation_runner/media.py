@@ -353,3 +353,40 @@ class NativeMediaDelivery:
         except BaseException:
             self.effects.uncertain(intent)
             raise
+
+    def reconcile(self, intent, capsule, plan):
+        """Inspect original media after restart; never repeat attach or detach."""
+        from app.models.native_delivery import NativeDeliveryIntent
+
+        intent = NativeDeliveryIntent.model_validate(intent.model_dump(mode="json"))
+        if (
+            intent.execution_plan_hash != plan.execution_plan_hash
+            or intent.capsule_digest != capsule.capsule_digest
+        ):
+            refuse()
+        self.effects.require_reconcilable(intent)
+        registration = intent.registration
+        with pinned_source_media(
+            self.root,
+            registration,
+            capsule,
+            plan,
+            image_digest=intent.image_digest,
+            image_byte_count=intent.image_byte_count,
+            authority_check=self.guard,
+        ) as path:
+            result = self.adapter.transport.invoke(
+                registration.binding,
+                "inspect_media",
+                media=(path, intent.image_digest, intent.image_byte_count),
+            )
+            self._verify(
+                result,
+                registration.binding,
+                "attached" if intent.operation == "attach_media" else "detached",
+                intent.image_digest,
+                intent.image_byte_count,
+            )
+            self.guard(self.root, registration, capsule, plan)
+            self.effects.reconcile(intent, result)
+            return result

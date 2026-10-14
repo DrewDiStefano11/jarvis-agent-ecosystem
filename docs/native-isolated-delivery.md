@@ -19,6 +19,12 @@ is preserved. Autonomous executable validation remains disabled.
   uncertain and unreplayable; configuration observations are not execution proof.
   Production construction requires an independently authenticated original native
   identity registry. The test fixture registry is not a production substitute.
+- A recovery-only optical inspection checks the original private media and actual
+  stopped-VM drive without calling attach, detach or startup. Original claims can
+  transition to reconciled after lost acknowledgments; repeated recovery only
+  acknowledges the same durable observation. Changed state, forged success or
+  revoked authority is refused. This requires the original live lease; separately
+  authorized maintenance after lease expiry is still a remaining dependency.
 - A Linux root-side guest executor defines fixed catalog commands in restricted
   systemd units. It uses a separate root filesystem, read-only source, dynamic
   unprivileged users, private networking/devices, restricted namespaces and
@@ -50,7 +56,7 @@ cgroup and optical-device behavior cannot be accepted by these Windows tests.
    configurable. Development-laptop acceptance does not accept a different host.
 2. Implement protected native creation identity persistence, immutable media
    materialization and durable capacity reservation/recovery. Delivery currently
-   assumes an already registered private media artifact. Recovery reconciliation
+   assumes an already registered private media artifact. Full lifecycle recovery
    and cleanup after lease expiry still require separate maintenance authority.
 3. Enroll the protected guest service and dependency root. Implement the
    authenticated control channel, independent host telemetry collector, boot

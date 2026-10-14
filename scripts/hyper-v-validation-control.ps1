@@ -1,6 +1,6 @@
 # Fixed native management/telemetry protocol. No guest commands or result importer.
 param(
-    [Parameter(Mandatory)][ValidateSet('inspect','stop','unregister','absence','attach_media','detach_media')][string]$Operation,
+    [Parameter(Mandatory)][ValidateSet('inspect','stop','unregister','absence','attach_media','detach_media','inspect_media')][string]$Operation,
     [Parameter(Mandatory)][Guid]$VmId,
     [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{64}$')][string]$OwnershipDigest,
     [Parameter(Mandatory)][Guid]$HostMachineGuid,
@@ -27,7 +27,7 @@ try {
     }
     $nativeVm = Get-VM -Id $VmId -ErrorAction Stop
     if ($nativeVm.Notes -cne "jarvis-validation-v1:$OwnershipDigest") { throw 'owner mismatch' }
-    if ($Operation -in @('attach_media','detach_media')) {
+    if ($Operation -in @('attach_media','detach_media','inspect_media')) {
         if ([string]$nativeVm.State -ne 'Off' -or $nativeVm.Generation -ne 2) { throw 'stopped generation 2 required' }
         if (@(Get-VMNetworkAdapter -VM $nativeVm).Count -or @(Get-VMSnapshot -VM $nativeVm).Count -or
             @(Get-VMIntegrationService -VM $nativeVm | Where-Object { $_.Enabled }).Count) { throw 'sharing or network enabled' }
@@ -40,7 +40,7 @@ try {
         if ($drives.Count -gt 1) { throw 'ambiguous media drives' }
         if ($drives.Count -eq 1 -and $drives[0].Path -and
             -not [string]::Equals([IO.Path]::GetFullPath($drives[0].Path), $selectedPath, [StringComparison]::OrdinalIgnoreCase)) { throw 'foreign media' }
-        if ($Operation -eq 'attach_media') {
+        if ($Operation -eq 'attach_media' -or ($Operation -eq 'inspect_media' -and $drives.Count -eq 1 -and $drives[0].Path)) {
             $item = Get-Item -LiteralPath $selectedPath -ErrorAction Stop
             if ($item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'unsafe media' }
             $mediaStream = [IO.File]::Open($selectedPath, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
@@ -50,17 +50,23 @@ try {
                 try { $actualDigest = ([BitConverter]::ToString($sha.ComputeHash($mediaStream))).Replace('-','').ToLowerInvariant() }
                 finally { $sha.Dispose() }
                 if ($actualDigest -cne $MediaDigest) { throw 'media hash mismatch' }
-                if ($drives.Count -eq 0) { Add-VMDvdDrive -VM $nativeVm -Path $selectedPath -ErrorAction Stop | Out-Null }
-                else { Set-VMDvdDrive -VMDvdDrive $drives[0] -Path $selectedPath -ErrorAction Stop }
+                if ($Operation -eq 'attach_media') {
+                    if ($drives.Count -eq 0) { Add-VMDvdDrive -VM $nativeVm -Path $selectedPath -ErrorAction Stop | Out-Null }
+                    else { Set-VMDvdDrive -VMDvdDrive $drives[0] -Path $selectedPath -ErrorAction Stop }
+                }
                 $drives = @(Get-VMDvdDrive -VM $nativeVm -ErrorAction Stop)
                 if ($drives.Count -ne 1 -or -not [string]::Equals([IO.Path]::GetFullPath($drives[0].Path), $selectedPath, [StringComparison]::OrdinalIgnoreCase)) { throw 'attachment uncertain' }
             } finally { $mediaStream.Dispose() }
-        } elseif ($drives.Count -eq 1 -and $drives[0].Path) {
+        } elseif ($Operation -eq 'detach_media' -and $drives.Count -eq 1 -and $drives[0].Path) {
             Set-VMDvdDrive -VMDvdDrive $drives[0] -Path $null -ErrorAction Stop
             if (@(Get-VMDvdDrive -VM $nativeVm | Where-Object { $_.Path }).Count) { throw 'detachment uncertain' }
         }
+        $finalDrives = @(Get-VMDvdDrive -VM $nativeVm -ErrorAction Stop)
+        if ($finalDrives.Count -gt 1 -or ($finalDrives.Count -eq 1 -and $finalDrives[0].Path -and
+            -not [string]::Equals([IO.Path]::GetFullPath($finalDrives[0].Path), $selectedPath, [StringComparison]::OrdinalIgnoreCase))) { throw 'media changed during observation' }
+        $mediaState = if (@($finalDrives | Where-Object { $_.Path }).Count -eq 1) { 'attached' } else { 'detached' }
         @{ vmId = [string]$VmId; ownershipDigest = $OwnershipDigest; hostMachineGuid = [string]$actualHostGuid;
-           mediaDigest = $MediaDigest; mediaBytes = $MediaBytes; mediaState = if ($Operation -eq 'attach_media') { 'attached' } else { 'detached' };
+           mediaDigest = $MediaDigest; mediaBytes = $MediaBytes; mediaState = $mediaState;
            commandOutcome = 'unmeasured'; executionAuthorized = $false } | ConvertTo-Json -Compress
         exit 0
     }

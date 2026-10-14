@@ -56,12 +56,13 @@ class NativeHyperVTransport:
             "absence",
             "attach_media",
             "detach_media",
+            "inspect_media",
         }:
             refuse("HYPERV_OPERATION_UNAVAILABLE")
         if os.name != "nt":
             refuse("HYPERV_PLATFORM_UNAVAILABLE")
         self.guard(binding, operation)
-        media_effect = operation in {"attach_media", "detach_media"}
+        media_effect = operation in {"attach_media", "detach_media", "inspect_media"}
         if media_effect:
             if (
                 self.media_guard is None

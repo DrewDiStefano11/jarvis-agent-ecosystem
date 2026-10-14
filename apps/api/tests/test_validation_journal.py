@@ -184,6 +184,167 @@ def test_native_delivery_claim_ack_loss_cannot_reexecute(native_delivery_bundle,
         assert [entry.kind for entry in effects._history(session, intent)] == ["intent", "claimed"]
 
 
+def delivery_observation(intent):
+    binding = intent.registration.binding
+    return dict(
+        vmId=str(binding.vm_id),
+        hostMachineGuid=str(binding.host_machine_guid),
+        ownershipDigest=binding.ownership_digest,
+        mediaDigest=intent.image_digest,
+        mediaBytes=intent.image_byte_count,
+        mediaState="attached" if intent.operation == "attach_media" else "detached",
+        commandOutcome="unmeasured",
+        executionAuthorized=False,
+    )
+
+
+@pytest.mark.parametrize("operation", ["attach_media", "detach_media"])
+@pytest.mark.parametrize("uncertain", [False, True])
+def test_native_delivery_recovery_reconciles_once_without_reclaim(
+    native_delivery_bundle, operation, uncertain
+):
+    _, effects, registration, capsule, plan = native_delivery_bundle
+    intent = effects.prepare(registration, capsule, plan, operation, "e" * 64, 65536)
+    with pytest.raises(DomainError, match="original durable claim"):
+        effects.require_reconcilable(intent)
+    effects.claim(intent)
+    if uncertain:
+        assert effects.uncertain(intent)
+    observation = delivery_observation(intent)
+    effects.reconcile(intent, observation)
+    effects.reconcile(intent, observation)
+    effects.require_acknowledged(intent)
+    with effects.service.repository.sessions() as session:
+        history = effects._history(session, intent)
+        assert [entry.kind for entry in history] == (
+            ["intent", "claimed", "uncertain", "reconciled"]
+            if uncertain
+            else ["intent", "claimed", "reconciled"]
+        )
+    with pytest.raises(DomainError):
+        effects.claim(intent)
+
+
+def test_native_delivery_recovery_retries_only_checkpoint_after_ack_loss(
+    native_delivery_bundle, monkeypatch
+):
+    _, effects, registration, capsule, plan = native_delivery_bundle
+    intent = effects.prepare(registration, capsule, plan, "attach_media", "e" * 64, 65536)
+    effects.claim(intent)
+    acknowledge = effects._acknowledge
+    monkeypatch.setattr(
+        effects, "_acknowledge", lambda _: (_ for _ in ()).throw(OSError("ack lost"))
+    )
+    with pytest.raises(OSError):
+        effects.reconcile(intent, delivery_observation(intent))
+    monkeypatch.setattr(effects, "_acknowledge", acknowledge)
+    effects.reconcile(intent, delivery_observation(intent))
+    effects.require_acknowledged(intent)
+    with effects.service.repository.sessions() as session:
+        assert [entry.kind for entry in effects._history(session, intent)] == [
+            "intent",
+            "claimed",
+            "reconciled",
+        ]
+
+
+@pytest.mark.parametrize(
+    "attack", ["state", "forged", "source", "identity", "stop", "lease", "approval"]
+)
+def test_native_delivery_recovery_rejects_changed_state_and_authority(
+    native_delivery_bundle, attack
+):
+    app, effects, registration, capsule, plan = native_delivery_bundle
+    intent = effects.prepare(registration, capsule, plan, "attach_media", "e" * 64, 65536)
+    effects.claim(intent)
+    observation = delivery_observation(intent)
+    if attack == "state":
+        observation["mediaState"] = "detached"
+    elif attack == "forged":
+        observation["commandOutcome"] = "passed"
+        observation["executionAuthorized"] = True
+    elif attack == "source":
+        reader = effects.service.state_reader
+        effects.service.state_reader = lambda row, session: reader(row, session).model_copy(
+            update={"head_sha": "f" * 40}
+        )
+    elif attack == "identity":
+        effects.native_verifier = lambda *_: (_ for _ in ()).throw(
+            DomainError("ORIGINAL_IDENTITY_CHANGED", "Identity changed.", 409)
+        )
+    elif attack == "stop":
+        with app.state.repository.session_factory.begin() as session:
+            session.get(SystemStateRow, 1).emergency_stop = True
+    else:
+        field = "lease_token" if attack == "lease" else "approval_id"
+        effects.request = effects.request.model_copy(update={field: "foreign"})
+    with pytest.raises(DomainError):
+        effects.reconcile(intent, observation)
+    with effects.service.repository.sessions() as session:
+        assert [entry.kind for entry in effects._history(session, intent)] == ["intent", "claimed"]
+
+
+@pytest.mark.parametrize("native_state", ["attached", "detached"])
+def test_native_media_restart_only_inspects_and_never_repeats_effect(
+    native_delivery_bundle, tmp_path, monkeypatch, native_state
+):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from app.validation_runner import media
+
+    _, effects, registration, capsule, plan = native_delivery_bundle
+    intent = effects.prepare(registration, capsule, plan, "attach_media", "e" * 64, 65536)
+    effects.claim(intent)
+    calls = []
+    path = tmp_path / registration.allocation_name / "source.iso"
+
+    def guard(root, original, checked_capsule, checked_plan):
+        assert (root, original, checked_capsule, checked_plan) == (
+            tmp_path,
+            registration,
+            capsule,
+            plan,
+        )
+        calls.append("authority")
+
+    @contextmanager
+    def pin(root, original, checked_capsule, checked_plan, **kwargs):
+        assert kwargs["image_digest"] == intent.image_digest
+        assert kwargs["image_byte_count"] == intent.image_byte_count
+        kwargs["authority_check"](root, original, checked_capsule, checked_plan)
+        try:
+            yield path
+        finally:
+            calls.append("unpin")
+
+    def invoke(binding, operation, *, media):
+        assert binding == registration.binding
+        assert operation == "inspect_media"
+        assert media == (path, intent.image_digest, intent.image_byte_count)
+        calls.append(operation)
+        return {**delivery_observation(intent), "mediaState": native_state}
+
+    monkeypatch.setattr(media, "pinned_source_media", pin)
+    delivery = media.NativeMediaDelivery(
+        SimpleNamespace(transport=SimpleNamespace(invoke=invoke)),
+        root=tmp_path,
+        authority_check=guard,
+        durable_effect=effects,
+    )
+    if native_state == "attached":
+        assert delivery.reconcile(intent, capsule, plan)["executionAuthorized"] is False
+    else:
+        with pytest.raises(DomainError):
+            delivery.reconcile(intent, capsule, plan)
+    assert calls.count("inspect_media") == 1
+    assert "unpin" in calls
+    with effects.service.repository.sessions() as session:
+        assert effects._history(session, intent)[-1].kind == (
+            "reconciled" if native_state == "attached" else "claimed"
+        )
+
+
 @pytest.fixture
 def journal(workspace):
     app, actor, workspace_service, reserve_request, _, _ = workspace

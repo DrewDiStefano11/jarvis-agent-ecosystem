@@ -293,3 +293,45 @@ class NativeDeliveryJournal:
         except Exception:
             return False
         return True
+
+    def require_reconcilable(self, intent):
+        """Allow observation of an original claim, never replay or fresh adoption."""
+        intent = NativeDeliveryIntent.model_validate(intent.model_dump(mode="json"))
+        with self.service.repository.leases._write() as session:
+            self._fence(session, intent)
+            history = self._history(session, intent)
+            if not history or history[-1].kind == "intent":
+                fail("DELIVERY_CLAIM_REQUIRED", "Recovery requires an original durable claim.")
+            if self._checkpoint(intent, history[0])[0] is None:
+                fail("DELIVERY_CHECKPOINT_REQUIRED", "Original intent acknowledgment is missing.")
+
+    def reconcile(self, intent, observation):
+        """Persist freshly verified native configuration after lost acknowledgment.
+
+        Requires original live execution authority. Expired or stopped runs need
+        separately authorized maintenance containment, not authority resurrection.
+        This transition never establishes command execution or frees capacity.
+        """
+        from app.validation_runner.media import verify_media_observation
+
+        self.require_reconcilable(intent)
+        verify_media_observation(
+            observation,
+            intent.registration.binding,
+            "attached" if intent.operation == "attach_media" else "detached",
+            intent.image_digest,
+            intent.image_byte_count,
+        )
+        observation_digest = digest(observation)
+        with self.service.repository.leases._write() as session:
+            self._fence(session, intent)
+            history = self._history(session, intent)
+            last = history[-1]
+            if last.kind in {"claimed", "uncertain"}:
+                self._append(session, intent, "reconciled", observation_digest=observation_digest)
+            elif last.kind not in {"observed", "reconciled"} or (
+                last.observation_digest != observation_digest
+            ):
+                fail("DELIVERY_OBSERVATION_CHANGED", "Native configuration differs from history.")
+        self.service.repository.leases.repository.refresh_event_cursor()
+        self._acknowledge(intent)
