@@ -8,7 +8,7 @@ from app.core.errors import DomainError
 from app.github_publication import current_observation as current
 from app.github_publication.readiness import assess
 from app.github_publication.transport import GitHubReader
-from tests.test_github_publication_collector import Broker, HEAD, OLD, PR, TARGET, client
+from tests.test_github_publication_collector import HEAD, OLD, PR, TARGET, Broker, client
 
 
 @pytest.mark.parametrize("changed", [False, True])

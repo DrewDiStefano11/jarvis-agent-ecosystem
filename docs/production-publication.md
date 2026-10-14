@@ -74,7 +74,7 @@ cannot replace Campaign B's independently protected committed-head receipts.
 
 `completed` describes publication policy readiness for human review/merge, not a
 merge operation. Current status rejects observations older than five minutes,
-future timestamps, changed native HEAD and invalidated validation. Automatic merge
+future timestamps, changed native HEAD and invalidated validation. Current manual-merge
 readiness also requires a new bounded provider collection under retained native
 source/metadata pins, current profile/task authority and acknowledged journal
 identity. A changed remote head, newly failed check or new review request clears
