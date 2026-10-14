@@ -75,6 +75,13 @@ cannot replace Campaign B's independently protected committed-head receipts.
 `completed` describes publication policy readiness for human review/merge, not a
 merge operation. Current status rejects observations older than five minutes,
 future timestamps, changed native HEAD and invalidated validation. Automatic merge
+readiness also requires a new bounded provider collection under retained native
+source/metadata pins, current profile/task authority and acknowledged journal
+identity. A changed remote head, newly failed check or new review request clears
+readiness even while an older passing observation remains recent. Provider retry
+deadlines and credential/profile errors are reported without sleeping or polling.
+The status read performs no audit mutation, workflow rerun, source dispatch or
+merge. Fresh genuine B validation is checked again after collection. Automatic merge
 is always false. The system neither pushes main nor requests billable workflows.
 
 ## API and integration boundaries
