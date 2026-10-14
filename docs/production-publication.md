@@ -16,6 +16,13 @@ and a native commit continuation consumer. These are trusted host adapters, not
 model inputs or enrollment APIs. Configuration installs no key, runner or VM and
 does not enable GitHub workflows. Missing evidence or guards fail closed.
 
+Replacing the trusted profile revokes captured publication/native consumer
+references. Current profile identity is checked before and after validation and
+at publication authority/approval boundaries. Omitted native consumers are cleared;
+they are not inherited from an earlier profile. Invalid replacement inputs leave
+the prior profile intact. An already attempted remote effect is reconciled through
+the protected journal by the current authorized profile, never blindly repeated.
+
 Publication requires the unassigned `self_build.github.publish` task permission,
 an independent authenticated operator's exact-plan approval, current runtime
 attempt/worker/lease, workspace ownership and emergency-stop clearance. The plan
