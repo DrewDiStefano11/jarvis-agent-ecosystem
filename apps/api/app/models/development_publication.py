@@ -1,6 +1,6 @@
 """Reference-only protected publication source bridge. Never an effect grant."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from pydantic import field_validator
@@ -38,7 +38,7 @@ class PublicationSourceAnchor(Contract):
 
     @field_validator("observed_at")
     @classmethod
-    def aware(cls, value):
+    def aware(cls, value: datetime) -> datetime:
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("DEVELOPMENT_TIMESTAMP_INVALID")
-        return value
+        return value.astimezone(UTC)

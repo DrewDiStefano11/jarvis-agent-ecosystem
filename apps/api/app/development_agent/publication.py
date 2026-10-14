@@ -56,7 +56,12 @@ def verify_destination(baseline, destination, anchor):
             if entry.path not in baseline.context.selection.paths:
                 continue
             current = observed.get(entry.path)
-            if current is None or current.kind != entry.kind or current.content != entry.content:
+            if (
+                current is None
+                or current.kind != entry.kind
+                or current.content != entry.content
+                or (entry.kind == "file" and entry.content is None)
+            ):
                 valid = False
     if not valid or destination.code_state.changes:
         refuse("DEVELOPMENT_CORRECTION_CONTEXT_INVALID")

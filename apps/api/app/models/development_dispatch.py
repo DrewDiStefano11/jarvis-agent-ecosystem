@@ -86,7 +86,9 @@ class AdmissionPlan(Contract):
             self.baseline_snapshot_hash,
             self.repair_selection,
         )
-        if any(value is not None for value in values) and any(value is None for value in values):
+        if (
+            any(value is not None for value in values) or self.publication_source is not None
+        ) and any(value is None for value in values):
             raise ValueError("DEVELOPMENT_LINEAGE_REFERENCE_INVALID")
         return self
 

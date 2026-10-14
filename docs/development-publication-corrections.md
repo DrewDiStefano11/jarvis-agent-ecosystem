@@ -1,0 +1,9 @@
+# Publication-source correction bridge (in progress)
+
+Campaign A accepts an optional publication operation/head/observation reference during correction workspace preview and approval. It resolves that reference only through `app.state.development_publication_source_reader`. The reader is absent by default; requests requiring it fail with `DEVELOPMENT_PUBLICATION_LINK_UNAVAILABLE`. No HTTP payload can supply the resolved anchor or install a reader.
+
+The future Campaign C adapter must read its protected source link under the requesting operator's authority and return a `PublicationSourceAnchor`. A compares task, original workspace, source-edit identity, mutation checkpoint, parent code-state hash, and exact published head. Anchors are historical references with mutation and validation authority fixed false. They require a complete correction lineage and enter the exact approved admission hash. Existing admissions omit absent anchors to preserve their serialized hash shape.
+
+An advanced-head destination must have the anchored commit as both base and HEAD, no working-tree changes, and the captured bytes and modes of every selected baseline source. Unread selected files cannot satisfy this comparison. Native workspace ownership, independent exact-plan approvals, task budgets, source measurement, and recovery guards remain required.
+
+This adapter interface is not yet wired to Campaign C's protected implementation. Boundary tests use deterministic fixtures and prove only contract/refusal behavior. Real Git publication-to-correction execution, restart recovery across that chain, and Campaign B's isolated validation still require integration evidence. Live inference remains disabled pending independently verified subscription-only usage and recharge safeguards; no API key or separate API inference is activated.
