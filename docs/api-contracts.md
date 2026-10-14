@@ -324,3 +324,14 @@ mutation reference) and returns `TypedApiResponse[BaselineSummary]`. It is an
 owner/lease-fenced historical snapshot capture, with no provider dispatch or source
 effect. The private snapshot is not accepted from HTTP/model payloads. The summary
 explicitly grants no freshness, validation, execution or publication authority.
+
+
+### Correction workspace approval
+
+POST `/api/development/workspaces/{workspace_id}/correction/preview` accepts
+`PreviewCorrectionWorkspace` and returns `TypedApiResponse[LineagePlan]`.
+POST `/api/remote/development/workspaces/{workspace_id}/correction/approve` accepts
+`ApproveCorrectionWorkspace` and returns `TypedApiResponse[LineageRecord]` under
+existing operator authentication. Each binds a native destination, protected
+baseline and repair scope to the unchanged original task budget. It grants no
+source effect, validation success, live inference activation or publication.

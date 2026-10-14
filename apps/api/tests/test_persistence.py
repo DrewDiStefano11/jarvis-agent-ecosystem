@@ -152,7 +152,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     with engine.connect() as connection:
         assert (
             connection.scalar(text("select version_num from alembic_version"))
-            == "20261013_development_baselines"
+            == "20261014_development_lineage"
         )
     engine.dispose()
     command.downgrade(config, "20260723_02")
@@ -200,7 +200,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
         assert (
             connection.scalar(text("select version_num from alembic_version"))
-            == "20261013_development_baselines"
+            == "20261014_development_lineage"
         )
     for revision in (root / "migrations" / "versions").glob("*.py"):
         source = revision.read_text(encoding="utf-8")
@@ -1990,7 +1990,7 @@ def test_sqlite_percent_path_survives_application_and_alembic_roundtrip(
         with create_database_engine(value).connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20261013_development_baselines"
+                == "20261014_development_lineage"
             )
         assert sorted(p.name for p in tmp_path.glob("*.db")) == [filename]
     finally:

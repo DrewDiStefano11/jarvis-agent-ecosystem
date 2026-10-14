@@ -122,6 +122,9 @@ class DevelopmentProposalService:
         *,
         allow_delete=False,
         commit_guard=None,
+        baseline=None,
+        repair_selection=None,
+        expected_native_context_hash=None,
     ):
         # Re-measure after inference. A model's before hash is never native evidence.
         def finalize(context, guard):
@@ -132,7 +135,19 @@ class DevelopmentProposalService:
                     original_plan_hash=reservation.plan.plan_hash,
                     authorization_reference=row.approval_id,
                 )
-            intent = compile_proposal(proposal, context, references, allow_delete=allow_delete)
+            if baseline is None:
+                intent = compile_proposal(proposal, context, references, allow_delete=allow_delete)
+            else:
+                from app.development_agent.corrections import compile_correction
+
+                intent = compile_correction(
+                    proposal,
+                    baseline,
+                    context,
+                    repair_selection,
+                    references,
+                    allow_delete=allow_delete,
+                )
             guard()
 
             def final_commit(session):
@@ -159,6 +174,8 @@ class DevelopmentProposalService:
             workspace_id,
             authority,
             selection,
-            expected_hash=proposal.context_hash,
+            expected_hash=proposal.context_hash
+            if baseline is None
+            else expected_native_context_hash,
             finalize=finalize,
         )
