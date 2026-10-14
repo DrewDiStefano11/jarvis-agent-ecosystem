@@ -12,6 +12,100 @@ from tests.test_github_publication_readiness import observation
 from tests.test_publication_lifecycle import history
 
 
+@pytest.mark.parametrize("tamper", [None, "native_checkpoint", "source_plan", "selection"])
+def test_source_link_requires_exact_native_and_mutation_provenance(monkeypatch, tamper):
+    snapshot = fold(history()).model_copy(update={"observation": observation()})
+    plan = snapshot.plan
+    change = NS(
+        path="source.py",
+        before=NS(sha256="0" * 64, mode="100644"),
+        after=NS(sha256="1" * 64, mode="100644"),
+    )
+    proposal = NS(
+        parent_sha=plan.parent_sha,
+        prospective_commit_sha=plan.commit_sha,
+        prospective_tree_sha="c" * 40,
+        files=(NS(path="source.py"),),
+        lineage=NS(
+            actor_id=plan.actor_id, runtime_run_id=plan.runtime_run_id, attempt_id=plan.attempt_id
+        ),
+    )
+    proof = NS(
+        proof_hash="a" * 64,
+        mutation_operation_id="mutation-operation",
+        mutation_checkpoint_id="mutation-checkpoint",
+        editing_record_id="b" * 64,
+        editing_plan_hash="c" * 64,
+    )
+    record = NS(
+        state="checkpointed",
+        workspace_id=plan.workspace_id,
+        operation_id="native-operation",
+        checkpoint_id="native-checkpoint",
+        plan=NS(
+            plan_hash=plan.native_plan_hash,
+            snapshot_digest=plan.source_snapshot_digest,
+            preparation=NS(plan=NS(proposal=proposal)),
+            applied_source=proof,
+        ),
+    )
+    original = NS(
+        head_sha=plan.parent_sha,
+        original_base_sha=plan.approved_base_sha,
+        repository_identity=plan.repository_identity,
+        changes=(change,),
+    )
+    if tamper == "source_plan":
+        record.plan.plan_hash = "f" * 64
+    elif tamper == "selection":
+        proposal.files = ()
+    monkeypatch.setattr(
+        source_link,
+        "PublicationJournal",
+        lambda service: NS(
+            read=lambda *args: snapshot,
+            checkpoint=lambda *args: (object(), "publication-checkpoint", {}),
+        ),
+    )
+    monkeypatch.setattr(
+        source_link,
+        "NativeCommitJournal",
+        lambda native: NS(
+            history=lambda *args: NS(current=record, source_snapshot=original),
+        ),
+    )
+    monkeypatch.setattr(
+        source_link,
+        "checkpoint",
+        lambda *args: (
+            None if tamper == "native_checkpoint" else object(),
+            "native-checkpoint",
+            "sha256:" + "d" * 64,
+            {},
+        ),
+    )
+    args = (
+        NS(native=object()),
+        object(),
+        plan.workspace_id,
+        snapshot.operation_id,
+        plan.commit_sha,
+        digest(snapshot.observation.model_dump(mode="json")),
+    )
+    if tamper is not None:
+        with pytest.raises(DomainError):
+            source_link.read_source_link(*args)
+        return
+    # Interface-only fixture, not a real checkpoint or evidence importer.
+    linked = source_link.read_source_link(*args)
+    assert linked.mutation_checkpoint_id == proof.mutation_checkpoint_id
+    assert linked.source_edit_record_id == proof.editing_record_id
+    assert linked.source_edit_plan_hash == proof.editing_plan_hash
+    assert linked.original_code_state.head_sha == plan.parent_sha
+    assert linked.historical_only and not linked.mutation_authority
+    assert not linked.validation_authority
+
+
 @pytest.mark.parametrize(
     "tamper", ["head", "digest", "repository", "pr", "incomplete", "checkpoint"]
 )

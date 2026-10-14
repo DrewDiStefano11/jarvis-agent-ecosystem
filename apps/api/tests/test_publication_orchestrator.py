@@ -256,5 +256,7 @@ def test_actual_native_checkpoint_and_ledger_resume_lost_pr_ack(context, monkeyp
     assert linked.original_code_state.head_sha == plan.parent_sha
     assert linked.original_code_state.changes == state.changes
     assert linked.native_checkpoint_id == finished.checkpoint_id
+    assert linked.mutation_checkpoint_id == finished.plan.applied_source.mutation_checkpoint_id
+    assert linked.source_edit_plan_hash == finished.plan.applied_source.editing_plan_hash
     assert linked.historical_only is True
     assert linked.mutation_authority is linked.validation_authority is False

@@ -28,6 +28,9 @@ class PublicationSourceLink(Contract):
     source_snapshot_digest: Digest
     applied_source_proof_hash: Digest
     mutation_operation_id: Identifier
+    mutation_checkpoint_id: Identifier
+    source_edit_record_id: Digest
+    source_edit_plan_hash: Digest
     parent_sha: Commit
     commit_sha: Commit
     tree_sha: Commit
