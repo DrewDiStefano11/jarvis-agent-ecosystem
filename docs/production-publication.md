@@ -78,7 +78,13 @@ OpenAPI is authoritative. Routes delegate to services with explicit transactions
 there is no route SQL or separate frontend domain state.
 
 Campaign A retains correction capture/rehydration and source editing ownership.
-Correction dispatch awaits its supported development contract; no competing
+The protected source-link reader resolves an acknowledged observation and native
+final checkpoint internally. It returns the immutable parent CodeState/hash,
+applied-source mutation/proof identities, exact parent/tree/commit, checkpoint
+references and observation digest. A must match its separately captured precommit
+baseline; the link is historical and grants no current-source, mutation or
+validation authority. Changed observations or missing checkpoints refuse.
+Correction dispatch awaits A's supported development contract; no competing
 editing engine or automatic correction authority is introduced here. Campaign B
 retains isolation, protected collection and post-commit continuation ownership.
 No mocked evidence, ordinary subprocess test execution or state-reader assertion
@@ -97,4 +103,5 @@ Real acceptance requires Campaign B's independently verified runner and receipts
 supported native continuation, configured credentials and verified hosted-CI cost
 policy. It also requires real exact-head CI and independent review. Source
 dependency baseline test failures are documented in the native milestone; they
-are not bypassed by this orchestrator. No main push or automatic merge is allowed.
+now pass after A's exact published fixture repair, without runtime changes or a
+duplicate long full-suite run. No main push or automatic merge is allowed.

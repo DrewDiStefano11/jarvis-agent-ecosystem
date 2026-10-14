@@ -13,6 +13,10 @@ def test_publication_api_is_registered_and_unconfigured_host_fails_closed(tmp_pa
     )
     with TestClient(app) as client:
         paths = client.get("/openapi.json").json()["paths"]
+        assert (
+            "/api/self-build/workspaces/{workspace_id}/publication/{operation_id}/source-link"
+            in paths
+        )
         assert "/api/self-build/workspaces/{workspace_id}/publication" in paths
         assert (
             "/api/self-build/workspaces/{workspace_id}/publication/{operation_id}/observe" in paths

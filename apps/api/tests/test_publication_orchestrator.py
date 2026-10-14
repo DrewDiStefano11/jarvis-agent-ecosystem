@@ -190,7 +190,71 @@ def test_actual_native_checkpoint_and_ledger_resume_lost_pr_ack(context, monkeyp
     assert uncertain.state == "blocked"
     assert uncertain.error_code == "GITHUB_TRANSPORT_UNAVAILABLE"
     assert posts == {"git": 1, "pr": 1}
+
     recovered = orchestrator.advance_publication(service, c.actor, request, plan)
     assert recovered.state == "pr_created"
     assert recovered.pr_number == 7
     assert posts == {"git": 1, "pr": 1}
+
+    # A consumes a protected historical reference, never caller-supplied source.
+    from app.github_publication.journal import PublicationJournal
+    from app.github_publication.source_link import read_source_link
+    from app.self_build.commit_recovery_read import inspect_recovery
+    from tests.test_github_publication_readiness import observation
+
+    measured = observation(
+        repository_id=123,
+        pr_number=7,
+        head_sha=plan.commit_sha,
+        head_sha_after_collection=plan.commit_sha,
+        base_sha=plan.approved_base_sha,
+        approved_base_sha=plan.approved_base_sha,
+        draft=True,
+        reviews=[],
+        checks=[
+            dict(
+                evidence_id="fixture-check",
+                context="backend",
+                app_id=42,
+                head_sha=plan.commit_sha,
+                state="failed",
+            )
+        ],
+    )
+    journal = PublicationJournal(service)
+
+    def observed(preview, history, program, guard):
+        captured = journal.append(
+            c.actor,
+            request,
+            recovered.operation_id,
+            plan,
+            "observation",
+            guard,
+            expected=recovered,
+            observation=measured.model_dump(mode="json"),
+        )
+        return journal.acknowledge(c.actor, request, captured, guard)
+
+    observed_snapshot = inspect_recovery(
+        c.native,
+        c.actor,
+        plan.workspace_id,
+        plan.native_command_id,
+        finalize=observed,
+        request=request,
+    )
+    linked = read_source_link(
+        service,
+        c.actor,
+        plan.workspace_id,
+        observed_snapshot.operation_id,
+        plan.commit_sha,
+        digest(measured.model_dump(mode="json")),
+    )
+    assert linked.commit_sha == plan.commit_sha
+    assert linked.original_code_state.head_sha == plan.parent_sha
+    assert linked.original_code_state.changes == state.changes
+    assert linked.native_checkpoint_id == finished.checkpoint_id
+    assert linked.historical_only is True
+    assert linked.mutation_authority is linked.validation_authority is False

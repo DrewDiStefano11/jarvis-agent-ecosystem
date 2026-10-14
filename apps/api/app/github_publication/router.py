@@ -17,6 +17,7 @@ from app.models.publication_lifecycle import (
     PublicationSnapshot,
     PublicationStatus,
 )
+from app.models.publication_source_link import PublicationSourceLink
 from app.remote_control.router import Actor as Operator
 from app.self_build.router import Actor
 
@@ -65,6 +66,32 @@ def service(request):
             503,
         )
     return value
+
+
+@router.get(
+    "/{workspace_id}/publication/{operation_id}/source-link",
+    response_model=TypedApiResponse[PublicationSourceLink],
+)
+def source_link(
+    workspace_id: str,
+    operation_id: str,
+    request: Request,
+    principal: Actor,
+    expected_head_sha: str = Query(pattern=r"^[a-f0-9]{40}$"),
+    observation_digest: str = Query(pattern=r"^[a-f0-9]{64}$"),
+):
+    from app.github_publication.source_link import read_source_link
+
+    return TypedApiResponse(
+        data=read_source_link(
+            service(request),
+            principal,
+            workspace_id,
+            operation_id,
+            expected_head_sha,
+            observation_digest,
+        )
+    )
 
 
 @router.post(
