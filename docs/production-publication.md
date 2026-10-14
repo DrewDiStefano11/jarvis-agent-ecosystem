@@ -40,6 +40,14 @@ reader compare source evidence to the effective source base. This does not enabl
 advanced-head correction publication: protected original branch/PR lineage and
 A's independent admission/approval remain required integration work.
 
+`correction_link.read_correction_link` now resolves a protected historical direct-
+child reference: original source/publication link, child native history and final
+checkpoint, same task/actor/repository, complete source selection, and unchanged
+original observation. It preserves the original remote branch/PR while identifying
+the child's distinct local branch and source base. Siblings rooted at the original
+main base are rejected. `publication_authority` and `lineage_admission_verified`
+remain false; the reader does not dispatch, approve or publish a correction.
+
 ## Durable phases
 
 The operator-facing state contract provides `preparing`, `committing`, `pushing`,

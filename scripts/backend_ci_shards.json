@@ -72,7 +72,8 @@
     "tests/test_publication_correction_triage.py",
     "tests/test_publication_deployment.py",
     "tests/test_current_publication_observation.py",
-    "tests/test_publication_source_base.py"
+    "tests/test_publication_source_base.py",
+    "tests/test_correction_publication_link.py"
   ],
   "system": [
     "tests/test_git_process.py",
