@@ -110,6 +110,7 @@ class PublicationService:
                 branch=proposal.branch,
                 base_branch=self.target.base_branch,
                 approved_base_sha=history.source_snapshot.original_base_sha,
+                source_base_sha=history.source_snapshot.original_base_sha,
                 parent_sha=proposal.parent_sha,
                 commit_sha=proposal.prospective_commit_sha,
                 expected_remote_sha=None,

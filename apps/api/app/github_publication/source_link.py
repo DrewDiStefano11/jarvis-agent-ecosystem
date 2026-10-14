@@ -42,7 +42,7 @@ def read_source_link(
         or proposal.prospective_commit_sha != expected_head_sha
         or proposal.parent_sha != plan.parent_sha
         or source.head_sha != proposal.parent_sha
-        or source.original_base_sha != plan.approved_base_sha
+        or source.original_base_sha != plan.validation_base_sha
         or source.repository_identity != plan.repository_identity
         or record.workspace_id != plan.workspace_id
         or proposal.lineage.actor_id != plan.actor_id

@@ -31,6 +31,15 @@ validation journal/plan/state digests, task metadata, publisher identities and t
 complete producer implementation digest. A changed implementation invalidates
 the approved policy. Approval expires; recovery cannot grant authority itself.
 
+The optional `source_base_sha` identifies the source-validation/native parent
+separately from `approved_base_sha`, the approved GitHub PR base. Preview derives
+the source base from protected native history; a supplied value must match the
+native parent and is included in the plan hash. Legacy plans omit the field and
+retain their original serialized shape/hash. B assessment and the source-link
+reader compare source evidence to the effective source base. This does not enable
+advanced-head correction publication: protected original branch/PR lineage and
+A's independent admission/approval remain required integration work.
+
 ## Durable phases
 
 The operator-facing state contract provides `preparing`, `committing`, `pushing`,
