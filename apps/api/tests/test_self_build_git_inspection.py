@@ -1,7 +1,5 @@
 """Native production-path approval, lease, outbox and read-only Git acceptance."""
 
-import os
-import shutil
 import subprocess
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
@@ -17,6 +15,7 @@ from app.models.git_inspection import ApproveRepositoryInspection, InspectReposi
 from app.models.identity import AssignPermissionRequest, CreatePermissionRequest
 from app.models.self_build import ApproveWorkspaceRequest, WorkspaceIntent
 from app.self_build.git_observer import GitObserver
+from tests.native_git import native_git_executable
 
 pytest_plugins = ["tests.test_self_build_workspaces"]
 
@@ -25,24 +24,7 @@ pytest_plugins = ["tests.test_self_build_workspaces"]
 def git_workspace(workspace, request):
     app, actor, workspace_service, reservation_request, _, policy = workspace
     root = Path(policy["primary_root"])
-    executable = shutil.which("git")
-    if (
-        executable
-        and os.name == "nt"
-        and (
-            Path(executable).parent.name.casefold() == "cmd"
-            or (
-                Path(executable).parent.name.casefold() == "bin"
-                and Path(executable).parent.parent.name.casefold() not in {"mingw32", "mingw64"}
-            )
-        )
-    ):
-        installation = Path(executable).parent.parent
-        implementations = [
-            installation / family / "bin/git.exe" for family in ("mingw64", "mingw32")
-        ]
-        executable = str(next(path for path in implementations if path.is_file()))
-    assert executable, "Native Git is required for repository acceptance"
+    executable = str(native_git_executable())
 
     def git(*args):
         return (
