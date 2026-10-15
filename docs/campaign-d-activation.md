@@ -98,12 +98,12 @@ An in-flight request may finish, so the verified provider boundary must cover it
 
 ## GitHub publication boundary
 
-The repository is public and uses standard runners. GitHub documents free standard
-runner execution, but artifact/cache storage has separate billing considerations.
-Account-specific artifact storage safeguards are **unverified**. Remote Actions CI
-must remain skipped for this branch/PR, including applicable triggers, until the
-owner independently verifies an enforceable $0 boundary. No paid review is requested.
-Local validation and a draft PR do not constitute remote CI acceptance.
+The owner explicitly authorized standard public-repository GitHub-hosted Actions
+CI on 2026-10-15 and withdrew the independent billing-verification prerequisite.
+Every required job now runs for this branch/PR. This authorization permits no
+billing changes, paid services, larger runners, purchased reviews or cloud inference.
+Local validation and a draft PR do not constitute remote CI acceptance; final-head
+job results must pass before merge readiness is claimed.
 [GitHub Actions billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
 
 ## Narrow follow-up engineering tasks

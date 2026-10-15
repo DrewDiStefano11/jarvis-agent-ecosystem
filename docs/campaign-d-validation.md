@@ -8,16 +8,17 @@ still receives their measured local identity; remote endpoints without verified
 nonbillable capacity remain blocked. Regression fixtures cover IPv4, localhost
 and IPv6 routing without making real network requests.
 
-The existing manual CI trigger is also checked against every branch quarantine
-condition. No hosted workflow is activated; the Campaign D CI quarantine remains
-required until its enforceable $0 storage/cache safeguards are independently verified.
+The owner authorized standard public-repository GitHub-hosted CI on 2026-10-15
+and withdrew the former independent billing-verification prerequisite. All
+push, pull-request and manual triggers run every required validation job.
+No billing setting, paid service, larger runner or cloud provider is activated.
 
 - Implementation: six opt-in hosted integrations, private eligibility records,
   shared durable quotas, bounded switching, safe pause and recovery evidence.
 - Local acceptance: mock transports, signed OAuth fixtures and isolated temporary
   databases. No cloud sign-in, inference or provisioning was performed.
-- Remote CI: deliberately skipped; account-specific Actions storage safeguards
-  are unverified. Skipped checks do not establish CI acceptance.
+- Remote CI: required on the final exact head. Skipped checks do not establish
+  CI acceptance; consult the PR for the latest run and job results.
 - Live provider acceptance: pending independent account evidence and separate
   bounded-test authorization. All cloud connections remain disabled.
 - Independent PR review: pending. No paid or credit-consuming review is requested.
@@ -38,11 +39,11 @@ OAuth sessions cannot query the account model catalog. Every failed physical
 attempt is audited even if a subsequent retry succeeds. Free-only doctor output
 cannot probe cloud accounts or claim account verification.
 
-Every registered workflow trigger and job was inspected. Push events exclude only
-`codex/campaign-d-zero-cost`; every job, including the `always()` aggregate, fences
-that branch for PR events. `[skip ci]` is additional protection, not the sole gate.
-Other branches and PRs retain all checks. A regression test rejects an unfenced
-workflow, trigger or job. No repository-wide Actions setting was changed.
+Every registered workflow trigger and job was inspected. The obsolete Campaign D
+branch exclusion and job guards are removed; the backend aggregate retains its
+`always()` guard and all required dependencies. A regression verifies the complete
+job/shard inventory, enabled triggers and standard runners. No repository-wide
+Actions setting was changed.
 
 Unrelated handoff files, validation directories and other worktrees were preserved.
 A concurrent unstaged edit to `apps/api/app/self_improvement/router.py` was left
@@ -123,9 +124,8 @@ and models to actual quota/reset evidence, and approve a bounded live acceptance
 test. Insufficient evidence means disabled; unenforceable cost prevention means
 unsuitable. No provider has passed these gates.
 
-For remote CI, the owner must separately establish a hard $0 Actions storage
-boundary before removing the Campaign D branch quarantine. A successful local
-suite or a skipped remote check never substitutes for that evidence.
+Standard GitHub-hosted CI is now explicitly authorized. A successful local suite
+or skipped remote check never substitutes for completed final-head CI evidence.
 
 ## Conflict resolution against newer main, 2026-10-13
 
@@ -167,12 +167,10 @@ prevents request reservation and inference. Enabling the switch requires
 verification. `AGENTS.md` now records this narrowly authorized Campaign D policy;
 no live activation has been approved or performed.
 
-The reviewer recommendation to run remote CI is **not implemented**: the owner
-explicitly requires every remote workflow job to stay skipped until an enforceable
-$0 storage boundary is independently verified. The local pre-commit requirements
-and branch quarantine are now explicit in `AGENTS.md` and the workflow comments.
-The PR remains draft, remote CI acceptance remains pending, and the CI review
-finding stays visible as a blocked owner gate. Other PRs retain their CI.
+The earlier deferral of the CI finding is superseded by the owner's 2026-10-15
+authorization. Remote validation is restored for Campaign D. Final-head CI and
+independent review still determine merge readiness; cloud activation remains a
+separate owner gate.
 
 Validation for the correction: **271 affected backend tests passed**, covering
 activation absent/present/revoked, quotas, worker, critic, provider contracts and

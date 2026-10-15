@@ -25,10 +25,9 @@
   authority. Hosted fallback requires the same activation and per-provider evidence;
   retain RBAC, leases, checkpoints, request bounds and emergency stop. Unverified
   providers and all paid/credit-consuming inference remain unavailable.
-- The owner explicitly requires every remote Actions job for
-  `codex/campaign-d-zero-cost` to remain skipped until an enforceable $0 storage
-  boundary is independently verified. Do not lift this quarantine, activate cloud
-  services, or use paid reviews to satisfy automated suggestions. Other PRs retain
-  their normal CI. Skipped checks are not CI acceptance: keep the PR draft, require
-  the local gates above, and leave remote/live acceptance pending; no automatic merge.
+- The owner authorizes standard public-repository GitHub-hosted Actions CI,
+  including Campaign D. The former billing-verification branch quarantine is
+  withdrawn. Preserve all validation jobs and security gates; do not change billing,
+  enable paid services or larger runners, purchase review credits, activate cloud
+  inference, or merge automatically. Skipped checks are not passing CI evidence.
 - Work on feature branches. Never merge directly into `main`, delete the feature branch, or push without approval.

@@ -108,7 +108,7 @@ def completion(request):
     )
 
 
-def test_campaign_ci_quarantines_every_registered_trigger_and_job():
+def test_campaign_ci_runs_every_required_validation_job_on_standard_runners():
     import yaml
 
     root = Path(__file__).resolve().parents[3]
@@ -116,17 +116,31 @@ def test_campaign_ci_quarantines_every_registered_trigger_and_job():
     assert [path.name for path in workflows] == ["ci.yml"]
     workflow = yaml.load(workflows[0].read_text(), Loader=yaml.BaseLoader)
     assert set(workflow["on"]) == {"push", "pull_request", "workflow_dispatch"}
-    assert not workflow["on"]["workflow_dispatch"]
-    assert workflow["on"]["push"]["branches-ignore"] == ["codex/campaign-d-zero-cost"]
-    guard = (
-        "github.head_ref != 'codex/campaign-d-zero-cost' && "
-        "github.ref_name != 'codex/campaign-d-zero-cost'"
-    )
+    assert set(workflow["jobs"]) == {
+        "backend-static",
+        "backend-migrations",
+        "backend-tests",
+        "backend-git-linux",
+        "backend",
+        "frontend",
+        "repository-integrity",
+        "runtime-browser",
+    }
+    assert workflow["jobs"]["backend-tests"]["strategy"]["matrix"]["shard"] == [
+        "runtime",
+        "autonomy",
+        "models",
+        "system",
+    ]
+    assert set(workflow["jobs"]["backend"]["needs"]) == {
+        "backend-static",
+        "backend-migrations",
+        "backend-tests",
+        "backend-git-linux",
+    }
     for name, job in workflow["jobs"].items():
-        expected = "always() && " + guard if name == "backend" else guard
-        assert job.get("if") == expected, f"Unfenced job: {name}"
-    # The explicit branch equality leaves all other heads eligible. A newly
-    # added trigger/workflow/job needs safety review before this gate can pass.
+        assert job.get("if") == ("always()" if name == "backend" else None), name
+        assert job["runs-on"] in {"windows-latest", "ubuntu-latest"}, name
 
 
 @pytest.mark.parametrize("configured", [False, True])
