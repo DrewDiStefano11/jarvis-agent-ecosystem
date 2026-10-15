@@ -59,6 +59,8 @@ def test_request_dependency_upgrade_invalidates_persisted_admission(development,
         "context/security.py",
         "context/budget.py",
         "model_providers/tool_calls.py",
+        "model_providers/policy.py",
+        "source_edit_planning/service.py",
     ):
         changed_path = source_root / name
 

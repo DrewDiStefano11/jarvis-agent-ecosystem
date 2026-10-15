@@ -38,13 +38,17 @@ POLICY_SOURCE_PATHS = (
     "models/development_agent.py",
     "models/development_validation.py",
     "models/source_change.py",
+    "models/source_edit_planning.py",
     "models/context.py",
     "context/assembler.py",
     "context/security.py",
     "context/budget.py",
     "model_providers/contracts.py",
+    "model_providers/policy.py",
     "model_providers/tool_calls.py",
     "self_build/change_verifier.py",
+    "source_edit_planning/service.py",
+    "source_change/planner.py",
     "tool_execution/filesystem.py",
 )
 
