@@ -30,6 +30,8 @@ def preflight_directory_pins(root, files):
     for item in files:
         parts = item.path.split("/")
         prefixes.update(tuple(parts[:depth]) for depth in range(1, len(parts)))
+        if len(root.parents) + len(prefixes) > MAX_DIRECTORY_PINS:
+            raise ValueError("CAPSULE_DIRECTORY_PIN_LIMIT")
     if len(root.parents) + len(prefixes) > MAX_DIRECTORY_PINS:
         raise ValueError("CAPSULE_DIRECTORY_PIN_LIMIT")
 
