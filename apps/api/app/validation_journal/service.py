@@ -627,7 +627,7 @@ class ValidationJournalService:
             now=now,
             expected_execution_plan_hash=approved_hash,
             max_age_seconds=max_age_seconds,
-            current_lineage=(
+            current_attempt=(
                 snapshot.intent.owner.runtime_run_id,
                 snapshot.intent.owner.attempt_id,
             ),
@@ -683,7 +683,7 @@ class ValidationJournalService:
                 self.verifier,
                 now=now,
                 expected_execution_plan_hash=approved_hash,
-                current_lineage=(owner.runtime_run_id, owner.attempt_id),
+                current_attempt=(owner.runtime_run_id, owner.attempt_id),
             )
             provisional = ValidationVerdict(
                 workspace_id=workspace_id,

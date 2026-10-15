@@ -13,7 +13,7 @@ from app.self_build.git_observer import COMMIT, pinned_metadata_file
 from app.self_build.owned_process import owned_process
 from app.self_build.policy import digest
 from app.self_build.workspace_namespace import owned_namespace
-from app.tool_execution.filesystem import open_directory, open_file, read_bytes
+from app.tool_execution.filesystem import open_directory, open_file, read_bytes, windows_native_path
 
 
 def supports_mutation():
@@ -69,7 +69,9 @@ def pin_read_tree(stack, path, authority_check, *, maximum=16384):
     def walk_error(error):
         raise error
 
-    for parent, directories, files in os.walk(path, followlinks=False, onerror=walk_error):
+    walk_root = Path(windows_native_path(path))
+    for parent, directories, files in os.walk(walk_root, followlinks=False, onerror=walk_error):
+        parent = Path(path) / Path(parent).relative_to(walk_root)
         authority_check()
         count += len(directories) + len(files)
         if count > maximum:
