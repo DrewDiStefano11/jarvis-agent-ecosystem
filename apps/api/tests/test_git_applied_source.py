@@ -365,7 +365,12 @@ def test_coherently_rehashed_foreign_receipt_cannot_replace_native_history(appli
     from app.models.source_mutation_history import MutationHistory
 
     _, actor, binding, workspace_id, request, mutation, _ = applied
-    forged = mutation.model_copy(update={"completed_count": 0, "prefix_digest": None})
+    # Empty progress must also carry an empty original-identity vector. Keep
+    # this forged history schema-valid so the binding's count check is exercised.
+    forged = mutation.model_copy(
+        update={"completed_count": 0, "prefix_digest": None, "original_identities": ()}
+    )
+    forged = type(mutation).model_validate(forged.model_dump(mode="json"))
     monkeypatch.setattr(
         binding.history,
         "read",
@@ -373,8 +378,9 @@ def test_coherently_rehashed_foreign_receipt_cannot_replace_native_history(appli
             record=forged, native_checkpoint_present=True, journal_checkpoint_acknowledged=True
         ),
     )
-    with pytest.raises(DomainError):
+    with pytest.raises(DomainError) as rejected:
         binding.source(actor, workspace_id, request.source_edit_record_id)
+    assert rejected.value.code == "GIT_COMMIT_APPLIED_SOURCE_REQUIRED"
 
 
 @pytest.mark.parametrize(
