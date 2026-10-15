@@ -231,5 +231,7 @@ class PublicationService:
         if not callable(self.hosted_ci_guard):
             fail("GITHUB_HOSTED_CI_COST_UNVERIFIED")
         require_guard(self.hosted_ci_guard, "GITHUB_HOSTED_CI_COST_UNVERIFIED")
+        if self.configuration_guard is not None:
+            require_guard(self.configuration_guard, "GITHUB_PUBLICATION_PROFILE_CHANGED")
         if self.broker is None:
             fail("GITHUB_CREDENTIAL_UNAVAILABLE", 503)

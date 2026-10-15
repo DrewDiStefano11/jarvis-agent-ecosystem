@@ -76,6 +76,22 @@ def packets(raw):
     return tuple(result)
 
 
+def advertised_ref(name):
+    """Remote names use Git's byte-level rules, never generated-branch scope."""
+    if name == b"HEAD":
+        return True
+    return (
+        name.startswith(b"refs/")
+        and not name.endswith((b"/", b"."))
+        and not any(token in name for token in (b"..", b"//", b"@{", b"\\"))
+        and not any(byte <= 32 or byte == 127 or byte in b"~^:?*[" for byte in name)
+        and all(
+            part and not part.startswith(b".") and not part.endswith(b".lock")
+            for part in name.split(b"/")
+        )
+    )
+
+
 def advertisement(raw):
     stream = packets(raw)
     if (
@@ -111,17 +127,13 @@ def advertisement(raw):
     refs = []
     for line in lines:
         try:
-            value, name = line.decode("ascii").split(" ")
+            raw_value, raw_name = line.split(b" ", 1)
+            value = raw_value.decode("ascii")
         except (ValueError, UnicodeError):
             refuse()
-        leaf = name.removeprefix("refs/heads/").removeprefix("refs/tags/")
-        if (
-            not OID.fullmatch(value)
-            or value == ZERO
-            or not (name == "HEAD" or name.startswith("refs/"))
-            or not safe_branch(leaf)
-        ):
+        if not OID.fullmatch(value) or value == ZERO or not advertised_ref(raw_name):
             refuse()
+        name = raw_name.decode("utf-8", errors="surrogateescape")
         refs.append((name, value))
     if len(refs) != len({name for name, _ in refs}):
         refuse()

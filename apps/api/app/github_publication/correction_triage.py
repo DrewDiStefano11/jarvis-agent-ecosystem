@@ -63,7 +63,15 @@ def classify(source_link, publisher_ids, *, now=None):
             continue
         if check.state in {"failed", "cancelled", "skipped", "unknown", "stale"}:
             failed.add(check.evidence_id)
-            if check.app_id not in publisher_ids:
+            # Publisher IDs are GitHub users, not check-run GitHub App IDs.
+            # Only an explicitly app-bound protected requirement establishes
+            # the provider for this exact context.
+            if not any(
+                requirement.context == check.context
+                and requirement.app_id is not None
+                and requirement.app_id == check.app_id
+                for requirement in observed.required_checks
+            ):
                 blockers.append("check_publisher_unverified")
         elif check.state in {"queued", "running"}:
             waiting.add(check.evidence_id)
