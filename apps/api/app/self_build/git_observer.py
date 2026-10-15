@@ -75,7 +75,7 @@ def windows_implementation_path(path):
     return (
         path.name.casefold() == "git.exe"
         and path.parent.name.casefold() == "bin"
-        and path.parent.parent.name.casefold() in {"mingw32", "mingw64"}
+        and path.parent.parent.name.casefold() in {"ucrt64", "mingw32", "mingw64", "clangarm64"}
     )
 
 
@@ -135,7 +135,7 @@ class GitObserver:
         ):
             fail(
                 "SELF_BUILD_GIT_TOOL_INVALID",
-                "Configure an absolute pinned Git implementation; Windows requires mingw32/bin or mingw64/bin/git.exe.",
+                "Configure an absolute pinned Git implementation in a supported Windows native bin directory.",
             )
 
     def _tool(self, policy):
