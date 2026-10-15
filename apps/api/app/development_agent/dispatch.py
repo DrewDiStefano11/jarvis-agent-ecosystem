@@ -19,6 +19,7 @@ from app.models.agent_runtime import RecordCheckpointCommand
 from app.models.development_agent import DevelopmentProposal
 from app.models.development_dispatch import (
     AdmissionPlan,
+    AssemblyLimits,
     DevelopmentAdmission,
     DevelopmentDispatch,
     DevelopmentLimits,
@@ -40,6 +41,7 @@ POLICY_SOURCE_PATHS = (
     "models/source_change.py",
     "models/source_edit_planning.py",
     "models/context.py",
+    "models/domain.py",
     "context/assembler.py",
     "context/security.py",
     "context/budget.py",
@@ -138,6 +140,7 @@ class DevelopmentDispatchService:
             initial_context_hash=context.context_hash,
             selection=context.selection,
             limits=limits,
+            assembly_limits=AssemblyLimits.capture(self.app.state.context_assembler),
             policy_digest=POLICY_DIGEST,
         )
         provisional = AdmissionPlan(**payload, plan_hash="0" * 64)
@@ -193,6 +196,7 @@ class DevelopmentDispatchService:
             or plan.worker_id != authority.worker_id
             or plan.lease_fingerprint != digest(authority.lease_token)
             or plan.policy_digest != POLICY_DIGEST
+            or plan.assembly_limits != AssemblyLimits.capture(self.app.state.context_assembler)
             or record.approved_by == actor.actor_id
         ):
             refuse("DEVELOPMENT_ADMISSION_CONFLICT")
@@ -582,6 +586,7 @@ class DevelopmentDispatchService:
                     )
                 )
                 guard.in_transaction(session)
+                self.root(session, actor, row, authority)
                 self.remaining_seconds(root)
                 return record, True
 

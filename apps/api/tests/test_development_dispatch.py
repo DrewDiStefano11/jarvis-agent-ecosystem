@@ -55,6 +55,7 @@ def test_request_dependency_upgrade_invalidates_persisted_admission(development,
         "development_agent/provider.py",
         "models/development_agent.py",
         "models/context.py",
+        "models/domain.py",
         "context/assembler.py",
         "context/security.py",
         "context/budget.py",
@@ -81,6 +82,73 @@ def test_request_dependency_upgrade_invalidates_persisted_admission(development,
     with service.repository.sessions() as session:
         row = service.repository.lookup(session, context.workspace_id)
         assert service.root(session, actor, row, authority)[0] == admitted
+
+
+def test_live_assembler_limits_are_frozen_in_admission(development, monkeypatch):
+    from app.models.development_dispatch import AdmissionPlan
+
+    app, actor, _, authority, _, _, _, context = development
+    service, admitted = admit(development)
+    assembler = app.state.context_assembler
+    assert AdmissionPlan.model_json_schema()["properties"]["assembly_limits"]
+    assert admitted.plan.assembly_limits.maximum_tokens == assembler.maximum_tokens
+    assert (
+        admitted.plan.assembly_limits.maximum_total_characters == assembler.maximum_total_characters
+    )
+    for name in type(admitted.plan.assembly_limits).model_fields:
+        original = getattr(assembler, name)
+        changed = not original if type(original) is bool else original + 1
+        monkeypatch.setattr(assembler, name, changed)
+        # A new service models restart against the same persisted root with new settings.
+        restarted_service = DevelopmentDispatchService(app)
+        with restarted_service.repository.sessions() as session:
+            row = restarted_service.repository.lookup(session, context.workspace_id)
+            with pytest.raises(DomainError) as error:
+                restarted_service.root(session, actor, row, authority)
+        assert error.value.code == "DEVELOPMENT_ADMISSION_CONFLICT", name
+        monkeypatch.setattr(assembler, name, original)
+    with service.repository.sessions() as session:
+        row = service.repository.lookup(session, context.workspace_id)
+        assert service.root(session, actor, row, authority)[0] == admitted
+
+
+def test_assembler_change_during_request_rolls_back_dispatch(development, monkeypatch):
+    app, actor, _, authority, _, _, _, context = development
+    service, _ = admit(development)
+    assembler = app.state.context_assembler
+    assemble = assembler.assemble
+
+    def replace_limits(*args, **kwargs):
+        result = assemble(*args, **kwargs)
+        assembler.maximum_total_characters += 1
+        return result
+
+    monkeypatch.setattr(assembler, "assemble", replace_limits)
+    with pytest.raises(DomainError) as error:
+        service.reserve(actor, context.workspace_id, authority, context.selection, "changed-policy")
+    assert error.value.code == "DEVELOPMENT_ADMISSION_CONFLICT"
+    with service.repository.sessions() as session:
+        assert list(session.scalars(select(DevelopmentDispatchRow))) == []
+        assert (
+            list(
+                session.scalars(
+                    select(AuditEventRow).where(
+                        AuditEventRow.event_type == "development.dispatch.reserved"
+                    )
+                )
+            )
+            == []
+        )
+        assert (
+            list(
+                session.scalars(
+                    select(OutboxEventRow).where(
+                        OutboxEventRow.event_type == "development.dispatch.reserved"
+                    )
+                )
+            )
+            == []
+        )
 
 
 def result(record, **changes):
