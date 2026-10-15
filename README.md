@@ -1,5 +1,9 @@
 # Jarvis Agent Ecosystem
 
+Campaign D enforces [zero additional AI spending](docs/zero-cost-ai.md). Supported
+subscription/free adapters require verified account-specific nonbillable evidence;
+all cloud connections remain disabled pending that verification.
+
 Jarvis is a local AI Hub with durable planning, identity/RBAC, task leases, a runtime ledger, recovery and an office reflecting real workforce state. An explicitly enabled worker can call an approved loopback model and persist a reviewed plan. Separately authorized workspace plans can list/read bounded inputs and write files/reports inside marked local workspaces. The seeded demonstration remains available and distinct from actual autonomous work.
 
 For the current integration and transfer state, read the [coordinator handoff](docs/handoffs/milestone-63-coordinator-handoff.md). Validation and review gates are recorded separately from implementation claims.
@@ -13,7 +17,7 @@ For the current integration and transfer state, read the [coordinator handoff](d
 - deterministic departments, five permanent agents, tasks, approvals, artifacts, notifications, and audit fixtures
 - installable PWA metadata, offline shell, reconnection states, HTTP refresh fallback, and a 320px mobile layout
 - YAML agent manifests validated by Pydantic
-- SQLite persistence through typed SQLAlchemy models and Alembic head `20261006_12`, following coordination revision `20260907_11`
+- SQLite persistence through typed SQLAlchemy models and Alembic head `20261013_free_ai`, including durable shared free AI quotas
 - transactional outbox, durable idempotency keys, workflow runs, per-step checkpoints, and safe restart recovery
 - deterministic context assembly with provenance checks, trust ordering, redaction, injection signals, bounded truncation, durable manifests, and review gating
 - registered worker lifecycle, atomic task acquisition, renewable fencing tokens, attempt history, cancellation revocation, and expired-lease recovery
