@@ -79,6 +79,45 @@ def test_complete_changes_and_deterministic_preview_preserve_indexes(verified):
     assert str(target) not in result.model_dump_json() and nonce not in result.model_dump_json()
 
 
+@pytest.mark.parametrize("count", [4096, 4097])
+def test_source_file_limit_excludes_late_native_and_backup_artifacts(verified, monkeypatch, count):
+    from app.models.git_changes import NativeArtifact
+    from app.tool_execution.filesystem import windows_native_path
+
+    verifier, policy, record, nonce, target, _, _ = verified
+    target = Path(windows_native_path(target))
+    for index in range(count - 1):
+        (target / f"limit-{index:04d}.txt").write_bytes(b"")
+    backup = ".jarvis-edit-" + "a" * 64 + ".before"
+    (target / backup).write_bytes(b"")
+    artifact = NativeArtifact(
+        path=backup,
+        kind="source_backup",
+        sha256=sha256(b"").hexdigest(),
+        byte_count=0,
+        provenance_digest=record.ownership_digest,
+        device=(target / backup).stat().st_dev,
+        inode=(target / backup).stat().st_ino,
+    )
+    native_walk = os.walk
+
+    def source_first(*args, **kwargs):
+        for directory, children, files in native_walk(*args, **kwargs):
+            files.sort(key=lambda name: name in {".git", ".jarvis-workspace.json", backup})
+            yield directory, children, files
+
+    monkeypatch.setattr(os, "walk", source_first)
+    if count > 4096:
+        with pytest.raises(DomainError) as failure:
+            verifier.inspect(policy, record, nonce, native_artifacts=(artifact,))
+        assert failure.value.code == "SELF_BUILD_CHANGE_LIMIT"
+    else:
+        result = verifier.inspect(policy, record, nonce, native_artifacts=(artifact,))
+        assert len(result.current_inventory) == count
+        assert len(result.internal_inventory) == 3
+        assert result.untracked_file_count == count - 1
+
+
 def test_ignored_files_are_included_and_hostile_filters_are_not_run(verified):
     verifier, policy, record, nonce, target, _, _ = verified
     common = Path(policy.primary_root) / ".git"
@@ -207,3 +246,34 @@ def test_component_collisions_are_rejected(paths):
 def test_unmerged_or_truncated_index_refused(raw):
     with pytest.raises(DomainError):
         index_entries(raw)
+
+
+def test_long_derived_backup_is_measured_under_native_pins(verified):
+    from app.models.git_changes import NativeArtifact
+    from app.tool_execution.filesystem import windows_native_path
+
+    verifier, policy, record, nonce, target, _, _ = verified
+    target = Path(windows_native_path(target))
+    parent = "a" * 118 + "/" + "b" * 118
+    path = parent + "/.jarvis-edit-" + "a" * 64 + ".before"
+    backup = target / path
+    backup.parent.mkdir(parents=True)
+    backup.write_bytes(b"original")
+    native = backup.stat()
+    artifact = NativeArtifact(
+        path=path,
+        kind="source_backup",
+        sha256=sha256(b"original").hexdigest(),
+        byte_count=8,
+        provenance_digest=record.ownership_digest,
+        device=native.st_dev,
+        inode=native.st_ino,
+    )
+    result = verifier.inspect(policy, record, nonce, native_artifacts=(artifact,))
+    assert artifact in result.internal_inventory
+    assert path not in {item.path for item in result.current_inventory}
+    assert backup.stat().st_ino == native.st_ino
+    unclaimed = NativeArtifact.model_validate(artifact.model_dump(exclude={"device", "inode"}))
+    with pytest.raises(DomainError) as failure:
+        verifier.inspect(policy, record, nonce, native_artifacts=(unclaimed,))
+    assert failure.value.code == "SELF_BUILD_CHANGE_PROTECTED"
