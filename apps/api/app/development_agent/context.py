@@ -39,6 +39,14 @@ class RepositoryContextReader:
     def __init__(self, app):
         self.creation = app.state.self_build_creation_service
 
+    def require_ready(self, actor, workspace_id, authority):
+        binding = self.creation.current(actor, workspace_id, authority)
+        record, _, private_digest = binding
+        checkpoint, _, _ = self.creation.checkpoint(actor, record, private_digest)
+        if record.state != "ready" or checkpoint is None:
+            refuse("DEVELOPMENT_CHECKPOINT_REQUIRED")
+        return binding
+
     def inspect(
         self, actor, workspace_id, authority, selection, *, expected_hash=None, finalize=None
     ):
@@ -51,10 +59,7 @@ class RepositoryContextReader:
             )
         except (ValueError, TypeError, AttributeError):
             refuse("DEVELOPMENT_REQUEST_INVALID")
-        record, nonce, private_digest = self.creation.current(actor, workspace_id, authority)
-        checkpoint, _, _ = self.creation.checkpoint(actor, record, private_digest)
-        if record.state != "ready" or checkpoint is None:
-            refuse("DEVELOPMENT_CHECKPOINT_REQUIRED")
+        record, nonce, private_digest = self.require_ready(actor, workspace_id, authority)
 
         transaction_session = None
 

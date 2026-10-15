@@ -30,6 +30,13 @@ permission to use the API. Tests never load the provisioned key. Test-only execu
 subclasses permit only explicitly injected mock transports; the production class
 has no fixture or activation switch.
 
+The unwired adapter additionally enforces the central execution policy before
+client creation or source upload, even with enabled settings or an injected
+client. Execution integration fixtures explicitly forbid constructing real HTTP
+transports while exercising mocked wire behavior; unmocked adapter/factory
+regressions independently assert production refusal. Admission digests include
+the execution/configuration and mutation-contract implementation dependencies.
+
 Fixture responses establish protocol and recovery behavior, not real AI coding
 quality. Native filesystem mutation and inspection in those tests are real, but
 mock provider output is not independently verified code-execution evidence.

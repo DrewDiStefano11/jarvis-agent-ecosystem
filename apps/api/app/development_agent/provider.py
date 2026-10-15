@@ -28,6 +28,7 @@ from app.model_providers.errors import (
     RequestTimeoutError,
 )
 from app.model_providers.http import translate_http_error
+from app.model_providers.policy import require_live_provider_execution
 from app.model_providers.security import redact_secrets
 from app.model_providers.tool_calls import decode_model_response, post_model_response
 from app.models.development_agent import DevelopmentProposal
@@ -150,6 +151,15 @@ class OpenAIProposalProvider(ProviderBase):
 
     async def execute(self, request):
         request = self._validate_request(request)
+        # Configuration is not runtime authority to upload source to a cloud API.
+        require_live_provider_execution(
+            provider=self.name,
+            model=self.default_model,
+            task_id=request.task_id,
+            correlation_id=request.correlation_id,
+            execution_mode="disabled",
+            is_local=False,
+        )
         started = perf_counter()
         timeout = min(self.timeout_seconds, request.timeout_seconds or self.timeout_seconds)
         failure = None
