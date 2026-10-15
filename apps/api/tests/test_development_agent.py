@@ -234,6 +234,71 @@ def test_durable_replay_ignores_later_source_but_binds_exact_input(development, 
     )
 
 
+@pytest.mark.parametrize("interference", ["same", "different", "stop"])
+def test_lookup_observation_race_recovers_only_exact_authorized_command(
+    development, monkeypatch, interference
+):
+    app, actor, _, authority, _, target, _, context = development
+    retry = DevelopmentProposalService(app)
+    winner = DevelopmentProposalService(app)
+    args = (actor, context.workspace_id, authority, context.selection, "racing-replay")
+    original = proposal(context)
+    inspect = retry.reader.inspect
+    records = []
+
+    def competing_commit(*inspect_args, **inspect_kwargs):
+        committed = (
+            proposal(context, summary="Different input")
+            if interference == "different"
+            else original
+        )
+        records.append(winner.persist(*args, committed))
+        (target / "source.py").write_bytes(b"value = 3\n")
+        try:
+            return inspect(*inspect_args, **inspect_kwargs)
+        finally:
+            if interference == "stop":
+                with app.state.repository.session_factory.begin() as session:
+                    session.get(SystemStateRow, 1).emergency_stop = True
+
+    monkeypatch.setattr(retry.reader, "inspect", competing_commit)
+    if interference == "same":
+        assert retry.persist(*args, original) == records[0]
+    else:
+        with pytest.raises(DomainError) as error:
+            retry.persist(*args, original)
+        assert error.value.code == (
+            "SOURCE_EDIT_COMMAND_CONFLICT"
+            if interference == "different"
+            else "EMERGENCY_STOP_ACTIVE"
+        )
+    with app.state.repository.session_factory() as session:
+        assert (
+            len(
+                list(
+                    session.scalars(
+                        select(AuditEventRow).where(
+                            AuditEventRow.event_type == "self_build.source_edit_plan.persisted"
+                        )
+                    )
+                )
+            )
+            == 1
+        )
+        assert (
+            len(
+                list(
+                    session.scalars(
+                        select(OutboxEventRow).where(
+                            OutboxEventRow.event_type == "self_build.source_edit_plan.persisted"
+                        )
+                    )
+                )
+            )
+            == 1
+        )
+
+
 def test_durable_replay_still_requires_live_authority(development):
     app, actor, _, authority, permission, _, _, context = development
     service = DevelopmentProposalService(app)
