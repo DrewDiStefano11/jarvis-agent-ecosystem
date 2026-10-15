@@ -37,6 +37,11 @@ def failed(**changes):
     )
 
 
+def test_conflicting_protected_attempt_aliases_refuse():
+    with pytest.raises(ValueError, match="conflicting protected journal attempt"):
+        report([], current_attempt=("run-1", "new"), current_lineage=("run-1", "old"))
+
+
 def test_exact_reproduction_and_no_mutation_authority():
     signed = failed()
     result = report([signed])
@@ -46,6 +51,40 @@ def test_exact_reproduction_and_no_mutation_authority():
     assert finding.reproduction.code_state_hash == signed.measurement.code_state_hash
     assert finding.reproduction.suite_digest == signed.measurement.command.suite_digest
     assert not result.execution_authorized and not result.source_mutation_authorized
+
+
+def test_acknowledged_attempt_wins_regressed_collector_clock():
+    old = failed(command_run_id="old", attempt_id="old-attempt")
+    current = receipt(
+        build_execution_plan(state()),
+        command_run_id="current",
+        attempt_id="current-attempt",
+        started_at=NOW - timedelta(seconds=3),
+        finished_at=NOW - timedelta(seconds=2),
+    )
+    for values in permutations((old, current)):
+        finding = report(values, current_attempt=("run-1", "current-attempt")).findings[0]
+        assert finding.disposition == "passed"
+        assert finding.recommendation == "none"
+        assert finding.reproduction.command_run_id == "current"
+        assert len(finding.supporting_receipt_digests) == 2
+
+
+def test_missing_current_attempt_does_not_revive_historical_receipt():
+    values = [failed(attempt_id=f"old-{index}") for index in range(3)]
+    finding = report(values, current_attempt=("run-1", "current-attempt")).findings[0]
+    assert finding.disposition == "missing"
+    assert finding.recommendation == "gather_evidence"
+    assert finding.reproduction is None
+    assert finding.retries_remaining == 0
+    assert len(finding.supporting_receipt_digests) == 3
+
+
+def test_attempt_selection_still_authenticates_older_receipts():
+    old = failed(attempt_id="old-attempt").model_copy(update={"authentication_tag": "0" * 64})
+    current = receipt(build_execution_plan(state()), attempt_id="current-attempt")
+    with pytest.raises(ValueError, match="unauthenticated"):
+        report((old, current), current_attempt=("run-1", "current-attempt"))
 
 
 def test_validation_source_policy_version_names_the_provenance_digest():
