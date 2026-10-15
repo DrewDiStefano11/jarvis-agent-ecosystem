@@ -11,28 +11,12 @@ import pytest
 from app.core.errors import DomainError
 from app.self_build.git_observer import GitObserver, remote_identity
 from app.self_build.policy import RepositoryPolicy
+from tests.native_git import native_git_executable
 
 
 @pytest.fixture
 def repository(tmp_path):
-    executable = shutil.which("git")
-    if (
-        executable
-        and os.name == "nt"
-        and (
-            Path(executable).parent.name.casefold() == "cmd"
-            or (
-                Path(executable).parent.name.casefold() == "bin"
-                and Path(executable).parent.parent.name.casefold() not in {"mingw32", "mingw64"}
-            )
-        )
-    ):
-        installation = Path(executable).parent.parent
-        implementations = [
-            installation / family / "bin/git.exe" for family in ("mingw64", "mingw32")
-        ]
-        executable = str(next(path for path in implementations if path.is_file()))
-    assert executable, "Git is required for the native repository acceptance tests"
+    executable = str(native_git_executable())
     root, worktrees = tmp_path / "repository", tmp_path / "worktrees"
     root.mkdir()
     worktrees.mkdir()
