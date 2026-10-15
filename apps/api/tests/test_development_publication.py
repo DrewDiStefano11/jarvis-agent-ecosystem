@@ -167,7 +167,7 @@ def test_anchor_timestamp_is_aware_and_canonical_utc():
 
 def test_publication_anchor_requires_complete_correction_lineage():
     from app.models.development_agent import ContextSelection
-    from app.models.development_dispatch import AdmissionPlan, DevelopmentLimits
+    from app.models.development_dispatch import AdmissionPlan, AssemblyLimits, DevelopmentLimits
 
     _, _, anchor, _ = evidence()
     identifiers = (
@@ -194,6 +194,12 @@ def test_publication_anchor_requires_complete_correction_lineage():
     selection = ContextSelection(paths=("source.py",))
     payload.update(
         selection=selection,
+        assembly_limits=AssemblyLimits(
+            maximum_sources=1,
+            maximum_tokens=16000,
+            maximum_total_characters=131072,
+            cross_project_context_allowed=False,
+        ),
         limits=DevelopmentLimits(
             provider="codex_app_server",
             model="coding-model",

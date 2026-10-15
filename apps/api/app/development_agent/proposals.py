@@ -159,6 +159,14 @@ class DevelopmentProposalService:
                 expected_native_context_hash = TypeAdapter(Digest).validate_python(
                     expected_native_context_hash
                 )
+            if publication_source is not None:
+                from app.models.development_publication import PublicationSourceAnchor
+
+                if baseline is None:
+                    raise ValueError("publication correction baseline required")
+                publication_source = PublicationSourceAnchor.model_validate(
+                    publication_source.model_dump(mode="json", warnings=False)
+                )
         except (ValueError, TypeError, AttributeError):
             refuse("DEVELOPMENT_REQUEST_INVALID")
         try:
@@ -177,6 +185,11 @@ class DevelopmentProposalService:
                 "selection": selection.model_dump(mode="json"),
                 "proposal": proposal.model_dump(mode="json"),
                 "allow_delete": allow_delete,
+                **(
+                    {"publication_source": publication_source.model_dump(mode="json")}
+                    if publication_source is not None
+                    else {}
+                ),
                 **(
                     {
                         "baseline_snapshot_hash": baseline.snapshot_hash if baseline else None,

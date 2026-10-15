@@ -349,6 +349,39 @@ async def test_independent_lineage_preserves_first_work_and_budget_across_real_s
         ).dispatch_id == second.dispatch_id
         assert len(calls) == 1
         if committed_head:
+            from app.models.development_agent import DevelopmentProposal
+
+            stored = engine.dispatches.read(actor, workspace_id, authority, second.dispatch_id)
+            persist_args = (
+                actor,
+                workspace_id,
+                authority,
+                stored.reservation.context.selection,
+                engine.dispatches.plan_command(second.dispatch_id),
+                DevelopmentProposal.model_validate_json(stored.response.content),
+            )
+            persist_options = dict(
+                allow_delete=lineage.admission.plan.limits.allow_delete,
+                baseline=baseline.snapshot,
+                publication_source=publication_anchor,
+                repair_selection=preview_request.repair_selection,
+                expected_native_context_hash=stored.reservation.context.context_hash,
+            )
+            with monkeypatch.context() as replay_guard:
+                replay_guard.setattr(
+                    engine.proposals.reader,
+                    "inspect",
+                    lambda *a, **kw: pytest.fail(
+                        "Durable publication replay must not remeasure source"
+                    ),
+                )
+                assert engine.proposals.persist(*persist_args, **persist_options) == editing
+                changed = publication_anchor.model_copy(update={"link_hash": "0" * 64})
+                with pytest.raises(DomainError) as conflicting_anchor:
+                    engine.proposals.persist(
+                        *persist_args, **(persist_options | {"publication_source": changed})
+                    )
+                assert conflicting_anchor.value.code == "SOURCE_EDIT_COMMAND_CONFLICT"
             from app.main import create_app
             from app.remote_control.access import RemoteControlAccess
 

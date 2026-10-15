@@ -1,5 +1,12 @@
 # Publication-source correction bridge (in progress)
 
+The publication adapter and contract participate in the admission implementation
+digest. Durable proposal replay additionally binds the validated protected
+publication anchor when present; changing its reference or native evidence cannot
+reuse the original command. Non-publication replay hashes remain unchanged.
+The adapter contract tests are assigned to the models CI shard, with complete
+full-suite collection checked before publication.
+
 Campaign A accepts an optional publication operation/head/observation reference during correction workspace preview and approval. It resolves that reference only through `app.state.development_publication_source_reader`. The reader is absent by default; requests requiring it fail with `DEVELOPMENT_PUBLICATION_LINK_UNAVAILABLE`. No HTTP payload can supply the resolved anchor or install a reader.
 
 The future Campaign C adapter must read its protected source link under the requesting operator's authority and return a `PublicationSourceAnchor`. A compares task, original workspace, source-edit identity, mutation checkpoint, parent code-state hash, and exact published head. Anchors are historical references with mutation and validation authority fixed false. They require a complete correction lineage and enter the exact approved admission hash. Existing admissions omit absent anchors to preserve their serialized hash shape.
