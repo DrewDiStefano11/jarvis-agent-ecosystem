@@ -16,9 +16,12 @@ from app.models.context import (
     InjectionSeverity,
     TrustLevel,
 )
+from app.models.development_dispatch import AssemblyLimits
 
 
 def build_request(assembler, task, context, admission, dispatch_id, timeout, *, baseline=None):
+    if AssemblyLimits.capture(assembler) != admission.plan.assembly_limits:
+        refuse("DEVELOPMENT_ADMISSION_CONFLICT")
     criteria = "\n".join(admission.plan.limits.completion_criteria)
     # The assembler redacts sources, not its base task/criteria messages.
     for text in (task.request, criteria):
@@ -65,7 +68,7 @@ def build_request(assembler, task, context, admission, dispatch_id, timeout, *, 
             policy=ContextPolicy(
                 maximumSourceCount=1,
                 minimumRequiredContext=1,
-                maximumContextTokens=assembler.maximum_tokens,
+                maximumContextTokens=admission.plan.assembly_limits.maximum_tokens,
                 reservedOutputTokens=output_tokens,
             ),
             sources=[
@@ -86,6 +89,8 @@ def build_request(assembler, task, context, admission, dispatch_id, timeout, *, 
             ],
         ),
     )
+    if AssemblyLimits.capture(assembler) != admission.plan.assembly_limits:
+        refuse("DEVELOPMENT_ADMISSION_CONFLICT")
     if (
         assembly.status != "completed"
         or assembly.modelRequest is None

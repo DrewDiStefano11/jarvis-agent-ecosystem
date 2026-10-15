@@ -2,8 +2,12 @@
 
 from hashlib import sha256
 
+from pydantic import TypeAdapter
+
+from app.core.errors import DomainError
 from app.development_agent.context import RepositoryContextReader, refuse
-from app.models.development_agent import DevelopmentProposal, RepositoryContext
+from app.models.development_agent import ContextSelection, DevelopmentProposal, RepositoryContext
+from app.models.self_build import Identifier
 from app.models.source_change import (
     FileIdentity,
     PlanReferences,
@@ -13,6 +17,7 @@ from app.models.source_change import (
     SourceObservation,
 )
 from app.models.source_edit_planning import PersistEditingPlanRequest
+from app.models.workspace_creation import CreateWorkspaceRequest
 from app.self_build.policy import digest
 from app.source_change.planner import observation_identity, plan_source_changes
 from app.source_edit_planning.service import SourceEditingPlanService
@@ -127,6 +132,87 @@ class DevelopmentProposalService:
         repair_selection=None,
         expected_native_context_hash=None,
     ):
+        try:
+            authority = CreateWorkspaceRequest.model_validate(
+                authority.model_dump(mode="json", warnings=False)
+            )
+            selection = ContextSelection.model_validate(
+                selection.model_dump(mode="json", warnings=False)
+            )
+            if type(allow_delete) is not bool:
+                raise ValueError("deletion policy must be a trusted boolean")
+            if repair_selection is not None:
+                repair_selection = ContextSelection.model_validate(
+                    repair_selection.model_dump(mode="json", warnings=False)
+                )
+            if baseline is not None:
+                from app.models.development_baseline import BaselineSnapshot
+
+                baseline = BaselineSnapshot.model_validate(
+                    baseline.model_dump(mode="json", warnings=False)
+                )
+                if repair_selection is None:
+                    raise ValueError("correction scope required")
+            if expected_native_context_hash is not None:
+                from app.models.development_validation import Digest
+
+                expected_native_context_hash = TypeAdapter(Digest).validate_python(
+                    expected_native_context_hash
+                )
+        except (ValueError, TypeError, AttributeError):
+            refuse("DEVELOPMENT_REQUEST_INVALID")
+        try:
+            proposal = DevelopmentProposal.model_validate(
+                proposal.model_dump(mode="json", warnings=False)
+            )
+        except (ValueError, TypeError, AttributeError):
+            refuse("DEVELOPMENT_PROPOSAL_INVALID")
+        try:
+            command_id = TypeAdapter(Identifier).validate_python(command_id)
+        except (ValueError, TypeError, AttributeError):
+            refuse("SOURCE_EDIT_REQUEST_INVALID")
+        origin_request_hash = digest(
+            {
+                "workspace_id": workspace_id,
+                "selection": selection.model_dump(mode="json"),
+                "proposal": proposal.model_dump(mode="json"),
+                "allow_delete": allow_delete,
+                **(
+                    {
+                        "baseline_snapshot_hash": baseline.snapshot_hash if baseline else None,
+                        "repair_selection": repair_selection.model_dump(mode="json")
+                        if repair_selection is not None
+                        else None,
+                        "expected_native_context_hash": expected_native_context_hash,
+                    }
+                    if baseline is not None
+                    or repair_selection is not None
+                    or expected_native_context_hash is not None
+                    else {}
+                ),
+            }
+        )
+        authority_binding = self.reader.require_ready(actor, workspace_id, authority)
+
+        def replay():
+            if self.reader.require_ready(actor, workspace_id, authority) != authority_binding:
+                refuse("DEVELOPMENT_OWNER_CHANGED")
+            existing = self.plans.replay(
+                actor,
+                digest(["source-edit-plan-v1", actor.actor_id, command_id]),
+                origin_request_hash,
+                commit_guard=commit_guard,
+            )
+            if existing is not None and existing.plan.workspace_id != workspace_id:
+                refuse("SOURCE_EDIT_COMMAND_CONFLICT")
+            if self.reader.require_ready(actor, workspace_id, authority) != authority_binding:
+                refuse("DEVELOPMENT_OWNER_CHANGED")
+            return existing
+
+        existing = replay()
+        if existing is not None:
+            return existing
+
         # Re-measure after inference. A model's before hash is never native evidence.
         def finalize(context, guard):
             with self.plans.repository.sessions() as session:
@@ -169,15 +255,26 @@ class DevelopmentProposalService:
                 mutation_observation(context, (change.path for change in intent.changes)),
                 context.code_state,
                 commit_guard=final_commit,
+                origin_request_hash=origin_request_hash,
             )
 
-        return self.reader.inspect(
-            actor,
-            workspace_id,
-            authority,
-            selection,
-            expected_hash=proposal.context_hash
-            if baseline is None
-            else expected_native_context_hash,
-            finalize=finalize,
-        )
+        try:
+            return self.reader.inspect(
+                actor,
+                workspace_id,
+                authority,
+                selection,
+                expected_hash=proposal.context_hash
+                if baseline is None
+                else expected_native_context_hash,
+                finalize=finalize,
+            )
+        except DomainError as error:
+            if error.code == "DEVELOPMENT_CONTEXT_STALE":
+                # Another session may have committed and applied this command
+                # after our initial lookup. Recover only its exact protected
+                # input binding, with fresh authority on both sides of the read.
+                existing = replay()
+                if existing is not None:
+                    return existing
+            raise

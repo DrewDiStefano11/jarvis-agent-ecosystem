@@ -6,13 +6,15 @@ from pathlib import Path
 from threading import Barrier
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from sqlalchemy import select
 
 from app.core.config import Settings
 from app.db.models import OutboxEventRow, SystemStateRow, TaskRow
-from app.main import create_app
+from app.main import DATABASE_REVISION, create_app
 from app.models.domain import SystemStatus
 from app.models.manifest import load_manifest
 
@@ -40,7 +42,14 @@ def test_health_status_and_lists() -> None:
 
 def test_system_status_contract_advertises_current_database_revision() -> None:
     revision = SystemStatus.model_json_schema()["properties"]["databaseRevision"]
-    assert revision["default"] == "20261012_source_mutation"
+    root = Path(__file__).parents[1]
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "migrations"))
+    assert (
+        revision["default"]
+        == DATABASE_REVISION
+        == ScriptDirectory.from_config(config).get_current_head()
+    )
 
 
 @pytest.mark.parametrize("configured_actor", ["", "local-worker-actor"])

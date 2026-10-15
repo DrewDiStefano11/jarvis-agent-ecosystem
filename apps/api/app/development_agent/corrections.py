@@ -55,6 +55,7 @@ def compile_correction(
 
     verify_destination(baseline, destination, publication_source)
     desired = {item.change.path: item.content for item in baseline.files}
+    baseline_paths = set(desired)
     logical = DevelopmentProposal.model_validate(
         proposal.model_copy(update={"context_hash": baseline.context.context_hash}).model_dump(
             mode="json"
@@ -75,14 +76,14 @@ def compile_correction(
             FileIdentity(**entry.content.model_dump(exclude={"text"})) if entry.content else None
         )
         if after is not None:
-            # A model requests text, never a mode change. Preserve measured mode
-            # for an existing physical file; new physical files are regular 100644.
+            # Carry protected baseline modes across workspaces. A new model
+            # text edit outside that baseline inherits the destination mode.
             raw = after.text.encode("utf-8")
             after = SourceContent(
                 text=after.text,
                 digest=sha256(raw).hexdigest(),
                 byte_count=len(raw),
-                mode=before.mode if before else "100644",
+                mode=after.mode if path in baseline_paths else before.mode if before else "100644",
             )
         if (before is None and after is None) or (
             before is not None

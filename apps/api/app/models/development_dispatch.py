@@ -39,6 +39,17 @@ class DevelopmentLimits(Contract):
         return self
 
 
+class AssemblyLimits(Contract):
+    maximum_sources: int = Field(ge=1, strict=True)
+    maximum_tokens: int = Field(ge=1, strict=True)
+    maximum_total_characters: int = Field(ge=1, strict=True)
+    cross_project_context_allowed: bool = Field(strict=True)
+
+    @classmethod
+    def capture(cls, assembler):
+        return cls(**{name: getattr(assembler, name) for name in cls.model_fields})
+
+
 class AdmissionPlan(Contract):
     schema_version: Literal["1.0"] = "1.0"
     task_id: Identifier
@@ -56,6 +67,7 @@ class AdmissionPlan(Contract):
     initial_context_hash: Digest
     selection: ContextSelection
     limits: DevelopmentLimits
+    assembly_limits: AssemblyLimits
     policy_digest: Digest
     plan_hash: Digest
     origin_admission_digest: Digest | None = None

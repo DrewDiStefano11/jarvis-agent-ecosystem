@@ -63,8 +63,19 @@ mode grant. The compiler supplies identities and modes from native evidence,
 verifies claimed original digests, checks exact selected paths and runs the
 existing source safety planner. Deletion requires a trusted explicit opt-in.
 
-`DevelopmentProposalService.persist` re-measures source after inference and
-compiles/persists only if the exact context digest is still current. Persistence
+`DevelopmentProposalService.persist` first resolves an existing actor/command
+record under fresh creation approval, lease, RBAC, checkpoint and emergency-stop
+checks. An `originRequestHash` in the original source-plan audit/outbox event
+atomically binds workspace, selected paths, complete proposal and deletion policy.
+An exact replay returns that validated historical proposal after source changes
+or application recreation, without remeasuring source or creating another event.
+Changed input refuses with `SOURCE_EDIT_COMMAND_CONFLICT`; replay grants no edit
+authority. If another session commits between the initial lookup and source
+observation, a stale-context refusal triggers one protected replay lookup with
+fresh authority checks before and after the read. Changed inputs and emergency
+stop still refuse, and a stale command with no durable record stays stale.
+New commands remeasure source after inference and compile/persist only
+if the exact context digest is still current. Persistence
 runs inside native pins and the existing fenced source-plan transaction. Existing
 source-plan command replay, protected reads, audit/outbox and restart semantics
 are reused; source contents do not enter audit payloads. It proposes multi-file
