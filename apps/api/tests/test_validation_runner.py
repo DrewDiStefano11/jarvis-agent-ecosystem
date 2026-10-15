@@ -781,6 +781,20 @@ def test_directory_pin_budget_refuses_export_and_import_before_filesystem_effect
         transfer.import_linux_guest(tmp_path, capsule, payload, authority_check=lambda: None)
 
 
+def test_directory_pin_preflight_stops_at_budget_before_consuming_oversized_tail(tmp_path):
+    from types import SimpleNamespace
+
+    from app.validation_runner.source_transfer import MAX_DIRECTORY_PINS, preflight_directory_pins
+
+    def inventory():
+        for index in range(MAX_DIRECTORY_PINS + 1):
+            yield SimpleNamespace(path=f"directory-{index}/file.py")
+        pytest.fail("Preflight must refuse before consuming the remaining oversized inventory")
+
+    with pytest.raises(ValueError, match="DIRECTORY_PIN_LIMIT"):
+        preflight_directory_pins(tmp_path, inventory())
+
+
 def test_isolation_capsule_exact_transfer_and_authority(isolation_bundle):
     from app.validation_runner.isolation import verify_capsule, verify_transfer
 
