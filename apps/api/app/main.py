@@ -339,6 +339,11 @@ def create_app(
     app.state.self_build_workspace_service = WorkspaceService(app)
     app.state.self_build_git_service = GitInspectionService(app)
     app.state.self_build_creation_service = WorkspaceCreationService(app)
+    from app.development_agent.context import RepositoryContextReader
+    from app.development_agent.proposals import DevelopmentProposalService
+
+    app.state.development_context_reader = RepositoryContextReader(app)
+    app.state.development_proposal_service = DevelopmentProposalService(app)
     app.state.self_build_commit_service = CommitPreparationService(app)
     app.include_router(self_build_router)
     app.include_router(commit_router)
