@@ -9,6 +9,8 @@ exporter, test runner, coding engine or authorization importer.
 
 `RepositoryTarget` binds a stable numeric repository ID, owner/name, approved base
 branch and `codex/` feature namespace. Repository transfer or mismatch refuses.
+Malformed repository IDs or non-string names also refuse through the sanitized
+`GITHUB_REPOSITORY_IDENTITY_CHANGED` / 409 envelope before any PR observation.
 The feature ref must stay inside that namespace and cannot equal the base. The
 operator policy additionally requires at least one independent current-head
 approval and configured mandatory checks. Defaults retain `backend`, `frontend`,

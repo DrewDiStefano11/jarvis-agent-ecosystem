@@ -20,6 +20,10 @@ to a Git subprocess or candidate/test workspace.
 undeltified pack directly from private verified object payloads, derives object
 IDs from the actual bytes, and includes the pack checksum trailer. Payloads remain
 excluded from request representations. Unsupported formats/capabilities refuse.
+Advertised remote names follow Git's reference-format rules, including valid
+`+`, `@` and non-ASCII byte sequences. They remain opaque observations; generated
+publication branches still use the narrower configured namespace allowlist.
+Accepting unrelated remote names grants no additional push target or authority.
 
 A request contains exactly one generated `refs/heads/codex/...` ref and one
 direct-child commit. The remote old value comes from fresh advertisement; an

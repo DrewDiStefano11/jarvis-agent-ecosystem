@@ -1,5 +1,6 @@
 """Trusted profile replacement revokes captured consumers without granting evidence."""
 
+from contextlib import nullcontext
 from types import SimpleNamespace as NS
 
 import pytest
@@ -57,6 +58,25 @@ def test_profile_replacement_during_validation_refuses_the_result():
     with pytest.raises(DomainError) as error:
         captured.require_commit(object(), "workspace", object())
     assert error.value.code == "GIT_COMMIT_VALIDATION_PROFILE_CHANGED"
+
+
+@pytest.mark.parametrize("boundary", ["validation", "hosted_ci"])
+def test_publication_profile_replacement_in_effect_guard_refuses_return(monkeypatch, boundary):
+    app = NS(state=NS(self_build_native_commit_service=object()))
+
+    def callback(name):
+        if boundary == name:
+            profile(app)
+
+    original = profile(app, hosted_ci_guard=lambda: callback("hosted_ci"))
+    original.native = NS(repository=NS(sessions=lambda: nullcontext(None)))
+    original.validation = NS(require=lambda *args: callback("validation"))
+    original.broker = object()  # Interface-only fixture; never resolves a credential.
+    monkeypatch.setattr(original, "live", lambda *args: original.configuration_guard())
+    with pytest.raises(DomainError) as error:
+        original.require_effect(object(), object(), object())
+    assert error.value.code == "GITHUB_PUBLICATION_PROFILE_CHANGED"
+    assert app.state.github_publication_service is not original
 
 
 def test_invalid_replacement_preserves_existing_profile_atomically():
