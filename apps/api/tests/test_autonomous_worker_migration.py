@@ -61,7 +61,7 @@ def test_phase_2c_upgrade_downgrade_and_reupgrade(tmp_path: Path) -> None:
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
         assert (
             connection.scalar(text("select version_num from alembic_version"))
-            == "20261012_source_plans"
+            == "20261012_source_mutation"
         )
 
 

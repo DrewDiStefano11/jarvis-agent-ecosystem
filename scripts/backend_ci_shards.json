@@ -39,6 +39,7 @@
     "tests/test_tool_execution.py"
   ],
   "models": [
+    "tests/test_git_native_artifact_contract.py",
     "tests/test_development_validation.py",
     "tests/test_validation_evidence.py",
     "tests/test_validation_journal.py",
@@ -75,6 +76,9 @@
     "tests/test_github_publication_collector.py",
     "tests/test_git_process.py",
     "tests/test_git_change_verifier.py",
+    "tests/test_git_commit_preparation.py",
+    "tests/test_git_commit_authorization.py",
+    "tests/test_git_applied_source.py",
     "tests/test_self_build_workspaces.py",
     "tests/test_self_build_git_observer.py",
     "tests/test_self_build_git_inspection.py",

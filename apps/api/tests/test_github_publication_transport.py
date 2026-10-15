@@ -47,14 +47,23 @@ def test_fixed_host_identity_and_credentials_rotate_on_every_call():
     [
         {"id": 2, "full_name": "operator/repository"},
         {"id": 1, "full_name": "foreign/repository"},
+        {"id": 1, "full_name": None},
+        {"id": 1, "full_name": 1},
+        {"id": 1, "full_name": ["private-provider-data"]},
+        {"id": 1, "full_name": {"private-provider-data": "secret"}},
+        {"id": 1},
+        {"id": True, "full_name": "operator/repository"},
         [],
     ],
 )
 def test_repository_transfer_or_identity_drift_refuses(payload):
     client = reader(lambda request: httpx.Response(200, json=payload))
     try:
-        with pytest.raises(DomainError, match="identity changed"):
+        with pytest.raises(DomainError, match="identity changed") as caught:
             client.repository()
+        assert caught.value.code == "GITHUB_REPOSITORY_IDENTITY_CHANGED"
+        assert caught.value.status_code == 409
+        assert "private-provider-data" not in str(caught.value)
     finally:
         client.close()
 
