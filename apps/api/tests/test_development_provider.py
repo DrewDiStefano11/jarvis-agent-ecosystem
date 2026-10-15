@@ -76,6 +76,22 @@ def provider(client=None, **changes):
     )
 
 
+@pytest.fixture
+def mock_transport_execution(monkeypatch):
+    """Exercise wire behavior only; production execution policy remains disabled."""
+    from app.development_agent import provider as implementation
+
+    original_client = httpx.AsyncClient
+
+    def mock_client_only(*args, **kwargs):
+        if not isinstance(kwargs.get("transport"), httpx.MockTransport):
+            pytest.fail("Wire fixtures must never create a real HTTP transport.")
+        return original_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", mock_client_only)
+    monkeypatch.setattr(implementation, "require_live_provider_execution", lambda **kwargs: None)
+
+
 @pytest.mark.asyncio
 async def test_disabled_gate_precedes_client_creation_and_configuration_health(monkeypatch):
     def forbidden(*args, **kwargs):
@@ -92,7 +108,9 @@ async def test_disabled_gate_precedes_client_creation_and_configuration_health(m
 
 
 @pytest.mark.asyncio
-async def test_real_router_maps_only_proposals_and_accounts_complete_usage():
+async def test_real_router_maps_only_proposals_and_accounts_complete_usage(
+    mock_transport_execution,
+):
     calls = []
 
     def transport(req):
@@ -162,7 +180,7 @@ async def test_bad_request_has_no_transport(changes):
         {"id": "resp_" + KEY},
     ],
 )
-async def test_bad_response_cannot_become_proposal_evidence(changes):
+async def test_bad_response_cannot_become_proposal_evidence(changes, mock_transport_execution):
     def transport(req):
         return httpx.Response(200, json=response(**changes))
 
@@ -174,7 +192,7 @@ async def test_bad_response_cannot_become_proposal_evidence(changes):
 
 
 @pytest.mark.asyncio
-async def test_foreign_context_and_escaped_key_echo_refuse():
+async def test_foreign_context_and_escaped_key_echo_refuse(mock_transport_execution):
     for text in (
         json.dumps(
             {
@@ -220,7 +238,9 @@ async def test_foreign_context_and_escaped_key_echo_refuse():
         (429, {"error": {"code": "insufficient_quota", "message": KEY}}, QuotaExhaustedError),
     ],
 )
-async def test_http_errors_have_no_credential_bearing_exception_chain(status, body, expected):
+async def test_http_errors_have_no_credential_bearing_exception_chain(
+    status, body, expected, mock_transport_execution
+):
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(lambda req: httpx.Response(status, json=body))
     ) as client:
@@ -231,7 +251,7 @@ async def test_http_errors_have_no_credential_bearing_exception_chain(status, bo
 
 
 @pytest.mark.asyncio
-async def test_wire_limit_and_duplicate_json_refuse():
+async def test_wire_limit_and_duplicate_json_refuse(mock_transport_execution):
     for data in (b"x" * 262145, b'{"status":"completed","status":"incomplete"}'):
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(lambda req, data=data: httpx.Response(200, content=data))
@@ -241,7 +261,9 @@ async def test_wire_limit_and_duplicate_json_refuse():
 
 
 @pytest.mark.asyncio
-async def test_budget_refuses_before_wire_and_cancellation_stops_pending_request():
+async def test_budget_refuses_before_wire_and_cancellation_stops_pending_request(
+    mock_transport_execution,
+):
     calls = []
     entered = asyncio.Event()
 
@@ -287,7 +309,7 @@ def test_closed_schema_requires_every_object_field():
 
 
 @pytest.mark.asyncio
-async def test_tampered_encoding_and_deadline_have_safe_exception_chains():
+async def test_tampered_encoding_and_deadline_have_safe_exception_chains(mock_transport_execution):
     from app.model_providers.errors import RequestTimeoutError
 
     async def pending(req):
@@ -330,9 +352,27 @@ async def test_factory_is_separate_disabled_and_side_effect_free(monkeypatch):
     assert existing.registry.list() == []
     engine = router.registry.get("openai-development")
     assert (await engine.health_check()).status.value == "configuration_only"
+    with pytest.raises(ProviderExecutionDisabledError):
+        await engine.execute(request())
     requirements = development_routing(enabled)
     assert requirements.allow_remote and not requirements.allow_fallback
     assert KEY not in repr(enabled) and KEY not in enabled.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_configured_remote_provider_requires_policy_even_with_injected_transport():
+    calls = []
+
+    def forbidden(req):
+        calls.append(req)
+        pytest.fail("Configuration must not authorize source upload.")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(forbidden)) as client:
+        engine = provider(client, enabled=True)
+        with pytest.raises(ProviderExecutionDisabledError) as error:
+            await engine.execute(request())
+    assert calls == []
+    assert error.value.metadata["execution_mode"] == "disabled"
 
 
 def test_enabled_configuration_requires_explicit_model_and_independent_key(monkeypatch):

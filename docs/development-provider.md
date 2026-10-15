@@ -1,6 +1,7 @@
 # Proposal-only coding provider
 
-This milestone is stacked explicitly on Campaign A PR #128 at 01c4594.
+This milestone is stacked explicitly on Campaign A PR #128 and includes its
+durable proposal-replay correction.
 Its implementation is in app.development_agent.provider and config; it is not
 registered with the ordinary local planning worker. Native source mutation still
 uses separate exact-plan operator approval.
@@ -35,6 +36,14 @@ The OpenAI key comes from JARVIS_DEVELOPMENT_OPENAI_API_KEY or OPENAI_API_KEY as
 SecretStr. No real credentials or machine paths belong in configuration examples.
 No env file is implicitly loaded by this separate settings class; a trusted
 launcher may use an explicitly approved env-file destination.
+
+Even with development configuration enabled and an injected HTTP client, the
+remote adapter must pass the central provider execution policy before creating
+a client or sending source. Its runtime execution mode remains `disabled` until
+the separate authorized cloud execution boundary exists. An enable flag, API key
+or configuration-only health result grants no source-upload authority. Protocol
+tests use explicit MockTransport-only policy fixtures; they do not enable live
+execution or prove provider/account acceptance.
 
 The side-effect-free factory uses a separate registry and one physical attempt
 per dispatch. Local selection retains the original adapter's local-only phase
