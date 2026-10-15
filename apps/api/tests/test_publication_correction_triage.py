@@ -9,7 +9,7 @@ from app.github_publication.correction_triage import classify
 from tests.test_github_publication_readiness import HEAD, NOW, OLD, observation
 
 
-def triage(measured, now=NOW):
+def triage(measured, now=NOW, publisher_ids=(10,)):
     return classify(
         NS(
             observation=measured,
@@ -20,7 +20,7 @@ def triage(measured, now=NOW):
             link_hash="a" * 64,
             observation_digest="b" * 64,
         ),
-        (42,),
+        publisher_ids,
         now=now,
     )
 
@@ -113,6 +113,26 @@ def test_overflow_is_explicit_and_never_silently_truncates_findings():
     assert "evidence_limit_exceeded" in value.blockers
 
 
+@pytest.mark.parametrize("publisher_ids", [(10,), (42,), (999,)])
+def test_required_check_app_authority_is_independent_of_publisher_users(publisher_ids):
+    measured = observation(
+        checks=[
+            dict(evidence_id="check-1", context="backend", app_id=42, head_sha=HEAD, state="failed")
+        ]
+    )
+    assert triage(measured, publisher_ids=publisher_ids).disposition == "investigation_required"
+
+
+def test_unbound_required_check_cannot_invent_trusted_app_authority():
+    measured = observation(
+        required_checks=[dict(context="backend", app_id=None)],
+        checks=[
+            dict(evidence_id="check-1", context="backend", app_id=42, head_sha=HEAD, state="failed")
+        ],
+    )
+    assert "check_publisher_unverified" in triage(measured).blockers
+
+
 def test_unknown_publisher_failure_refuses_automatic_correction():
     value = triage(
         observation(
@@ -125,7 +145,8 @@ def test_unknown_publisher_failure_refuses_automatic_correction():
                     state="failed",
                 )
             ]
-        )
+        ),
+        publisher_ids=(999,),
     )
     assert value.disposition == "blocked"
     assert "check_publisher_unverified" in value.blockers

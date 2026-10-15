@@ -1,5 +1,16 @@
 # Production publication orchestration
 
+Effect admission rechecks the configured publication profile after validation
+and hosted-CI callbacks. A synchronous profile replacement in either callback
+revokes the captured target, broker and publisher policy before the next remote
+request can be authorized. Callback success cannot preserve an obsolete profile.
+
+Correction triage authenticates failed check providers against the protected
+required-check context and its explicit GitHub App ID. Publisher GitHub user IDs
+are a separate identity namespace and cannot establish check-app authority.
+Unbound requirements or mismatched app/context evidence remain blocked; trusted
+failed checks request investigation without authorizing source changes or retries.
+
 Campaign C composes native exact commits, guarded authenticated HTTPS push, draft
 PR reconciliation, protected publication checkpoints and exact-head observation.
 The default application initializes native commit services and exposes typed
