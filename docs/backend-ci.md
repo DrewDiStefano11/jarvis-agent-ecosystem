@@ -9,6 +9,12 @@ concurrency still cancels superseded workflow runs.
 
 ## Reproduce locally
 
+Native Git fixtures resolve the real executable behind Windows launchers for
+UCRT64, MINGW64, MINGW32 and ARM64 installations. Git for Windows 2.56 moved
+the x64 native image to `ucrt64/bin/git.exe`; fixture discovery must not assume
+`mingw64` exists. Tests still hash and pin the selected image and exercise owned
+process execution; the launcher is never substituted for native-image validation.
+
 Install the Python 3.12 backend dev dependencies, then run from the repository root:
 
 ```powershell
