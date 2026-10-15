@@ -115,7 +115,8 @@ def test_campaign_ci_quarantines_every_registered_trigger_and_job():
     workflows = list((root / ".github" / "workflows").glob("*.y*ml"))
     assert [path.name for path in workflows] == ["ci.yml"]
     workflow = yaml.load(workflows[0].read_text(), Loader=yaml.BaseLoader)
-    assert set(workflow["on"]) == {"push", "pull_request"}
+    assert set(workflow["on"]) == {"push", "pull_request", "workflow_dispatch"}
+    assert not workflow["on"]["workflow_dispatch"]
     assert workflow["on"]["push"]["branches-ignore"] == ["codex/campaign-d-zero-cost"]
     guard = (
         "github.head_ref != 'codex/campaign-d-zero-cost' && "
@@ -372,6 +373,71 @@ async def test_compatible_free_integrations_complete_mock_requests(capacity, int
     assert response.content == "answer"
     assert capacity.snapshot()[0]["remaining_requests"] == 4
     await adapter._client.aclose()
+
+
+@pytest.mark.parametrize(
+    "base_url",
+    ["http://127.0.0.1:11434/v1/", "http://localhost:11434/v1/", "http://[::1]:11434/v1/"],
+)
+async def test_free_only_loopback_compatible_routes_without_cloud_allowance(base_url):
+    from types import SimpleNamespace
+
+    calls = []
+
+    def local_completion(request):
+        calls.append(request.url.host)
+        return completion(request)
+
+    def cloud_quota_forbidden(*args, **kwargs):
+        pytest.fail("Trusted loopback inference must not require or reserve a cloud allowance.")
+
+    async with httpx.AsyncClient(
+        base_url=base_url, transport=httpx.MockTransport(local_completion)
+    ) as client:
+        adapter = OpenAICompatibleProvider(
+            name="local-compatible",
+            base_url=base_url,
+            api_key=SecretStr("local-fixture-key"),
+            default_model="local-model",
+            execution_mode="free_only",
+            health_strategy=HealthCheckStrategy.CONFIGURATION,
+            free_capacity=SimpleNamespace(
+                available=cloud_quota_forbidden, reserve=cloud_quota_forbidden
+            ),
+            client=client,
+        )
+        assert adapter.is_local and adapter.free_eligible("local-model")
+        router = ModelRouter(
+            ProviderRegistry([adapter]), RetryExecutor(RetryPolicy(maximum_attempts=1))
+        )
+        response = await router.execute(
+            request=ModelExecutionRequest(prompt="local fixture"),
+            requirements=RoutingRequirements(requested_provider=adapter.name, allow_remote=False),
+            budget=TaskBudget(maximum_requests=1, maximum_output_tokens=2048),
+        )
+    assert response.content == "answer" and len(calls) == 1
+
+
+@pytest.mark.parametrize("mode", ["disabled", "free_only"])
+async def test_remote_compatible_without_allowance_remains_ineligible(mode):
+    def forbidden(request):
+        pytest.fail("A remote endpoint without verified allowance must never be contacted.")
+
+    base_url = "https://example.invalid/v1/"
+    async with httpx.AsyncClient(
+        base_url=base_url, transport=httpx.MockTransport(forbidden)
+    ) as client:
+        adapter = OpenAICompatibleProvider(
+            name="unverified-remote",
+            base_url=base_url,
+            api_key=SecretStr("fixture-key"),
+            default_model="model",
+            execution_mode=mode,
+            client=client,
+        )
+        assert not adapter.is_local and not adapter.free_eligible("model")
+        with pytest.raises(ProviderExecutionDisabledError):
+            await adapter.execute(ModelExecutionRequest(prompt="fixture"))
 
 
 async def test_hard_quota_switches_accounts_and_persists_all_exhaustion(capacity):

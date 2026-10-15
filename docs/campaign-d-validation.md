@@ -2,6 +2,16 @@
 
 ## Acceptance boundaries
 
+Trusted loopback OpenAI-compatible adapters remain eligible in `free_only`
+without a cloud allowance or cloud-quota reservation. Central execution policy
+still receives their measured local identity; remote endpoints without verified
+nonbillable capacity remain blocked. Regression fixtures cover IPv4, localhost
+and IPv6 routing without making real network requests.
+
+The existing manual CI trigger is also checked against every branch quarantine
+condition. No hosted workflow is activated; the Campaign D CI quarantine remains
+required until its enforceable $0 storage/cache safeguards are independently verified.
+
 - Implementation: six opt-in hosted integrations, private eligibility records,
   shared durable quotas, bounded switching, safe pause and recovery evidence.
 - Local acceptance: mock transports, signed OAuth fixtures and isolated temporary

@@ -151,7 +151,7 @@ class OpenAICompatibleProvider(ProviderBase):
                 )
 
     def free_eligible(self, model: str) -> bool:
-        if self.execution_mode == "local_only" and self.is_local:
+        if self.execution_mode in {"local_only", "free_only"} and self.is_local:
             return True
         return bool(
             self.execution_mode == "free_only"
@@ -201,7 +201,7 @@ class OpenAICompatibleProvider(ProviderBase):
             task_id=request.task_id,
             correlation_id=request.correlation_id,
             execution_mode=self.execution_mode,
-            is_local=self.is_local and self.execution_mode != "free_only",
+            is_local=self.is_local,
             verified_nonbillable=verified,
         )
         if verified:
