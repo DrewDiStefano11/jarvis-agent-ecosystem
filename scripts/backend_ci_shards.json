@@ -69,6 +69,9 @@
   ],
   "system": [
     "tests/test_github_git_protocol.py",
+    "tests/test_github_git_https.py",
+    "tests/test_github_publisher_api.py",
+    "tests/test_github_branch_publication.py",
     "tests/test_github_publication_readiness.py",
     "tests/test_github_publication_transport.py",
     "tests/test_github_publication_collector.py",
