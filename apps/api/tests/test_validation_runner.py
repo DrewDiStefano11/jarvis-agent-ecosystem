@@ -265,6 +265,15 @@ def test_optical_source_guest_import_unavailable_on_development_windows(isolatio
         "inspect-tamper",
         "inspect-foreign",
         "inspect-late-foreign",
+        "inspect-late-running",
+        "inspect-late-network",
+        "inspect-late-checkpoint",
+        "inspect-late-integration",
+        "inspect-late-memory",
+        "inspect-late-startup",
+        "inspect-late-owner",
+        "inspect-late-generation",
+        "inspect-late-identity",
     ],
 )
 def test_native_powershell_media_protocol_uses_no_guest_services(tmp_path, isolation_bundle, case):
@@ -327,6 +336,24 @@ function Set-VMDvdDrive { param($VMDvdDrive,[string]$Path); $global:dvd.Path=$Pa
     elif case == "inspect-late-foreign":
         code += "$global:reads=0\nfunction Get-VMDvdDrive { $global:reads++; "
         code += "if ($global:reads -gt 1) { [pscustomobject]@{Path='C:\\foreign.iso'} } }\n"
+    elif case.startswith("inspect-late-"):
+        code += "$global:dvd=[pscustomobject]@{Path=" + quote(path) + "}\n"
+        changes = {
+            "inspect-late-running": "$global:vm.State='Running'",
+            "inspect-late-startup": "$global:vm.AutomaticStartAction='Start'",
+            "inspect-late-owner": "$global:vm.Notes='foreign'",
+            "inspect-late-generation": "$global:vm.Generation=1",
+            "inspect-late-identity": "$global:vm.Id=[Guid]'bbbbbbbb-1234-1234-1234-123456789abc'",
+        }
+        code += "$global:vmReads=0\nfunction Get-VM { $global:vmReads++; "
+        code += "if ($global:vmReads -gt 1) { " + changes.get(case, "") + " }; $global:vm }\n"
+        late_callbacks = {
+            "inspect-late-network": "function Get-VMNetworkAdapter { if ($global:vmReads -gt 1) { @{SwitchId=[Guid]::Empty} } }",
+            "inspect-late-checkpoint": "function Get-VMSnapshot { if ($global:vmReads -gt 1) { @{Id='late'} } }",
+            "inspect-late-integration": "function Get-VMIntegrationService { if ($global:vmReads -gt 1) { @{Enabled=$true} } }",
+            "inspect-late-memory": "function Get-VMMemory { @{DynamicMemoryEnabled=($global:vmReads -gt 1)} }",
+        }
+        code += late_callbacks.get(case, "") + "\n"
     if case.startswith("inspect-"):
         # A read-only recovery must not call any mutating Hyper-V operation.
         code += "function Add-VMDvdDrive { throw 'unexpected mutation' }\n"

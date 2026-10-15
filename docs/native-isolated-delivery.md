@@ -1,5 +1,12 @@
 # Native optical delivery and protected guest measurement
 
+Media completion re-fetches the VM and revalidates exact identity/ownership,
+stopped generation-2 state, absence of networking/checkpoints/enabled integration
+services, fixed memory and disabled automatic startup after final drive readback.
+Late isolation changes refuse the observation instead of becoming a durable
+reconciliation position. Read-only inspection never attaches/detaches media or
+starts the VM; deterministic native PowerShell fixtures exercise these races.
+
 This increment is stacked on Campaign B #142 and reconciles authoritative main
 at `5e11d60`. Existing Campaign B history, including `21efe49` and `d3fa66d`,
 is preserved. Autonomous executable validation remains disabled.

@@ -10,6 +10,13 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
+function Assert-MediaVmSafety($Vm) {
+    if ($Vm.Id -ne $VmId -or $Vm.Notes -cne "jarvis-validation-v1:$OwnershipDigest") { throw 'owner mismatch' }
+    if ([string]$Vm.State -ne 'Off' -or $Vm.Generation -ne 2) { throw 'stopped generation 2 required' }
+    if (@(Get-VMNetworkAdapter -VM $Vm).Count -or @(Get-VMSnapshot -VM $Vm).Count -or
+        @(Get-VMIntegrationService -VM $Vm | Where-Object { $_.Enabled }).Count) { throw 'sharing or network enabled' }
+    if ([string]$Vm.AutomaticStartAction -ne 'Nothing' -or (Get-VMMemory -VM $Vm).DynamicMemoryEnabled) { throw 'unsafe startup configuration' }
+}
 try {
     $actualHostGuid = [Guid](Get-ItemProperty -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Cryptography').MachineGuid
     if ($actualHostGuid -ne $HostMachineGuid) { throw 'foreign host' }
@@ -28,10 +35,7 @@ try {
     $nativeVm = Get-VM -Id $VmId -ErrorAction Stop
     if ($nativeVm.Notes -cne "jarvis-validation-v1:$OwnershipDigest") { throw 'owner mismatch' }
     if ($Operation -in @('attach_media','detach_media','inspect_media')) {
-        if ([string]$nativeVm.State -ne 'Off' -or $nativeVm.Generation -ne 2) { throw 'stopped generation 2 required' }
-        if (@(Get-VMNetworkAdapter -VM $nativeVm).Count -or @(Get-VMSnapshot -VM $nativeVm).Count -or
-            @(Get-VMIntegrationService -VM $nativeVm | Where-Object { $_.Enabled }).Count) { throw 'sharing or network enabled' }
-        if ([string]$nativeVm.AutomaticStartAction -ne 'Nothing' -or (Get-VMMemory -VM $nativeVm).DynamicMemoryEnabled) { throw 'unsafe startup configuration' }
+        Assert-MediaVmSafety $nativeVm
         if (-not $MediaPath -or [IO.Path]::GetFileName($MediaPath) -cne 'source.iso' -or
             -not [IO.Path]::IsPathRooted($MediaPath) -or $MediaPath.StartsWith('\\') -or
             $MediaBytes -le 0 -or $MediaBytes -gt 140000000 -or -not $MediaDigest) { throw 'invalid media binding' }
@@ -64,6 +68,8 @@ try {
         $finalDrives = @(Get-VMDvdDrive -VM $nativeVm -ErrorAction Stop)
         if ($finalDrives.Count -gt 1 -or ($finalDrives.Count -eq 1 -and $finalDrives[0].Path -and
             -not [string]::Equals([IO.Path]::GetFullPath($finalDrives[0].Path), $selectedPath, [StringComparison]::OrdinalIgnoreCase))) { throw 'media changed during observation' }
+        $nativeVm = Get-VM -Id $VmId -ErrorAction Stop
+        Assert-MediaVmSafety $nativeVm
         $mediaState = if (@($finalDrives | Where-Object { $_.Path }).Count -eq 1) { 'attached' } else { 'detached' }
         @{ vmId = [string]$VmId; ownershipDigest = $OwnershipDigest; hostMachineGuid = [string]$actualHostGuid;
            mediaDigest = $MediaDigest; mediaBytes = $MediaBytes; mediaState = $mediaState;
