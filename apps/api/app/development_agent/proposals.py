@@ -2,8 +2,11 @@
 
 from hashlib import sha256
 
+from pydantic import TypeAdapter
+
 from app.development_agent.context import RepositoryContextReader, refuse
-from app.models.development_agent import DevelopmentProposal, RepositoryContext
+from app.models.development_agent import ContextSelection, DevelopmentProposal, RepositoryContext
+from app.models.self_build import Identifier
 from app.models.source_change import (
     FileIdentity,
     PlanReferences,
@@ -13,6 +16,7 @@ from app.models.source_change import (
     SourceObservation,
 )
 from app.models.source_edit_planning import PersistEditingPlanRequest
+from app.models.workspace_creation import CreateWorkspaceRequest
 from app.self_build.policy import digest
 from app.source_change.planner import observation_identity, plan_source_changes
 from app.source_edit_planning.service import SourceEditingPlanService
@@ -114,6 +118,48 @@ class DevelopmentProposalService:
     def persist(
         self, actor, workspace_id, authority, selection, command_id, proposal, *, allow_delete=False
     ):
+        try:
+            authority = CreateWorkspaceRequest.model_validate(
+                authority.model_dump(mode="json", warnings=False)
+            )
+            selection = ContextSelection.model_validate(
+                selection.model_dump(mode="json", warnings=False)
+            )
+            if type(allow_delete) is not bool:
+                raise ValueError("deletion policy must be a trusted boolean")
+        except (ValueError, TypeError, AttributeError):
+            refuse("DEVELOPMENT_REQUEST_INVALID")
+        try:
+            proposal = DevelopmentProposal.model_validate(
+                proposal.model_dump(mode="json", warnings=False)
+            )
+        except (ValueError, TypeError, AttributeError):
+            refuse("DEVELOPMENT_PROPOSAL_INVALID")
+        try:
+            command_id = TypeAdapter(Identifier).validate_python(command_id)
+        except (ValueError, TypeError, AttributeError):
+            refuse("SOURCE_EDIT_REQUEST_INVALID")
+        origin_request_hash = digest(
+            {
+                "workspace_id": workspace_id,
+                "selection": selection.model_dump(mode="json"),
+                "proposal": proposal.model_dump(mode="json"),
+                "allow_delete": allow_delete,
+            }
+        )
+        authority_binding = self.reader.require_ready(actor, workspace_id, authority)
+        existing = self.plans.replay(
+            actor,
+            digest(["source-edit-plan-v1", actor.actor_id, command_id]),
+            origin_request_hash,
+        )
+        if existing is not None:
+            if existing.plan.workspace_id != workspace_id:
+                refuse("SOURCE_EDIT_COMMAND_CONFLICT")
+            if self.reader.require_ready(actor, workspace_id, authority) != authority_binding:
+                refuse("DEVELOPMENT_OWNER_CHANGED")
+            return existing
+
         # Re-measure after inference. A model's before hash is never native evidence.
         def finalize(context, guard):
             with self.plans.repository.sessions() as session:
@@ -136,6 +182,7 @@ class DevelopmentProposalService:
                 ),
                 mutation_observation(context, (change.path for change in intent.changes)),
                 context.code_state,
+                origin_request_hash=origin_request_hash,
             )
 
         return self.reader.inspect(
