@@ -11,28 +11,12 @@ import pytest
 from app.core.errors import DomainError
 from app.self_build.git_observer import GitObserver, remote_identity
 from app.self_build.policy import RepositoryPolicy
+from tests.native_git import native_git_executable
 
 
 @pytest.fixture
 def repository(tmp_path):
-    executable = shutil.which("git")
-    if (
-        executable
-        and os.name == "nt"
-        and (
-            Path(executable).parent.name.casefold() == "cmd"
-            or (
-                Path(executable).parent.name.casefold() == "bin"
-                and Path(executable).parent.parent.name.casefold() not in {"mingw32", "mingw64"}
-            )
-        )
-    ):
-        installation = Path(executable).parent.parent
-        implementations = [
-            installation / family / "bin/git.exe" for family in ("mingw64", "mingw32")
-        ]
-        executable = str(next(path for path in implementations if path.is_file()))
-    assert executable, "Git is required for the native repository acceptance tests"
+    executable = str(native_git_executable())
     root, worktrees = tmp_path / "repository", tmp_path / "worktrees"
     root.mkdir()
     worktrees.mkdir()
@@ -359,6 +343,13 @@ def test_replacement_refs_cannot_change_the_approved_base_tree(repository):
         ("C:/Program Files/Git/cmd/git.exe", False),
         ("C:/Program Files/Git/bin/git.exe", False),
         ("C:/Tools/git.exe", False),
+        ("C:/Program Files/Git/ucrt64/git.exe", False),
+        ("C:/Program Files/Git/usr/bin/git.exe", False),
+        ("C:/Program Files/Git/ucrt64/cmd/git.exe", False),
+        ("C:/Program Files/Git/ucrt64/bin/git.cmd", False),
+        ("C:/Program Files/Git/ucrt64/bin/git.exe", True),
+        ("C:/Program Files/Git/clangarm64/bin/git.exe", True),
+        ("C:/Program Files/Git/UCRT64/BIN/GIT.EXE", True),
         ("C:/Program Files/Git/mingw64/bin/git.exe", True),
         ("C:/Program Files/Git/mingw32/bin/git.exe", True),
     ],

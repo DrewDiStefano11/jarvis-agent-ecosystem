@@ -37,12 +37,12 @@ actual tool, dependency, environment and isolation configuration is not measured
 by this milestone. It does not invent a configuration digest or elevate proposals
 to autonomous repair readiness.
 
-Confirmed transient infrastructure, CI environment, dependency and watchdog failures project
-to reliability observations and retry-policy diagnoses, preserving the bounded
-retry decision without generating product handler/test-coverage repair proposals.
-Classification follows the bounded-retry recommendation, requiring the recorded
-qualifying transient diagnostic code. A transient-looking kind without such
-evidence retains failure diagnosis.
+Infrastructure, CI environment, dependency, watchdog and unknown failures project
+as reliability observations, including failures without a qualifying transient
+code. They cannot generate product handler or test-coverage repair proposals.
+Their diagnosis remains required unless authenticated allowlisted transient codes
+and the bounded history support a retry request. This routing grants no retry
+authority and preserves the existing operator and runtime attempt budgets.
 Repair disposition selects the highest authenticated sequence within each run and
 attempt before timestamp comparison, consistent with validation assessment even
 when the collector clock regresses. Historical failures still count toward the

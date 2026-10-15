@@ -6,7 +6,7 @@ from typing import Literal
 from pydantic import Field, field_validator
 
 from app.models.development_validation import Commit, Contract, Digest, FailureKind, Gate
-from app.models.validation_execution import Identifier
+from app.models.validation_execution import DiagnosticCode, Identifier
 
 
 class ReproductionReference(Contract):
@@ -33,6 +33,7 @@ class RepairFinding(Contract):
         "passed", "failed", "missing", "stale", "interrupted", "cancelled", "unmeasured"
     ]
     failure_kind: FailureKind | None = None
+    diagnostic_codes: tuple[DiagnosticCode, ...] = Field(default=(), max_length=16)
     reproduction: ReproductionReference | None = None
     recommendation: Literal[
         "none",

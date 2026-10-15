@@ -48,6 +48,40 @@ def test_exact_reproduction_and_no_mutation_authority():
     assert not result.execution_authorized and not result.source_mutation_authorized
 
 
+def test_acknowledged_attempt_wins_regressed_collector_clock():
+    old = failed(command_run_id="old", attempt_id="old-attempt")
+    current = receipt(
+        build_execution_plan(state()),
+        command_run_id="current",
+        attempt_id="current-attempt",
+        started_at=NOW - timedelta(seconds=3),
+        finished_at=NOW - timedelta(seconds=2),
+    )
+    for values in permutations((old, current)):
+        finding = report(values, current_attempt=("run-1", "current-attempt")).findings[0]
+        assert finding.disposition == "passed"
+        assert finding.recommendation == "none"
+        assert finding.reproduction.command_run_id == "current"
+        assert len(finding.supporting_receipt_digests) == 2
+
+
+def test_missing_current_attempt_does_not_revive_historical_receipt():
+    values = [failed(attempt_id=f"old-{index}") for index in range(3)]
+    finding = report(values, current_attempt=("run-1", "current-attempt")).findings[0]
+    assert finding.disposition == "missing"
+    assert finding.recommendation == "gather_evidence"
+    assert finding.reproduction is None
+    assert finding.retries_remaining == 0
+    assert len(finding.supporting_receipt_digests) == 3
+
+
+def test_attempt_selection_still_authenticates_older_receipts():
+    old = failed(attempt_id="old-attempt").model_copy(update={"authentication_tag": "0" * 64})
+    current = receipt(build_execution_plan(state()), attempt_id="current-attempt")
+    with pytest.raises(ValueError, match="unauthenticated"):
+        report((old, current), current_attempt=("run-1", "current-attempt"))
+
+
 def test_validation_source_policy_version_names_the_provenance_digest():
     from app.development_validation.planner import POLICY_DIGEST, POLICY_VERSION
 
@@ -277,7 +311,7 @@ def test_repair_disposition_follows_higher_sequence_after_clock_regression():
 
 
 @pytest.mark.parametrize(
-    "failure_kind", ["infrastructure", "ci_environment", "dependency", "watchdog"]
+    "failure_kind", ["infrastructure", "ci_environment", "dependency", "watchdog", "unknown"]
 )
 def test_unconfirmed_transient_kind_retains_failure_diagnosis(failure_kind):
     plan = build_execution_plan(state())
@@ -291,8 +325,18 @@ def test_unconfirmed_transient_kind_retains_failure_diagnosis(failure_kind):
         expected_execution_plan_hash=plan.execution_plan_hash,
         now=NOW,
     ).collect()
-    assert facts[0].category == "execution"
+    assert facts[0].category == "reliability"
     assert report([signed]).findings[0].recommendation == "diagnose_failure"
+    baseline = create_baseline(
+        repo_sha=state().head_sha,
+        configuration_fingerprint="c" * 64,
+        safety_fingerprint="d" * 64,
+        sources=(provenance,),
+        observations=facts,
+    )
+    proposals = analyze(baseline).proposals
+    assert proposals and all(p.category == "retry_policy" for p in proposals)
+    assert all(p.status == "needs_evidence" for p in proposals)
 
 
 def test_source_aliases_cannot_replay_same_measured_artifact():
