@@ -4,6 +4,7 @@ from hashlib import sha256
 
 from pydantic import TypeAdapter
 
+from app.core.errors import DomainError
 from app.development_agent.context import RepositoryContextReader, refuse
 from app.models.development_agent import ContextSelection, DevelopmentProposal, RepositoryContext
 from app.models.self_build import Identifier
@@ -148,16 +149,23 @@ class DevelopmentProposalService:
             }
         )
         authority_binding = self.reader.require_ready(actor, workspace_id, authority)
-        existing = self.plans.replay(
-            actor,
-            digest(["source-edit-plan-v1", actor.actor_id, command_id]),
-            origin_request_hash,
-        )
-        if existing is not None:
-            if existing.plan.workspace_id != workspace_id:
+
+        def replay():
+            if self.reader.require_ready(actor, workspace_id, authority) != authority_binding:
+                refuse("DEVELOPMENT_OWNER_CHANGED")
+            existing = self.plans.replay(
+                actor,
+                digest(["source-edit-plan-v1", actor.actor_id, command_id]),
+                origin_request_hash,
+            )
+            if existing is not None and existing.plan.workspace_id != workspace_id:
                 refuse("SOURCE_EDIT_COMMAND_CONFLICT")
             if self.reader.require_ready(actor, workspace_id, authority) != authority_binding:
                 refuse("DEVELOPMENT_OWNER_CHANGED")
+            return existing
+
+        existing = replay()
+        if existing is not None:
             return existing
 
         # Re-measure after inference. A model's before hash is never native evidence.
@@ -185,11 +193,21 @@ class DevelopmentProposalService:
                 origin_request_hash=origin_request_hash,
             )
 
-        return self.reader.inspect(
-            actor,
-            workspace_id,
-            authority,
-            selection,
-            expected_hash=proposal.context_hash,
-            finalize=finalize,
-        )
+        try:
+            return self.reader.inspect(
+                actor,
+                workspace_id,
+                authority,
+                selection,
+                expected_hash=proposal.context_hash,
+                finalize=finalize,
+            )
+        except DomainError as error:
+            if error.code == "DEVELOPMENT_CONTEXT_STALE":
+                # Another session may have committed and applied this command
+                # after our initial lookup. Recover only its exact protected
+                # input binding, with fresh authority on both sides of the read.
+                existing = replay()
+                if existing is not None:
+                    return existing
+            raise
