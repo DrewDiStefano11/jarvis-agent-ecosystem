@@ -9,6 +9,7 @@ import psutil
 import pytest
 
 from app.self_build.owned_process import owned_process
+from tests.native_git import FAMILIES, implementation_path, native_git_executable
 
 
 def guard():
@@ -134,21 +135,27 @@ def test_windows_pre_resume_failure_never_runs_tool(tmp_path, monkeypatch, failu
     assert checks == 2 and not marker.exists()
 
 
+@pytest.mark.parametrize("family", FAMILIES)
+@pytest.mark.parametrize("entry", ["cmd", "bin", "native"])
+def test_native_git_fixture_supports_installation_layouts(tmp_path, family, entry):
+    native = tmp_path / family / "bin/git.exe"
+    native.parent.mkdir(parents=True)
+    native.write_bytes(b"fixture image")
+    launcher = native if entry == "native" else tmp_path / entry / "git.exe"
+    assert implementation_path(launcher, windows=True) == native
+
+
+def test_native_git_fixture_refuses_missing_implementation(tmp_path):
+    with pytest.raises(AssertionError, match="No supported native Git implementation"):
+        implementation_path(tmp_path / "cmd/git.exe", windows=True)
+
+
 def test_real_git_runs_from_immutable_image_inside_owned_process(tmp_path):
-    import shutil
     from hashlib import sha256
-    from pathlib import Path
 
     from app.self_build.git_image import pinned_image
 
-    executable = Path(shutil.which("git"))
-    if os.name == "nt" and executable.parent.name.casefold() in {"cmd", "bin"}:
-        installation = executable.parent.parent
-        executable = next(
-            candidate
-            for family in ("mingw64", "mingw32")
-            if (candidate := installation / family / "bin/git.exe").is_file()
-        )
+    executable = native_git_executable()
     image_hash = sha256(executable.read_bytes()).hexdigest()
     environment = {
         key: os.environ[key] for key in ("SystemRoot", "WINDIR", "TEMP", "TMP") if key in os.environ
