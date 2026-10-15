@@ -70,7 +70,11 @@ atomically binds workspace, selected paths, complete proposal and deletion polic
 An exact replay returns that validated historical proposal after source changes
 or application recreation, without remeasuring source or creating another event.
 Changed input refuses with `SOURCE_EDIT_COMMAND_CONFLICT`; replay grants no edit
-authority. New commands remeasure source after inference and compile/persist only
+authority. If another session commits between the initial lookup and source
+observation, a stale-context refusal triggers one protected replay lookup with
+fresh authority checks before and after the read. Changed inputs and emergency
+stop still refuse, and a stale command with no durable record stays stale.
+New commands remeasure source after inference and compile/persist only
 if the exact context digest is still current. Persistence
 runs inside native pins and the existing fenced source-plan transaction. Existing
 source-plan command replay, protected reads, audit/outbox and restart semantics
