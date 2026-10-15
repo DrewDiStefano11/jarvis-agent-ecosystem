@@ -520,7 +520,10 @@ def test_source_freeze_rejects_duplicate_before_consuming_unbounded_input(isolat
     assert len(count) == 2
 
 
-@pytest.mark.parametrize("failure", [None, "unexpected", "occupied", "unprotected", "revoked"])
+@pytest.mark.parametrize(
+    "failure",
+    [None, "unexpected", "occupied", "unprotected", "revoked", "name_limit", "unicode_name"],
+)
 def test_guest_import_descriptor_operations_and_failure_quarantine(
     isolation_bundle, tmp_path, monkeypatch, failure
 ):
@@ -532,9 +535,22 @@ def test_guest_import_descriptor_operations_and_failure_quarantine(
 
     from app.validation_runner import source_transfer as transfer
 
-    _, _, capsule, content = isolation_bundle
+    plan, owner, capsule, content = isolation_bundle
+    if failure == "unicode_name":
+        from app.validation_runner.isolation import build_capsule
+
+        files = [capsule.files[0], capsule.files[0].model_copy(update={"path": "😀" * 70 + ".py"})]
+        capsule = build_capsule(
+            plan,
+            owner=owner,
+            journal_digest=capsule.journal_digest,
+            native_inventory_digest=digest([file.model_dump(mode="json") for file in files]),
+            files=files,
+        )
     payload = transfer.freeze_payload(
-        capsule, [(capsule.files[0].path, "100644", content)], authority_check=lambda: None
+        capsule,
+        [(file.path, "100644", content) for file in capsule.files],
+        authority_check=lambda: None,
     )
     root = tmp_path / "private-guest"
     paths, infos, children, data, operations = {}, {}, {}, {}, []
@@ -608,6 +624,7 @@ def test_guest_import_descriptor_operations_and_failure_quarantine(
         SimpleNamespace(
             geteuid=lambda: 0,
             fstat=lambda fd: infos[fd],
+            fpathconf=lambda fd, key: 3 if failure == "name_limit" else 255,
             mkdir=mkdir,
             write=write,
             fchmod=chmod,
@@ -622,8 +639,10 @@ def test_guest_import_descriptor_operations_and_failure_quarantine(
     if failure:
         with pytest.raises((ValueError, FileExistsError, DomainError)):
             transfer.import_linux_guest(root, capsule, payload, authority_check=guard)
-        if failure in {"occupied", "unprotected"}:
+        if failure in {"occupied", "unprotected", "name_limit", "unicode_name"}:
             assert "write" not in operations
+        if failure in {"name_limit", "unicode_name"}:
+            assert "mkdir" not in operations
         # No cleanup effects are available: uncertainty cannot erase evidence.
     else:
         assert (
@@ -656,6 +675,49 @@ def test_isolation_transfer_contract_refuses_escape_and_credential_paths(path):
 
     with pytest.raises(ValueError):
         CapsuleFile(path=path, mode="100644", content_digest="a" * 64, byte_count=1)
+
+
+@pytest.mark.parametrize("count", [129, 4096])
+def test_directory_pin_budget_refuses_export_and_import_before_filesystem_effects(
+    isolation_bundle, tmp_path, monkeypatch, count
+):
+    from app.validation_runner import source_transfer as transfer
+    from app.validation_runner.isolation import build_capsule
+
+    plan, owner, original, content = isolation_bundle
+    files = [original.files[0]] + [
+        original.files[0].model_copy(update={"path": f"dir-{index:04d}/source.py"})
+        for index in range(count - 1)
+    ]
+    capsule = build_capsule(
+        plan,
+        owner=owner,
+        journal_digest=original.journal_digest,
+        native_inventory_digest=digest([file.model_dump(mode="json") for file in files]),
+        files=files,
+    )
+    payload = transfer.freeze_payload(
+        capsule,
+        [(file.path, file.mode, content) for file in files],
+        authority_check=lambda: None,
+    )
+    monkeypatch.setattr(
+        transfer, "open_directory", lambda *a, **kw: pytest.fail("No pins before preflight")
+    )
+    with pytest.raises(ValueError, match="DIRECTORY_PIN_LIMIT"):
+        transfer.export_snapshot(
+            tmp_path,
+            capsule,
+            plan,
+            owner=owner,
+            journal_digest=capsule.journal_digest,
+            native_inventory_digest=capsule.inventory_digest,
+            authority_check=lambda *a: None,
+        )
+    monkeypatch.setattr(transfer.sys, "platform", "linux")
+    monkeypatch.setattr(transfer.os, "geteuid", lambda: 0, raising=False)
+    with pytest.raises(ValueError, match="DIRECTORY_PIN_LIMIT"):
+        transfer.import_linux_guest(tmp_path, capsule, payload, authority_check=lambda: None)
 
 
 def test_isolation_capsule_exact_transfer_and_authority(isolation_bundle):

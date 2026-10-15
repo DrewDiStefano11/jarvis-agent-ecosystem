@@ -4,6 +4,10 @@ The Campaign B integration adds journal-backed `diagnose`, atomic `record_verdic
 and historical `read_verdict`. Their contracts, isolation blocker and remaining
 production connections are documented in [Campaign B validation audit](campaign-b-validation-audit.md).
 They do not enable untrusted source execution or grant publication authority.
+Diagnosis selects the acknowledged target journal's runtime attempt, even when
+collector clocks regress between attempts. All authenticated historical failures
+still consume the retry budget. A target attempt with no measured result stays
+missing; an older result cannot supply its recovery position.
 
 This milestone stacks on the trusted validation evidence PR. It is an internal
 service and has no registered HTTP/model route, collector key or process runner.

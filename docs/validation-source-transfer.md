@@ -16,6 +16,14 @@ state reader and runtime fence remains necessary; no permissive default exists.
 
 Each ancestor is opened with the existing no-follow directory primitives.
 Windows holds directory handles against replacement; POSIX traverses descriptors.
+The exporter and guest importer preflight all distinct directory prefixes plus
+root ancestry against a 128-directory pin budget before opening any pins. A
+schema-valid capsule exceeding that resource policy refuses before reads/writes
+instead of failing partway through materialization with descriptor exhaustion.
+The Linux importer also checks every UTF-8 path component against the actual
+destination's `PC_NAME_MAX` before any directory/file creation. Unsupported name
+limits and overlong components refuse without partially materializing earlier
+entries; the capsule schema's character limit alone is insufficient.
 Regular source files must have one link, no reparse point and the approved hash
 and length. POSIX additionally verifies executable bits; Windows Git modes are
 taken from the independently measured native inventory, not filesystem flags.
