@@ -26,7 +26,7 @@ function renderApp(){return render(<BrowserRouter><AppStoreProvider><App/></AppS
 const statusRequestCount = () => vi.mocked(fetch).mock.calls.filter(([url]) => String(url).endsWith('/api/system/status')).length
 // Resolve the real lazy module before interaction checks. Cold Vite transforms
 // on CI can outlast a DOM query; interaction assertions keep their normal bound.
-beforeAll(async () => { await import('../src/pages/Office') })
+beforeAll(async () => { await Promise.all([import('../src/pages/Office'), import('../src/pages/Approvals')]) })
 beforeEach(() => { localStorage.clear(); vi.spyOn(window, 'confirm').mockReturnValue(true) })
 beforeEach(()=>{window.history.pushState({},'', '/');FakeWebSocket.instances=[];vi.stubGlobal('WebSocket',FakeWebSocket);vi.stubGlobal('fetch',vi.fn(async(input:string|URL|Request,init?:RequestInit)=>{const path=new URL(typeof input==='string'?input:input instanceof URL?input.href:input.url).pathname;const data=endpointData[path]??((path.endsWith('/decomposition') || path.endsWith('/coordination'))?null:init?.method==='POST'?{}:[]);return {ok:true,status:200,json:async()=>({data,meta:{schemaVersion:'1.0'}})} as Response}))})
 
