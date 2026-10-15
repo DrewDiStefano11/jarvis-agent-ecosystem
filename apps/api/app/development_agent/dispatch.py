@@ -10,17 +10,16 @@ from sqlalchemy.exc import SQLAlchemyError
 from app.agent_runtime.authorization import RuntimeActorContext
 from app.agent_runtime.repository import RuntimeExecutionFence
 from app.db.models import AuditEventRow, TaskRow
-from app.development_agent import repository
 from app.development_agent import request as request_builder
 from app.development_agent.context import RepositoryContextReader, refuse
 from app.development_agent.repository import DevelopmentAdmissionRow, DevelopmentDispatchRow
 from app.model_providers.contracts import ModelExecutionResponse, UsageQuality
 from app.model_providers.tool_calls import decode_model_response
-from app.models import development_dispatch as contracts
 from app.models.agent_runtime import RecordCheckpointCommand
 from app.models.development_agent import DevelopmentProposal
 from app.models.development_dispatch import (
     AdmissionPlan,
+    AssemblyLimits,
     DevelopmentAdmission,
     DevelopmentDispatch,
     DevelopmentLimits,
@@ -31,19 +30,52 @@ from app.models.development_dispatch import (
 from app.models.domain import Task
 from app.self_build.policy import digest
 
-POLICY_DIGEST = digest(
-    {
-        "implementation": [
-            Path(path).read_text(encoding="utf-8")
-            for path in (
-                __file__,
-                contracts.__file__,
-                repository.__file__,
-                request_builder.__file__,
-            )
-        ],
-    }
+POLICY_SOURCE_PATHS = (
+    "development_agent/dispatch.py",
+    "development_agent/repository.py",
+    "development_agent/request.py",
+    "development_agent/context.py",
+    "development_agent/provider.py",
+    "development_agent/proposals.py",
+    "development_agent/execution.py",
+    "development_agent/config.py",
+    "development_agent/review.py",
+    "models/development_dispatch.py",
+    "models/development_agent.py",
+    "models/development_validation.py",
+    "models/source_change.py",
+    "models/source_edit_planning.py",
+    "models/development_handoff.py",
+    "models/development_review.py",
+    "models/source_mutation.py",
+    "models/context.py",
+    "models/domain.py",
+    "context/assembler.py",
+    "context/security.py",
+    "context/budget.py",
+    "model_providers/contracts.py",
+    "model_providers/policy.py",
+    "model_providers/tool_calls.py",
+    "self_build/change_verifier.py",
+    "source_edit_planning/service.py",
+    "source_mutation/service.py",
+    "source_change/planner.py",
+    "tool_execution/filesystem.py",
 )
+
+
+def policy_digest():
+    root = Path(__file__).resolve().parents[1]
+    return digest(
+        {
+            "implementation": {
+                name: (root / name).read_text(encoding="utf-8") for name in POLICY_SOURCE_PATHS
+            }
+        }
+    )
+
+
+POLICY_DIGEST = policy_digest()
 
 
 def protected_storage(method):
@@ -117,6 +149,7 @@ class DevelopmentDispatchService:
             initial_context_hash=context.context_hash,
             selection=context.selection,
             limits=limits,
+            assembly_limits=AssemblyLimits.capture(self.app.state.context_assembler),
             policy_digest=POLICY_DIGEST,
         )
         provisional = AdmissionPlan(**payload, plan_hash="0" * 64)
@@ -172,6 +205,7 @@ class DevelopmentDispatchService:
             or plan.worker_id != authority.worker_id
             or plan.lease_fingerprint != digest(authority.lease_token)
             or plan.policy_digest != POLICY_DIGEST
+            or plan.assembly_limits != AssemblyLimits.capture(self.app.state.context_assembler)
             or record.approved_by == actor.actor_id
         ):
             refuse("DEVELOPMENT_ADMISSION_CONFLICT")
@@ -605,6 +639,7 @@ class DevelopmentDispatchService:
                     )
                 )
                 guard.in_transaction(session)
+                self.root(session, actor, row, authority)
                 self.remaining_seconds(root)
                 return record, True
 
