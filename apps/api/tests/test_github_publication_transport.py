@@ -47,14 +47,23 @@ def test_fixed_host_identity_and_credentials_rotate_on_every_call():
     [
         {"id": 2, "full_name": "operator/repository"},
         {"id": 1, "full_name": "foreign/repository"},
+        {"id": 1, "full_name": None},
+        {"id": 1, "full_name": 1},
+        {"id": 1, "full_name": ["private-provider-data"]},
+        {"id": 1, "full_name": {"private-provider-data": "secret"}},
+        {"id": 1},
+        {"id": True, "full_name": "operator/repository"},
         [],
     ],
 )
 def test_repository_transfer_or_identity_drift_refuses(payload):
     client = reader(lambda request: httpx.Response(200, json=payload))
     try:
-        with pytest.raises(DomainError, match="identity changed"):
+        with pytest.raises(DomainError, match="identity changed") as caught:
             client.repository()
+        assert caught.value.code == "GITHUB_REPOSITORY_IDENTITY_CHANGED"
+        assert caught.value.status_code == 409
+        assert "private-provider-data" not in str(caught.value)
     finally:
         client.close()
 
@@ -105,6 +114,40 @@ def test_rate_limit_requests_durable_retry_without_busy_replay(status, headers, 
         with pytest.raises(GitHubRetry) as caught:
             client.repository()
         assert caught.value.retry_after_seconds == delay
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize(
+    "reset,expected",
+    [
+        ("999999999999", 86400),
+        ("100000000100", 86400),
+        ("1120", 120),
+        ("900", 60),
+    ],
+)
+def test_reset_derived_retry_is_bounded(reset, expected, monkeypatch):
+    monkeypatch.setattr("app.github_publication.transport.time.time", lambda: 1000)
+    calls = []
+
+    def handle(request):
+        calls.append(request)
+        return httpx.Response(
+            403,
+            headers={
+                "x-ratelimit-remaining": "0",
+                "x-ratelimit-reset": reset,
+            },
+        )
+
+    client = reader(handle)
+    try:
+        with pytest.raises(GitHubRetry) as caught:
+            client.repository()
+        assert caught.value.retry_after_seconds == expected
+        assert 1 <= caught.value.retry_after_seconds <= 86400
+        assert len(calls) == 1
     finally:
         client.close()
 

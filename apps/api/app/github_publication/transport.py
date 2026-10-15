@@ -148,7 +148,7 @@ class GitHubReader:
                         and reset.isdigit()
                         and len(reset) <= 12
                     ):
-                        seconds = max(seconds, max(1, int(reset) - int(time.time())))
+                        seconds = min(86400, max(seconds, max(1, int(reset) - int(time.time()))))
                     raise GitHubRetry(seconds)
                 if response.status_code == 401:
                     raise DomainError(
@@ -207,7 +207,9 @@ class GitHubReader:
         payload = self._get("")
         if (
             not isinstance(payload, dict)
+            or type(payload.get("id")) is not int
             or payload.get("id") != self.target.repository_id
+            or not isinstance(payload.get("full_name"), str)
             or payload.get("full_name", "").casefold()
             != f"{self.target.owner}/{self.target.name}".casefold()
         ):
