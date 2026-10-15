@@ -40,6 +40,47 @@ def admit(development, **changes):
     return service, root
 
 
+def test_request_dependency_upgrade_invalidates_persisted_admission(development, monkeypatch):
+    from pathlib import Path
+
+    from app.development_agent import dispatch
+
+    _, actor, _, authority, _, _, _, context = development
+    service, admitted = admit(development)
+    original_digest = dispatch.POLICY_DIGEST
+    original_read = Path.read_text
+    source_root = Path(dispatch.__file__).resolve().parents[1]
+    for name in (
+        "development_agent/context.py",
+        "development_agent/provider.py",
+        "models/development_agent.py",
+        "models/context.py",
+        "context/assembler.py",
+        "context/security.py",
+        "context/budget.py",
+        "model_providers/tool_calls.py",
+    ):
+        changed_path = source_root / name
+
+        def upgraded(path, *args, _changed=changed_path, **kwargs):
+            text = original_read(path, *args, **kwargs)
+            return text + "\n# simulated deployment change\n" if path == _changed else text
+
+        monkeypatch.setattr(Path, "read_text", upgraded)
+        changed_digest = dispatch.policy_digest()
+        assert changed_digest != original_digest, name
+        monkeypatch.setattr(dispatch, "POLICY_DIGEST", changed_digest)
+        with service.repository.sessions() as session:
+            row = service.repository.lookup(session, context.workspace_id)
+            with pytest.raises(DomainError) as error:
+                service.root(session, actor, row, authority)
+        assert error.value.code == "DEVELOPMENT_ADMISSION_CONFLICT"
+    monkeypatch.setattr(dispatch, "POLICY_DIGEST", original_digest)
+    with service.repository.sessions() as session:
+        row = service.repository.lookup(session, context.workspace_id)
+        assert service.root(session, actor, row, authority)[0] == admitted
+
+
 def result(record, **changes):
     data = dict(
         content=proposal(record.reservation.context).model_dump_json(),

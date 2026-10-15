@@ -1,8 +1,9 @@
 # Durable development admission and dispatch
 
-This milestone is explicitly stacked on Campaign A PR #130 (36cbd0f), which is
-stacked on #128. Origin/main is still dc63ed2; no unmerged source-history,
-validation runner or publication implementation has been imported.
+This milestone is explicitly stacked on Campaign A PR #130, which is stacked on
+#128. The repair integrates the shared source-history test correction from #141
+and retains the already merged main source-history/provenance dependencies.
+Campaign B validation runners and Campaign C publication code remain separate.
 
 DevelopmentDispatchService is an internal application service. It creates no
 scheduler, HTTP route, model tool, provider traffic or filesystem mutation.
@@ -12,7 +13,13 @@ operator and workspace-creation boundaries remain authoritative.
 ## Admission
 
 The operator reviews the exact previewed AdmissionPlan hash. The plan binds the
-native durable task objective fingerprint, repository workspace/creation,
+packaged request/context/proposal contracts, provider output schema, Context
+Assembler redaction/budget implementation and source-observation dependencies.
+A deployment changing those semantics invalidates earlier admissions; collector
+or model text cannot renew their approval. Current OpenAPI and runtime database
+revisions must also match the single packaged Alembic head.
+
+The plan also binds the native durable task objective fingerprint, repository workspace/creation,
 original run/attempt/worker/lease, explicit coding provider/model, selected source
 paths, operator completion criteria, deletion policy and execution limits.
 The implementation actor cannot approve itself. Admission requires the current
