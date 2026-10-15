@@ -81,13 +81,17 @@ Every read disables Git replacement-object semantics through both the global
 `refs/replace` cannot make an approved commit SHA describe a replacement tree.
 This policy change invalidates earlier inspection approvals.
 
-On Windows configure the actual `<Git>/mingw64/bin/git.exe` or
-`<Git>/mingw32/bin/git.exe` implementation and hash that file. `cmd/git.exe`,
+On Windows configure the actual `<Git>/<family>/bin/git.exe` implementation,
+where family is `ucrt64`, `mingw64`, `mingw32` or `clangarm64`, and hash that file.
+Git for Windows 2.56 uses UCRT64 for its x64 native implementation. `cmd/git.exe`,
 root/bin launchers and other wrapper layouts are rejected before approval or
 process start. The fixed built-in read families run directly in that pinned process,
 so authority/watchdog termination kills the actual operation and the approval binds
 the implementing executable. No wrapper can quietly select another implementation
 or widen PATH/HOME. This follows [Git for Windows' documented direct-binary path](https://gitforwindows.org/git-wrapper.html).
+The observer source participates in the inspection policy digest; updating this
+layout policy invalidates existing inspection approvals and requires a new preview
+and operator approval. Persisted hashes and checkpoints are never rewritten.
 Future Git mutation/command families that can spawn helpers additionally require
 process-tree containment; these read-only fixed built-ins expose no such family.
 
@@ -115,7 +119,7 @@ alternates before and after execution. Directory identity/change stamps also det
 an alternate file introduced and removed during a read; such evidence cannot be
 approved. Real regressions move required objects outside the registered repository
 and prove that persistent and transient alternate-store injection fail closed.
-Windows fixtures preserve an already-direct mingw32/bin or mingw64/bin executable;
+Windows fixtures preserve an already-direct supported native bin executable;
 only standard cmd/bin launchers are translated for test setup. Production still
 requires the operator to configure and hash the actual native implementation.
 
