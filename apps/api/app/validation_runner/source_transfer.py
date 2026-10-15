@@ -21,6 +21,17 @@ from app.validation_runner.isolation import verify_capsule, verify_transfer
 MAGIC = b"JARVIS-SOURCE\x00\x01"
 MAX_MANIFEST = 2097152
 MAX_PAYLOAD = 134217728 + MAX_MANIFEST + len(MAGIC) + 4
+# Reserve ample descriptor capacity for process I/O, SQLite and native guards.
+MAX_DIRECTORY_PINS = 128
+
+
+def preflight_directory_pins(root, files):
+    prefixes = {()}
+    for item in files:
+        parts = item.path.split("/")
+        prefixes.update(tuple(parts[:depth]) for depth in range(1, len(parts)))
+    if len(root.parents) + len(prefixes) > MAX_DIRECTORY_PINS:
+        raise ValueError("CAPSULE_DIRECTORY_PIN_LIMIT")
 
 
 def manifest_bytes(capsule):
@@ -127,6 +138,7 @@ def export_snapshot(
         authority_check(root, capsule)
 
     guard()
+    preflight_directory_pins(root, capsule.files)
     with ExitStack() as stack:
         # Windows locks every ancestor against replacement. POSIX traverses each
         # component with directory descriptors and O_NOFOLLOW, including root.
@@ -184,6 +196,7 @@ def import_linux_guest(root, capsule, payload, *, authority_check):
     root = Path(root)
     if not root.is_absolute():
         raise ValueError("CAPSULE_ROOT_INVALID")
+    preflight_directory_pins(root, capsule.files)
     with ExitStack() as stack:
         parent = None
         for path in (*reversed(root.parents), root):
@@ -195,6 +208,16 @@ def import_linux_guest(root, capsule, payload, *, authority_check):
                 raise ValueError("CAPSULE_GUEST_ROOT_UNPROTECTED")
         if stat.S_IMODE(os.fstat(parent.fd).st_mode) != 0o700 or os.listdir(parent.fd):
             raise ValueError("CAPSULE_GUEST_ROOT_NOT_EMPTY_PRIVATE")
+        # Inspect the actual destination before creating even the first path.
+        name_max = os.fpathconf(parent.fd, "PC_NAME_MAX")
+        if name_max <= 0:
+            raise ValueError("CAPSULE_GUEST_NAME_LIMIT_UNAVAILABLE")
+        if any(
+            len(component.encode("utf-8")) > name_max
+            for path, _, _ in records
+            for component in path.split("/")
+        ):
+            raise ValueError("CAPSULE_GUEST_NAME_LIMIT")
         root_device = os.fstat(parent.fd).st_dev
         directories = {(): parent}
         children = {(): set()}
