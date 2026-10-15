@@ -58,6 +58,73 @@ def synthetic_advertisement(*, refs=None, capabilities=b"report-status object-fo
     return packet(b"# service=git-receive-pack\n") + b"0000" + b"".join(lines) + b"0000"
 
 
+@pytest.mark.parametrize(
+    "name,accepted",
+    [
+        ("refs/tags/v1.0+linux", True),
+        ("refs/heads/release@2026", True),
+        ("refs/heads/naïve", True),
+        ("refs/custom/-topic", True),
+        ("refs/heads/topic./child", True),
+        ("refs/heads/topic.locked", True),
+        ("refs/heads/.hidden", False),
+        ("refs/heads/topic.lock", False),
+        ("refs/heads/topic.lock/child", False),
+        ("refs/heads/topic..old", False),
+        ("refs/heads/topic@{1}", False),
+        ("refs/heads/topic\\child", False),
+        ("refs/heads/topic:child", False),
+        ("refs/heads/topic child", False),
+        ("refs/heads/topic\x7f", False),
+        ("refs/heads/topic\tchild", False),
+        ("refs/heads/topic?", False),
+        ("refs/heads/topic*", False),
+        ("refs/heads/topic[", False),
+        ("refs/heads/topic^", False),
+        ("refs/heads/topic~", False),
+        ("refs/heads/topic.", False),
+        ("refs/heads//topic", False),
+        ("refs/heads/topic/", False),
+    ],
+)
+def test_advertised_refs_match_native_git_rules(name, accepted):
+    executable = shutil.which("git")
+    if executable is None:
+        pytest.skip("native Git unavailable")
+    result = subprocess.run(
+        [executable, "check-ref-format", name],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=10,
+        env=dict(
+            os.environ, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_COUNT="0"
+        ),
+    )
+    assert (result.returncode == 0) == accepted
+    raw = synthetic_advertisement(refs={name: "a" * 40})
+    if accepted:
+        assert advertisement(raw).refs == ((name, "a" * 40),)
+    else:
+        with pytest.raises(DomainError) as error:
+            advertisement(raw)
+        assert error.value.code == "GITHUB_GIT_PROTOCOL_INVALID"
+
+
+def test_remote_non_utf8_names_are_opaque_and_do_not_block_scoped_push():
+    raw = (
+        packet(b"# service=git-receive-pack\n")
+        + b"0000"
+        + packet(b"a" * 40 + b" refs/tags/release-\xff\0report-status\n")
+        + b"0000"
+    )
+    remote = advertisement(raw)
+    assert remote.refs[0][0].encode("utf-8", errors="surrogateescape") == b"refs/tags/release-\xff"
+    tree = Object("tree", b"")
+    child = commit(tree.sha, "a" * 40)
+    request = receive_request(TARGET, "codex/job", "a" * 40, child.sha, raw, (tree, child))
+    assert request.reference == REFERENCE and request.old_sha == ZERO
+
+
 @pytest.fixture
 def repository(tmp_path):
     executable = shutil.which("git")
