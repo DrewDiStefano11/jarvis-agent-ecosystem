@@ -12,7 +12,7 @@ from sqlalchemy import select, text
 
 from app.db.models import AgentRuntimeRunRow, AuditEventRow, SystemStateRow, TaskRow
 from app.db.session import create_database_engine, create_session_factory
-from app.main import create_app
+from app.main import DATABASE_REVISION, create_app
 from app.model_qualification.runner import run_fixture_qualification
 from app.models.self_improvement import (
     CandidateAttestation,
@@ -363,7 +363,7 @@ def test_concurrent_analysis_converges(database):
 
 def test_migration_one_head_populated_upgrade_guarded_downgrade_reupgrade(database):
     sessions, config, _ = database
-    assert ScriptDirectory.from_config(config).get_heads() == ["20261012_source_mutation"]
+    assert ScriptDirectory.from_config(config).get_heads() == [DATABASE_REVISION]
     command.downgrade(config, "20260906_10")
     # Preserve a durable runtime row while upgrading the populated predecessor.
     with sessions.begin() as session:

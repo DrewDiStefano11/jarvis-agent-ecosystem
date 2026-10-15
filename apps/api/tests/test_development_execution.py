@@ -24,7 +24,10 @@ from app.models.source_mutation import ApplySourceMutation, ApproveSourceMutatio
 from app.source_edit_planning.repository import SourceEditingPlanRow
 from tests.test_development_dispatch import admit
 
-pytest_plugins = ["tests.test_development_agent"]
+pytest_plugins = ["tests.test_development_agent", "tests.test_development_provider"]
+# The provider policy is bypassed only inside fixtures that forbid constructing
+# a real HTTP transport. Unmocked production-denial tests remain in provider.py.
+pytestmark = pytest.mark.usefixtures("mock_transport_execution")
 
 KEY = "unit-private-execution-key"
 
@@ -259,6 +262,51 @@ async def test_binding_checkpoint_crash_recovers_the_exact_plan_without_provider
         assert result.editing_record_id and len(calls) == 1
         with service.dispatches.repository.sessions() as session:
             assert len(session.scalars(select(SourceEditingPlanRow)).all()) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "code,category",
+    [
+        ("DEVELOPMENT_BUDGET_EXHAUSTED", "budget_exceeded"),
+        ("DEVELOPMENT_PROVIDER_CHANGED", "provider_configuration_failure"),
+    ],
+)
+async def test_domain_failure_retains_actual_durable_category(
+    development, monkeypatch, code, category
+):
+    app, actor, _, authority, _, _, _, context = development
+    admit(development)
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _: pytest.fail("no inference"))
+    ) as client:
+        service = executor(app, client)
+
+        async def fail(*args, **kwargs):
+            raise DomainError(code, "Sanitized expected failure", 409)
+
+        monkeypatch.setattr(service, "call", fail)
+        with pytest.raises(DomainError) as error:
+            await service.execute(
+                actor, context.workspace_id, authority, context.selection, "domain-failure"
+            )
+        assert error.value.code == code
+        with service.dispatches.repository.sessions() as session:
+            row = session.scalar(select(DevelopmentDispatchRow))
+            assert row.payload["failure"]["category"] == category
+            assert (
+                len(
+                    list(
+                        session.scalars(
+                            select(AuditEventRow).where(
+                                AuditEventRow.event_type == "development.dispatch.failed"
+                            )
+                        )
+                    )
+                )
+                == 1
+            )
+            assert not list(session.scalars(select(SourceEditingPlanRow)))
 
 
 @pytest.mark.asyncio
