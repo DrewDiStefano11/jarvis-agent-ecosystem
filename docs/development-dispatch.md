@@ -12,8 +12,31 @@ operator and workspace-creation boundaries remain authoritative.
 
 ## Admission
 
+Dispatch failure evidence preserves expected domain categories: expired budgets
+record `budget_exceeded`, changed provider configuration records
+`provider_configuration_failure`, disabled execution records
+`provider_execution_disabled`, and only recognized authority failures record
+`authority_lost`. Unknown domain failures remain `internal_error` with their
+sanitized original refusal code. Source-plan replay retains both exact input
+binding and the caller's current transactional execution guard.
+
 The operator reviews the exact previewed AdmissionPlan hash. The plan binds the
-native durable task objective fingerprint, repository workspace/creation,
+packaged request/context/proposal contracts, provider output schema, Context
+Assembler redaction/budget implementation and source-observation dependencies.
+A deployment changing those semantics invalidates earlier admissions; collector
+or model text cannot renew their approval. Current OpenAPI and runtime database
+revisions must also match the single packaged Alembic head.
+
+The task domain contract participates in the implementation digest. Each plan
+also persists the live Context Assembler token, total-character, source-count and
+cross-project limits under its exact approved hash. A restart with different
+limits invalidates the admission. Request construction uses the approved token
+limit and rechecks live settings after assembly; final transaction validation
+refuses configuration changes without persisting dispatch audit/outbox evidence.
+Previously stored plans lacking these bounds fail closed and require a new
+operator-reviewed admission; no approval or checkpoint is rewritten.
+
+The plan also binds the native durable task objective fingerprint, repository workspace/creation,
 original run/attempt/worker/lease, explicit coding provider/model, selected source
 paths, operator completion criteria, deletion policy and execution limits.
 The implementation actor cannot approve itself. Admission requires the current

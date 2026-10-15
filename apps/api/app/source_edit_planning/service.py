@@ -8,6 +8,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.errors import DomainError
+from app.db.models import AuditEventRow
 from app.development_validation.planner import digest
 from app.models import source_edit_planning as planning_contracts
 from app.models.development_validation import CodeState
@@ -108,19 +109,85 @@ class SourceEditingPlanService:
         except (ValueError, TypeError, AttributeError, DomainError):
             refuse("SOURCE_EDIT_RECORD_INVALID")
 
-    def persist(self, actor, request, observation, original_code_state, *, commit_guard=None):
+    @staticmethod
+    def _check_origin(session, result, origin_request_hash):
+        events = list(
+            session.scalars(
+                select(AuditEventRow)
+                .where(
+                    AuditEventRow.event_type == "self_build.source_edit_plan.persisted",
+                    AuditEventRow.actor == result.actor_id,
+                    AuditEventRow.task_id == result.plan.task_id,
+                    AuditEventRow.payload["payload"]["recordId"].as_string() == result.record_id,
+                )
+                .limit(2)
+            )
+        )
+        if len(events) != 1:
+            refuse("SOURCE_EDIT_COMMAND_CONFLICT")
+        payload = events[0].payload.get("payload", {})
+        if (
+            payload.get("originRequestHash") != origin_request_hash
+            or payload.get("planHash") != result.plan.plan_hash
+            or payload.get("workspaceId") != result.plan.workspace_id
+            or payload.get("runtimeRunId") != result.plan.runtime_run_id
+        ):
+            refuse("SOURCE_EDIT_COMMAND_CONFLICT")
+
+    def replay(self, actor, record_id, origin_request_hash, *, commit_guard=None):
+        """Read a command's protected origin binding without observing current source."""
+        try:
+            with self.repository.sessions() as session:
+                if session.get(SourceEditingPlanRow, record_id) is None:
+                    return None
+            return self._read(
+                actor, record_id, origin_request_hash=origin_request_hash, commit_guard=commit_guard
+            )
+        except SQLAlchemyError:
+            refuse("SOURCE_EDIT_STORAGE_FAILED")
+
+    def persist(
+        self,
+        actor,
+        request,
+        observation,
+        original_code_state,
+        *,
+        origin_request_hash=None,
+        commit_guard=None,
+    ):
         try:
             return self._persist(
-                actor, request, observation, original_code_state, commit_guard=commit_guard
+                actor,
+                request,
+                observation,
+                original_code_state,
+                origin_request_hash=origin_request_hash,
+                commit_guard=commit_guard,
             )
         except SQLAlchemyError:
             # Database exceptions can contain bound source payloads in their SQL
             # parameters. Never pass those exceptions or chains to public/log output.
             refuse("SOURCE_EDIT_STORAGE_FAILED")
 
-    def _persist(self, actor, request, observation, original_code_state, *, commit_guard=None):
+    def _persist(
+        self,
+        actor,
+        request,
+        observation,
+        original_code_state,
+        *,
+        origin_request_hash=None,
+        commit_guard=None,
+    ):
         # Internal trusted observation/state arguments. No model/API importer exists.
         try:
+            if origin_request_hash is not None and (
+                type(origin_request_hash) is not str
+                or len(origin_request_hash) != 64
+                or any(character not in "0123456789abcdef" for character in origin_request_hash)
+            ):
+                raise ValueError("invalid origin digest")
             request = PersistEditingPlanRequest.model_validate(
                 request.model_dump(mode="json", warnings=False)
             )
@@ -171,6 +238,8 @@ class SourceEditingPlanService:
                 result = self.record(existing)
                 if result.request_hash != request_hash:
                     refuse("SOURCE_EDIT_COMMAND_CONFLICT")
+                if origin_request_hash is not None:
+                    self._check_origin(session, result, origin_request_hash)
                 if commit_guard is not None:
                     commit_guard(session)
                 return result
@@ -239,6 +308,11 @@ class SourceEditingPlanService:
                     "runtimeRunId": run.run_id,
                     "mutationSupported": False,
                     "evidenceStatus": "unmeasured",
+                    **(
+                        {"originRequestHash": origin_request_hash}
+                        if origin_request_hash is not None
+                        else {}
+                    ),
                 },
             )
             if commit_guard is not None:
@@ -252,7 +326,7 @@ class SourceEditingPlanService:
         except SQLAlchemyError:
             refuse("SOURCE_EDIT_STORAGE_FAILED")
 
-    def _read(self, actor, record_id):
+    def _read(self, actor, record_id, *, origin_request_hash=None, commit_guard=None):
         with self.repository.sessions() as session:
             row = session.get(SourceEditingPlanRow, record_id)
             if row is None:
@@ -290,4 +364,8 @@ class SourceEditingPlanService:
                 or result.plan.workspace_version > workspace_row.version
             ):
                 refuse("SOURCE_EDIT_RECORD_INVALID")
+            if origin_request_hash is not None:
+                self._check_origin(session, result, origin_request_hash)
+            if commit_guard is not None:
+                commit_guard(session)
             return result

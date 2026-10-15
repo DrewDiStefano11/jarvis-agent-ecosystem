@@ -13,7 +13,127 @@ from app.self_build.policy import digest
 from tests.test_development_dispatch import admit
 from tests.test_development_execution import executor, grant_editing, output
 
-pytest_plugins = ["tests.test_development_agent"]
+pytest_plugins = ["tests.test_development_agent", "tests.test_development_provider"]
+pytestmark = pytest.mark.usefixtures("mock_transport_execution")
+
+
+@pytest.mark.parametrize("content_change", [False, True])
+@pytest.mark.parametrize("edit_baseline", [False, True])
+def test_correction_preserves_captured_modes_and_regular_new_text(content_change, edit_baseline):
+    """Pure compiler projection fixture; no native provenance or approval is asserted."""
+    from hashlib import sha256
+
+    from pydantic import BaseModel
+
+    from app.development_agent.corrections import compile_correction, correction_context_hash
+    from app.models.development_agent import (
+        ContextSelection,
+        DevelopmentProposal,
+        RepositoryContext,
+    )
+    from app.models.development_baseline import BaselineFile
+    from app.models.development_validation import FileChange
+    from app.models.source_change import PlanReferences, SourceContent, SourceEntry
+    from tests.test_development_navigation import context
+
+    class CompilerProjection(BaseModel):
+        context: RepositoryContext
+        files: tuple[BaselineFile, ...]
+        snapshot_hash: str
+
+    original = context()
+    selected = ContextSelection(paths=("source.py", "zz_repair.py"))
+    original = original.model_copy(
+        update={
+            "selection": selected,
+            "observation": original.observation.model_copy(
+                update={
+                    "entries": (
+                        *original.observation.entries,
+                        SourceEntry(path="zz_repair.py", kind="absent"),
+                    )
+                }
+            ),
+        }
+    )
+    original = original.model_copy(
+        update={"context_hash": digest(original.model_dump(mode="json", exclude={"context_hash"}))}
+    )
+    before = original.observation.entries[0].content
+    text = before.text + ("# captured content\n" if content_change else "")
+    after = SourceContent(
+        text=text,
+        digest=sha256(text.encode()).hexdigest(),
+        byte_count=len(text.encode()),
+        mode="100755",
+    )
+    change = FileChange(
+        path="source.py",
+        before_hash=before.digest,
+        after_hash=after.digest,
+        before_mode="100644",
+        after_mode="100755",
+    )
+    captured = original.model_copy(
+        update={
+            "observation": original.observation.model_copy(
+                update={
+                    "entries": (
+                        original.observation.entries[0].model_copy(update={"content": after}),
+                        *original.observation.entries[1:],
+                    )
+                }
+            ),
+            "code_state": original.code_state.model_copy(update={"changes": (change,)}),
+        }
+    )
+    captured = captured.model_copy(
+        update={"context_hash": digest(captured.model_dump(mode="json", exclude={"context_hash"}))}
+    )
+    baseline = CompilerProjection(
+        context=captured,
+        files=(BaselineFile(change=change, content=after),),
+        snapshot_hash="0" * 64,
+    )
+    baseline = baseline.model_copy(
+        update={
+            "snapshot_hash": digest(baseline.model_dump(mode="json", exclude={"snapshot_hash"}))
+        }
+    )
+    destination = original.model_copy(update={"workspace_id": "fresh-workspace"})
+    destination = destination.model_copy(
+        update={
+            "context_hash": digest(destination.model_dump(mode="json", exclude={"context_hash"}))
+        }
+    )
+    files = [dict(operation="add", path="zz_repair.py", before_digest=None, text="repair = True\n")]
+    if edit_baseline:
+        files.append(
+            dict(
+                operation="modify",
+                path="source.py",
+                before_digest=after.digest,
+                text="# repaired text\n",
+            )
+        )
+    proposal = DevelopmentProposal(
+        context_hash=correction_context_hash(baseline, destination, selected),
+        summary="Preserve captured modes",
+        completion_criteria=("Captured executable mode survives correction.",),
+        files=tuple(files),
+    )
+    result = compile_correction(
+        proposal,
+        baseline,
+        destination,
+        selected,
+        PlanReferences(original_plan_hash="a" * 64, authorization_reference="approval"),
+    )
+    changes = {item.path: item for item in result.changes}
+    assert changes["source.py"].before.mode == "100644"
+    assert changes["source.py"].after.mode == "100755"
+    assert changes["source.py"].after.text == ("# repaired text\n" if edit_baseline else text)
+    assert changes["zz_repair.py"].after.mode == "100644"
 
 
 async def completed(development):

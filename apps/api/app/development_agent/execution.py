@@ -17,6 +17,28 @@ from app.self_build.policy import digest
 from app.source_mutation.service import SourceMutationService
 
 
+def domain_failure_category(code):
+    categories = {
+        "DEVELOPMENT_PROVIDER_TIMEOUT": "timeout",
+        "DEVELOPMENT_RESPONSE_INVALID": "malformed_provider_response",
+        "DEVELOPMENT_BUDGET_EXHAUSTED": "budget_exceeded",
+        "DEVELOPMENT_PROVIDER_CHANGED": "provider_configuration_failure",
+        "DEVELOPMENT_EXECUTION_DISABLED": "provider_execution_disabled",
+    }
+    authority_codes = {
+        "EMERGENCY_STOP_ACTIVE",
+        "DEVELOPMENT_AUTHORITY_LOST",
+        "DEVELOPMENT_OWNER_CHANGED",
+        "DEVELOPMENT_ADMISSION_CONFLICT",
+        "DEVELOPMENT_CHECKPOINT_REQUIRED",
+        "DEVELOPMENT_CHECKPOINT_INVALID",
+        "SELF_BUILD_CREATION_PERMISSION_DENIED",
+        "SELF_BUILD_CREATION_OPERATOR_REQUIRED",
+        "SELF_BUILD_CREATION_OWNER_INACTIVE",
+    }
+    return categories.get(code, "authority_lost" if code in authority_codes else "internal_error")
+
+
 class DevelopmentExecutor:
     """Application-owned provider calls. Model output grants no filesystem authority."""
 
@@ -259,15 +281,7 @@ class DevelopmentExecutor:
             failure_category = error.category.value
             failure_code = "DEVELOPMENT_PROVIDER_FAILED"
         except DomainError as error:
-            failure_category = (
-                "timeout"
-                if error.code == "DEVELOPMENT_PROVIDER_TIMEOUT"
-                else (
-                    "malformed_provider_response"
-                    if error.code == "DEVELOPMENT_RESPONSE_INVALID"
-                    else "authority_lost"
-                )
-            )
+            failure_category = domain_failure_category(error.code)
             failure_code = error.code
         except Exception:
             failure_category = "internal_error"

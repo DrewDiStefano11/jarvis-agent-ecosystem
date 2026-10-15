@@ -30,7 +30,8 @@ from tests.agent_runtime_testkit import make_spec, ts
 from tests.test_development_baselines import completed
 from tests.test_development_execution import executor, output
 
-pytest_plugins = ["tests.test_development_agent"]
+pytest_plugins = ["tests.test_development_agent", "tests.test_development_provider"]
+pytestmark = pytest.mark.usefixtures("mock_transport_execution")
 
 
 def fresh_workspace(development):

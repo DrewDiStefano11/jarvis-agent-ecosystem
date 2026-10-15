@@ -1,5 +1,13 @@
 # Approved correction workspace lineage
 
+Lineages inherit the root's approved assembler bounds without widening them.
+The implementation digest includes baseline, compiler and lineage contracts.
+Durable proposal replay binds optional protected baseline snapshot, repair scope
+and native-context expectation alongside the canonical proposal, and retains
+fresh execution/creation guards. Original non-correction command hashes remain
+unchanged when those optional inputs are absent. The status/OpenAPI revision
+matches the packaged lineage migration head.
+
 This increment is stacked on #145/#138/#137 and the merged main 5e11d60 native
 source/Git foundations. It imports no private provider, publication or validation
 implementation. All production model inference remains quarantined.

@@ -1,5 +1,11 @@
 # Protected correction baselines
 
+Correction compilation preserves the protected captured mode for carried
+baseline paths, including mode-only changes and later text edits to those paths.
+Newly proposed text outside the baseline inherits the destination's measured
+mode, or regular `100644` for a new file. Model text never grants a mode change.
+The authoritative status/OpenAPI revision matches the baseline migration head.
+
 This milestone is stacked on Campaign A #138/#137/#133/#130/#128 and the merged
 main 5e11d60 source/history/artifact/Git preparation foundations. It imports no
 private validation runner, native commit executor or provider implementation.

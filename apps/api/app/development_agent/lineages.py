@@ -61,6 +61,7 @@ class DevelopmentLineageService:
             "actor_id",
             "selection",
             "limits",
+            "assembly_limits",
             "policy_digest",
         )
         creation, _, _ = self.dispatches.creation.intent(workspace)
