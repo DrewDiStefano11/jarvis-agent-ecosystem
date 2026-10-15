@@ -57,6 +57,35 @@ def proposal(context, **changes):
     return DevelopmentProposal(**payload)
 
 
+def test_invalid_replay_input_does_not_echo_source_in_warnings_or_errors():
+    import traceback
+    import warnings
+
+    from app.models.workspace_creation import CreateWorkspaceRequest
+    from tests.test_development_navigation import context
+
+    native = context()
+    secret = "private-source-invalid-proposal"
+    invalid = proposal(native).model_copy(update={"schema_version": secret})
+    authority = CreateWorkspaceRequest(
+        inspection_id="inspection-1",
+        expected_plan_hash="a" * 64,
+        approval_id="approval-1",
+        worker_id="worker-1",
+        lease_token="private-fixture-lease",
+    )
+    service = object.__new__(DevelopmentProposalService)
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        with pytest.raises(DomainError) as error:
+            service.persist(
+                object(), native.workspace_id, authority, native.selection, "invalid", invalid
+            )
+    assert error.value.code == "DEVELOPMENT_PROPOSAL_INVALID"
+    assert secret not in "".join(traceback.format_exception(error.value))
+    assert secret not in "".join(str(warning.message) for warning in captured)
+
+
 def references(app, workspace_id):
     service = app.state.self_build_workspace_service
     with service.repository.sessions() as session:
@@ -145,6 +174,91 @@ def test_stale_source_refuses_before_plan_persistence(development):
     fresh = reader.inspect(actor, context.workspace_id, authority, context.selection)
     assert fresh.context_hash != context.context_hash
     assert fresh.code_state.changes[0].after_hash == sha256(b"value = 3\n").hexdigest()
+
+
+def test_durable_replay_ignores_later_source_but_binds_exact_input(development, monkeypatch):
+    app, actor, _, authority, _, target, _, context = development
+    service = DevelopmentProposalService(app)
+    args = (actor, context.workspace_id, authority, context.selection, "durable-replay")
+    original = proposal(context)
+    record = service.persist(*args, original)
+    (target / "source.py").write_bytes(b"value = 3\n")
+
+    def unexpected_observation(*args, **kwargs):
+        raise AssertionError("durable command replay must not remeasure source")
+
+    monkeypatch.setattr(service.reader, "inspect", unexpected_observation)
+    assert service.persist(*args, original) == record
+    for changed in (
+        proposal(context, summary="A different summary"),
+        proposal(context, completion_criteria=("A different criterion",)),
+        proposal(context, context_hash="f" * 64),
+        proposal(context, files=original.files[:1]),
+    ):
+        with pytest.raises(DomainError) as error:
+            service.persist(*args, changed)
+        assert error.value.code == "SOURCE_EDIT_COMMAND_CONFLICT"
+    with pytest.raises(DomainError, match="integrity"):
+        service.persist(*args, original, allow_delete=True)
+    with pytest.raises(DomainError) as error:
+        service.persist(
+            actor,
+            context.workspace_id,
+            authority,
+            ContextSelection(paths=("source.py",)),
+            "durable-replay",
+            original,
+        )
+    assert error.value.code == "SOURCE_EDIT_COMMAND_CONFLICT"
+    assert (target / "source.py").read_bytes() == b"value = 3\n"
+    with app.state.repository.session_factory() as session:
+        audit = list(
+            session.scalars(
+                select(AuditEventRow).where(
+                    AuditEventRow.event_type == "self_build.source_edit_plan.persisted"
+                )
+            )
+        )
+        outbox = list(
+            session.scalars(
+                select(OutboxEventRow).where(
+                    OutboxEventRow.event_type == "self_build.source_edit_plan.persisted"
+                )
+            )
+        )
+    assert len(audit) == len(outbox) == 1
+    assert len(audit[0].payload["payload"]["originRequestHash"]) == 64
+    assert (
+        outbox[0].envelope["payload"]["originRequestHash"]
+        == audit[0].payload["payload"]["originRequestHash"]
+    )
+
+
+def test_durable_replay_still_requires_live_authority(development):
+    app, actor, _, authority, permission, _, _, context = development
+    service = DevelopmentProposalService(app)
+    args = (
+        actor,
+        context.workspace_id,
+        authority,
+        context.selection,
+        "live-replay",
+        proposal(context),
+    )
+    service.persist(*args)
+    with app.state.repository.session_factory.begin() as session:
+        session.get(SystemStateRow, 1).emergency_stop = True
+    with pytest.raises(DomainError) as error:
+        service.persist(*args)
+    assert error.value.code == "EMERGENCY_STOP_ACTIVE"
+    with app.state.repository.session_factory.begin() as session:
+        session.get(SystemStateRow, 1).emergency_stop = False
+    app.state.identity_service.assign_permission(
+        actor.actor_id, AssignPermissionRequest(effect="deny", **permission)
+    )
+    with pytest.raises(DomainError) as error:
+        service.persist(*args)
+    assert error.value.code == "SELF_BUILD_CREATION_PERMISSION_DENIED"
 
 
 def test_stop_and_revoked_operator_block_context(development):
@@ -351,10 +465,37 @@ def test_context_proposal_applies_real_native_changes_with_independent_approval(
     assert (target / "new.py").read_bytes().startswith(b"from source import value")
     assert (target / "docs/context.txt").read_bytes() == b"Unchanged reference material.\n"
     assert SourceMutationService(app).apply(actor, request) == result
+    assert (
+        plans.persist(
+            actor,
+            context.workspace_id,
+            authority,
+            selection,
+            "native-development",
+            proposal(context),
+        )
+        == record
+    )
     from app.main import create_app
 
     restarted = create_app(database_url=app.state.settings.database_url)
     try:
+        # Restore the same trusted operator configuration, never caller/model authority.
+        for name in type(app.state.settings).model_fields:
+            if name.startswith("self_build_"):
+                setattr(restarted.state.settings, name, getattr(app.state.settings, name))
+        restarted.state.remote_control_service = app.state.remote_control_service
+        assert (
+            DevelopmentProposalService(restarted).persist(
+                actor,
+                context.workspace_id,
+                authority,
+                selection,
+                "native-development",
+                proposal(context),
+            )
+            == record
+        )
         restored = SourceEditingPlanService(restarted).read(actor, record.record_id)
         assert restored == record and restored.plan.task_id == result.plan.task_id
         from app.source_mutation.repository import SourceMutationRow
