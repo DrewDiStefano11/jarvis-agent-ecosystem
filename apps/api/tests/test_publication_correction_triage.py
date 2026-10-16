@@ -162,3 +162,67 @@ def test_missing_required_check_remains_operator_visible():
     value = triage(observation(checks=[]))
     assert value.disposition == "blocked"
     assert "required_check_evidence_unconfirmed" in value.blockers
+
+
+@pytest.mark.parametrize("state", ["queued", "running"])
+@pytest.mark.parametrize("case", ["unbound", "missing_app", "wrong_app", "wrong_context"])
+def test_pending_checks_require_exact_context_and_app_authority(state, case):
+    requirement = dict(context="backend", app_id=None if case == "unbound" else 42)
+    measured = observation(
+        required_checks=[requirement],
+        checks=[
+            dict(
+                evidence_id="check-1",
+                context="other" if case == "wrong_context" else "backend",
+                app_id=None if case == "missing_app" else 999 if case == "wrong_app" else 42,
+                head_sha=HEAD,
+                state=state,
+            )
+        ],
+    )
+    value = triage(measured)
+    assert value.disposition == "blocked"
+    assert "check_publisher_unverified" in value.blockers
+    assert not value.dispatch_authorized
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "publisher",
+        "non_independent",
+        "missing_review",
+        "stale_review",
+        "stale_finding",
+        "dismissed",
+        "pending",
+        "independent",
+    ],
+)
+def test_unresolved_findings_require_current_independent_review_provenance(case):
+    linked = review("thread-review", state="commented")
+    linked["reviewer_id"] = 10 if case == "publisher" else 3
+    linked["independent"] = case != "non_independent"
+    if case == "stale_review":
+        linked["head_sha"] = OLD
+    if case in {"dismissed", "pending"}:
+        linked["state"] = case
+    finding = dict(
+        evidence_id="finding-1",
+        head_sha=OLD if case == "stale_finding" else HEAD,
+        resolved=False,
+        review_id="unknown-review" if case == "missing_review" else "thread-review",
+    )
+    # An otherwise valid independent approval cannot authenticate someone else's thread.
+    measured = observation(
+        reviews=[review("approval", state="approved"), linked], findings=[finding]
+    )
+    value = triage(measured)
+    assert value.evidence_ids == ("finding-1",)
+    assert not value.dispatch_authorized
+    if case == "independent":
+        assert value.disposition == "review_correction_required"
+        assert not value.blockers
+    else:
+        assert value.disposition == "blocked"
+        assert "review_evidence_requires_reconfirmation" in value.blockers
