@@ -109,3 +109,8 @@ persisted workspace, command, operation, original approval and measured journal
 prefix. A renewal cannot create a new command intent. Valid progress after the
 measured prefix remains recoverable; original evidence stays append-only.
 Frontend sources are unchanged; prior frontend validation evidence is retained.
+Triage also requires current independently authored review provenance for every
+unresolved correction finding. Queued/running checks require the same explicit
+required-context/GitHub-App binding as failed checks. Unknown evidence remains
+blocked for reconfirmation. Focused triage/readiness verification: 62 passed;
+recovery runner/position verification: 37 passed, including lost acknowledgment.

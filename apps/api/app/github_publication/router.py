@@ -7,6 +7,7 @@ from app.github_publication.journal import PublicationJournal
 from app.github_publication.observation_service import observe
 from app.github_publication.orchestrator import advance_publication
 from app.models.domain import TypedApiResponse
+from app.models.publication_correction import PublicationCorrectionTriage
 from app.models.publication_lifecycle import (
     AdvancePublication,
     ApprovePublication,
@@ -92,6 +93,33 @@ def source_link(
             observation_digest,
         )
     )
+
+
+@router.get(
+    "/{workspace_id}/publication/{operation_id}/correction-triage",
+    response_model=TypedApiResponse[PublicationCorrectionTriage],
+)
+def correction_triage(
+    workspace_id: str,
+    operation_id: str,
+    request: Request,
+    principal: Actor,
+    expected_head_sha: str = Query(pattern=r"^[a-f0-9]{40}$"),
+    observation_digest: str = Query(pattern=r"^[a-f0-9]{64}$"),
+):
+    from app.github_publication.correction_triage import classify
+    from app.github_publication.source_link import read_source_link
+
+    configured = service(request)
+    linked = read_source_link(
+        configured,
+        principal,
+        workspace_id,
+        operation_id,
+        expected_head_sha,
+        observation_digest,
+    )
+    return TypedApiResponse(data=classify(linked, configured.publisher_ids))
 
 
 @router.post(
