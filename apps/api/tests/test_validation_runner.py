@@ -534,6 +534,184 @@ def test_capsule_subset_cannot_replace_trusted_complete_inventory(isolation_bund
         )
 
 
+@pytest.fixture
+def hyperv_binding():
+    from app.models.hyper_v_control import HyperVBinding
+
+    return HyperVBinding(
+        host_identity="test-host",
+        host_machine_guid="aaaaaaaa-1234-1234-1234-123456789abc",
+        vm_id="12345678-1234-1234-1234-123456789abc",
+        ownership_digest="a" * 64,
+        provisioning_digest="b" * 64,
+        capsule_digest="c" * 64,
+    )
+
+
+def test_native_hyperv_mock_measures_vm_only_and_does_not_invent_guest_success(hyperv_binding):
+    from datetime import UTC, datetime
+
+    from app.validation_runner.hyper_v import NativeHyperVAdapter
+
+    calls = []
+
+    class Transport:
+        def invoke(self, binding, operation):
+            calls.append(operation)
+            return dict(
+                vmId=str(binding.vm_id),
+                ownershipDigest=binding.ownership_digest,
+                hostMachineGuid=str(binding.host_machine_guid),
+                observedAt=datetime.now(UTC).isoformat(),
+                state="off",
+                memoryAssignedBytes=0,
+                memoryStartupBytes=2147483648,
+                cpuCount=1,
+                hostVmUptimeSeconds=0,
+                hostCpuUsagePercent=0,
+                connectedNetworkAdapters=0,
+                checkpointCount=0,
+                dynamicMemory=False,
+                automaticStart="nothing",
+            )
+
+    adapter = NativeHyperVAdapter(Transport(), authority_check=lambda binding, operation: None)
+    measured = adapter.inspect(hyperv_binding)
+    assert measured.command_outcome == "unmeasured" and not measured.execution_authorized
+    assert adapter.stop(hyperv_binding).state == "off"
+    assert calls == ["inspect", "stop", "inspect"]
+    with pytest.raises(DomainError):
+        adapter.execute(hyperv_binding)
+
+
+def test_native_hyperv_refuses_foreign_vm_and_live_authority_loss(hyperv_binding):
+    from app.validation_runner.hyper_v import NativeHyperVAdapter
+
+    class Foreign:
+        def invoke(self, binding, operation):
+            return dict(vmId="foreign", ownershipDigest=binding.ownership_digest)
+
+    adapter = NativeHyperVAdapter(Foreign(), authority_check=lambda binding, operation: None)
+    with pytest.raises(DomainError) as caught:
+        adapter.inspect(hyperv_binding)
+    assert caught.value.code == "HYPERV_OWNER_MISMATCH"
+
+    def revoked(binding, operation):
+        raise DomainError("EMERGENCY_STOP_ACTIVE", "Stopped.", 409)
+
+    adapter.guard = revoked
+    with pytest.raises(DomainError) as caught:
+        adapter.stop(hyperv_binding)
+    assert caught.value.code == "EMERGENCY_STOP_ACTIVE"
+
+
+@pytest.mark.parametrize("payload", [[], "private-native-message"])
+def test_native_hyperv_malformed_response_is_sanitized(hyperv_binding, payload):
+    from app.validation_runner.hyper_v import NativeHyperVAdapter
+
+    class Transport:
+        def invoke(self, binding, operation):
+            return payload
+
+    adapter = NativeHyperVAdapter(Transport(), authority_check=lambda binding, operation: None)
+    with pytest.raises(DomainError) as caught:
+        adapter.inspect(hyperv_binding)
+    assert caught.value.code == "HYPERV_OBSERVATION_INVALID"
+    assert "private-native-message" not in str(caught.value)
+
+
+def test_real_hyperv_operator_enrolled_vm_configuration_only():
+    """Opt-in read-only real VM check. No creation/start/source execution occurs."""
+    import json
+    import os
+    from pathlib import Path
+
+    from app.models.hyper_v_control import HyperVBinding
+    from app.validation_runner.hyper_v import NativeHyperVAdapter, NativeHyperVTransport
+
+    location = os.environ.get("JARVIS_HYPERV_READONLY_ACCEPTANCE")
+    if not location:
+        pytest.skip("Requires operator-enrolled VM and protected native transport config")
+    data = Path(location).read_bytes()
+    if len(data) > 16384:
+        pytest.fail("Native acceptance configuration exceeds bound")
+    config = json.loads(data)
+    binding = HyperVBinding.model_validate(config["binding"])
+
+    def read_only(current, operation):
+        if current != binding or operation != "inspect":
+            raise DomainError("HYPERV_ACCEPTANCE_READ_ONLY", "Read-only inspection required.", 409)
+
+    transport = NativeHyperVTransport(**config["transport"], authority_check=read_only)
+    result = NativeHyperVAdapter(transport, authority_check=read_only).inspect(binding)
+    assert result.state == "off"
+    assert result.connected_network_adapters == 0 and result.checkpoint_count == 0
+    assert not result.dynamic_memory and result.automatic_start == "nothing"
+    assert result.command_outcome == "unmeasured" and not result.execution_authorized
+
+
+@pytest.mark.parametrize("operation", ["inspect", "stop", "unregister", "foreign-owner"])
+def test_native_powershell_control_with_mock_hyperv_cmdlets(operation):
+    """Exercise the actual fixed script, with no real Hyper-V invocation."""
+    import json
+    import os
+    import subprocess
+    from pathlib import Path
+
+    if os.name != "nt":
+        pytest.skip("Native Windows PowerShell mock protocol test")
+    executable = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    script = Path(__file__).resolve().parents[3] / "scripts/hyper-v-validation-control.ps1"
+    quoted = str(script).replace("'", "''")
+    code = (
+        """
+$global:removed = $false
+$global:fakeVm = [pscustomobject]@{ Id=[Guid]'12345678-1234-1234-1234-123456789abc';
+    Notes='jarvis-validation-v1:"""
+        + "a" * 64
+        + """'; State='Off'; MemoryAssigned=[long]0;
+    AutomaticStartAction='Nothing'; Uptime=[TimeSpan]::Zero; CPUUsage=0 }
+function Import-Module { }
+function Get-ItemProperty { @{ MachineGuid='aaaaaaaa-1234-1234-1234-123456789abc' } }
+function Get-VM { if (-not $global:removed) { $global:fakeVm } }
+function Get-VMNetworkAdapter { }
+function Get-VMSnapshot { }
+function Get-VMProcessor { @{ Count=1 } }
+function Get-VMMemory { @{ Startup=[long]2147483648; DynamicMemoryEnabled=$false } }
+function Stop-VM { $global:fakeVm.State='Off' }
+function Remove-VM { $global:removed=$true }
+"""
+    )
+    if operation == "foreign-owner":
+        code += "$global:fakeVm.Notes='foreign'\n"
+    action = "inspect" if operation == "foreign-owner" else operation
+    code += (
+        "& '"
+        + quoted
+        + "' -Operation "
+        + action
+        + " -VmId 12345678-1234-1234-1234-123456789abc -OwnershipDigest "
+        + "a" * 64
+        + " -HostMachineGuid aaaaaaaa-1234-1234-1234-123456789abc"
+    )
+    completed = subprocess.run(
+        [str(executable), "-NoProfile", "-NonInteractive", "-Command", code],
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+    if operation == "foreign-owner":
+        assert completed.returncode != 0
+        assert b"HYPERV_NATIVE_CONTROL_UNAVAILABLE" in completed.stderr
+    else:
+        assert completed.returncode == 0, completed.stderr.decode(errors="replace")
+        observed = json.loads(completed.stdout)
+        if operation == "unregister":
+            assert observed["absent"] and not observed["storageCleanupComplete"]
+        else:
+            assert observed["state"] == "off" and observed["connectedNetworkAdapters"] == 0
+
+
 def plan(**options):
     state = CodeState(
         repository_identity="github.com/example/jarvis",
