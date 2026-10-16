@@ -79,6 +79,7 @@ def test_request_dependency_upgrade_invalidates_persisted_admission(development,
         "model_providers/tool_calls.py",
         "model_providers/policy.py",
         "source_edit_planning/service.py",
+        "source_edit_planning/projection.py",
         "source_mutation/service.py",
     ):
         changed_path = source_root / name
