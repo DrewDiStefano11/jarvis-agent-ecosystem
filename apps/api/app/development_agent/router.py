@@ -8,6 +8,12 @@ from app.models.development_dispatch import (
     DevelopmentAdmission,
     DevelopmentIteration,
 )
+from app.models.development_lineage import (
+    ApproveCorrectionWorkspace,
+    LineagePlan,
+    LineageRecord,
+    PreviewCorrectionWorkspace,
+)
 from app.models.development_review import (
     ApproveDevelopmentAdmission,
     CaptureDevelopmentBaseline,
@@ -109,5 +115,28 @@ def baseline(
                 dispatch_id,
                 body.mutation,
             )
+        )
+    )
+
+
+@router.post("/{workspace_id}/correction/preview", response_model=TypedApiResponse[LineagePlan])
+def correction_preview(
+    workspace_id: str, body: PreviewCorrectionWorkspace, request: Request, principal: Actor
+):
+    return TypedApiResponse(
+        data=request.app.state.development_lineage_service.preview(principal, workspace_id, body)
+    )
+
+
+@operator_router.post(
+    "/{workspace_id}/correction/approve", response_model=TypedApiResponse[LineageRecord]
+)
+def correction_approve(
+    workspace_id: str, body: ApproveCorrectionWorkspace, request: Request, principal: Operator
+):
+    owner = request.app.state.agent_runtime_service.authenticate_actor(body.execution_actor_id)
+    return TypedApiResponse(
+        data=request.app.state.development_lineage_service.approve(
+            principal, owner, workspace_id, body
         )
     )
