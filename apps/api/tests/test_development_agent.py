@@ -311,6 +311,13 @@ def test_durable_replay_still_requires_live_authority(development):
         proposal(context),
     )
     service.persist(*args)
+
+    def deny_replay(session):
+        raise DomainError("DEVELOPMENT_BUDGET_EXHAUSTED", "Budget exhausted", 409)
+
+    with pytest.raises(DomainError) as denied:
+        service.persist(*args, commit_guard=deny_replay)
+    assert denied.value.code == "DEVELOPMENT_BUDGET_EXHAUSTED"
     with app.state.repository.session_factory.begin() as session:
         session.get(SystemStateRow, 1).emergency_stop = True
     with pytest.raises(DomainError) as error:

@@ -102,13 +102,73 @@ class DispatchReservation(Contract):
     _utc = field_validator("reserved_at")(utc)
 
 
+class DispatchFailure(Contract):
+    category: Literal[
+        "provider_unavailable",
+        "authentication_failure",
+        "temporary_rate_limit",
+        "hard_quota_exhausted",
+        "timeout",
+        "invalid_model_request",
+        "model_unavailable",
+        "budget_exceeded",
+        "malformed_provider_response",
+        "unknown_provider",
+        "provider_configuration_failure",
+        "provider_execution_disabled",
+        "transient_provider_failure",
+        "authority_lost",
+        "cancelled",
+        "internal_error",
+    ]
+    observed_at: datetime
+    audit_id: Identifier
+    outcome: Literal["unknown"] = "unknown"
+
+    _utc = field_validator("observed_at")(utc)
+
+
+class EditingBinding(Contract):
+    editing_record_id: Digest
+    editing_plan_hash: Digest
+    response_digest: Digest
+    audit_id: Identifier
+
+
+class DevelopmentIteration(Contract):
+    schema_version: Literal["1.0"] = "1.0"
+    task_id: Identifier
+    runtime_run_id: Identifier
+    attempt_id: Identifier
+    workspace_id: Identifier
+    dispatch_id: Digest
+    ordinal: int = Field(ge=1, le=8)
+    provider: Identifier
+    requested_model: str
+    actual_model: str
+    context_hash: Digest
+    response_digest: Digest
+    editing_record_id: Digest
+    editing_plan_hash: Digest
+    state: Literal["awaiting_source_approval", "source_recovery_required", "mutation_recorded"] = (
+        "awaiting_source_approval"
+    )
+    current_source_measured: Literal[False] = False
+
+
 class DevelopmentDispatch(Contract):
     reservation: DispatchReservation
     response: ModelExecutionResponse | None = Field(default=None, repr=False)
     response_audit_id: Identifier | None = None
+    failure: DispatchFailure | None = None
+    editing_binding: EditingBinding | None = None
 
     @model_validator(mode="after")
     def response_shape(self):
         if (self.response is None) != (self.response_audit_id is None):
             raise ValueError("DEVELOPMENT_RESPONSE_INCOMPLETE")
+        if (self.failure is not None and self.response is not None) or (
+            self.editing_binding is not None and self.response is None
+        ):
+            raise ValueError("DEVELOPMENT_DISPATCH_STATE_INVALID")
         return self
