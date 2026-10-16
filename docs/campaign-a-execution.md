@@ -51,8 +51,11 @@ Provider fixtures do not prove real model coding quality. Native measurement is
 not independent code execution. Campaign B must retain its real isolated runner;
 validation_passed and publication_ready remain false in A's handoff.
 
-The remaining implementation includes operator-facing durable task admission and
-review orchestration, independently approved correction baseline/workspace lineage
+Authenticated admission preview/read, independent remote-operator approval, and
+protected source-plan review are now exposed through typed HTTP contracts. The
+iteration endpoint remains quarantined before reservation. Remaining implementation
+includes complete operator-facing task orchestration and independently approved
+correction baseline/workspace lineage
 for repeated effects, and bounded repair informed by real validation diagnoses.
 The existing one-mutation-per-workspace rule is preserved. A fresh source/validation
 plan cannot reset the task's immutable root reservation/output/deadline budget.
