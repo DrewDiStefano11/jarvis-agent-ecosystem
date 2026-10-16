@@ -64,6 +64,343 @@ def isolation_bundle():
     return expected, owner, capsule, content
 
 
+def test_source_payload_roundtrip_and_noncanonical_order(isolation_bundle):
+    from app.validation_runner.source_transfer import freeze_payload, receive_payload
+
+    _, _, capsule, content = isolation_bundle
+    calls = []
+
+    def guard():
+        calls.append("guard")
+
+    records = [(capsule.files[0].path, "100644", content)]
+    payload = freeze_payload(capsule, records, authority_check=guard)
+    assert type(payload) is bytes
+    assert receive_payload(capsule, payload, authority_check=guard) == tuple(records)
+    assert len(calls) >= 6
+
+
+@pytest.mark.parametrize("damage", ["truncated", "trailing", "content", "magic", "manifest"])
+def test_source_payload_rejects_corrupt_or_incomplete_input(isolation_bundle, damage):
+    from app.validation_runner.source_transfer import MAGIC, freeze_payload, receive_payload
+
+    _, _, capsule, content = isolation_bundle
+
+    def guard():
+        pass
+
+    payload = freeze_payload(
+        capsule, [(capsule.files[0].path, "100644", content)], authority_check=guard
+    )
+    if damage == "truncated":
+        payload = payload[:-1]
+    elif damage == "trailing":
+        payload += b"forged success"
+    elif damage == "content":
+        payload = payload[:-1] + b"!"
+    elif damage == "magic":
+        payload = b"!" + payload[1:]
+    else:
+        index = len(MAGIC) + 4
+        payload = payload[:index] + b"!" + payload[index + 1 :]
+    with pytest.raises(ValueError):
+        receive_payload(capsule, payload, authority_check=guard)
+
+
+@pytest.mark.parametrize(
+    "binding", ["workspace_id", "attempt_id", "approval_id", "lease_fingerprint"]
+)
+def test_source_payload_rejects_cross_authority_substitution(isolation_bundle, binding):
+    from app.models.validation_isolation import SourceCapsule
+    from app.validation_runner.source_transfer import freeze_payload, receive_payload
+
+    _, owner, capsule, content = isolation_bundle
+    payload = freeze_payload(
+        capsule, [(capsule.files[0].path, "100644", content)], authority_check=lambda: None
+    )
+    value = "f" * 64 if binding == "lease_fingerprint" else "foreign"
+    changed = capsule.model_dump(mode="json", exclude={"capsule_digest"})
+    changed["owner"] = owner.model_copy(update={binding: value}).model_dump(mode="json")
+    other = SourceCapsule.model_validate({**changed, "capsule_digest": digest(changed)})
+    with pytest.raises(ValueError, match="BINDING_MISMATCH"):
+        receive_payload(other, payload, authority_check=lambda: None)
+
+
+@pytest.mark.parametrize("bad", ["duplicate", "missing", "mutable", "mode", "unexpected"])
+def test_source_freeze_never_exposes_partial_invalid_transfer(isolation_bundle, bad):
+    from app.validation_runner.source_transfer import freeze_payload
+
+    _, _, capsule, content = isolation_bundle
+    record = (capsule.files[0].path, "100644", content)
+    records = {
+        "duplicate": [record, record],
+        "missing": [],
+        "mutable": [(record[0], record[1], bytearray(content))],
+        "mode": [(record[0], "120000", content)],
+        "unexpected": [(".ssh/id_rsa", "100644", content)],
+    }[bad]
+    with pytest.raises(ValueError):
+        freeze_payload(capsule, records, authority_check=lambda: None)
+
+
+def test_native_source_snapshot_rechecks_authority_and_freezes_bytes(isolation_bundle, tmp_path):
+    from app.validation_runner.source_transfer import export_snapshot, receive_payload
+
+    plan, owner, capsule, content = isolation_bundle
+    path = tmp_path / capsule.files[0].path
+    path.parent.mkdir(parents=True)
+    path.write_bytes(content)
+    calls = []
+
+    def guard(root, checked):
+        assert root == tmp_path and checked == capsule
+        calls.append("guard")
+
+    payload = export_snapshot(
+        tmp_path,
+        capsule,
+        plan,
+        owner=owner,
+        journal_digest=capsule.journal_digest,
+        native_inventory_digest=capsule.inventory_digest,
+        authority_check=guard,
+    )
+    path.write_bytes(b"!" * len(content))
+    assert receive_payload(capsule, payload, authority_check=lambda: None)[0][2] == content
+    assert len(calls) >= 5
+    with pytest.raises(ValueError, match="SOURCE_CHANGED|TOOL_IO_LIMIT"):
+        export_snapshot(
+            tmp_path,
+            capsule,
+            plan,
+            owner=owner,
+            journal_digest=capsule.journal_digest,
+            native_inventory_digest=capsule.inventory_digest,
+            authority_check=guard,
+        )
+
+
+def test_source_snapshot_foreign_root_and_revocation_deny_before_export(isolation_bundle, tmp_path):
+    from app.validation_runner.source_transfer import export_snapshot
+
+    plan, owner, capsule, _ = isolation_bundle
+
+    def denied(root, checked):
+        raise DomainError("AUTHORITY_REVOKED", "Scope revoked", 403)
+
+    with pytest.raises(DomainError, match="Scope revoked"):
+        export_snapshot(
+            tmp_path,
+            capsule,
+            plan,
+            owner=owner,
+            journal_digest=capsule.journal_digest,
+            native_inventory_digest=capsule.inventory_digest,
+            authority_check=denied,
+        )
+
+
+def test_source_transfer_lease_loss_before_return_denies_payload(isolation_bundle):
+    from app.validation_runner.source_transfer import freeze_payload
+
+    _, _, capsule, content = isolation_bundle
+    calls = []
+
+    def guard():
+        calls.append(1)
+        if len(calls) == 3:
+            raise DomainError("LEASE_EXPIRED", "Lease expired", 409)
+
+    with pytest.raises(DomainError):
+        freeze_payload(capsule, [(capsule.files[0].path, "100644", content)], authority_check=guard)
+
+
+def test_linux_guest_import_refuses_windows_and_no_host_files(isolation_bundle, tmp_path):
+    import sys
+
+    from app.validation_runner.source_transfer import import_linux_guest
+
+    if sys.platform == "linux":
+        pytest.skip("Windows-specific unavailable adapter check")
+    _, _, capsule, _ = isolation_bundle
+    with pytest.raises(ValueError, match="GUEST_IMPORT_UNAVAILABLE"):
+        import_linux_guest(tmp_path, capsule, b"invalid", authority_check=lambda: None)
+    assert not tuple(tmp_path.iterdir())
+
+
+def test_native_source_snapshot_refuses_hard_link(isolation_bundle, tmp_path):
+    import os
+
+    from app.validation_runner.source_transfer import export_snapshot
+
+    plan, owner, capsule, content = isolation_bundle
+    foreign = tmp_path / "foreign"
+    foreign.write_bytes(content)
+    path = tmp_path / capsule.files[0].path
+    path.parent.mkdir(parents=True)
+    os.link(foreign, path)
+    with pytest.raises(DomainError):
+        export_snapshot(
+            tmp_path,
+            capsule,
+            plan,
+            owner=owner,
+            journal_digest=capsule.journal_digest,
+            native_inventory_digest=capsule.inventory_digest,
+            authority_check=lambda *_: None,
+        )
+
+
+def test_source_freeze_rejects_duplicate_before_consuming_unbounded_input(isolation_bundle):
+    from app.validation_runner.source_transfer import freeze_payload
+
+    _, _, capsule, content = isolation_bundle
+    count = []
+
+    def endless():
+        while True:
+            count.append(1)
+            yield capsule.files[0].path, "100644", content
+
+    with pytest.raises(ValueError, match="TRANSFER_PATH"):
+        freeze_payload(capsule, endless(), authority_check=lambda: None)
+    assert len(count) == 2
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [None, "unexpected", "occupied", "unprotected", "revoked", "name_limit", "unicode_name"],
+)
+def test_guest_import_descriptor_operations_and_failure_quarantine(
+    isolation_bundle, tmp_path, monkeypatch, failure
+):
+    """Deterministic syscall fixture, never real guest acceptance."""
+    import os
+    import stat
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from app.validation_runner import source_transfer as transfer
+
+    plan, owner, capsule, content = isolation_bundle
+    if failure == "unicode_name":
+        from app.validation_runner.isolation import build_capsule
+
+        files = [capsule.files[0], capsule.files[0].model_copy(update={"path": "😀" * 70 + ".py"})]
+        capsule = build_capsule(
+            plan,
+            owner=owner,
+            journal_digest=capsule.journal_digest,
+            native_inventory_digest=digest([file.model_dump(mode="json") for file in files]),
+            files=files,
+        )
+    payload = transfer.freeze_payload(
+        capsule,
+        [(file.path, "100644", content) for file in capsule.files],
+        authority_check=lambda: None,
+    )
+    root = tmp_path / "private-guest"
+    paths, infos, children, data, operations = {}, {}, {}, {}, []
+
+    def directory(path, *, private=False):
+        fd = len(infos) + 1
+        paths[path] = fd
+        infos[fd] = SimpleNamespace(
+            st_uid=0, st_dev=1, st_mode=stat.S_IFDIR | (0o700 if private else 0o755)
+        )
+        children[fd] = set()
+        return fd
+
+    for path in (*reversed(root.parents), root):
+        directory(path, private=path == root)
+    if failure == "unprotected":
+        infos[paths[root]].st_mode |= 0o002
+
+    def open_directory(stack, path, parent=None, leaf=None, **kwargs):
+        if parent is not None:
+            assert path == parent.path / leaf and "/" not in leaf and "\\" not in leaf
+        return SimpleNamespace(path=path, fd=paths[path])
+
+    def mkdir(leaf, *, mode, dir_fd):
+        operations.append("mkdir")
+        if failure == "occupied":
+            raise FileExistsError("Unexpected pre-existing entry")
+        parent = next(path for path, fd in paths.items() if fd == dir_fd)
+        directory(parent / leaf, private=True)
+        children[dir_fd].add(leaf)
+
+    @contextmanager
+    def open_file(parent, leaf, flags, **kwargs):
+        key = (parent.fd, leaf)
+        if flags & os.O_CREAT:
+            assert flags & os.O_EXCL
+            fd = len(infos) + 1
+            infos[fd] = SimpleNamespace(st_uid=0, st_dev=1, st_mode=stat.S_IFREG | 0o600)
+            data[key] = [fd, b""]
+            children[parent.fd].add(leaf)
+        yield data[key][0]
+
+    def write(fd, chunk):
+        operations.append("write")
+        entry = next(value for value in data.values() if value[0] == fd)
+        entry[1] += chunk
+        return len(chunk)
+
+    def chmod(fd, mode):
+        infos[fd].st_mode = stat.S_IFMT(infos[fd].st_mode) | mode
+
+    def listdir(fd):
+        result = set(children[fd])
+        if failure == "unexpected" and data and fd == paths[root]:
+            result.add("forged-result.json")
+        return list(result)
+
+    def guard():
+        if failure == "revoked" and "write" in operations:
+            raise DomainError("LEASE_EXPIRED", "Lease expired", 409)
+
+    monkeypatch.setattr(transfer.sys, "platform", "linux")
+    monkeypatch.setattr(transfer, "open_directory", open_directory)
+    monkeypatch.setattr(transfer, "open_file", open_file)
+    monkeypatch.setattr(
+        transfer, "read_bytes", lambda fd, maximum: next(v[1] for v in data.values() if v[0] == fd)
+    )
+    monkeypatch.setattr(
+        transfer,
+        "os",
+        SimpleNamespace(
+            geteuid=lambda: 0,
+            fstat=lambda fd: infos[fd],
+            fpathconf=lambda fd, key: 3 if failure == "name_limit" else 255,
+            mkdir=mkdir,
+            write=write,
+            fchmod=chmod,
+            fsync=lambda fd: operations.append("fsync"),
+            listdir=listdir,
+            O_WRONLY=os.O_WRONLY,
+            O_CREAT=os.O_CREAT,
+            O_EXCL=os.O_EXCL,
+            O_RDONLY=os.O_RDONLY,
+        ),
+    )
+    if failure:
+        with pytest.raises((ValueError, FileExistsError, DomainError)):
+            transfer.import_linux_guest(root, capsule, payload, authority_check=guard)
+        if failure in {"occupied", "unprotected", "name_limit", "unicode_name"}:
+            assert "write" not in operations
+        if failure in {"name_limit", "unicode_name"}:
+            assert "mkdir" not in operations
+        # No cleanup effects are available: uncertainty cannot erase evidence.
+    else:
+        assert (
+            transfer.import_linux_guest(root, capsule, payload, authority_check=guard)
+            == capsule.capsule_digest
+        )
+        entry = next(iter(data.values()))
+        assert entry[1] == content and stat.S_IMODE(infos[entry[0]].st_mode) == 0o444
+        assert stat.S_IMODE(infos[paths[root]].st_mode) == 0o555
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -85,6 +422,63 @@ def test_isolation_transfer_contract_refuses_escape_and_credential_paths(path):
 
     with pytest.raises(ValueError):
         CapsuleFile(path=path, mode="100644", content_digest="a" * 64, byte_count=1)
+
+
+@pytest.mark.parametrize("count", [129, 4096])
+def test_directory_pin_budget_refuses_export_and_import_before_filesystem_effects(
+    isolation_bundle, tmp_path, monkeypatch, count
+):
+    from app.validation_runner import source_transfer as transfer
+    from app.validation_runner.isolation import build_capsule
+
+    plan, owner, original, content = isolation_bundle
+    files = [original.files[0]] + [
+        original.files[0].model_copy(update={"path": f"dir-{index:04d}/source.py"})
+        for index in range(count - 1)
+    ]
+    capsule = build_capsule(
+        plan,
+        owner=owner,
+        journal_digest=original.journal_digest,
+        native_inventory_digest=digest([file.model_dump(mode="json") for file in files]),
+        files=files,
+    )
+    payload = transfer.freeze_payload(
+        capsule,
+        [(file.path, file.mode, content) for file in files],
+        authority_check=lambda: None,
+    )
+    monkeypatch.setattr(
+        transfer, "open_directory", lambda *a, **kw: pytest.fail("No pins before preflight")
+    )
+    with pytest.raises(ValueError, match="DIRECTORY_PIN_LIMIT"):
+        transfer.export_snapshot(
+            tmp_path,
+            capsule,
+            plan,
+            owner=owner,
+            journal_digest=capsule.journal_digest,
+            native_inventory_digest=capsule.inventory_digest,
+            authority_check=lambda *a: None,
+        )
+    monkeypatch.setattr(transfer.sys, "platform", "linux")
+    monkeypatch.setattr(transfer.os, "geteuid", lambda: 0, raising=False)
+    with pytest.raises(ValueError, match="DIRECTORY_PIN_LIMIT"):
+        transfer.import_linux_guest(tmp_path, capsule, payload, authority_check=lambda: None)
+
+
+def test_directory_pin_preflight_stops_at_budget_before_consuming_oversized_tail(tmp_path):
+    from types import SimpleNamespace
+
+    from app.validation_runner.source_transfer import MAX_DIRECTORY_PINS, preflight_directory_pins
+
+    def inventory():
+        for index in range(MAX_DIRECTORY_PINS + 1):
+            yield SimpleNamespace(path=f"directory-{index}/file.py")
+        pytest.fail("Preflight must refuse before consuming the remaining oversized inventory")
+
+    with pytest.raises(ValueError, match="DIRECTORY_PIN_LIMIT"):
+        preflight_directory_pins(tmp_path, inventory())
 
 
 def test_isolation_capsule_exact_transfer_and_authority(isolation_bundle):
