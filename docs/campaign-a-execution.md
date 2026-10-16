@@ -62,7 +62,6 @@ plan cannot reset the task's immutable root reservation/output/deadline budget.
 Campaign A implementation completion and live coding acceptance remain distinct;
 this execution checkpoint is not a campaign-completion claim.
 
-Remote CI is intentionally skipped for this publication under the operator's
-unverified billing/storage boundary. Local tests and integrity checks are reported
-in the PR. No merge is recommended without independently permitted current-head
-CI and review. No remote workflow, live inference or API-key validation is invoked.
+Public-repository GitHub-hosted Actions CI is authorized and required for the current
+head. Preserve every validation job and require current-head CI plus independent
+review before a manual merge. Live inference and API-key validation remain disabled.
