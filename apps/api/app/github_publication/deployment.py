@@ -37,7 +37,6 @@ def configure(
         broker=broker,
         hosted_ci_guard=hosted_ci_guard,
     )
-    if native_commit_validation_consumer is not None:
-        app.state.native_commit_validation_consumer = native_commit_validation_consumer
+    app.state.native_commit_validation_consumer = native_commit_validation_consumer
     app.state.github_publication_service = result
     return result
