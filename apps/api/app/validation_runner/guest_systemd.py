@@ -62,6 +62,16 @@ def guest_path(value):
     return value
 
 
+class _OutputBudget:
+    def __init__(self, limit):
+        self.remaining = limit
+
+    def consume(self, content):
+        if len(content) > self.remaining:
+            refuse()
+        self.remaining -= len(content)
+
+
 class NativeSystemdControl:
     def __init__(
         self,
@@ -430,7 +440,9 @@ class ProtectedGuestExecutor:
         self.source_check(self.source, capsule, plan)
         self.claim(owner, command_run_id, selected)
         observations = []
-        deadline = monotonic() + selected.command.timeout_seconds
+        deadline = monotonic() + min(self.limits.wall_seconds, selected.command.timeout_seconds)
+        # Both pipes and every invocation share this command/run budget.
+        output = _OutputBudget(min(self.limits.output_bytes, selected.command.output_limit_bytes))
         for index, invocation in enumerate(selected.invocations):
             self.guard()
             unit = (
@@ -445,7 +457,7 @@ class ProtectedGuestExecutor:
                 )[:32]
                 + ".service"
             )
-            observations.append(self._run(unit, invocation, selected.command, deadline))
+            observations.append(self._run(unit, invocation, selected.command, deadline, output))
         self.source_check(self.source, capsule, plan)
         self.guard()
         # These are native observations only. The separately authenticated host
@@ -459,7 +471,7 @@ class ProtectedGuestExecutor:
             "execution_authorized": False,
         }
 
-    def _run(self, unit, invocation, command, deadline):
+    def _run(self, unit, invocation, command, deadline, output):
         program = self.programs.get(invocation.program)
         if type(program) is not tuple or len(program) != 2:
             refuse()
@@ -553,9 +565,8 @@ class ProtectedGuestExecutor:
                         if not content:
                             eof.add(fd)
                         else:
+                            output.consume(content)
                             retained += len(content)
-                            if retained > command.output_limit_bytes:
-                                refuse()
                             hashes[pipes.index(fd)].update(content)
                     data = self.control.show(unit)
                     if data["ExecMainExitTimestampMonotonic"] not in {"", "0"}:
@@ -605,9 +616,8 @@ class ProtectedGuestExecutor:
                         if not content:
                             eof.add(fd)
                         else:
+                            output.consume(content)
                             retained += len(content)
-                            if retained > command.output_limit_bytes:
-                                refuse()
                             hashes[pipes.index(fd)].update(content)
                 return {
                     "unit": unit,

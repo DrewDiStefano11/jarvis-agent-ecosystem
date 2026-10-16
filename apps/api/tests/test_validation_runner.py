@@ -1834,3 +1834,76 @@ def test_cleanup_acl_policy_deterministically_rejects_unsafe_descriptors(monkeyp
         with pytest.raises(DomainError):
             cleanup.private_acl(123, service)
     assert ctypes.addressof(descriptor) in freed
+
+
+@pytest.mark.parametrize("isolation_wall,command_wall", [(2, 30), (30, 2)])
+@pytest.mark.parametrize("isolation_output,command_output", [(7, 100), (100, 7)])
+def test_guest_execution_shares_stricter_limits_across_invocations(
+    isolation_bundle, monkeypatch, isolation_wall, command_wall, isolation_output, command_output
+):
+    from pathlib import PurePosixPath
+    from types import SimpleNamespace
+
+    from app.models.validation_isolation import IsolationLimits
+    from app.validation_runner import guest_systemd as guest
+
+    plan, owner, capsule, _ = isolation_bundle
+    command = SimpleNamespace(timeout_seconds=command_wall, output_limit_bytes=command_output)
+    selected = SimpleNamespace(
+        gate="backend_ruff",
+        command=command,
+        invocations=("first", "second"),
+        invocation_digest="a" * 64,
+    )
+    monkeypatch.setattr(guest, "sys", SimpleNamespace(platform="linux"))
+    monkeypatch.setattr(guest.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(guest, "describe_invocations", lambda _: (selected,))
+    monkeypatch.setattr(guest, "monotonic", lambda: 100)
+    executor = guest.ProtectedGuestExecutor(
+        None,
+        rootfs="/rootfs",
+        source_root="/source",
+        spool_root="/spool",
+        programs={},
+        limits=IsolationLimits(
+            memory_bytes=2147483648,
+            cpu_count=1,
+            disk_bytes=1073741824,
+            process_count=8,
+            wall_seconds=isolation_wall,
+            output_bytes=isolation_output,
+        ),
+        authority_check=lambda: None,
+        source_check=lambda *_: None,
+        claim_execution=lambda *_: None,
+    )
+    executor.rootfs, executor.source, executor.spool = map(
+        PurePosixPath, ("/rootfs", "/source", "/spool")
+    )
+    calls = []
+
+    def run(unit, invocation, selected_command, deadline, output):
+        assert deadline == 102
+        assert selected_command is command
+        calls.append(invocation)
+        # Combined stdout/stderr fits on the first invocation, but not the second.
+        output.consume(b"out")
+        output.consume(b"err")
+        return {"output_bytes": 6}
+
+    monkeypatch.setattr(executor, "_run", run)
+    with pytest.raises(DomainError, match="Protected guest execution"):
+        executor.execute(plan, capsule, owner, "command", "backend_ruff")
+    assert calls == ["first", "second"]
+
+
+def test_guest_output_budget_accepts_exact_combined_limit_then_refuses():
+    from app.validation_runner.guest_systemd import _OutputBudget
+
+    output = _OutputBudget(7)
+    output.consume(b"stdout")
+    output.consume(b"e")
+    assert output.remaining == 0
+    with pytest.raises(DomainError):
+        output.consume(b"x")
+    assert output.remaining == 0
