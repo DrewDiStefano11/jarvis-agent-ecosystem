@@ -70,7 +70,8 @@
     "tests/test_publication_status.py",
     "tests/test_publication_validation_consumer.py",
     "tests/test_publication_source_link.py",
-    "tests/test_publication_correction_triage.py"
+    "tests/test_publication_correction_triage.py",
+    "tests/test_publication_deployment.py"
   ],
   "system": [
     "tests/test_git_process.py",
