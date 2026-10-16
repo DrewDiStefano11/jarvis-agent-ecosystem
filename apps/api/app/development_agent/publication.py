@@ -8,17 +8,25 @@ from app.self_build.policy import digest
 
 
 class PublicationSourceReader(Protocol):
+    """Read historical references under the authenticated execution owner's scope.
+
+    The adapter must enforce durable owner/RBAC access. This identity is not the
+    independent operator who approves the destination plan and grants no effects.
+    """
+
     def read(
-        self, actor, workspace_id: str, reference: PublicationSourceReference
+        self, execution_actor, workspace_id: str, reference: PublicationSourceReference
     ) -> PublicationSourceAnchor: ...
 
 
-def read_anchor(app, actor, baseline, reference):
+def read_anchor(app, execution_actor, baseline, reference):
     reader = getattr(app.state, "development_publication_source_reader", None)
     if reader is None:
         refuse("DEVELOPMENT_PUBLICATION_LINK_UNAVAILABLE")
     anchor = PublicationSourceAnchor.model_validate(
-        reader.read(actor, baseline.context.workspace_id, reference).model_dump(mode="json")
+        reader.read(execution_actor, baseline.context.workspace_id, reference).model_dump(
+            mode="json"
+        )
     )
     if (
         anchor.reference != reference

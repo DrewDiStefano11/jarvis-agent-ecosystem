@@ -66,19 +66,36 @@ def test_unconfigured_reader_is_unavailable():
     assert error.value.code == "DEVELOPMENT_PUBLICATION_LINK_UNAVAILABLE"
 
 
-def test_reader_receives_operator_and_original_workspace():
+def test_reader_receives_execution_owner_and_original_workspace():
     baseline, reference, anchor, _ = evidence()
     actor = object()
     calls = []
 
     class Reader:
-        def read(self, operator, workspace_id, requested):
-            calls.append((operator, workspace_id, requested))
+        def read(self, execution_actor, workspace_id, requested):
+            calls.append((execution_actor, workspace_id, requested))
             return anchor
 
     app = SimpleNamespace(state=SimpleNamespace(development_publication_source_reader=Reader()))
     assert read_anchor(app, actor, baseline, reference) == anchor
     assert calls == [(actor, baseline.context.workspace_id, reference)]
+
+
+def test_reader_scope_refusal_never_retries_with_operator_authority():
+    baseline, reference, _, _ = evidence()
+    owner = object()
+    calls = []
+
+    class Reader:
+        def read(self, execution_actor, workspace_id, requested):
+            calls.append(execution_actor)
+            raise DomainError("GITHUB_PUBLICATION_PERMISSION_DENIED", "Owner access denied", 403)
+
+    app = SimpleNamespace(state=SimpleNamespace(development_publication_source_reader=Reader()))
+    with pytest.raises(DomainError) as error:
+        read_anchor(app, owner, baseline, reference)
+    assert error.value.code == "GITHUB_PUBLICATION_PERMISSION_DENIED"
+    assert calls == [owner]
 
 
 @pytest.mark.parametrize(
