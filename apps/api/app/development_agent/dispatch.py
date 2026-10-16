@@ -45,6 +45,7 @@ POLICY_SOURCE_PATHS = (
     "models/development_baseline.py",
     "models/source_mutation_inspection.py",
     "models/source_artifact_verification.py",
+    "models/source_artifacts.py",
     "models/git_changes.py",
     "self_build/native_artifacts.py",
     "source_mutation/inspection.py",

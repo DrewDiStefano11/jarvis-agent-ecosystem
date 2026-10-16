@@ -65,5 +65,6 @@ Campaign B's real isolated command execution and protected receipts remain requi
 All live inference remains quarantined. Native Codex app-server is the preferred
 future provider, contingent on independently verified included-only use,
 purchased-credit exclusion and recharge safeguards. No newly created API key is
-read or used. Remote CI remains skipped under the operator's unverified billing
-boundary; snapshot/protocol fixture results are not real coding acceptance.
+read or used. Standard public GitHub-hosted Actions CI is authorized and required
+on the current head. Skipped checks are not passing validation evidence;
+snapshot/protocol fixture results are not real coding acceptance.
