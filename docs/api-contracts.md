@@ -1,7 +1,8 @@
 # HTTP contracts
 
 Campaign D adds `free_only` to `AutonomousWorkerStatus.modelExecutionMode` and
-updates the advertised database head to `20261013_free_ai`. Existing response
+adds the `20261013_free_ai` migration. The current advertised database head is
+`20261016_a_review_join`, joining quota and development-dispatch history. Existing response
 envelopes and event schema versions are preserved. No HTTP endpoint accepts
 provider allowance evidence, tokens or cloud activation. The environment-only
 activation switch defaults to false and is separate from allowance evidence.
@@ -105,7 +106,7 @@ Health and system status report exhausted outbox rows separately from the compat
 
 Health additively reports context readiness/count. System status additively reports the durable context assembler state and assembly/source/security counts. Review-required content is a domain outcome and does not by itself make the API unhealthy.
 
-Phase 2B workers register a stable `instanceId`, then acquire an eligible task before processing it. Acquisition returns the compatible task plus a capability-bearing `leaseToken`; only the matching worker/token pair may renew, release, complete, or fail that attempt. Tokens are never placed in audit or event payloads—only a one-way fingerprint is recorded. A stale, expired, cancelled, or superseded token returns `TASK_LEASE_LOST` (409). Repeating a successful completion with the same attempt token is idempotent.
+Phase 2B workers register a stable `instanceId`, then acquire an eligible task before processing it. Acquisition returns the compatible task plus a capability-bearing `leaseToken`; only the matching worker/token pair may renew, release, complete, or fail that attempt. Tokens are never placed in audit or event payloadsâ€”only a one-way fingerprint is recorded. A stale, expired, cancelled, or superseded token returns `TASK_LEASE_LOST` (409). Repeating a successful completion with the same attempt token is idempotent.
 
 Workers in `draining` state cannot acquire work and release their active leases. Cancellation atomically revokes an active lease before returning. Acquisition returns `data: null` for an empty or dependency-blocked queue. Lease duration defaults to `JARVIS_TASK_LEASE_SECONDS`; callers may request a bounded override. Health and system status add active worker, active lease, expired lease, and stale worker counts without changing existing fields.
 
@@ -239,7 +240,7 @@ An optional frozen `correction_policy` enables one same-specialist planning
 correction for failed/needs-correction results using native retries. It requires
 explicit verification criteria and a frozen run deadline bounded by the policy.
 Absent policy is omitted from legacy serialization. Fixed limits are one retry,
-eight planning/critic dispatches across two cycles and 1–3600 elapsed seconds.
+eight planning/critic dispatches across two cycles and 1â€“3600 elapsed seconds.
 Run-version-fenced native checkpoints reserve each physical dispatch before
 provider access. Unknown recovered worker acknowledgements consume their slot
 and pause with `model_dispatch_outcome_unknown` for operator reconciliation.
@@ -250,7 +251,7 @@ reassignment/replanning remains unavailable.
 
 Optional `coordinator_verification` freezes policy version
 `coordinator-verification-1`, two reviewer requests per node attempt and
-`maximum_elapsed_seconds` (1–3600). It requires planning-review execution and a
+`maximum_elapsed_seconds` (1â€“3600). It requires planning-review execution and a
 bounded run deadline. Absent policy is omitted from legacy serialization. Critic
 dispatches, responses and verdicts use native runtime checkpoints and consume
 the existing 38-dispatch coordinator budget. Native reservation refuses exhausted
