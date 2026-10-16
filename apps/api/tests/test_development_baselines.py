@@ -8,6 +8,7 @@ from app.core.errors import DomainError
 from app.db.models import AuditEventRow, SystemStateRow
 from app.development_agent.baseline_repository import DevelopmentBaselineRow
 from app.development_agent.baselines import DevelopmentBaselineService
+from app.main import DATABASE_REVISION
 from app.models.source_mutation import ApplySourceMutation, ApproveSourceMutation
 from app.self_build.policy import digest
 from tests.test_development_dispatch import admit
@@ -391,7 +392,7 @@ def test_populated_baseline_migration_refuses_loss_of_snapshot_evidence(tmp_path
             assert connection.scalar(text("SELECT COUNT(*) FROM development_baselines")) == 1
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20261013_development_baselines"
+                == DATABASE_REVISION
             )
     finally:
         engine.dispose()

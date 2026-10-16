@@ -124,7 +124,7 @@ class ModelExecutionResult(AutonomousWorkerContract):
 
 class AutonomousWorkerStatus(AutonomousWorkerContract):
     enabled: bool
-    modelExecutionMode: Literal["disabled", "local_only"]
+    modelExecutionMode: Literal["disabled", "local_only", "free_only"]
     workerActorId: str | None = Field(
         default=None,
         description="Configured local worker identity; configuration does not establish task access.",
