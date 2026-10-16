@@ -297,3 +297,5 @@ When authenticated remote operator service is disabled, persisted creation appro
 return `SELF_BUILD_APPROVAL_UNAVAILABLE` before intent or native effects. Windows
 inventory validation rejects aliased path components and file/directory collisions
 with `SELF_BUILD_MATERIALIZATION_UNSAFE` before target/branch registration.
+
+Campaign C integration (2026-10-16) retains both native/publication operator routes and current shared model-router persistence. The real composed commit/recovery acceptance case has a bounded 600-second test budget for fixture setup plus two native executions on Windows hosted runners (existing 300-second runs reached the second completion guard before timing out). Assertions, production deadlines, authority checks and recovery invariants are unchanged.

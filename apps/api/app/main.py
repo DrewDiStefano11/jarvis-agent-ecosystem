@@ -39,6 +39,8 @@ from app.core.config import Settings
 from app.core.errors import DomainError
 from app.core.transitions import InvalidTransitionError, validate_transition
 from app.db.session import create_database_engine, create_session_factory
+from app.github_publication.router import operator_router as publication_operator_router
+from app.github_publication.router import router as publication_router
 from app.identity.router import router as identity_router
 from app.identity.service import IdentityService
 from app.model_providers.factory import build_model_router
@@ -84,12 +86,15 @@ from app.remote_control.router import router as remote_control_router
 from app.remote_control.service import RemoteControlService
 from app.repositories.sqlalchemy import IdempotencyResult, SqlAlchemyRepository
 from app.repositories.task_leases import TaskLeaseRepository
+from app.self_build.commit_execution import NativeCommitService
 from app.self_build.commit_router import operator_router as commit_operator_router
 from app.self_build.commit_router import router as commit_router
 from app.self_build.commit_service import CommitPreparationService
 from app.self_build.creation_service import WorkspaceCreationService
 from app.self_build.git_operator_router import router as git_operator_router
 from app.self_build.git_service import GitInspectionService
+from app.self_build.native_commit_router import operator_router as native_commit_operator_router
+from app.self_build.native_commit_router import router as native_commit_router
 from app.self_build.router import router as self_build_router
 from app.self_build.service import WorkspaceService
 from app.self_improvement.router import router as self_improvement_router
@@ -312,6 +317,8 @@ def create_app(
         app.include_router(remote_control_router)
         app.include_router(git_operator_router)
         app.include_router(commit_operator_router)
+        app.include_router(native_commit_operator_router)
+        app.include_router(publication_operator_router)
     app.state.model_router = build_model_router(settings, session_factory)
     app.state.model_execution_repository = ModelExecutionRepository(
         session_factory,
@@ -345,8 +352,11 @@ def create_app(
     app.state.development_context_reader = RepositoryContextReader(app)
     app.state.development_proposal_service = DevelopmentProposalService(app)
     app.state.self_build_commit_service = CommitPreparationService(app)
+    app.state.self_build_native_commit_service = NativeCommitService(app)
     app.include_router(self_build_router)
     app.include_router(commit_router)
+    app.include_router(native_commit_router)
+    app.include_router(publication_router)
     app.include_router(self_improvement_router)
     app.include_router(tool_execution_router)
     app.include_router(agent_runtime_router)
