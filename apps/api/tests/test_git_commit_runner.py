@@ -32,6 +32,7 @@ def test_bool_and_async_validation_callbacks_never_authorize_native_effects():
         assert error.value.code == "GIT_COMMIT_VALIDATION_UNAVAILABLE"
 
 
+@pytest.mark.timeout(600)  # Two real native executions plus recovery and fixture setup on Windows.
 def test_index_ack_loss_resumes_composed_native_commit(context, monkeypatch):
     c = context
     calls = []

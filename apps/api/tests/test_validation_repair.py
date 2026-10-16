@@ -37,6 +37,11 @@ def failed(**changes):
     )
 
 
+def test_conflicting_protected_attempt_aliases_refuse():
+    with pytest.raises(ValueError, match="conflicting protected journal attempt"):
+        report([], current_attempt=("run-1", "new"), current_lineage=("run-1", "old"))
+
+
 def test_exact_reproduction_and_no_mutation_authority():
     signed = failed()
     result = report([signed])
@@ -46,6 +51,40 @@ def test_exact_reproduction_and_no_mutation_authority():
     assert finding.reproduction.code_state_hash == signed.measurement.code_state_hash
     assert finding.reproduction.suite_digest == signed.measurement.command.suite_digest
     assert not result.execution_authorized and not result.source_mutation_authorized
+
+
+def test_acknowledged_attempt_wins_regressed_collector_clock():
+    old = failed(command_run_id="old", attempt_id="old-attempt")
+    current = receipt(
+        build_execution_plan(state()),
+        command_run_id="current",
+        attempt_id="current-attempt",
+        started_at=NOW - timedelta(seconds=3),
+        finished_at=NOW - timedelta(seconds=2),
+    )
+    for values in permutations((old, current)):
+        finding = report(values, current_attempt=("run-1", "current-attempt")).findings[0]
+        assert finding.disposition == "passed"
+        assert finding.recommendation == "none"
+        assert finding.reproduction.command_run_id == "current"
+        assert len(finding.supporting_receipt_digests) == 2
+
+
+def test_missing_current_attempt_does_not_revive_historical_receipt():
+    values = [failed(attempt_id=f"old-{index}") for index in range(3)]
+    finding = report(values, current_attempt=("run-1", "current-attempt")).findings[0]
+    assert finding.disposition == "missing"
+    assert finding.recommendation == "gather_evidence"
+    assert finding.reproduction is None
+    assert finding.retries_remaining == 0
+    assert len(finding.supporting_receipt_digests) == 3
+
+
+def test_attempt_selection_still_authenticates_older_receipts():
+    old = failed(attempt_id="old-attempt").model_copy(update={"authentication_tag": "0" * 64})
+    current = receipt(build_execution_plan(state()), attempt_id="current-attempt")
+    with pytest.raises(ValueError, match="unauthenticated"):
+        report((old, current), current_attempt=("run-1", "current-attempt"))
 
 
 def test_validation_source_policy_version_names_the_provenance_digest():
@@ -156,6 +195,32 @@ def test_failure_category_without_recorded_transient_code_cannot_request_retry()
     assert report([signed]).findings[0].recommendation == "diagnose_failure"
 
 
+@pytest.mark.parametrize("current_outcome", ["passed", "failed"])
+def test_explicit_journal_lineage_overrides_cross_attempt_collector_clock(current_outcome):
+    plan = build_execution_plan(state())
+    old = failed(attempt_id="old", command_run_id="old")
+    current = receipt(
+        plan,
+        attempt_id="current",
+        command_run_id="current",
+        outcome=current_outcome,
+        exit_code=0 if current_outcome == "passed" else 1,
+        failure_kind=None if current_outcome == "passed" else "watchdog",
+        diagnostic_codes=() if current_outcome == "passed" else ("timeout",),
+        started_at=NOW - timedelta(seconds=10),
+        finished_at=NOW - timedelta(seconds=9),
+    )
+    for values in permutations([old, current]):
+        finding = report(
+            values, current_lineage=(current.measurement.runtime_run_id, "current")
+        ).findings[0]
+        assert finding.disposition == current_outcome
+        assert finding.reproduction.attempt_id == "current"
+        assert len(finding.supporting_receipt_digests) == 2
+        if current_outcome == "failed":
+            assert finding.retries_remaining == 1
+
+
 def test_tied_permanent_failure_is_not_suppressed_by_transient_failure():
     plan = build_execution_plan(state())
     permanent = failed()
@@ -172,7 +237,50 @@ def test_tied_permanent_failure_is_not_suppressed_by_transient_failure():
     for values in permutations([permanent, transient]):
         finding = report(values).findings[0]
         assert finding.recommendation == "diagnose_failure"
+        assert finding.failure_kind == "unknown"
         assert len(finding.supporting_receipt_digests) == 2
+
+
+@pytest.mark.parametrize("other_kind", ["infrastructure", "unknown", "dependency"])
+def test_conflicting_tied_failures_cannot_generate_product_repairs(other_kind):
+    plan = build_execution_plan(state())
+    values = [
+        failed(),
+        receipt(
+            plan,
+            outcome="failed",
+            exit_code=1,
+            failure_kind=other_kind,
+            command_run_id="conflicting",
+            attempt_id="other-attempt",
+        ),
+    ]
+    for ordered in permutations(values):
+        finding = report(ordered).findings[0]
+        assert finding.failure_kind == "unknown"
+        assert finding.recommendation == "diagnose_failure"
+        assert len(finding.supporting_receipt_digests) == 2
+        assert finding.reproduction.receipt_digest in finding.supporting_receipt_digests
+        provenance, facts = ValidationExecutionSource(
+            "conflicting",
+            state(),
+            plan,
+            ordered,
+            verifier(),
+            now=NOW,
+            expected_execution_plan_hash=plan.execution_plan_hash,
+        ).collect()
+        assert facts[0].category == "reliability"
+        baseline = create_baseline(
+            repo_sha=state().head_sha,
+            configuration_fingerprint="c" * 64,
+            safety_fingerprint="d" * 64,
+            sources=(provenance,),
+            observations=facts,
+        )
+        proposals = analyze(baseline).proposals
+        assert proposals and all(p.category == "retry_policy" for p in proposals)
+        assert all(p.status == "needs_evidence" for p in proposals)
 
 
 def test_forged_replayed_and_wrong_plan_evidence_rejected():
@@ -277,7 +385,7 @@ def test_repair_disposition_follows_higher_sequence_after_clock_regression():
 
 
 @pytest.mark.parametrize(
-    "failure_kind", ["infrastructure", "ci_environment", "dependency", "watchdog"]
+    "failure_kind", ["infrastructure", "ci_environment", "dependency", "watchdog", "unknown"]
 )
 def test_unconfirmed_transient_kind_retains_failure_diagnosis(failure_kind):
     plan = build_execution_plan(state())
@@ -291,8 +399,18 @@ def test_unconfirmed_transient_kind_retains_failure_diagnosis(failure_kind):
         expected_execution_plan_hash=plan.execution_plan_hash,
         now=NOW,
     ).collect()
-    assert facts[0].category == "execution"
+    assert facts[0].category == "reliability"
     assert report([signed]).findings[0].recommendation == "diagnose_failure"
+    baseline = create_baseline(
+        repo_sha=state().head_sha,
+        configuration_fingerprint="c" * 64,
+        safety_fingerprint="d" * 64,
+        sources=(provenance,),
+        observations=facts,
+    )
+    proposals = analyze(baseline).proposals
+    assert proposals and all(p.category == "retry_policy" for p in proposals)
+    assert all(p.status == "needs_evidence" for p in proposals)
 
 
 def test_source_aliases_cannot_replay_same_measured_artifact():

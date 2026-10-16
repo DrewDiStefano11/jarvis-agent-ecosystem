@@ -201,7 +201,7 @@ class CheckoutDriver:
         ]
         buffers = [bytearray(), bytearray()]
         lock, overflow, errors = Lock(), Event(), Event()
-        last = [monotonic()]
+        last = [0.0]
         threads = []
 
         def drain(stream, index, maximum):
@@ -225,6 +225,9 @@ class CheckoutDriver:
                     authority_check=self.authority_check,
                     launch=launch,
                 ) as process:
+                    # Image pinning and suspended-process setup can be slow. The
+                    # output watchdog measures the running child, not that setup.
+                    last[0] = monotonic()
                     threads = [
                         Thread(target=drain, args=(process.stdout, 0, output_limit), daemon=True),
                         Thread(target=drain, args=(process.stderr, 1, 65536), daemon=True),
