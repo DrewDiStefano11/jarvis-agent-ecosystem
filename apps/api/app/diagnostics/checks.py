@@ -655,6 +655,22 @@ def check_provider(
             ),
             identifiers=identifiers,
         )
+    if settings.model_execution_mode == "free_only":
+        # The doctor has no persistent quota session and cannot independently
+        # attest billing safety. Do not contact cloud services or imply that a
+        # configured allowance proves live capacity.
+        grants = settings.parsed_free_allowances()
+        identifiers["freeAllowanceRecords"] = len(grants)
+        return CheckResult(
+            name="model_provider",
+            group="provider",
+            status=CheckStatus.DEGRADED
+            if grants or settings.model_ollama_enabled
+            else CheckStatus.BLOCKED,
+            reason="free-only capacity requires account evidence and persistent quota verification; no cloud probe performed",
+            remediation="inspect the runtime capacity state and Campaign D activation checklist; leave unverified providers disabled",
+            identifiers=identifiers,
+        )
     try:
         health = provider_health(settings)
     except Exception as exc:  # noqa: BLE001 - provider probe failures are data, not crashes

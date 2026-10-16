@@ -100,7 +100,7 @@ from app.team_selection.router import router as team_selection_router
 from app.tool_execution.router import router as tool_execution_router
 from app.tool_execution.service import ToolExecutionService
 
-DATABASE_REVISION = "20261012_source_mutation"
+DATABASE_REVISION = "20261013_free_ai"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
@@ -312,7 +312,7 @@ def create_app(
         app.include_router(remote_control_router)
         app.include_router(git_operator_router)
         app.include_router(commit_operator_router)
-    app.state.model_router = build_model_router(settings)
+    app.state.model_router = build_model_router(settings, session_factory)
     app.state.model_execution_repository = ModelExecutionRepository(
         session_factory,
         outbox_max_attempts=repository.outbox_max_attempts,
@@ -339,6 +339,11 @@ def create_app(
     app.state.self_build_workspace_service = WorkspaceService(app)
     app.state.self_build_git_service = GitInspectionService(app)
     app.state.self_build_creation_service = WorkspaceCreationService(app)
+    from app.development_agent.context import RepositoryContextReader
+    from app.development_agent.proposals import DevelopmentProposalService
+
+    app.state.development_context_reader = RepositoryContextReader(app)
+    app.state.development_proposal_service = DevelopmentProposalService(app)
     app.state.self_build_commit_service = CommitPreparationService(app)
     app.include_router(self_build_router)
     app.include_router(commit_router)
@@ -632,7 +637,16 @@ def create_app(
         )
         runtime_persistence = _runtime_health_component(database_reachable, schema_current)
         provider_ready = bool(
-            [provider for provider in app.state.model_router.registry.list() if provider.is_local]
+            [
+                provider
+                for provider in app.state.model_router.registry.list()
+                if provider.is_local
+                or (
+                    settings.model_execution_mode == "free_only"
+                    and hasattr(provider, "free_eligible")
+                    and provider.free_eligible(provider.default_model)
+                )
+            ]
         )
         autonomous_status = _autonomous_status_component(
             database_reachable,

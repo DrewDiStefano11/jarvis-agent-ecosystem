@@ -81,3 +81,5 @@ No features, virtual machines, images, credentials or paid infrastructure are
 installed or activated by this increment. Publication uses `[skip ci]`; skipped
 hosted checks are not passing validation evidence. Never enable autonomous
 execution until actual-host acceptance and protected collection succeed.
+
+Campaign repair: the native registration output watchdog starts after executable pinning and suspended-process initialization. Slow setup does not consume the running-child inactivity budget; output caps, live authority checks and owned-process cleanup remain enforced. Deterministic delayed-pin/delayed-launch regressions accompany the existing stall, overflow and emergency-stop cases.
