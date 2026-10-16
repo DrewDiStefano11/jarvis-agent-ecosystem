@@ -83,3 +83,31 @@ def test_index_ack_loss_resumes_composed_native_commit(context, monkeypatch):
     assert finished.plan == c.record.plan
     assert finished.original_approval_id == c.record.original_approval_id
     assert calls
+
+
+def test_recovery_renewal_cannot_authorize_a_different_command(context):
+    c = context
+    recovered = c.native.recovery(c.actor, c.record.workspace_id, c.record.command_id)
+    operator = RuntimeActorContext(
+        actor_id=c.app.state.remote_control_service.access.actor_id, stable_key="persisted-operator"
+    )
+    renewed = c.native.renew_approval(
+        operator,
+        RenewNativeCommitApproval(
+            workspace_id=c.record.workspace_id,
+            command_id=c.record.command_id,
+            expected_plan_hash=c.record.plan.plan_hash,
+            expected_recovery_hash=recovered.recovery_hash,
+        ),
+    )
+    request = c.request.model_copy(update={"approval_id": renewed.approval_id})
+    # The valid command can still recover its original acknowledged intent.
+    assert c.journal.begin(c.actor, c.record.workspace_id, request) == c.record
+    foreign = request.model_copy(update={"command_id": "unapproved-command-b"})
+    with pytest.raises(DomainError) as error:
+        c.journal.begin(c.actor, c.record.workspace_id, foreign)
+    assert error.value.code == "GIT_COMMIT_EXECUTION_APPROVAL_REQUIRED"
+    with pytest.raises(DomainError) as error:
+        c.journal.read(c.actor, c.record.workspace_id, foreign.command_id)
+    assert error.value.code == "GIT_COMMIT_EXECUTION_NOT_FOUND"
+    assert c.journal.read(c.actor, c.record.workspace_id, request.command_id) == c.record
