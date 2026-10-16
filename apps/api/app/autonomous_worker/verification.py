@@ -345,6 +345,11 @@ class IndependentVerifier:
                     heartbeat = asyncio.create_task(
                         self.worker._lease_heartbeat(execution.taskId, worker_id, lease_token)
                     )
+
+                    async def before_reviewer_dispatch(provider_name: str, model: str) -> None:
+                        self.worker._assert_live_policy(snapshot, actor, worker_id, lease_token)
+                        self.worker.assert_provider_activation(provider_name)
+
                     try:
                         self.worker._assert_live_policy(snapshot, actor, worker_id, lease_token)
                         timeout = self.worker.execution_timeout(snapshot)
@@ -389,12 +394,17 @@ class IndependentVerifier:
                                     preferred_model=request.model_name,
                                     required_capability=ModelCapability.CHAT,
                                     prefer_local=True,
-                                    allow_remote=False,
+                                    allow_remote=self.worker.settings.verified_cloud_execution_allowed,
                                     allow_fallback=False,
                                 ),
                                 budget=TaskBudget(
                                     maximum_requests=1,
                                     maximum_output_tokens=min(request.maximum_output_tokens, 2048),
+                                ),
+                                **(
+                                    {"before_dispatch": before_reviewer_dispatch}
+                                    if self.worker.settings.model_execution_mode == "free_only"
+                                    else {}
                                 ),
                             )
                         self.worker._assert_live_policy(snapshot, actor, worker_id, lease_token)

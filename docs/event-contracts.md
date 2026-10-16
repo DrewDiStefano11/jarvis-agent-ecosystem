@@ -1,5 +1,13 @@
 # Event contracts and transitions
 
+Campaign D records physical dispatch identity in `model.call.started`,
+`model.retry.started`, and `model.fallback.started`, with provider/model,
+`dispatchKind`, and durable `requestCount`. `model.call.failed` records sanitized
+`failureCategory` for each failed physical attempt before retrying or switching.
+These append-only audit/outbox records contain
+no prompt, output, credential, or raw provider body. Existing envelope versions
+and sequence semantics are preserved. See [zero-cost AI](zero-cost-ai.md).
+
 Every `EventEnvelope` includes `eventId`, `schemaVersion`, `eventType`, `timestamp`, `sequenceNumber`, `correlationId`, optional `taskId`/`agentId`, `source`, and typed payload data. Event families are `agent.status.changed`, `task.*`, `approval.*`, `context.*`, `system.*`, `temporary_agent.*`, and `error.*`. A `system.snapshot` is sent immediately after connection.
 
 Phase 2B adds `worker.registered`, `worker.draining`, `worker.stopped`, `task.lease.acquired`, `task.lease.renewed`, `task.lease.released`, and `task.lease.expired`. Completion and failure continue to use compatible `task.completed`, `task.retrying`, and `task.failed` names. Lease events contain the worker ID, attempt number, expiration/checkpoint where applicable, and a non-secret token fingerprint; the bearer token is never published.
@@ -38,3 +46,10 @@ bind operation/attempt, phase recovery cursor and canonical integrity digest;
 the workspace projection acknowledges their identifier after verification. Ready
 publication follows the verified complete-source checkpoint, preserving the
 interrupted finalization gap for idempotent recovery. Audit history is append-only.
+
+`self_build.source_edit_plan.persisted` may include `originRequestHash`, a
+64-character SHA-256 digest binding an internal development proposal's exact
+inputs. It is written with the plan and matching audit/outbox event in one
+transaction. Exact command replay emits no event. The optional field grants no
+execution or mutation authority and contains no raw source, lease or credential.
+The event envelope version and sequence/session rules remain unchanged.
