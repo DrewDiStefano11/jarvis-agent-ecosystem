@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -83,6 +84,12 @@ class ModelRouter:
             )
             and provider.name not in requirements.provider_denylist
             and (requirements.allow_remote or provider.is_local)
+            and (
+                not hasattr(provider, "free_eligible")
+                or provider.free_eligible(
+                    requirements.preferred_model or request.model or provider.default_model
+                )
+            )
         ]
         health = await self.registry.health(candidates)
         candidates = [item for item in candidates if health[item.name].healthy]
@@ -113,11 +120,20 @@ class ModelRouter:
         requirements: RoutingRequirements,
         budget: TaskBudget,
         pricing: PricingTable | None = None,
+        before_dispatch: Callable[[str, str], Awaitable[None]] | None = None,
+        after_failure: Callable[[str, str, str], Awaitable[None]] | None = None,
     ) -> ModelExecutionResponse:
         request = ModelExecutionRequest.model_validate(request.model_dump())
         tracker = BudgetTracker(budget, pricing)
         candidates = await self.eligible(request, requirements)
         if not candidates:
+            if (
+                any(hasattr(p, "free_eligible") for p in self.registry.list())
+                and requirements.allow_remote
+            ):
+                raise QuotaExhaustedError(
+                    "no verified free capacity; pause until allowance is verified"
+                )
             raise UnknownProviderError("no healthy provider satisfies the routing requirements")
         fallback_offset = 0
         maximum_candidates = 1
@@ -139,16 +155,31 @@ class ModelRouter:
         failures: list[str] = []
 
         for index, provider in enumerate(selected_candidates):
+            # A prior candidate may have exhausted this same account bucket.
+            # Recheck before checkpointing or spending another request slot.
+            if hasattr(provider, "free_eligible") and not provider.free_eligible(
+                requirements.preferred_model or request.model or provider.default_model
+            ):
+                continue
             attempted.append(provider.name)
             effective_model = (
                 requirements.preferred_model or request.model or provider.default_model
             )
             routed_request = request.model_copy(update={"model": effective_model})
+
+            async def dispatch(provider=provider, routed_request=routed_request):
+                if before_dispatch is not None:
+                    await before_dispatch(provider.name, routed_request.model)
+                try:
+                    return await provider.execute(routed_request)
+                except ModelProviderError as exc:
+                    if after_failure is not None:
+                        await after_failure(provider.name, routed_request.model, exc.category.value)
+                    raise
+
             try:
                 response = await self.retry.execute(
-                    lambda provider=provider, routed_request=routed_request: provider.execute(
-                        routed_request
-                    ),
+                    dispatch,
                     request=routed_request,
                     budget=tracker,
                     provider_name=provider.name,
@@ -163,6 +194,8 @@ class ModelRouter:
                     )
                 validate_tool_response(response, routed_request)
                 response.estimated_cost_usd = tracker.record(response)
+                if not provider.is_local and hasattr(provider, "free_eligible"):
+                    response.estimated_cost_usd = 0
                 response.routing_metadata = {
                     "selected_provider": provider.name,
                     "selected_model": response.model,
@@ -207,4 +240,6 @@ class ModelRouter:
                     raise
                 if not requirements.allow_fallback or index == len(selected_candidates) - 1:
                     raise
+        if requirements.allow_remote:
+            raise QuotaExhaustedError("verified free provider routing exhausted; pause")
         raise UnknownProviderError("provider routing exhausted without a result")

@@ -8,6 +8,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import create_engine, inspect, text
 
+from app.main import DATABASE_REVISION
 from tests.test_persistence import database_url
 
 
@@ -219,8 +220,7 @@ def test_safe_runtime_downgrade_and_upgrade_round_trip_preserves_representable_d
     engine = create_engine(database_url(path))
     with engine.connect() as connection:
         assert (
-            connection.scalar(text("select version_num from alembic_version"))
-            == "20261014_development_lineage"
+            connection.scalar(text("select version_num from alembic_version")) == DATABASE_REVISION
         )
     assert "agent_runtime_runs" in set(inspect(engine).get_table_names())
     engine.dispose()

@@ -449,15 +449,53 @@ class ModelExecutionRepository:
             return [self._contract(row) for row in rows]
 
     def record_call_started(
-        self, execution_id: str, *, worker_id: str, lease_token: str, request_count: int
+        self,
+        execution_id: str,
+        *,
+        worker_id: str,
+        lease_token: str,
+        request_count: int,
+        provider: str | None = None,
+        model: str | None = None,
+        dispatch_kind: str | None = None,
     ) -> ModelExecutionResult:
         return self._transition(
             execution_id,
             ModelExecutionStage.CALL_STARTED,
-            "model.repair.started" if request_count > 1 else "model.call.started",
+            (
+                f"model.{dispatch_kind}.started"
+                if dispatch_kind in {"retry", "fallback"}
+                else "model.repair.started"
+                if request_count > 1
+                else "model.call.started"
+            ),
             worker_id=worker_id,
             lease_token=lease_token,
             request_count=request_count,
+            metadata=(
+                {"provider": provider, "model": model, "dispatchKind": dispatch_kind}
+                if provider is not None
+                else None
+            ),
+        )
+
+    def record_provider_failure(
+        self,
+        execution_id: str,
+        *,
+        worker_id: str,
+        lease_token: str,
+        provider: str,
+        model: str,
+        category: str,
+    ) -> ModelExecutionResult:
+        return self._transition(
+            execution_id,
+            ModelExecutionStage.CALL_STARTED,
+            "model.call.failed",
+            worker_id=worker_id,
+            lease_token=lease_token,
+            metadata={"provider": provider, "model": model, "failureCategory": category},
         )
 
     def record_validation_failed(
@@ -964,11 +1002,19 @@ class ModelExecutionRepository:
             status = "degraded"
             reason = "execution_lease_lost"
         elif enabled:
-            status = "healthy" if execution_mode == "local_only" and provider_ready else "degraded"
-            if execution_mode != "local_only":
+            status = (
+                "healthy"
+                if execution_mode in {"local_only", "free_only"} and provider_ready
+                else "degraded"
+            )
+            if execution_mode not in {"local_only", "free_only"}:
                 reason = "model_execution_disabled"
             elif not provider_ready:
-                reason = "no_local_provider_available"
+                reason = (
+                    "free_capacity_unavailable"
+                    if execution_mode == "free_only"
+                    else "no_local_provider_available"
+                )
             elif not live_worker:
                 status = "degraded"
                 reason = "autonomous_worker_unavailable"
@@ -996,6 +1042,7 @@ class ModelExecutionRepository:
         worker_id: str,
         lease_token: str,
         request_count: int | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> ModelExecutionResult:
         now = datetime.now(UTC)
         with self._write() as session:
@@ -1009,7 +1056,7 @@ class ModelExecutionRepository:
                 session,
                 row,
                 event_type,
-                {"requestCount": row.request_count},
+                {"requestCount": row.request_count, **(metadata or {})},
             )
             session.flush()
             return self._contract(row)
@@ -1068,9 +1115,14 @@ class ModelExecutionRepository:
         event_type: str,
         payload: dict[str, Any],
     ) -> None:
-        identity = canonical_json(
-            {"executionId": row.execution_id, "eventType": event_type}
-        ).encode()
+        identity_fields = {"executionId": row.execution_id, "eventType": event_type}
+        if "dispatchKind" in payload or "failureCategory" in payload:
+            identity_fields.update(
+                requestCount=payload["requestCount"],
+                provider=payload["provider"],
+                model=payload["model"],
+            )
+        identity = canonical_json(identity_fields).encode()
         digest = sha256(identity).hexdigest()
         event_id = f"model-{digest[:48]}"
         if session.get(OutboxEventRow, event_id) is not None:

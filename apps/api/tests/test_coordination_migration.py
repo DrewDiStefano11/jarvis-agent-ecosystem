@@ -1,6 +1,7 @@
 from alembic import command
 from sqlalchemy import create_engine, inspect, text
 
+from app.main import DATABASE_REVISION
 from tests.test_autonomous_worker_migration import migration_config
 from tests.test_persistence import database_url
 
@@ -36,7 +37,7 @@ def test_coordination_upgrade_from_dependency_and_empty_roundtrip(tmp_path):
         with engine.connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20261014_development_lineage"
+                == DATABASE_REVISION
             )
     finally:
         engine.dispose()
@@ -79,8 +80,7 @@ def test_populated_main_upgrade_preserves_task_and_supported_roundtrip(tmp_path)
             == "Populated upgrade"
         )
         assert (
-            connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "20261014_development_lineage"
+            connection.scalar(text("SELECT version_num FROM alembic_version")) == DATABASE_REVISION
         )
     engine.dispose()
     command.downgrade(config, "20260729_04")
@@ -101,7 +101,7 @@ def test_upgrade_from_self_improvement_preserves_populated_history(tmp_path):
     from alembic.script import ScriptDirectory
 
     config = migration_config(tmp_path / "self-improvement-upgrade.db")
-    assert ScriptDirectory.from_config(config).get_heads() == ["20261014_development_lineage"]
+    assert ScriptDirectory.from_config(config).get_heads() == [DATABASE_REVISION]
     command.upgrade(config, "20261002_si")
     engine = create_engine(config.get_main_option("sqlalchemy.url"))
     payload = json.dumps({"immutable_evidence": "preserve self-improvement history"})
@@ -123,8 +123,7 @@ def test_upgrade_from_self_improvement_preserves_populated_history(tmp_path):
     command.upgrade(config, "head")
     with engine.connect() as connection:
         assert (
-            connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "20261014_development_lineage"
+            connection.scalar(text("SELECT version_num FROM alembic_version")) == DATABASE_REVISION
         )
         assert connection.scalar(text("SELECT payload FROM self_improvement_records")) == payload
     engine.dispose()
