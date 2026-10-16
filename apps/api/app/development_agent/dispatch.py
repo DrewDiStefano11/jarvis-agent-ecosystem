@@ -75,6 +75,7 @@ POLICY_SOURCE_PATHS = (
     "model_providers/tool_calls.py",
     "self_build/change_verifier.py",
     "source_edit_planning/service.py",
+    "source_edit_planning/projection.py",
     "source_mutation/service.py",
     "source_change/planner.py",
     "tool_execution/filesystem.py",
