@@ -1,6 +1,6 @@
 # Fixed native management/telemetry protocol. No guest commands or result importer.
 param(
-    [Parameter(Mandatory)][ValidateSet('inspect','stop','unregister')][string]$Operation,
+    [Parameter(Mandatory)][ValidateSet('inspect','stop','unregister','absence')][string]$Operation,
     [Parameter(Mandatory)][Guid]$VmId,
     [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{64}$')][string]$OwnershipDigest,
     [Parameter(Mandatory)][Guid]$HostMachineGuid
@@ -12,6 +12,16 @@ try {
     if ($actualHostGuid -ne $HostMachineGuid) { throw 'foreign host' }
     $env:PSModulePath = "$env:SystemRoot\System32\WindowsPowerShell\v1.0\Modules"
     Import-Module Hyper-V -ErrorAction Stop
+    if ($Operation -eq 'absence') {
+        # An inventory failure cannot be interpreted as absence. Original storage
+        # ownership still comes from the protected creation registration, not this
+        # echoed digest. Never inspect candidate JSON or suppress native errors.
+        $remainingVm = Get-VM -ErrorAction Stop | Where-Object { $_.Id -eq $VmId }
+        if ($remainingVm) { throw 'VM still registered' }
+        @{ absent = $true; vmId = [string]$VmId; ownershipDigest = $OwnershipDigest;
+           hostMachineGuid = [string]$actualHostGuid } | ConvertTo-Json -Compress
+        exit 0
+    }
     $nativeVm = Get-VM -Id $VmId -ErrorAction Stop
     if ($nativeVm.Notes -cne "jarvis-validation-v1:$OwnershipDigest") { throw 'owner mismatch' }
     if ($Operation -eq 'stop') {

@@ -1044,7 +1044,18 @@ def test_real_hyperv_operator_enrolled_vm_configuration_only():
     assert result.command_outcome == "unmeasured" and not result.execution_authorized
 
 
-@pytest.mark.parametrize("operation", ["inspect", "stop", "unregister", "foreign-owner"])
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "inspect",
+        "stop",
+        "unregister",
+        "foreign-owner",
+        "absence",
+        "absence-present",
+        "absence-error",
+    ],
+)
 def test_native_powershell_control_with_mock_hyperv_cmdlets(operation):
     """Exercise the actual fixed script, with no real Hyper-V invocation."""
     import json
@@ -1078,7 +1089,17 @@ function Remove-VM { $global:removed=$true }
     )
     if operation == "foreign-owner":
         code += "$global:fakeVm.Notes='foreign'\n"
-    action = "inspect" if operation == "foreign-owner" else operation
+    elif operation == "absence":
+        code += "$global:removed=$true\n"
+    elif operation == "absence-error":
+        code += "function Get-VM { throw 'native inventory unavailable' }\n"
+    action = (
+        "inspect"
+        if operation == "foreign-owner"
+        else "absence"
+        if operation.startswith("absence")
+        else operation
+    )
     code += (
         "& '"
         + quoted
@@ -1094,7 +1115,7 @@ function Remove-VM { $global:removed=$true }
         timeout=20,
         check=False,
     )
-    if operation == "foreign-owner":
+    if operation in {"foreign-owner", "absence-present", "absence-error"}:
         assert completed.returncode != 0
         assert b"HYPERV_NATIVE_CONTROL_UNAVAILABLE" in completed.stderr
     else:
@@ -1102,6 +1123,8 @@ function Remove-VM { $global:removed=$true }
         observed = json.loads(completed.stdout)
         if operation == "unregister":
             assert observed["absent"] and not observed["storageCleanupComplete"]
+        elif operation == "absence":
+            assert observed["absent"]
         else:
             assert observed["state"] == "off" and observed["connectedNetworkAdapters"] == 0
 
@@ -1252,3 +1275,248 @@ def test_invocation_iterator_is_bounded_before_candidate_materialization():
     with pytest.raises(ValueError):
         verify_invocations(expected, unbounded_candidates())
     assert len(consumed) <= 10
+
+
+@pytest.mark.parametrize("valid", [True, False])
+def test_native_hyperv_absence_requires_fresh_successful_binding(hyperv_binding, valid):
+    from app.validation_runner.hyper_v import NativeHyperVAdapter
+
+    calls = []
+
+    class Transport:
+        def invoke(self, binding, operation):
+            assert operation == "absence"
+            calls.append(operation)
+            return {
+                "absent": valid,
+                "vmId": str(binding.vm_id),
+                "hostMachineGuid": str(binding.host_machine_guid),
+                "ownershipDigest": binding.ownership_digest,
+            }
+
+    adapter = NativeHyperVAdapter(Transport(), authority_check=lambda *_: None)
+    if valid:
+        adapter.require_absent(hyperv_binding)
+        adapter.require_absent(hyperv_binding)
+        assert calls == ["absence", "absence"]
+    else:
+        with pytest.raises(DomainError):
+            adapter.require_absent(hyperv_binding)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        None,
+        "extra",
+        "identity",
+        "acl",
+        "running",
+        "revoked",
+        "interrupted",
+        "hardlink",
+        "ads",
+        "nested",
+    ],
+)
+def test_native_registered_storage_cleanup_fixture(
+    isolation_bundle, hyperv_binding, tmp_path, monkeypatch, failure
+):
+    """Real Windows fixture handles/deletion; ACL and VM guards are mocks."""
+    import os
+
+    from app.models.validation_cleanup import (
+        OwnedStorageEntry,
+        StorageIdentity,
+        StorageRegistration,
+    )
+    from app.validation_runner import cleanup
+    from app.validation_runner.cleanup import cleanup_registered_storage
+
+    if os.name != "nt":
+        pytest.skip("Native Windows cleanup fixture")
+    _, owner, capsule, _ = isolation_bundle
+    root = tmp_path / "dedicated"
+    root.mkdir()
+    allocation = root / ("jarvis-validation-" + "a" * 32)
+    allocation.mkdir()
+    file_parent = allocation
+    if failure == "nested":
+        file_parent = allocation / "VirtualMachines"
+        file_parent.mkdir()
+    file = file_parent / "guest.vhdx"
+    file.write_bytes(b"owned temporary fixture only")
+    service_sid = "S-1-5-21-1-2-3-4567"
+
+    def acl(fd, expected_sid):
+        if failure == "acl" or expected_sid != service_sid:
+            cleanup.refuse()
+
+    monkeypatch.setattr(cleanup, "private_acl", acl)
+
+    def identity(path):
+        info = path.stat()
+        return StorageIdentity(volume_id=info.st_dev, file_id=info.st_ino)
+
+    record = StorageRegistration(
+        binding=hyperv_binding,
+        owner=owner,
+        journal_digest=capsule.journal_digest,
+        dedicated_root_identity=identity(root),
+        allocation_identity=identity(allocation),
+        allocation_name=allocation.name,
+        service_sid=service_sid,
+        entries=(
+            (
+                OwnedStorageEntry(
+                    path="VirtualMachines", kind="directory", identity=identity(file_parent)
+                ),
+            )
+            if failure == "nested"
+            else ()
+        )
+        + (
+            OwnedStorageEntry(
+                path=file.relative_to(allocation).as_posix(), kind="file", identity=identity(file)
+            ),
+        ),
+    )
+    if failure == "extra":
+        (allocation / "unexpected.bin").write_bytes(b"never delete unknown content")
+    elif failure == "hardlink":
+        os.link(file, tmp_path / "external-link")
+    elif failure == "ads":
+        type(file)(str(file) + ":forged").write_bytes(b"unexpected alternate stream")
+    elif failure == "identity":
+        record = record.model_copy(
+            update={
+                "entries": (
+                    record.entries[0].model_copy(
+                        update={
+                            "identity": record.entries[0].identity.model_copy(
+                                update={"file_id": 1}
+                            ),
+                        }
+                    ),
+                )
+            }
+        )
+    guard_calls = []
+
+    def guard(*_):
+        guard_calls.append(1)
+        if failure == "revoked" and len(guard_calls) >= 3:
+            raise DomainError("CLEANUP_REVOKED", "Cleanup permission revoked", 409)
+        if failure == "interrupted" and len(guard_calls) == 4:
+            raise DomainError("CLEANUP_CRASH", "Simulated interruption", 409)
+
+    def absent(_):
+        if failure == "running":
+            raise DomainError("VM_REGISTERED", "VM still registered", 409)
+
+    if failure and failure != "nested":
+        with pytest.raises(DomainError):
+            cleanup_registered_storage(
+                root, record, authority_check=guard, require_vm_absent=absent
+            )
+        if failure == "interrupted":
+            assert not file.exists() and allocation.exists()
+            outcome = cleanup_registered_storage(
+                root, record, authority_check=guard, require_vm_absent=absent
+            )
+            assert outcome["registered_storage_absent"] and not allocation.exists()
+        else:
+            assert file.exists() and allocation.exists()
+    else:
+        outcome = cleanup_registered_storage(
+            root, record, authority_check=guard, require_vm_absent=absent
+        )
+        assert outcome["registered_storage_absent"] and not outcome["capacity_released"]
+        assert root.exists() and not allocation.exists()
+        repeated = cleanup_registered_storage(
+            root, record, authority_check=guard, require_vm_absent=absent
+        )
+        assert repeated["registered_storage_absent"] and not repeated["capacity_released"]
+
+
+def test_native_acl_refuses_unenrolled_owner_without_deletion(tmp_path):
+    import os
+
+    from app.validation_runner.cleanup import private_acl
+
+    if os.name != "nt":
+        pytest.skip("Native Windows ACL inspection")
+    file = tmp_path / "unregistered.bin"
+    file.write_bytes(b"preserve")
+    fd = os.open(file, os.O_RDONLY | os.O_BINARY)
+    try:
+        with pytest.raises(DomainError):
+            private_acl(fd, "S-1-5-21-1-2-3-4567")
+    finally:
+        os.close(fd)
+    assert file.read_bytes() == b"preserve"
+
+
+@pytest.mark.parametrize("case", ["valid", "owner", "public", "unprotected", "callback", "error"])
+def test_cleanup_acl_policy_deterministically_rejects_unsafe_descriptors(monkeypatch, case):
+    import ctypes
+    import sys
+    from types import SimpleNamespace
+
+    from app.validation_runner import cleanup
+
+    service = "S-1-5-21-1-2-3-4567"
+    owner = ctypes.create_string_buffer(16)
+    descriptor = ctypes.create_string_buffer(16)
+    dacl = ctypes.create_string_buffer(8)
+    ctypes.c_ushort.from_buffer(dacl, 4).value = 1
+    entry = ctypes.create_string_buffer(32)
+    entry[0] = b"\x09" if case == "callback" else b"\x00"
+    strings, freed = [], []
+
+    def get(handle, kind, flags, owner_out, group_out, dacl_out, sacl_out, descriptor_out):
+        owner_out._obj.value = ctypes.addressof(owner)
+        dacl_out._obj.value = ctypes.addressof(dacl)
+        descriptor_out._obj.value = ctypes.addressof(descriptor)
+        return 5 if case == "error" else 0
+
+    def control(pointer, flags_out, revision_out):
+        flags_out._obj.value = 0 if case == "unprotected" else 0x1000
+        return 1
+
+    def ace(pointer, index, entry_out):
+        entry_out._obj.value = ctypes.addressof(entry)
+        return 1
+
+    def convert(pointer, output):
+        address = pointer.value if hasattr(pointer, "value") else pointer
+        sid = service
+        if case == "owner" and address == ctypes.addressof(owner):
+            sid = "S-1-5-21-9-9-9-9"
+        if case == "public" and address == ctypes.addressof(entry) + 8:
+            sid = "S-1-1-0"
+        text = ctypes.create_unicode_buffer(sid)
+        strings.append(text)
+        output._obj.value = ctypes.addressof(text)
+        return 1
+
+    def free(pointer):
+        freed.append(pointer.value)
+
+    advapi = SimpleNamespace(
+        GetSecurityInfo=get,
+        GetSecurityDescriptorControl=control,
+        GetAce=ace,
+        ConvertSidToStringSidW=convert,
+    )
+    kernel = SimpleNamespace(LocalFree=free)
+    monkeypatch.setitem(sys.modules, "msvcrt", SimpleNamespace(get_osfhandle=lambda fd: fd))
+    monkeypatch.setattr(
+        ctypes, "WinDLL", lambda name, **_: advapi if name == "advapi32" else kernel, raising=False
+    )
+    if case == "valid":
+        cleanup.private_acl(123, service)
+    else:
+        with pytest.raises(DomainError):
+            cleanup.private_acl(123, service)
+    assert ctypes.addressof(descriptor) in freed

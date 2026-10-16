@@ -39,7 +39,7 @@ class NativeHyperVTransport:
 
     def invoke(self, binding, operation):
         binding = HyperVBinding.model_validate(binding.model_dump(mode="json"))
-        if operation not in {"inspect", "stop", "unregister"}:
+        if operation not in {"inspect", "stop", "unregister", "absence"}:
             refuse("HYPERV_OPERATION_UNAVAILABLE")
         if os.name != "nt":
             refuse("HYPERV_PLATFORM_UNAVAILABLE")
@@ -200,3 +200,17 @@ class NativeHyperVAdapter:
 
     def execute(self, *args, **kwargs):
         refuse("VALIDATION_EXECUTION_ISOLATION_UNAVAILABLE")
+
+    def require_absent(self, binding):
+        """Fresh successful native inventory lookup, never a replayed removal ack."""
+        binding = HyperVBinding.model_validate(binding.model_dump(mode="json"))
+        self.guard(binding, "absence")
+        result = self.transport.invoke(binding, "absence")
+        if not isinstance(result, dict) or (
+            result.get("absent") is not True
+            or result.get("vmId") != str(binding.vm_id)
+            or result.get("ownershipDigest") != binding.ownership_digest
+            or result.get("hostMachineGuid") != str(binding.host_machine_guid)
+        ):
+            refuse("HYPERV_EFFECT_UNCERTAIN")
+        self.guard(binding, "absence")
