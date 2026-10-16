@@ -62,6 +62,7 @@ BUILTIN_ADAPTER_CAPABILITIES = frozenset(
 class ProviderType(StrEnum):
     OLLAMA = "ollama"
     OPENAI_COMPATIBLE = "openai_compatible"
+    OPENAI_RESPONSES = "openai_responses"
 
 
 class UsageQuality(StrEnum):
