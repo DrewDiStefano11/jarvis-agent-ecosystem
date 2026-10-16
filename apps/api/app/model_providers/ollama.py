@@ -22,6 +22,7 @@ from app.model_providers.errors import (
     MalformedProviderResponseError,
     ModelProviderError,
     ProviderConfigurationError,
+    ProviderExecutionDisabledError,
 )
 from app.model_providers.http import is_loopback_endpoint, translate_http_error
 from app.model_providers.policy import (
@@ -101,6 +102,10 @@ class OllamaProvider(ProviderBase):
         request = ModelExecutionRequest.model_validate(request.model_dump())
         validate_tool_support(request, self.capabilities, self.name)
         model = request.model or self.default_model
+        if self.execution_mode == "free_only" and model.endswith(("-cloud", ":cloud")):
+            raise ProviderExecutionDisabledError(
+                "Ollama cloud models are not verified local inference"
+            )
         require_live_provider_execution(
             provider=self.name,
             model=model,
@@ -227,7 +232,7 @@ class OllamaProvider(ProviderBase):
 
     async def health_check(self) -> ProviderHealth:
         network_allowed = provider_network_health_allowed() or (
-            self.execution_mode == "local_only" and self.is_local
+            self.execution_mode in {"local_only", "free_only"} and self.is_local
         )
         if not network_allowed:
             return ProviderHealth(
@@ -253,7 +258,7 @@ class OllamaProvider(ProviderBase):
 
     async def model_available(self, model: str) -> bool | None:
         network_allowed = provider_network_health_allowed() or (
-            self.execution_mode == "local_only" and self.is_local
+            self.execution_mode in {"local_only", "free_only"} and self.is_local
         )
         if not network_allowed:
             return None
@@ -269,7 +274,7 @@ class OllamaProvider(ProviderBase):
         under the current execution mode. Never downloads or starts anything.
         """
         network_allowed = provider_network_health_allowed() or (
-            self.execution_mode == "local_only" and self.is_local
+            self.execution_mode in {"local_only", "free_only"} and self.is_local
         )
         if not network_allowed:
             return None
@@ -280,7 +285,7 @@ class OllamaProvider(ProviderBase):
 
     async def _list_models(self) -> set[str]:
         network_allowed = provider_network_health_allowed() or (
-            self.execution_mode == "local_only" and self.is_local
+            self.execution_mode in {"local_only", "free_only"} and self.is_local
         )
         require_provider_network_health(
             provider=self.name,

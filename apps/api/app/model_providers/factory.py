@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import os
+
+from pydantic import SecretStr
+from sqlalchemy.orm import Session, sessionmaker
+
 from app.core.config import Settings
 from app.model_providers.budget import ModelPricing, PricingTable, TaskBudget
 from app.model_providers.contracts import ModelCapability
+from app.model_providers.free_capacity import FreeCapacityRepository
+from app.model_providers.free_endpoints import compatible_endpoint
 from app.model_providers.ollama import OllamaProvider
 from app.model_providers.openai_compatible import (
     HealthCheckStrategy,
@@ -13,7 +20,9 @@ from app.model_providers.retry import RetryExecutor, RetryPolicy
 from app.model_providers.router import ModelRouter, RoutingRequirements
 
 
-def build_provider_registry(settings: Settings) -> ProviderRegistry:
+def build_provider_registry(
+    settings: Settings, sessions: sessionmaker[Session] | None = None
+) -> ProviderRegistry:
     providers = []
     if settings.model_ollama_enabled:
         providers.append(
@@ -42,6 +51,44 @@ def build_provider_registry(settings: Settings) -> ProviderRegistry:
                 execution_mode=settings.model_execution_mode,
             )
         )
+    grants = settings.parsed_free_allowances()
+    if grants and settings.verified_cloud_execution_allowed and sessions is not None:
+        capacity = FreeCapacityRepository(sessions)
+        capacity.configure(grants)
+        for grant in grants:
+            credential = os.environ.get(grant.credential_env)
+            if not credential and grant.integration != "codex":
+                continue
+            if grant.integration in {"chatgpt", "codex"}:
+                from app.model_providers.subscription import ChatGPTPlanProvider, CodexProvider
+
+                if grant.integration == "chatgpt":
+                    from pathlib import Path
+
+                    from app.model_providers.chatgpt_auth import load_session
+                    from app.model_providers.errors import AuthenticationError
+
+                    try:
+                        session = load_session(Path(credential))
+                        session.require_plan_usage(grant.session_identity or grant.account_id)
+                    except (AuthenticationError, OSError):
+                        continue
+                    providers.append(ChatGPTPlanProvider(grant, capacity, session))
+                else:
+                    providers.append(CodexProvider(grant, capacity))
+            else:
+                providers.append(
+                    OpenAICompatibleProvider(
+                        name=grant.provider,
+                        base_url=compatible_endpoint(grant),
+                        api_key=SecretStr(credential),
+                        default_model=sorted(grant.models)[0],
+                        execution_mode="free_only",
+                        health_strategy=HealthCheckStrategy.CONFIGURATION,
+                        free_allowance=grant,
+                        free_capacity=capacity,
+                    )
+                )
     priority = {
         name.strip(): index
         for index, name in enumerate(settings.model_provider_priority.split(","))
@@ -51,7 +98,9 @@ def build_provider_registry(settings: Settings) -> ProviderRegistry:
     return ProviderRegistry(providers)
 
 
-def build_model_router(settings: Settings) -> ModelRouter:
+def build_model_router(
+    settings: Settings, sessions: sessionmaker[Session] | None = None
+) -> ModelRouter:
     retry = RetryExecutor(
         RetryPolicy(
             maximum_attempts=settings.model_retry_maximum_attempts,
@@ -59,7 +108,7 @@ def build_model_router(settings: Settings) -> ModelRouter:
             maximum_backoff_seconds=settings.model_retry_maximum_backoff_seconds,
         )
     )
-    return ModelRouter(build_provider_registry(settings), retry)
+    return ModelRouter(build_provider_registry(settings, sessions), retry)
 
 
 def build_default_task_budget(settings: Settings) -> TaskBudget:

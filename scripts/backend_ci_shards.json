@@ -39,6 +39,7 @@
     "tests/test_tool_execution.py"
   ],
   "models": [
+    "tests/test_free_ai_capacity.py",
     "tests/test_git_native_artifact_contract.py",
     "tests/test_development_validation.py",
     "tests/test_validation_evidence.py",
@@ -126,6 +127,8 @@
     "tests/test_publication_lifecycle.py",
     "tests/test_publication_api.py",
     "tests/test_publication_journal.py",
-    "tests/test_publication_orchestrator.py"
+    "tests/test_publication_orchestrator.py",
+    "tests/test_development_agent.py",
+    "tests/test_development_navigation.py"
   ]
 }

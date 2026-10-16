@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from app.model_providers.errors import ProviderExecutionDisabledError
 
-CURRENT_PROVIDER_POLICY = "phase_2c_local_only"
+CURRENT_PROVIDER_POLICY = "campaign_d_zero_cost"
 
 
 def require_live_provider_execution(
@@ -13,13 +13,16 @@ def require_live_provider_execution(
     correlation_id: str | None = None,
     execution_mode: str = "disabled",
     is_local: bool = False,
+    verified_nonbillable: bool = False,
 ) -> None:
     if execution_mode == "local_only" and is_local:
+        return
+    if execution_mode == "free_only" and (is_local or verified_nonbillable):
         return
     detail = (
         "model execution is disabled"
         if execution_mode == "disabled"
-        else "local model execution requires a structurally loopback provider"
+        else "model execution requires loopback inference or verified nonbillable capacity"
     )
     raise ProviderExecutionDisabledError(
         detail,
