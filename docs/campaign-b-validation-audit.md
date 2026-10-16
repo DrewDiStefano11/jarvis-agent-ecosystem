@@ -4,6 +4,13 @@ Audited baseline: `origin/main` at `5749a41` (2026-10-13), including the actual
 merge commits for PR #111 and PR #113. Work is on `codex/campaign-b-validation`
 in an independent worktree. No campaign source execution is enabled.
 
+Integration update: `origin/main` advanced to `dc63ed2` when PR #112 merged.
+Its native authorized mutation service and Alembic migration are now integrated
+into this feature branch. The table below records the original audit; source
+mutation is no longer an absent dependency, but connecting it to an approved
+development proposal, verified validation snapshot and cross-source repair budget
+remains unfinished. PR #114 recovery-history work is still a separate dependency.
+
 ## Implemented foundations and remaining connections
 
 | Component | Baseline implementation | Remaining production connection |
@@ -29,6 +36,11 @@ limit without truncating away failures. Every supplied historical receipt is sti
 authenticated by the existing verifier. Unknown/missing/stale/uncertain work is an
 evidence problem, not an invented code defect. Findings retain only fixed diagnostic
 codes and exact reproduction references, never raw logs or model explanations.
+Diagnosis selects receipts from the acknowledged journal's native runtime/attempt
+identity, rather than ordering different attempts by collector completion time.
+Earlier authenticated failures still consume retry budget. Missing current-attempt
+receipts cannot inherit a previous attempt's outcome. Native ledger timestamp
+checks and receipt-to-step time bounds continue to reject backward persisted time.
 
 `record_verdict` records an exact acknowledged final journal assessment and diagnosis
 in existing append-only audit storage with its outbox event in the same transaction.
@@ -151,3 +163,18 @@ Follow-up classification validation: 148 repair, self-improvement and evidence t
 passed, along with backend Ruff formatting/lint and frontend typecheck, ESLint,
 234 Vitest tests and production build. These checks cover the reliability routing
 change; the full-shard results above belong to the preceding journal milestone.
+
+Integrated branch validation before the requested local commit: Ruff format/lint,
+isolated migration roundtrip, frontend typecheck/ESLint/234 Vitest/build passed.
+Backend runtime passed 402 tests, autonomy passed 503, and models passed 874 with
+2 skips. The final system shard is still running; its result and the final exact
+collection-union check are pending. Full collection contains 2,768 cases. Five
+focused journal-lineage, missing-current-result and retained retry-budget
+regressions passed. The local commit does not claim the final shard has passed
+and does not enable execution or publication.
+
+Subsequent result: that system shard completed with 986 passes and one skip,
+bringing the integrated baseline total to 2,765 passes and three skips across
+2,768 collected cases. The portable isolation contract/collector milestone is
+documented in `validation-isolation-provisioning.md`; its focused local tests do
+not prove real isolated execution.

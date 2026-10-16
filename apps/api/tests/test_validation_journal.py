@@ -1000,28 +1000,29 @@ def next_fixture_attempt(journal):
         runtime.handle_authorized(command_type(**fields), actor)
 
 
-def test_uncertain_current_attempt_cannot_inherit_old_failure(journal):
+@pytest.mark.parametrize("old_failure", [None, "watchdog"])
+def test_current_uncertain_journal_cannot_inherit_previous_attempt_result(journal, old_failure):
     _, actor, _, service, workspace_id, request = journal
-    first = finalize_fixture(journal, failure_kind="watchdog", diagnostic_codes=("timeout",))
+    finalize_fixture(journal, failure_kind=old_failure, diagnostic_codes=("timeout",))
     next_fixture_attempt(journal)
-    current = finalize_fixture(journal, uncertain=True)
-    assert first.intent.owner.attempt_id != current.intent.owner.attempt_id
+    final = finalize_fixture(journal, uncertain=True)
     diagnosis = service.diagnose(
-        actor, workspace_id, current.intent.journal_id, now=datetime.now(UTC)
+        actor, workspace_id, final.intent.journal_id, now=datetime.now(UTC)
     )
-    assert diagnosis.findings[0].disposition == "missing"
-    assert diagnosis.findings[0].reproduction is None
-    assert len(diagnosis.findings[0].supporting_receipt_digests) == 1
+    finding = diagnosis.findings[0]
+    assert finding.disposition == "missing" and finding.recommendation == "gather_evidence"
+    assert finding.reproduction is None
+    assert len(finding.supporting_receipt_digests) == 1
     verdict = service.record_verdict(
         actor,
         workspace_id,
         request,
-        current.intent.journal_id,
-        expected_journal_digest=current.digest,
+        final.intent.journal_id,
+        expected_journal_digest=final.digest,
     )
-    assert not verdict.assessment.ready
     assert verdict.repair.findings[0].disposition == "missing"
-    assert verdict.repair.findings[0].recommendation == "gather_evidence"
+    assert not verdict.assessment.ready
+    assert finding.gate in verdict.assessment.missing
 
 
 def test_persisted_failed_attempts_consume_retry_budget_and_old_owner_cannot_record(journal):

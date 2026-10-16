@@ -22,8 +22,16 @@ def build_repair_evidence(
     expected_execution_plan_hash,
     retry_budget=2,
     max_age_seconds=3600,
+    current_lineage=None,
     current_attempt=None,
 ):
+    if (
+        current_attempt is not None
+        and current_lineage is not None
+        and current_attempt != current_lineage
+    ):
+        raise ValueError("conflicting protected journal attempt bindings")
+    current_attempt = current_attempt if current_attempt is not None else current_lineage
     if type(retry_budget) is not int or not 0 <= retry_budget <= 2:
         raise ValueError("retry budget must be operator-bounded to at most two")
     plan = verify_plan(plan)
@@ -141,11 +149,20 @@ def build_repair_evidence(
                 if transient
                 else "diagnose_failure"
             )
+        # Equal-time failures have no authoritative temporal ordering. Keep the
+        # chosen exact reproduction, but do not turn conflicting classifications
+        # into a product repair merely because one measurement wins the digest tie.
+        failure_kinds = {item.failure_kind for _, item in tied if item.outcome == "failed"}
+        failure_kind = (
+            (m.failure_kind if len(failure_kinds) == 1 else "unknown")
+            if disposition == "failed"
+            else None
+        )
         findings.append(
             RepairFinding(
                 gate=command.gate,
                 disposition=disposition,
-                failure_kind=m.failure_kind if disposition == "failed" else None,
+                failure_kind=failure_kind,
                 diagnostic_codes=m.diagnostic_codes,
                 reproduction=reference,
                 supporting_receipt_digests=supporting,
