@@ -6,6 +6,7 @@ the app. A VM/resource observation cannot produce a passing command receipt.
 
 import json
 import os
+import re
 from pathlib import Path
 from threading import Event, Lock, Thread
 from time import monotonic
@@ -22,7 +23,15 @@ def refuse(code):
 
 class NativeHyperVTransport:
     def __init__(
-        self, *, executable, executable_digest, script, script_digest, system_root, authority_check
+        self,
+        *,
+        executable,
+        executable_digest,
+        script,
+        script_digest,
+        system_root,
+        authority_check,
+        media_authority_check=None,
     ):
         # Operator-deployed, pinned runtime files outside candidate authority.
         self.executable = Path(executable)
@@ -36,14 +45,41 @@ class NativeHyperVTransport:
         self.executable_digest = executable_digest
         self.script_digest = script_digest
         self.guard = authority_check
+        self.media_guard = media_authority_check
 
-    def invoke(self, binding, operation):
+    def invoke(self, binding, operation, *, media=None):
         binding = HyperVBinding.model_validate(binding.model_dump(mode="json"))
-        if operation not in {"inspect", "stop", "unregister", "absence"}:
+        if operation not in {
+            "inspect",
+            "stop",
+            "unregister",
+            "absence",
+            "attach_media",
+            "detach_media",
+        }:
             refuse("HYPERV_OPERATION_UNAVAILABLE")
         if os.name != "nt":
             refuse("HYPERV_PLATFORM_UNAVAILABLE")
         self.guard(binding, operation)
+        media_effect = operation in {"attach_media", "detach_media"}
+        if media_effect:
+            if (
+                self.media_guard is None
+                or type(media) is not tuple
+                or len(media) != 3
+                or not isinstance(media[0], Path)
+                or not media[0].is_absolute()
+                or str(media[0]).startswith("\\\\")
+                or media[0].name != "source.iso"
+                or type(media[1]) is not str
+                or not re.fullmatch("[a-f0-9]{64}", media[1])
+                or type(media[2]) is not int
+                or not 1 <= media[2] <= 140000000
+            ):
+                refuse("HYPERV_MEDIA_AUTHORITY_REQUIRED")
+            self.media_guard(binding, operation, media)
+        elif media is not None:
+            refuse("HYPERV_OPERATION_UNAVAILABLE")
         argv = [
             str(self.executable),
             "-NoLogo",
@@ -60,6 +96,17 @@ class NativeHyperVTransport:
             "-HostMachineGuid",
             str(binding.host_machine_guid),
         ]
+        if media_effect:
+            argv.extend(
+                [
+                    "-MediaPath",
+                    str(media[0]),
+                    "-MediaDigest",
+                    media[1],
+                    "-MediaBytes",
+                    str(media[2]),
+                ]
+            )
         # No inherited authentication, arbitrary PATH, profile or module search.
         env = {
             "SystemRoot": str(self.system_root),
@@ -92,6 +139,8 @@ class NativeHyperVTransport:
 
                 def guard():
                     self.guard(binding, operation)
+                    if media_effect:
+                        self.media_guard(binding, operation, media)
 
                 with limited_process(
                     argv,

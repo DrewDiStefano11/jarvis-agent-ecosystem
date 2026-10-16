@@ -80,6 +80,259 @@ def test_source_payload_roundtrip_and_noncanonical_order(isolation_bundle):
     assert len(calls) >= 6
 
 
+@pytest.mark.parametrize("damage", [None, "boot", "path", "extra", "content", "extent", "padding"])
+def test_optical_source_media_fixed_filesystem_and_integrity(isolation_bundle, damage):
+    from app.validation_runner.media import (
+        DATA_SECTOR,
+        SECTOR,
+        build_source_media,
+        receive_source_media,
+    )
+    from app.validation_runner.source_transfer import freeze_payload
+
+    _, _, capsule, content = isolation_bundle
+    payload = freeze_payload(
+        capsule, [(capsule.files[0].path, "100644", content)], authority_check=lambda: None
+    )
+    medium = build_source_media(capsule, payload, authority_check=lambda: None)
+    assert medium[16 * SECTOR : 16 * SECTOR + 7] == b"\x01CD001\x01"
+    assert medium[17 * SECTOR : 17 * SECTOR + 7] == b"\xffCD001\x01"
+    if damage is None:
+        assert receive_source_media(capsule, medium, authority_check=lambda: None) == payload
+        assert len(medium) % SECTOR == 0
+        return
+    data = bytearray(medium)
+    if damage == "boot":
+        data[16 * SECTOR] = 0
+    elif damage == "path":
+        data[20 * SECTOR + 68 + 33] = ord("/")
+    elif damage == "extra":
+        data += b"\0" * SECTOR
+    elif damage == "extent":
+        data[20 * SECTOR + 68 + 2] = 0
+    elif damage == "content":
+        data[DATA_SECTOR * SECTOR + len(payload) - 1] ^= 1
+    else:
+        data[-1] = 1
+    with pytest.raises(ValueError):
+        receive_source_media(capsule, bytes(data), authority_check=lambda: None)
+
+
+def test_guest_unit_fixed_profile_contains_no_host_channels(isolation_bundle):
+    from app.validation_runner.guest_systemd import unit_arguments
+
+    expected, _, _, _ = isolation_bundle
+    invocation = next(
+        item for item in describe_invocations(expected) if item.gate == "backend_tests"
+    ).invocations[0]
+    args = unit_arguments(
+        "jarvis-validation-" + "a" * 32 + ".service",
+        invocation,
+        executable="/opt/jarvis/bin/python",
+        rootfs="/srv/jarvis/rootfs",
+        source="/srv/jarvis/source",
+        stdout="/srv/jarvis/spool/stdout",
+        stderr="/srv/jarvis/spool/stderr",
+        memory_bytes=1073741824,
+        process_count=32,
+        cpu_count=1,
+        timeout_seconds=30,
+        disk_bytes=1073741824,
+        output_paths=("apps/web/dist",),
+    )
+    for property in (
+        "DynamicUser=yes",
+        "NoNewPrivileges=yes",
+        "CapabilityBoundingSet=",
+        "PrivateNetwork=yes",
+        "PrivateDevices=yes",
+        "ProtectControlGroups=yes",
+        "RestrictNamespaces=yes",
+        "RootDirectory=/srv/jarvis/rootfs",
+        "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+        "MemoryMax=1073741824",
+        "TasksMax=32",
+        "CPUQuota=100%",
+        "KillMode=control-group",
+    ):
+        assert "--property=" + property in args
+    assert "--expand-environment=no" in args and "--no-block" in args
+    assert args[-len(invocation.arguments) :] == list(invocation.arguments)
+    assert not any("AF_VSOCK" in arg or "--shell" in arg for arg in args)
+
+
+@pytest.mark.parametrize("unsafe", ["/etc", "../secret", "apps/api/app", "apps/web/src"])
+def test_guest_unit_refuses_writable_source_or_escape(isolation_bundle, unsafe):
+    from app.validation_runner.guest_systemd import unit_arguments
+
+    expected, _, _, _ = isolation_bundle
+    invocation = describe_invocations(expected)[0].invocations[0]
+    with pytest.raises((ValueError, DomainError)):
+        unit_arguments(
+            "jarvis-validation-" + "a" * 32 + ".service",
+            invocation,
+            executable="/opt/jarvis/bin/python",
+            rootfs="/srv/jarvis/rootfs",
+            source="/srv/jarvis/source",
+            stdout="/srv/jarvis/spool/stdout",
+            stderr="/srv/jarvis/spool/stderr",
+            memory_bytes=1073741824,
+            process_count=32,
+            cpu_count=1,
+            timeout_seconds=30,
+            disk_bytes=1073741824,
+            output_paths=(unsafe,),
+        )
+
+
+def test_guest_systemd_rejects_duplicate_native_status_and_unknown_fields(monkeypatch):
+    from app.validation_runner.guest_systemd import NativeSystemdControl
+
+    control = NativeSystemdControl(
+        systemd_run="C:/native/systemd-run",
+        systemd_run_digest="a" * 64,
+        systemctl="C:/native/systemctl",
+        systemctl_digest="b" * 64,
+        authority_check=lambda: None,
+        cleanup_authority_check=lambda _: None,
+        command_authority_check=lambda _: None,
+    )
+    unit = "jarvis-validation-" + "a" * 32 + ".service"
+    for raw in (
+        b"LoadState=loaded\nExecMainStatus=0\nExecMainStatus=1\n",
+        b"LoadState=loaded\nmodelPassed=true\n",
+    ):
+        monkeypatch.setattr(control, "invoke", lambda *_, value=raw, **__: value)
+        with pytest.raises(DomainError):
+            control.show(unit)
+
+
+def test_guest_native_control_never_runs_on_windows(tmp_path):
+    import sys
+
+    from app.validation_runner.guest_systemd import NativeSystemdControl
+
+    if sys.platform == "linux":
+        pytest.skip("Windows-specific unavailable guest check")
+    calls = []
+    control = NativeSystemdControl(
+        systemd_run=tmp_path / "systemd-run",
+        systemd_run_digest="a" * 64,
+        systemctl=tmp_path / "systemctl",
+        systemctl_digest="b" * 64,
+        authority_check=lambda: calls.append("guard"),
+        cleanup_authority_check=lambda _: None,
+        command_authority_check=lambda _: None,
+    )
+    with pytest.raises(DomainError):
+        control.invoke("run", ["--shell", "arbitrary"])
+    assert not calls
+
+
+def test_optical_source_guest_import_unavailable_on_development_windows(isolation_bundle, tmp_path):
+    import sys
+
+    from app.validation_runner.media import import_optical_source
+
+    if sys.platform == "linux":
+        pytest.skip("Windows unavailable-guest check")
+    _, _, capsule, _ = isolation_bundle
+    with pytest.raises(DomainError):
+        import_optical_source(
+            "/dev/sr0",
+            tmp_path,
+            capsule,
+            image_digest="a" * 64,
+            image_byte_count=1,
+            device_number=1,
+            authority_check=lambda: None,
+        )
+    assert not tuple(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize(
+    "case", ["attach", "detach", "network", "integration", "foreign", "running", "tamper"]
+)
+def test_native_powershell_media_protocol_uses_no_guest_services(tmp_path, isolation_bundle, case):
+    import json
+    import os
+    import subprocess
+    from hashlib import sha256
+    from pathlib import Path
+
+    from app.validation_runner.media import build_source_media
+    from app.validation_runner.source_transfer import freeze_payload
+
+    if os.name != "nt":
+        pytest.skip("Native Windows fixed-script fixture")
+    _, _, capsule, content = isolation_bundle
+    payload = freeze_payload(
+        capsule, [(capsule.files[0].path, "100644", content)], authority_check=lambda: None
+    )
+    medium = build_source_media(capsule, payload, authority_check=lambda: None)
+    path = tmp_path / "source.iso"
+    path.write_bytes(medium)
+    script = Path(__file__).resolve().parents[3] / "scripts/hyper-v-validation-control.ps1"
+
+    def quote(value):
+        return "'" + str(value).replace("'", "''") + "'"
+
+    code = (
+        """
+$global:vm = [pscustomobject]@{Id=[Guid]'12345678-1234-1234-1234-123456789abc';
+ Notes='jarvis-validation-v1:"""
+        + "a" * 64
+        + """';State='Off';Generation=2;AutomaticStartAction='Nothing'}
+$global:dvd = $null
+function Import-Module { }
+function Get-ItemProperty { @{MachineGuid='aaaaaaaa-1234-1234-1234-123456789abc'} }
+function Get-VM { $global:vm }
+function Get-VMNetworkAdapter { }
+function Get-VMSnapshot { }
+function Get-VMIntegrationService { }
+function Get-VMMemory { @{DynamicMemoryEnabled=$false} }
+function Get-VMDvdDrive { if ($global:dvd) { $global:dvd } }
+function Add-VMDvdDrive { param($VM,[string]$Path); $global:dvd=[pscustomobject]@{Path=$Path} }
+function Set-VMDvdDrive { param($VMDvdDrive,[string]$Path); $global:dvd.Path=$Path }
+"""
+    )
+    if case == "network":
+        code += "function Get-VMNetworkAdapter { @{ SwitchId=[Guid]::Empty } }\n"
+    elif case == "integration":
+        code += "function Get-VMIntegrationService { @{ Enabled=$true } }\n"
+    elif case == "running":
+        code += "$global:vm.State='Running'\n"
+    elif case == "foreign":
+        code += "$global:dvd=[pscustomobject]@{Path='C:\\foreign.iso'}\n"
+    elif case == "detach":
+        code += "$global:dvd=[pscustomobject]@{Path=" + quote(path) + "}\n"
+    image_digest = "f" * 64 if case == "tamper" else sha256(medium).hexdigest()
+    action = "detach_media" if case == "detach" else "attach_media"
+    code += (
+        "& "
+        + quote(script)
+        + " -Operation "
+        + action
+        + " -VmId 12345678-1234-1234-1234-123456789abc -OwnershipDigest "
+        + "a" * 64
+    )
+    code += " -HostMachineGuid aaaaaaaa-1234-1234-1234-123456789abc -MediaPath " + quote(path)
+    code += " -MediaDigest " + image_digest + " -MediaBytes " + str(len(medium))
+    executable = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    result = subprocess.run(
+        [str(executable), "-NoProfile", "-NonInteractive", "-Command", code],
+        capture_output=True,
+        timeout=20,
+    )
+    if case in {"attach", "detach"}:
+        assert result.returncode == 0, result.stderr.decode(errors="replace")
+        observed = json.loads(result.stdout)
+        assert observed["mediaState"] == ("attached" if case == "attach" else "detached")
+        assert observed["commandOutcome"] == "unmeasured" and not observed["executionAuthorized"]
+    else:
+        assert result.returncode != 0 and b"HYPERV_NATIVE_CONTROL_UNAVAILABLE" in result.stderr
+
+
 @pytest.mark.parametrize("damage", ["truncated", "trailing", "content", "magic", "manifest"])
 def test_source_payload_rejects_corrupt_or_incomplete_input(isolation_bundle, damage):
     from app.validation_runner.source_transfer import MAGIC, freeze_payload, receive_payload
