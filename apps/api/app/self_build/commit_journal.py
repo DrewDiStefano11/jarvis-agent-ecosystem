@@ -17,7 +17,12 @@ from app.db.models import AuditEventRow
 from app.models.agent_runtime import RecordCheckpointCommand
 from app.models.git_changes import GitChangeObservation
 from app.models.git_commit_metadata import CommitMetadataSnapshot
-from app.models.git_execution import NativeCommitPlan, NativeCommitProgress, NativeCommitRecord
+from app.models.git_execution import (
+    NativeCommitPlan,
+    NativeCommitProgress,
+    NativeCommitRecord,
+    NativeCommitRecovery,
+)
 from app.self_build.commit_progress import advance, apply_progress
 from app.self_build.policy import digest
 
@@ -66,6 +71,45 @@ class NativeCommitJournal:
                 and expiry.tzinfo is not None
                 and expiry > datetime.now(UTC)
             )
+            if valid and ("recovery" in payload or "originalApprovalId" in payload):
+                recovery = NativeCommitRecovery.model_validate(payload["recovery"])
+                original = self.intent(session, row.id, request.command_id, row.actor_id)
+                valid = original is not None and (
+                    recovery.workspace_id == row.id
+                    and recovery.command_id == request.command_id
+                    and recovery.operation_id == original[0].operation_id
+                    and recovery.original_plan_hash == plan.plan_hash
+                    and original[0].plan == plan
+                    and payload["originalApprovalId"] == original[0].original_approval_id
+                    and request.approval_id != original[0].original_approval_id
+                )
+                if valid:
+                    # Validate all persisted progress first, then find the measured
+                    # prefix. Later progress must not invalidate a valid renewal.
+                    current, _ = self.project(actor, row, original[0], session)
+                    projected = original[0].model_copy(
+                        update={"intent_checkpoint_id": current.intent_checkpoint_id}
+                    )
+                    valid = self.recovery_position_matches(recovery, projected)
+                    events = session.scalars(
+                        select(AuditEventRow)
+                        .where(
+                            AuditEventRow.event_type == PROGRESS,
+                            AuditEventRow.payload["payload"]["operationId"].as_string()
+                            == recovery.operation_id,
+                        )
+                        .order_by(
+                            AuditEventRow.payload["payload"]["progress"]["ordinal"].as_integer()
+                        )
+                    )
+                    for entry in events:
+                        projected = apply_progress(
+                            projected,
+                            NativeCommitProgress.model_validate(
+                                entry.payload["payload"]["progress"]
+                            ),
+                        )
+                        valid = valid or self.recovery_position_matches(recovery, projected)
         except (AttributeError, KeyError, ValueError, TypeError):
             valid = False
         if not valid:
@@ -74,6 +118,14 @@ class NativeCommitJournal:
         self.preparation.operator(operator, row, session)
         self.service.permission(operator, row, session)
         return snapshot, metadata
+
+    @staticmethod
+    def recovery_position_matches(recovery, record):
+        return (
+            record.intent_checkpoint_id is not None
+            and recovery.phase == record.state
+            and recovery.record_digest == digest(record.model_dump(mode="json"))
+        )
 
     def intent(self, session, workspace_id, command_id, actor_id):
         matches = list(

@@ -103,3 +103,14 @@ ESLint, all 234 Vitest tests and the production build passed. Focused tests were
 rerun after the final collector changes; remote exact-head CI and independent
 review still must run for the published milestone. Real commit/push/PR acceptance
 through the Jarvis service remains required and has not been claimed.
+
+Targeted follow-up (2026-10-16): recovery renewal approvals are bound to their
+persisted workspace, command, operation, original approval and measured journal
+prefix. A renewal cannot create a new command intent. Valid progress after the
+measured prefix remains recoverable; original evidence stays append-only.
+Frontend sources are unchanged; prior frontend validation evidence is retained.
+Triage also requires current independently authored review provenance for every
+unresolved correction finding. Queued/running checks require the same explicit
+required-context/GitHub-App binding as failed checks. Unknown evidence remains
+blocked for reconfirmation. Focused triage/readiness verification: 62 passed;
+recovery runner/position verification: 37 passed, including lost acknowledgment.
