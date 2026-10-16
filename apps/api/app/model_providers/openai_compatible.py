@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
+from hashlib import sha256
 from time import perf_counter
 from typing import Any
 from urllib.parse import urlsplit
@@ -23,7 +24,9 @@ from app.model_providers.errors import (
     MalformedProviderResponseError,
     ModelProviderError,
     ProviderConfigurationError,
+    QuotaExhaustedError,
 )
+from app.model_providers.free_capacity import FreeCapacityRepository, require_allowance
 from app.model_providers.http import is_loopback_endpoint, translate_http_error
 from app.model_providers.policy import (
     provider_network_health_allowed,
@@ -37,6 +40,7 @@ from app.model_providers.tool_calls import (
     post_model_response,
     validate_tool_support,
 )
+from app.models.ai_capacity import FreeAllowance
 
 
 class HealthCheckStrategy(StrEnum):
@@ -63,6 +67,8 @@ class OpenAICompatibleProvider(ProviderBase):
         custom_headers: dict[str, str] | None = None,
         execution_mode: str = "disabled",
         client: httpx.AsyncClient | None = None,
+        free_allowance: FreeAllowance | None = None,
+        free_capacity: FreeCapacityRepository | None = None,
     ) -> None:
         if not isinstance(name, str) or not name.strip() or len(name) > 120:
             raise ProviderConfigurationError("provider name must contain 1 to 120 characters")
@@ -120,6 +126,46 @@ class OpenAICompatibleProvider(ProviderBase):
         self.custom_headers = dict(headers)
         self.execution_mode = execution_mode
         self._client = client
+        self.free_allowance = free_allowance
+        self.free_capacity = free_capacity
+        if free_allowance is not None:
+            from app.model_providers.free_endpoints import compatible_endpoint
+
+            if free_allowance.provider != name or self.base_url != compatible_endpoint(
+                free_allowance
+            ):
+                raise ProviderConfigurationError(
+                    "allowance does not match the fixed provider endpoint"
+                )
+
+            if (
+                sha256(api_key.get_secret_value().encode()).hexdigest()
+                != free_allowance.credential_fingerprint
+            ):
+                raise ProviderConfigurationError(
+                    "credential differs from the verified nonbillable account"
+                )
+            if client is not None and str(client.base_url) != self.base_url:
+                raise ProviderConfigurationError(
+                    "client endpoint differs from the verified provider"
+                )
+
+    def free_eligible(self, model: str) -> bool:
+        if self.execution_mode in {"local_only", "free_only"} and self.is_local:
+            return True
+        return bool(
+            self.execution_mode == "free_only"
+            and self.free_allowance is not None
+            and self.free_capacity is not None
+            and self.free_capacity.available(self.free_allowance, model)
+        )
+
+    def _network_allowed(self) -> bool:
+        return (
+            self.execution_mode == "local_only"
+            and self.is_local
+            or self.free_eligible(self.default_model)
+        )
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -145,6 +191,10 @@ class OpenAICompatibleProvider(ProviderBase):
         request = ModelExecutionRequest.model_validate(request.model_dump())
         validate_tool_support(request, self.capabilities, self.name)
         model = request.model or self.default_model
+        verified = False
+        if self.execution_mode == "free_only" and self.free_allowance is not None:
+            require_allowance(self.free_allowance, model)
+            verified = self.free_capacity is not None
         require_live_provider_execution(
             provider=self.name,
             model=model,
@@ -152,7 +202,11 @@ class OpenAICompatibleProvider(ProviderBase):
             correlation_id=request.correlation_id,
             execution_mode=self.execution_mode,
             is_local=self.is_local,
+            verified_nonbillable=verified,
         )
+        if verified:
+            assert self.free_capacity is not None and self.free_allowance is not None
+            self.free_capacity.reserve(self.free_allowance, model)
         payload: dict[str, Any] = {
             "model": model,
             "messages": [
@@ -224,14 +278,20 @@ class OpenAICompatibleProvider(ProviderBase):
             if owned:
                 await client.aclose()
         if translated_error is not None:
+            if (
+                isinstance(translated_error, QuotaExhaustedError)
+                and self.free_allowance is not None
+            ):
+                assert self.free_capacity is not None
+                self.free_capacity.exhaust(self.free_allowance)
             raise translated_error
-        if request.tools and (
+        if (request.tools or self.free_allowance is not None) and (
             _contains_credential(body, self.api_key.get_secret_value())
             or _contains_credential(
                 response.headers.get("x-request-id"), self.api_key.get_secret_value()
             )
         ):
-            raise _malformed(self.name, model, "provider tool response contains a credential")
+            raise _malformed(self.name, model, "provider response contains a credential")
         normalized = _normalize_completion(
             body,
             provider=self.name,
@@ -239,6 +299,11 @@ class OpenAICompatibleProvider(ProviderBase):
             request=request,
             credential=self.api_key.get_secret_value(),
         )
+        if (
+            self.free_allowance is not None
+            and normalized["model"] not in self.free_allowance.models
+        ):
+            raise _malformed(self.name, model, "provider returned an unverified model")
         try:
             return ModelExecutionResponse(
                 content=normalized["content"],
@@ -270,9 +335,7 @@ class OpenAICompatibleProvider(ProviderBase):
             raise error
 
     async def health_check(self) -> ProviderHealth:
-        network_allowed = provider_network_health_allowed() or (
-            self.execution_mode == "local_only" and self.is_local
-        )
+        network_allowed = provider_network_health_allowed() or self._network_allowed()
         if not network_allowed:
             return ProviderHealth(
                 provider=self.name,
@@ -315,9 +378,9 @@ class OpenAICompatibleProvider(ProviderBase):
             )
 
     async def model_available(self, model: str) -> bool | None:
-        network_allowed = provider_network_health_allowed() or (
-            self.execution_mode == "local_only" and self.is_local
-        )
+        if self.free_allowance is not None:
+            return self.free_eligible(model)
+        network_allowed = provider_network_health_allowed() or self._network_allowed()
         if not network_allowed:
             return None
         if self.health_strategy != HealthCheckStrategy.MODELS:
@@ -339,9 +402,7 @@ class OpenAICompatibleProvider(ProviderBase):
             return None
 
     async def _get(self, path: str) -> httpx.Response:
-        network_allowed = provider_network_health_allowed() or (
-            self.execution_mode == "local_only" and self.is_local
-        )
+        network_allowed = provider_network_health_allowed() or self._network_allowed()
         require_provider_network_health(
             provider=self.name,
             model=self.default_model,

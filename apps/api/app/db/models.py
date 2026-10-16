@@ -26,6 +26,16 @@ def now_utc() -> datetime:
     return datetime.now(UTC)
 
 
+class FreeQuotaRow(Base):
+    __tablename__ = "free_ai_quotas"
+    bucket_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window_key: Mapped[str] = mapped_column(String(80))
+    resets_at: Mapped[str] = mapped_column(String(80))
+    remaining_requests: Mapped[int] = mapped_column(Integer)
+    exhausted: Mapped[bool] = mapped_column(Boolean, default=False)
+    __table_args__ = (CheckConstraint("remaining_requests >= 0", name="ck_free_quota_remaining"),)
+
+
 class CatalogSourceRow(Base):
     __tablename__ = "catalog_sources"
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
