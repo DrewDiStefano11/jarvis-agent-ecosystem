@@ -1,7 +1,8 @@
 # HTTP contracts
 
 Campaign D adds `free_only` to `AutonomousWorkerStatus.modelExecutionMode` and
-updates the advertised database head to `20261013_free_ai`. Existing response
+adds the `20261013_free_ai` migration. The current advertised database head is
+`20261016_a_review_join`, joining quota and development-dispatch history. Existing response
 envelopes and event schema versions are preserved. No HTTP endpoint accepts
 provider allowance evidence, tokens or cloud activation. The environment-only
 activation switch defaults to false and is separate from allowance evidence.
