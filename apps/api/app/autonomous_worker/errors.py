@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.core.errors import DomainError
 
 ERROR_MESSAGES = {
+    "FREE_CAPACITY_UNAVAILABLE": "No verified nonbillable model capacity is available; execution is paused.",
     "MODEL_DISPATCH_OUTCOME_UNKNOWN": "A reserved model dispatch has an unknown outcome; operator reconciliation is required.",
     "VERIFICATION_IN_PROGRESS": "The independent reviewer dispatch is owned by the current execution lease.",
     "VERIFICATION_PROVENANCE_MISMATCH": "Verification references do not match the authoritative result.",

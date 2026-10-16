@@ -22,7 +22,16 @@ def build_repair_evidence(
     expected_execution_plan_hash,
     retry_budget=2,
     max_age_seconds=3600,
+    current_lineage=None,
+    current_attempt=None,
 ):
+    if (
+        current_attempt is not None
+        and current_lineage is not None
+        and current_attempt != current_lineage
+    ):
+        raise ValueError("conflicting protected journal attempt bindings")
+    current_attempt = current_attempt if current_attempt is not None else current_lineage
     if type(retry_budget) is not int or not 0 <= retry_budget <= 2:
         raise ValueError("retry budget must be operator-bounded to at most two")
     plan = verify_plan(plan)
@@ -69,8 +78,28 @@ def build_repair_evidence(
                 lineages[lineage] = (signed, measured)
         failures = sum(m.outcome == "failed" for _, m in lineages.values())
         remaining = max(0, retry_budget - max(0, failures - 1))
-        latest = max(m.finished_at for _, m in lineages.values())
-        tied = [(r, m) for r, m in lineages.values() if m.finished_at == latest]
+        supporting = tuple(
+            sorted(digest(item.model_dump(mode="json")) for item, _ in lineages.values())
+        )
+        if current_attempt is None:
+            latest = max(m.finished_at for _, m in lineages.values())
+            tied = [(r, m) for r, m in lineages.values() if m.finished_at == latest]
+        else:
+            # Journal callers bind the acknowledged target attempt from durable
+            # ownership, never from collector clocks or caller receipt ordering.
+            selected = lineages.get(current_attempt)
+            tied = [] if selected is None else [selected]
+        if not tied:
+            findings.append(
+                RepairFinding(
+                    gate=command.gate,
+                    disposition="stale" if source_changed else "missing",
+                    recommendation="revalidate" if source_changed else "gather_evidence",
+                    supporting_receipt_digests=supporting,
+                    retries_remaining=remaining,
+                )
+            )
+            continue
         # Failure wins tied outcomes; interruption/unknown wins a tied pass.
         priority = {"failed": 0, "interrupted": 1, "cancelled": 2, "unmeasured": 3, "passed": 4}
         r, m = min(
@@ -120,15 +149,23 @@ def build_repair_evidence(
                 if transient
                 else "diagnose_failure"
             )
+        # Equal-time failures have no authoritative temporal ordering. Keep the
+        # chosen exact reproduction, but do not turn conflicting classifications
+        # into a product repair merely because one measurement wins the digest tie.
+        failure_kinds = {item.failure_kind for _, item in tied if item.outcome == "failed"}
+        failure_kind = (
+            (m.failure_kind if len(failure_kinds) == 1 else "unknown")
+            if disposition == "failed"
+            else None
+        )
         findings.append(
             RepairFinding(
                 gate=command.gate,
                 disposition=disposition,
-                failure_kind=m.failure_kind if disposition == "failed" else None,
+                failure_kind=failure_kind,
+                diagnostic_codes=m.diagnostic_codes,
                 reproduction=reference,
-                supporting_receipt_digests=tuple(
-                    sorted(digest(item.model_dump(mode="json")) for item, _ in lineages.values())
-                ),
+                supporting_receipt_digests=supporting,
                 recommendation=recommendation,
                 retries_remaining=remaining,
             )

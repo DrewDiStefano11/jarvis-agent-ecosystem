@@ -7,23 +7,30 @@ authorized Phase 2C local planning worker. It provides contracts, adapter mappin
 registration, deterministic routing, retry/fallback policy, per-execution budgets, safe error
 normalization, and configuration factories.
 
-Construction remains side-effect-free and does not create an HTTP client or contact a provider.
+Legacy construction remains side-effect-free and does not create an HTTP client or contact a provider.
+The opt-in Campaign D factory initializes verified shared quota rows through an
+explicit transaction; it still makes no network request during construction.
 Application startup builds safe provider metadata and a router; only the separate, explicitly
 enabled autonomous worker invokes it. Ordinary API handlers, the simulator, tools, and the office
 do not generate model traffic.
 
-This change does **not** add:
+The public provider interface does **not** add:
 
 - OpenHands
 - vision payload mapping
-- streaming
-- persistent or cross-process budget accounting
+- streamed responses to callers (subscription SSE is collected internally)
+- persistent cross-process token or dollar budget accounting (shared free request
+  reservations are durable)
 - general-purpose autonomous orchestration
-- remote model execution
 - office integration
 - memory integration
 
 ## Current phase gate
+
+Campaign D adds explicit `free_only` execution with account-specific nonbillable
+evidence, persistent shared quotas, subscription/free integrations and safe pause.
+Execution remains disabled by default. See [zero-cost AI](zero-cost-ai.md).
+Pricing and task budgets never establish spending authority.
 
 `JARVIS_MODEL_EXECUTION_MODE` is `disabled` by default. In that mode:
 
@@ -33,7 +40,7 @@ This change does **not** add:
 - enabling provider configuration registers safe metadata only; and
 - application startup does not contact a provider.
 
-`local_only` is the only enabling mode. It requires a structurally loopback provider, disables
+The legacy `local_only` mode requires a structurally loopback provider, disables
 redirect following and proxy-environment inheritance in production clients, and is usable only
 through the disabled-by-default autonomous worker. Remote URLs, private LAN hosts, Docker names,
 and deceptive localhost names remain ineligible; `JARVIS_MODEL_ALLOW_REMOTE` does not override
@@ -148,12 +155,14 @@ Eligibility is evaluated deterministically:
 
 1. establish requested-provider/fallback scope;
 2. apply capability, allowlist, denylist, and local/remote policy;
-3. health-check only survivors;
+3. require current nonbillable eligibility for Campaign D hosted providers before
+   health-checking survivors;
 4. resolve the model as routing `preferred_model`, request model, then provider default;
 5. check exact model availability for every survivor; and
 6. prefer local survivors when requested and no provider was explicitly selected.
 
-Unknown availability remains eligible because not all compatible services enumerate models.
+Unknown availability remains eligible for legacy adapters because not all compatible services enumerate models.
+Campaign D hosted adapters require exact verified models and available durable capacity.
 Known unavailability removes the candidate. Each fallback uses its own default when neither
 routing nor request selected a model.
 
@@ -178,8 +187,9 @@ and the response must contain complete input/output usage. A returned model alia
 own exact price. No fuzzy matching, free defaults, or unknown-cost acceptance occurs. Without a
 cost cap, unpriced models and unknown usage may produce an unknown estimate.
 
-Accounting is deliberately in memory for one call. Persistent multi-process accounting is
-deferred.
+Token and dollar accounting is deliberately in memory for one call. Campaign D
+free request reservations are persistent and atomic across processes; they do
+not replace provider-enforced billing safeguards.
 
 ## Secrets and metadata
 
@@ -202,6 +212,9 @@ All providers are disabled by default:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `JARVIS_MODEL_EXECUTION_MODE` | `disabled` | Explicit `local_only` or verified `free_only` opt-in |
+| `JARVIS_MODEL_VERIFIED_CLOUD_ENABLED` | `false` | Separate owner activation after independent verification; quotas alone cannot enable hosted routing |
+| `JARVIS_MODEL_FREE_ALLOWANCES_JSON` | `[]` | Private operator-owned nonbillable evidence; no automatic verification |
 | `JARVIS_MODEL_OLLAMA_ENABLED` | `false` | Register Ollama metadata |
 | `JARVIS_MODEL_OLLAMA_NAME` | `ollama` | Stable registry name |
 | `JARVIS_MODEL_OLLAMA_BASE_URL` | loopback placeholder | Future endpoint |
@@ -258,7 +271,7 @@ developer-specific configuration must not be committed.
 
 ## Deferred work
 
-Remote-provider threat modeling, streaming, tool execution integration, result continuation, vision,
-persistent accounting beyond one durable execution result, production telemetry, general
-autonomous scheduling, memory, office controls, and external gateway operations remain outside
-this phase. See `docs/autonomous-worker.md` for the one real local execution path.
+Live hosted-account acceptance, streamed responses to callers, vision, persistent
+token/dollar accounting, general autonomous scheduling and external gateway
+operations remain pending. See `docs/autonomous-worker.md` for the existing local
+execution path and [zero-cost AI](zero-cost-ai.md) for gated hosted planning.

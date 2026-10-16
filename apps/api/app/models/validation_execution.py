@@ -15,6 +15,19 @@ from app.models.development_validation import (
 )
 
 Identifier = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")]
+DiagnosticCode = Literal[
+    "assertion_failed",
+    "lint_failed",
+    "typecheck_failed",
+    "build_failed",
+    "migration_failed",
+    "dependency_unavailable",
+    "timeout",
+    "cancelled",
+    "interrupted",
+    "output_truncated",
+    "unknown",
+]
 
 
 class CommandDefinition(Contract):
@@ -67,22 +80,7 @@ class ExecutionMeasurement(Contract):
     output_bytes: int = Field(strict=True, ge=0, le=1048576)
     output_truncated: bool = Field(strict=True)
     # Allowlisted diagnostic codes only: raw logs, paths and model prose never persist.
-    diagnostic_codes: tuple[
-        Literal[
-            "assertion_failed",
-            "lint_failed",
-            "typecheck_failed",
-            "build_failed",
-            "migration_failed",
-            "dependency_unavailable",
-            "timeout",
-            "cancelled",
-            "interrupted",
-            "output_truncated",
-            "unknown",
-        ],
-        ...,
-    ] = Field(default=(), max_length=16)
+    diagnostic_codes: tuple[DiagnosticCode, ...] = Field(default=(), max_length=16)
 
     @field_validator("started_at", "finished_at")
     @classmethod
