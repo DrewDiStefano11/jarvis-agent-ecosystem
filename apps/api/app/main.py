@@ -102,7 +102,7 @@ from app.team_selection.router import router as team_selection_router
 from app.tool_execution.router import router as tool_execution_router
 from app.tool_execution.service import ToolExecutionService
 
-DATABASE_REVISION = "20261016_a_review_join"
+DATABASE_REVISION = "20261016_a_baseline_join"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
@@ -343,6 +343,7 @@ def create_app(
     app.state.self_build_git_service = GitInspectionService(app)
     app.state.self_build_creation_service = WorkspaceCreationService(app)
     app.state.self_build_commit_service = CommitPreparationService(app)
+    from app.development_agent.baselines import DevelopmentBaselineService
     from app.development_agent.config import DevelopmentProviderSettings, build_development_router
     from app.development_agent.context import RepositoryContextReader
     from app.development_agent.dispatch import DevelopmentDispatchService
@@ -353,6 +354,7 @@ def create_app(
     app.state.development_context_reader = RepositoryContextReader(app)
     app.state.development_proposal_service = DevelopmentProposalService(app)
     app.state.development_dispatch_service = DevelopmentDispatchService(app)
+    app.state.development_baseline_service = DevelopmentBaselineService(app)
     app.state.development_review_service = DevelopmentReviewService(app)
     app.state.development_provider_settings = DevelopmentProviderSettings()
     app.state.development_model_router = build_development_router(

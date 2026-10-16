@@ -10,6 +10,7 @@ from sqlalchemy import create_engine, inspect, text
 from app.context.assembler import ContextAssembler
 from app.core.errors import DomainError
 from app.development_agent.request import build_request
+from app.main import DATABASE_REVISION
 from app.models.development_agent import RepositoryContext
 from app.models.development_dispatch import AssemblyLimits, DevelopmentLimits
 from app.self_build.policy import digest
@@ -118,8 +119,7 @@ def test_development_upgrade_downgrade_and_reupgrade_preserve_existing_schema(tm
     command.upgrade(config, "head")
     with engine.connect() as connection:
         assert (
-            connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "20261016_a_review_join"
+            connection.scalar(text("SELECT version_num FROM alembic_version")) == DATABASE_REVISION
         )
     engine.dispose()
 
@@ -147,8 +147,7 @@ def test_populated_admission_migration_refuses_destructive_downgrade(tmp_path):
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT COUNT(*) FROM development_admissions")) == 1
         assert (
-            connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "20261016_a_review_join"
+            connection.scalar(text("SELECT version_num FROM alembic_version")) == DATABASE_REVISION
         )
     engine.dispose()
 
