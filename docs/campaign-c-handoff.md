@@ -61,11 +61,12 @@ integrated explicitly; no source-runtime invariant was weakened.
    independently approved and proved before C publishes a child on the original
    remote branch. Do not reparent an approved native plan or use CLI rebasing as
    a substitute for that proof.
-3. Separate source-validation base from approved GitHub PR base when advanced-head
-   correction is supported. The current consumer compares B's CodeState base to
-   `approved_base_sha`; the fresh source workspace may legitimately start at the
-   previous published commit while the PR still targets the original main base.
-   Preserve both identities explicitly rather than weakening either check.
+3. Integrate the now separate source-validation and GitHub PR bases into protected
+   advanced-head correction admission. `source_base_sha` and its effective legacy
+   fallback are implemented in the hashed contract, protected preview, B consumer
+   and source-link reader. This preserves old plan hashes and rejects substituted
+   bases. The original published branch/PR binding and A lineage gate remain
+   unimplemented; no advanced-head publication is enabled by the new field.
 4. Add durable bounded correction requests and consume A's authoritative admission
    interface. Current triage is read-only and always grants no dispatch authority.
    Preserve original task/admission scope, deadline, budget reservations, source

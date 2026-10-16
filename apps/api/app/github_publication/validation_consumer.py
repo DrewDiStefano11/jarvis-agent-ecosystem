@@ -42,7 +42,7 @@ class PublicationValidationConsumer:
             or execution.execution_plan_hash != plan.validation_execution_plan_hash
             or execution.validation.code_state_hash != plan.validation_code_state_hash
             or state.head_sha != plan.commit_sha
-            or state.base_sha != plan.approved_base_sha
+            or state.base_sha != plan.validation_base_sha
             or state.repository_identity != plan.repository_identity
             or owner.workspace_id != plan.workspace_id
             or owner.task_id != plan.task_id

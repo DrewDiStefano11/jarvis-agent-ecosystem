@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, model_serializer, model_validator
 
 from app.models.github_publication import PullRequestObservation
 from app.models.self_build import Commit, Contract, Digest, Identifier
@@ -25,6 +25,7 @@ class PublicationPlan(Contract):
     branch: str = Field(max_length=200)
     base_branch: str = Field(max_length=200)
     approved_base_sha: Commit
+    source_base_sha: Commit | None = None
     parent_sha: Commit
     commit_sha: Commit
     expected_remote_sha: Commit | None
@@ -37,6 +38,17 @@ class PublicationPlan(Contract):
     implementation_policy_digest: Digest
     plan_hash: Digest
 
+    @property
+    def validation_base_sha(self):
+        return self.source_base_sha or self.approved_base_sha
+
+    @model_serializer(mode="wrap")
+    def compatible_shape(self, handler):
+        value = handler(self)
+        if self.source_base_sha is None:
+            value.pop("source_base_sha", None)
+        return value
+
     @model_validator(mode="after")
     def exact(self):
         from app.github_publication.transport import safe_branch
@@ -47,6 +59,7 @@ class PublicationPlan(Contract):
             or not safe_branch(self.base_branch)
             or self.branch == self.base_branch
             or self.expected_remote_sha not in {None, self.parent_sha}
+            or (self.source_base_sha is not None and self.source_base_sha != self.parent_sha)
             or any(type(value) is not int or value <= 0 for value in self.publisher_ids)
             or len(set(self.publisher_ids)) != len(self.publisher_ids)
             or self.plan_hash != digest(self.model_dump(mode="json", exclude={"plan_hash"}))
