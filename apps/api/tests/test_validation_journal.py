@@ -700,3 +700,417 @@ def test_historical_journal_survives_policy_upgrade_without_granting_current_aut
         service.prepare(actor, workspace_id, request)
     with pytest.raises(ValueError):
         evidence.verify_plan(prepared.intent.plan)
+
+
+def finalize_fixture(journal, *, failure_kind=None, diagnostic_codes=(), uncertain=False):
+    """Signed fixture measurements test storage only, never claim real execution."""
+    from app.models.validation_execution import ResourceMeasurements
+
+    _, actor, _, service, workspace_id, request = journal
+    current = service.prepare(actor, workspace_id, request)
+    for index, command in enumerate(current.intent.plan.commands):
+        reference = "verdict-command-" + str(index)
+        for kind in ("step_intent", "step_started"):
+            current = advance(
+                service,
+                actor,
+                workspace_id,
+                request,
+                current,
+                kind,
+                gate=command.gate,
+                command_run_id=reference,
+            )
+        if uncertain and index == 0:
+            current = service.reconcile(actor, workspace_id, request, current.intent.journal_id)
+            continue
+        finished = datetime.now(UTC)
+        failing = index == 0 and failure_kind is not None
+        signed = receipt(
+            current.intent.plan,
+            command,
+            task_id=current.intent.owner.task_id,
+            runtime_run_id=current.intent.owner.runtime_run_id,
+            attempt_id=current.intent.owner.attempt_id,
+            command_run_id=reference,
+            sequence=1,
+            started_at=current.updated_at,
+            finished_at=finished,
+            resources=ResourceMeasurements(
+                wall_time_ms=round((finished - current.updated_at).total_seconds() * 1000)
+            ),
+            outcome="failed" if failing else "passed",
+            exit_code=1 if failing else 0,
+            failure_kind=failure_kind if failing else None,
+            diagnostic_codes=diagnostic_codes if failing else (),
+        )
+        current = advance(
+            service,
+            actor,
+            workspace_id,
+            request,
+            current,
+            "step_result",
+            gate=command.gate,
+            command_run_id=reference,
+            receipt=signed,
+        )
+    return advance(service, actor, workspace_id, request, current, "finalized")
+
+
+def verdict_events(app):
+    with app.state.repository.session_factory() as session:
+        return list(
+            session.scalars(
+                select(AuditEventRow).where(
+                    AuditEventRow.event_type == "development_validation.verdict_recorded"
+                )
+            )
+        )
+
+
+def test_verdict_restart_lost_response_and_atomic_outbox(journal):
+    app, actor, operator, service, workspace_id, request = journal
+    final = finalize_fixture(journal)
+    original_approval_id = request.approval_id
+    renewed = service.approve(operator, workspace_id, request.expected_plan_hash)
+    request = request.model_copy(update={"approval_id": renewed.approval_id})
+    result = service.record_verdict(
+        actor,
+        workspace_id,
+        request,
+        final.intent.journal_id,
+        expected_journal_digest=final.digest,
+    )
+    assert result.assessment.ready
+    assert result.approval_id == original_approval_id
+    assert all(f.disposition == "passed" for f in result.repair.findings)
+    assert not result.execution_authorized and not result.source_mutation_authorized
+    assert not result.publication_authorized
+    assert request.lease_token not in result.model_dump_json()
+    restarted = ValidationJournalService(
+        app, state_reader=service.state_reader, receipt_verifier=service.verifier
+    )
+    assert restarted.read_verdict(actor, workspace_id, final.intent.journal_id) == result
+    assert (
+        restarted.record_verdict(
+            actor,
+            workspace_id,
+            request,
+            final.intent.journal_id,
+            expected_journal_digest=final.digest,
+        )
+        == result
+    )
+    assert len(verdict_events(app)) == 1
+    event = verdict_events(app)[0]
+    assert event.payload["payload"]["authorizationApprovalId"] == request.approval_id
+    with app.state.repository.session_factory() as session:
+        outbox = session.scalar(
+            select(OutboxEventRow).where(
+                OutboxEventRow.event_type == event.event_type,
+                OutboxEventRow.sequence_number == event.sequence_number,
+            )
+        )
+        assert outbox.envelope["payload"] == event.payload["payload"]
+
+    # Reconstruct the application/runtime repositories from the same isolated
+    # database too: the record must not depend on process-local service state.
+    from app.main import create_app
+
+    restored_app = create_app(database_url=app.state.settings.database_url)
+    restored_actor = restored_app.state.agent_runtime_service.authenticate_actor(actor.actor_id)
+    restored = ValidationJournalService(
+        restored_app, state_reader=service.state_reader, receipt_verifier=service.verifier
+    )
+    assert restored.read_verdict(restored_actor, workspace_id, final.intent.journal_id) == result
+
+
+@pytest.mark.parametrize(
+    "failure_kind,code,recommendation",
+    [
+        ("test", "assertion_failed", "diagnose_failure"),
+        ("migration", "migration_failed", "diagnose_failure"),
+        ("lint_type_build", "typecheck_failed", "diagnose_failure"),
+        ("infrastructure", "unknown", "diagnose_failure"),
+        ("watchdog", "timeout", "request_bounded_retry"),
+        ("dependency", "dependency_unavailable", "request_bounded_retry"),
+    ],
+)
+def test_journal_backed_diagnosis_retains_classification_and_exact_source(
+    journal, failure_kind, code, recommendation
+):
+    _, actor, _, service, workspace_id, _ = journal
+    final = finalize_fixture(journal, failure_kind=failure_kind, diagnostic_codes=(code,))
+    diagnosis = service.diagnose(
+        actor, workspace_id, final.intent.journal_id, now=datetime.now(UTC)
+    )
+    finding = diagnosis.findings[0]
+    assert finding.failure_kind == failure_kind
+    assert finding.diagnostic_codes == (code,)
+    assert finding.recommendation == recommendation
+    assert finding.reproduction.code_state_hash == final.intent.plan.validation.code_state_hash
+    assert finding.reproduction.command_run_id == final.steps[0].command_run_id
+
+
+def test_uncertain_final_journal_never_records_a_passing_verdict(journal):
+    _, actor, _, service, workspace_id, request = journal
+    final = finalize_fixture(journal, uncertain=True)
+    result = service.record_verdict(
+        actor,
+        workspace_id,
+        request,
+        final.intent.journal_id,
+        expected_journal_digest=final.digest,
+    )
+    assert not result.assessment.ready
+    assert result.repair.findings[0].disposition == "missing"
+    assert result.repair.findings[0].recommendation == "gather_evidence"
+
+
+def test_changed_source_blocks_verdict_and_historical_diagnosis_is_stale(journal):
+    app, actor, _, service, workspace_id, request = journal
+    final = finalize_fixture(journal)
+    previous = service.state_reader
+    service.state_reader = lambda row, session: previous(row, session).model_copy(
+        update={"head_sha": "f" * 40}
+    )
+    with pytest.raises(DomainError, match="changed"):
+        service.record_verdict(
+            actor,
+            workspace_id,
+            request,
+            final.intent.journal_id,
+            expected_journal_digest=final.digest,
+        )
+    diagnosis = service.diagnose(
+        actor, workspace_id, final.intent.journal_id, now=datetime.now(UTC)
+    )
+    assert diagnosis.source_changed
+    assert all(f.disposition == "stale" for f in diagnosis.findings)
+    with pytest.raises(ValueError):
+        service.assess(actor, workspace_id, final.intent.journal_id, now=datetime.now(UTC))
+    assert verdict_events(app) == []
+
+
+def test_verdict_rollback_and_checkpoint_gap_are_fail_closed(journal, monkeypatch):
+    app, actor, _, service, workspace_id, request = journal
+    final = finalize_fixture(journal)
+    emit = service._emit
+
+    def crash(*args, **kwargs):
+        emit(*args, **kwargs)
+        raise RuntimeError("verdict transaction crash")
+
+    monkeypatch.setattr(service, "_emit", crash)
+    with pytest.raises(RuntimeError):
+        service.record_verdict(
+            actor,
+            workspace_id,
+            request,
+            final.intent.journal_id,
+            expected_journal_digest=final.digest,
+        )
+    assert verdict_events(app) == []
+    with app.state.repository.session_factory() as session:
+        assert not list(
+            session.scalars(
+                select(OutboxEventRow).where(
+                    OutboxEventRow.event_type == "development_validation.verdict_recorded"
+                )
+            )
+        )
+    monkeypatch.setattr(service.runtime, "checkpoints_authorized", lambda *args: [])
+    with pytest.raises(DomainError) as failure:
+        service.diagnose(actor, workspace_id, final.intent.journal_id, now=datetime.now(UTC))
+    assert failure.value.code == "VALIDATION_RECOVERY_REQUIRED"
+
+
+def test_forged_persisted_receipt_cannot_create_verdict(journal, monkeypatch):
+    from app.development_validation.planner import digest
+
+    app, actor, _, service, workspace_id, request = journal
+    final = finalize_fixture(journal)
+    # Rewrite a fixture hash chain to prove authentication is independent of it.
+    with app.state.repository.session_factory.begin() as session:
+        previous = "0" * 64
+        for event in session.scalars(
+            select(AuditEventRow)
+            .where(AuditEventRow.event_type == "development_validation.journal_entry")
+            .order_by(AuditEventRow.sequence_number)
+        ):
+            payload = dict(event.payload["payload"])
+            entry = dict(payload["entry"])
+            entry["previous_digest"] = previous
+            if entry["kind"] == "step_result":
+                entry["receipt"] = {**entry["receipt"], "authentication_tag": "f" * 64}
+            entry["entry_digest"] = digest({k: v for k, v in entry.items() if k != "entry_digest"})
+            previous = entry["entry_digest"]
+            event.payload = {**event.payload, "payload": {**payload, "entry": entry}}
+    with pytest.raises(DomainError):
+        service.record_verdict(
+            actor,
+            workspace_id,
+            request,
+            final.intent.journal_id,
+            expected_journal_digest=final.digest,
+        )
+    assert verdict_events(app) == []
+    # Isolate receipt authentication from the independently failing checkpoint
+    # check. Even a fixture accepting the rewritten chain cannot accept its tag.
+    monkeypatch.setattr(service, "_checkpoint", lambda *args: (object(), "fixture", {}))
+    with pytest.raises(ValueError, match="unauthenticated"):
+        service.diagnose(actor, workspace_id, final.intent.journal_id, now=datetime.now(UTC))
+
+
+def next_fixture_attempt(journal):
+    from app.models.agent_runtime import (
+        FailAttemptCommand,
+        RequestRecoveryPlanCommand,
+        UnblockAgentRunCommand,
+    )
+
+    _, actor, _, service, _, request = journal
+    runtime = service.runtime
+    for index, command_type in enumerate(
+        (
+            FailAttemptCommand,
+            RequestRecoveryPlanCommand,
+            UnblockAgentRunCommand,
+            BeginAttemptCommand,
+            StartAttemptCommand,
+        )
+    ):
+        current = runtime.read_run_authorized("run-1", actor)
+        fields = dict(
+            run_id="run-1",
+            command_id=f"retry-{current.attempt_count}-{index}",
+            expected_run_version=current.version,
+            timestamp=datetime.now(UTC),
+        )
+        if command_type is FailAttemptCommand:
+            fields.update(failure_category="dependency", failure_detail="Fixture unavailable")
+        if command_type is BeginAttemptCommand:
+            fields.update(executor_reference=request.worker_id)
+            fields.update(
+                resume_from_checkpoint_id=runtime.checkpoints_authorized("run-1", actor)[
+                    -1
+                ].checkpoint_id
+            )
+        runtime.handle_authorized(command_type(**fields), actor)
+
+
+@pytest.mark.parametrize("old_failure", [None, "watchdog"])
+def test_current_uncertain_journal_cannot_inherit_previous_attempt_result(journal, old_failure):
+    _, actor, _, service, workspace_id, request = journal
+    finalize_fixture(journal, failure_kind=old_failure, diagnostic_codes=("timeout",))
+    next_fixture_attempt(journal)
+    final = finalize_fixture(journal, uncertain=True)
+    diagnosis = service.diagnose(
+        actor, workspace_id, final.intent.journal_id, now=datetime.now(UTC)
+    )
+    finding = diagnosis.findings[0]
+    assert finding.disposition == "missing" and finding.recommendation == "gather_evidence"
+    assert finding.reproduction is None
+    assert len(finding.supporting_receipt_digests) == 1
+    verdict = service.record_verdict(
+        actor,
+        workspace_id,
+        request,
+        final.intent.journal_id,
+        expected_journal_digest=final.digest,
+    )
+    assert verdict.repair.findings[0].disposition == "missing"
+    assert not verdict.assessment.ready
+    assert finding.gate in verdict.assessment.missing
+
+
+def test_persisted_failed_attempts_consume_retry_budget_and_old_owner_cannot_record(journal):
+    app, actor, _, service, workspace_id, request = journal
+    first = finalize_fixture(journal, failure_kind="watchdog", diagnostic_codes=("timeout",))
+    for expected_remaining in (1, 0):
+        next_fixture_attempt(journal)
+        final = finalize_fixture(journal, failure_kind="watchdog", diagnostic_codes=("timeout",))
+        diagnosis = service.diagnose(
+            actor, workspace_id, final.intent.journal_id, now=datetime.now(UTC)
+        )
+        finding = diagnosis.findings[0]
+        assert finding.retries_remaining == expected_remaining
+        assert len(finding.supporting_receipt_digests) == 3 - expected_remaining
+        assert finding.recommendation == (
+            "request_bounded_retry" if expected_remaining else "stop_retrying"
+        )
+    with pytest.raises(DomainError) as failure:
+        service.record_verdict(
+            actor,
+            workspace_id,
+            request,
+            first.intent.journal_id,
+            expected_journal_digest=first.digest,
+        )
+    assert failure.value.code == "VALIDATION_OWNER_MISMATCH"
+    assert verdict_events(app) == []
+
+
+@pytest.mark.parametrize("authority", ["stop", "lease", "approval"])
+def test_verdict_requires_live_authority(journal, authority):
+    app, actor, _, service, workspace_id, request = journal
+    final = finalize_fixture(journal)
+    if authority == "stop":
+        with app.state.repository.session_factory.begin() as session:
+            session.get(SystemStateRow, 1).emergency_stop = True
+    elif authority == "lease":
+        with app.state.repository.session_factory.begin() as session:
+            session.get(TaskLeaseRow, final.intent.owner.task_id).lease_token = "other"
+    else:
+        request = request.model_copy(update={"approval_id": "missing"})
+    with pytest.raises(DomainError):
+        service.record_verdict(
+            actor,
+            workspace_id,
+            request,
+            final.intent.journal_id,
+            expected_journal_digest=final.digest,
+        )
+    assert verdict_events(app) == []
+
+
+def test_historical_verdict_never_replaces_fresh_assessment(journal):
+    from datetime import timedelta
+
+    _, actor, _, service, workspace_id, request = journal
+    final = finalize_fixture(journal)
+    recorded = service.record_verdict(
+        actor,
+        workspace_id,
+        request,
+        final.intent.journal_id,
+        expected_journal_digest=final.digest,
+    )
+    future = recorded.observed_at + timedelta(seconds=3601)
+    assert recorded.assessment.ready
+    assert service.read_verdict(actor, workspace_id, final.intent.journal_id) == recorded
+    current = service.assess(actor, workspace_id, final.intent.journal_id, now=future)
+    assert not current.ready and current.stale
+    diagnosis = service.diagnose(actor, workspace_id, final.intent.journal_id, now=future)
+    assert all(f.disposition == "stale" for f in diagnosis.findings)
+
+
+def test_tampered_verdict_cannot_be_returned_as_durable_evidence(journal):
+    app, actor, _, service, workspace_id, request = journal
+    final = finalize_fixture(journal)
+    service.record_verdict(
+        actor,
+        workspace_id,
+        request,
+        final.intent.journal_id,
+        expected_journal_digest=final.digest,
+    )
+    with app.state.repository.session_factory.begin() as session:
+        event = session.get(AuditEventRow, verdict_events(app)[0].id)
+        payload = dict(event.payload["payload"])
+        verdict = {**payload["verdict"], "current_code_state_hash": "f" * 64}
+        event.payload = {**event.payload, "payload": {**payload, "verdict": verdict}}
+    with pytest.raises(DomainError) as failure:
+        service.read_verdict(actor, workspace_id, final.intent.journal_id)
+    assert failure.value.code == "VALIDATION_VERDICT_INVALID"

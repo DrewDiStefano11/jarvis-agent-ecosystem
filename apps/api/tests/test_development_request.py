@@ -10,8 +10,9 @@ from sqlalchemy import create_engine, inspect, text
 from app.context.assembler import ContextAssembler
 from app.core.errors import DomainError
 from app.development_agent.request import build_request
+from app.main import DATABASE_REVISION
 from app.models.development_agent import RepositoryContext
-from app.models.development_dispatch import DevelopmentLimits
+from app.models.development_dispatch import AssemblyLimits, DevelopmentLimits
 from app.self_build.policy import digest
 from tests.test_autonomous_worker_migration import migration_config
 from tests.test_context_assembler import task
@@ -27,14 +28,15 @@ def assembler():
     )
 
 
-def admission():
+def admission(context_assembler=None):
     return SimpleNamespace(
         plan=SimpleNamespace(
+            assembly_limits=AssemblyLimits.capture(context_assembler or assembler()),
             limits=DevelopmentLimits(
                 provider="openai-development",
                 model="coding-model",
                 completion_criteria=("The requested value is returned.",),
-            )
+            ),
         )
     )
 
@@ -95,7 +97,7 @@ def test_exact_source_context_is_never_silently_truncated():
         maximum_total_characters=500000,
         cross_project_context_allowed=False,
     )
-    root = admission()
+    root = admission(tiny)
     root.plan.limits = root.plan.limits.model_copy(update={"output_tokens_per_dispatch": 128})
     with pytest.raises(DomainError):
         build_request(tiny, task(), context(), root, "a" * 64, 10)
@@ -117,8 +119,7 @@ def test_development_upgrade_downgrade_and_reupgrade_preserve_existing_schema(tm
     command.upgrade(config, "head")
     with engine.connect() as connection:
         assert (
-            connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "20261014_development_lineage"
+            connection.scalar(text("SELECT version_num FROM alembic_version")) == DATABASE_REVISION
         )
     engine.dispose()
 
@@ -146,7 +147,18 @@ def test_populated_admission_migration_refuses_destructive_downgrade(tmp_path):
     with engine.connect() as connection:
         assert connection.scalar(text("SELECT COUNT(*) FROM development_admissions")) == 1
         assert (
-            connection.scalar(text("SELECT version_num FROM alembic_version"))
-            == "20261013_development_dispatch"
+            connection.scalar(text("SELECT version_num FROM alembic_version")) == DATABASE_REVISION
         )
+    engine.dispose()
+
+
+@pytest.mark.parametrize("predecessor", ["20261013_development_dispatch", "20261013_free_ai"])
+def test_development_join_upgrades_both_existing_heads(tmp_path, predecessor):
+    config = migration_config(tmp_path / "existing-head.db")
+    command.upgrade(config, predecessor)
+    command.upgrade(config, "head")
+    engine = create_engine(config.get_main_option("sqlalchemy.url"))
+    assert {"development_admissions", "development_dispatches", "free_ai_quotas"}.issubset(
+        inspect(engine).get_table_names()
+    )
     engine.dispose()
