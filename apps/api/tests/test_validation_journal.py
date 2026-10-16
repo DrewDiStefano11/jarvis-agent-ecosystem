@@ -18,6 +18,334 @@ pytest_plugins = ["tests.test_self_build_workspaces"]
 
 
 @pytest.fixture
+def native_delivery_bundle(journal):
+    from app.development_validation.planner import digest
+    from app.models.hyper_v_control import HyperVBinding
+    from app.models.validation_cleanup import (
+        OwnedStorageEntry,
+        StorageIdentity,
+        StorageRegistration,
+    )
+    from app.models.validation_isolation import CapsuleFile
+    from app.validation_journal.native_delivery import NativeDeliveryJournal
+    from app.validation_runner.isolation import build_capsule
+
+    app, actor, _, service, workspace_id, request = journal
+    snapshot = service.prepare(actor, workspace_id, request)
+    file = CapsuleFile(
+        path="apps/api/app/example.py", mode="100644", content_digest="a" * 64, byte_count=1
+    )
+    capsule = build_capsule(
+        snapshot.intent.plan,
+        owner=snapshot.intent.owner,
+        journal_digest=snapshot.digest,
+        native_inventory_digest=digest([file.model_dump(mode="json")]),
+        files=[file],
+    )
+    registration = StorageRegistration(
+        binding=HyperVBinding(
+            host_identity="fixture-host",
+            host_machine_guid="aaaaaaaa-1234-1234-1234-123456789abc",
+            vm_id="12345678-1234-1234-1234-123456789abc",
+            ownership_digest="c" * 64,
+            provisioning_digest="d" * 64,
+            capsule_digest=capsule.capsule_digest,
+        ),
+        owner=snapshot.intent.owner,
+        journal_digest=snapshot.digest,
+        dedicated_root_identity=StorageIdentity(volume_id=1, file_id=1),
+        allocation_identity=StorageIdentity(volume_id=1, file_id=2),
+        allocation_name="jarvis-validation-" + "a" * 32,
+        service_sid="S-1-5-21-1-2-3-4567",
+        entries=(
+            OwnedStorageEntry(
+                path="source.iso", kind="file", identity=StorageIdentity(volume_id=1, file_id=3)
+            ),
+        ),
+    )
+
+    def verify(checked, session):
+        assert checked == registration
+
+    effects = NativeDeliveryJournal(
+        service,
+        actor,
+        workspace_id,
+        request,
+        snapshot.intent.journal_id,
+        native_identity_verifier=verify,
+    )
+    return app, effects, registration, capsule, snapshot.intent.plan
+
+
+def test_native_delivery_durable_claim_blocks_restart_replay(native_delivery_bundle):
+    _, effects, registration, capsule, plan = native_delivery_bundle
+    intent = effects.prepare(registration, capsule, plan, "attach_media", "e" * 64, 65536)
+    assert effects.prepare(registration, capsule, plan, "attach_media", "e" * 64, 65536) == intent
+    effects.require_acknowledged(intent)
+    effects.claim(intent)
+    with pytest.raises(DomainError, match="never replayed"):
+        effects.claim(intent)
+    assert effects.uncertain(intent)
+    with pytest.raises(DomainError):
+        effects.claim(intent)
+
+
+def test_native_delivery_real_checkpoint_and_outbox_unmeasured_observation(native_delivery_bundle):
+    app, effects, registration, capsule, plan = native_delivery_bundle
+    intent = effects.prepare(registration, capsule, plan, "attach_media", "e" * 64, 65536)
+    effects.claim(intent)
+    binding = registration.binding
+    observation = dict(
+        vmId=str(binding.vm_id),
+        hostMachineGuid=str(binding.host_machine_guid),
+        ownershipDigest=binding.ownership_digest,
+        mediaDigest="e" * 64,
+        mediaBytes=65536,
+        mediaState="attached",
+        commandOutcome="unmeasured",
+        executionAuthorized=False,
+    )
+    forged = {**observation, "commandOutcome": "passed", "executionAuthorized": True}
+    with pytest.raises(DomainError):
+        effects.complete(intent, forged)
+    with pytest.raises(DomainError):
+        effects.complete(intent, {**observation, "vmId": "foreign"})
+    effects.complete(intent, observation)
+    effects.require_acknowledged(intent)
+    with effects.service.repository.sessions() as session:
+        history = effects._history(session, intent)
+    assert [entry.kind for entry in history] == ["intent", "claimed", "observed"]
+    assert effects._checkpoint(intent, history[-1])[0].resume_cursor == "3"
+    with app.state.repository.session_factory() as session:
+        audit = list(
+            session.scalars(
+                select(AuditEventRow).where(
+                    AuditEventRow.event_type == "development_validation.native_delivery"
+                )
+            )
+        )
+        assert len(audit) == 3
+        assert all(
+            session.scalar(
+                select(OutboxEventRow).where(
+                    OutboxEventRow.event_type == row.event_type,
+                    OutboxEventRow.sequence_number == row.sequence_number,
+                )
+            )
+            is not None
+            for row in audit
+        )
+
+
+def test_native_delivery_source_change_cannot_claim_stale_intent(native_delivery_bundle):
+    _, effects, registration, capsule, plan = native_delivery_bundle
+    intent = effects.prepare(registration, capsule, plan, "attach_media", "e" * 64, 65536)
+    reader = effects.service.state_reader
+    effects.service.state_reader = lambda row, session: reader(row, session).model_copy(
+        update={"head_sha": "f" * 40}
+    )
+    with pytest.raises(DomainError):
+        effects.claim(intent)
+
+
+def test_native_delivery_concurrent_claim_has_one_winner(native_delivery_bundle):
+    from concurrent.futures import ThreadPoolExecutor
+
+    _, effects, registration, capsule, plan = native_delivery_bundle
+    intent = effects.prepare(registration, capsule, plan, "attach_media", "e" * 64, 65536)
+
+    def claim():
+        try:
+            effects.claim(intent)
+            return "claimed"
+        except DomainError:
+            return "denied"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: claim(), range(2)))
+    assert sorted(results) == ["claimed", "denied"]
+
+
+def test_native_delivery_claim_ack_loss_cannot_reexecute(native_delivery_bundle, monkeypatch):
+    _, effects, registration, capsule, plan = native_delivery_bundle
+    intent = effects.prepare(registration, capsule, plan, "attach_media", "e" * 64, 65536)
+    acknowledge = effects._acknowledge
+    monkeypatch.setattr(
+        effects, "_acknowledge", lambda _: (_ for _ in ()).throw(OSError("ack lost"))
+    )
+    with pytest.raises(OSError):
+        effects.claim(intent)
+    monkeypatch.setattr(effects, "_acknowledge", acknowledge)
+    effects.prepare(registration, capsule, plan, "attach_media", "e" * 64, 65536)
+    with pytest.raises(DomainError):
+        effects.claim(intent)
+    with effects.service.repository.sessions() as session:
+        assert [entry.kind for entry in effects._history(session, intent)] == ["intent", "claimed"]
+
+
+def delivery_observation(intent):
+    binding = intent.registration.binding
+    return dict(
+        vmId=str(binding.vm_id),
+        hostMachineGuid=str(binding.host_machine_guid),
+        ownershipDigest=binding.ownership_digest,
+        mediaDigest=intent.image_digest,
+        mediaBytes=intent.image_byte_count,
+        mediaState="attached" if intent.operation == "attach_media" else "detached",
+        commandOutcome="unmeasured",
+        executionAuthorized=False,
+    )
+
+
+@pytest.mark.parametrize("operation", ["attach_media", "detach_media"])
+@pytest.mark.parametrize("uncertain", [False, True])
+def test_native_delivery_recovery_reconciles_once_without_reclaim(
+    native_delivery_bundle, operation, uncertain
+):
+    _, effects, registration, capsule, plan = native_delivery_bundle
+    intent = effects.prepare(registration, capsule, plan, operation, "e" * 64, 65536)
+    with pytest.raises(DomainError, match="original durable claim"):
+        effects.require_reconcilable(intent)
+    effects.claim(intent)
+    if uncertain:
+        assert effects.uncertain(intent)
+    observation = delivery_observation(intent)
+    effects.reconcile(intent, observation)
+    effects.reconcile(intent, observation)
+    effects.require_acknowledged(intent)
+    with effects.service.repository.sessions() as session:
+        history = effects._history(session, intent)
+        assert [entry.kind for entry in history] == (
+            ["intent", "claimed", "uncertain", "reconciled"]
+            if uncertain
+            else ["intent", "claimed", "reconciled"]
+        )
+    with pytest.raises(DomainError):
+        effects.claim(intent)
+
+
+def test_native_delivery_recovery_retries_only_checkpoint_after_ack_loss(
+    native_delivery_bundle, monkeypatch
+):
+    _, effects, registration, capsule, plan = native_delivery_bundle
+    intent = effects.prepare(registration, capsule, plan, "attach_media", "e" * 64, 65536)
+    effects.claim(intent)
+    acknowledge = effects._acknowledge
+    monkeypatch.setattr(
+        effects, "_acknowledge", lambda _: (_ for _ in ()).throw(OSError("ack lost"))
+    )
+    with pytest.raises(OSError):
+        effects.reconcile(intent, delivery_observation(intent))
+    monkeypatch.setattr(effects, "_acknowledge", acknowledge)
+    effects.reconcile(intent, delivery_observation(intent))
+    effects.require_acknowledged(intent)
+    with effects.service.repository.sessions() as session:
+        assert [entry.kind for entry in effects._history(session, intent)] == [
+            "intent",
+            "claimed",
+            "reconciled",
+        ]
+
+
+@pytest.mark.parametrize(
+    "attack", ["state", "forged", "source", "identity", "stop", "lease", "approval"]
+)
+def test_native_delivery_recovery_rejects_changed_state_and_authority(
+    native_delivery_bundle, attack
+):
+    app, effects, registration, capsule, plan = native_delivery_bundle
+    intent = effects.prepare(registration, capsule, plan, "attach_media", "e" * 64, 65536)
+    effects.claim(intent)
+    observation = delivery_observation(intent)
+    if attack == "state":
+        observation["mediaState"] = "detached"
+    elif attack == "forged":
+        observation["commandOutcome"] = "passed"
+        observation["executionAuthorized"] = True
+    elif attack == "source":
+        reader = effects.service.state_reader
+        effects.service.state_reader = lambda row, session: reader(row, session).model_copy(
+            update={"head_sha": "f" * 40}
+        )
+    elif attack == "identity":
+        effects.native_verifier = lambda *_: (_ for _ in ()).throw(
+            DomainError("ORIGINAL_IDENTITY_CHANGED", "Identity changed.", 409)
+        )
+    elif attack == "stop":
+        with app.state.repository.session_factory.begin() as session:
+            session.get(SystemStateRow, 1).emergency_stop = True
+    else:
+        field = "lease_token" if attack == "lease" else "approval_id"
+        effects.request = effects.request.model_copy(update={field: "foreign"})
+    with pytest.raises(DomainError):
+        effects.reconcile(intent, observation)
+    with effects.service.repository.sessions() as session:
+        assert [entry.kind for entry in effects._history(session, intent)] == ["intent", "claimed"]
+
+
+@pytest.mark.parametrize("native_state", ["attached", "detached"])
+def test_native_media_restart_only_inspects_and_never_repeats_effect(
+    native_delivery_bundle, tmp_path, monkeypatch, native_state
+):
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from app.validation_runner import media
+
+    _, effects, registration, capsule, plan = native_delivery_bundle
+    intent = effects.prepare(registration, capsule, plan, "attach_media", "e" * 64, 65536)
+    effects.claim(intent)
+    calls = []
+    path = tmp_path / registration.allocation_name / "source.iso"
+
+    def guard(root, original, checked_capsule, checked_plan):
+        assert (root, original, checked_capsule, checked_plan) == (
+            tmp_path,
+            registration,
+            capsule,
+            plan,
+        )
+        calls.append("authority")
+
+    @contextmanager
+    def pin(root, original, checked_capsule, checked_plan, **kwargs):
+        assert kwargs["image_digest"] == intent.image_digest
+        assert kwargs["image_byte_count"] == intent.image_byte_count
+        kwargs["authority_check"](root, original, checked_capsule, checked_plan)
+        try:
+            yield path
+        finally:
+            calls.append("unpin")
+
+    def invoke(binding, operation, *, media):
+        assert binding == registration.binding
+        assert operation == "inspect_media"
+        assert media == (path, intent.image_digest, intent.image_byte_count)
+        calls.append(operation)
+        return {**delivery_observation(intent), "mediaState": native_state}
+
+    monkeypatch.setattr(media, "pinned_source_media", pin)
+    delivery = media.NativeMediaDelivery(
+        SimpleNamespace(transport=SimpleNamespace(invoke=invoke)),
+        root=tmp_path,
+        authority_check=guard,
+        durable_effect=effects,
+    )
+    if native_state == "attached":
+        assert delivery.reconcile(intent, capsule, plan)["executionAuthorized"] is False
+    else:
+        with pytest.raises(DomainError):
+            delivery.reconcile(intent, capsule, plan)
+    assert calls.count("inspect_media") == 1
+    assert "unpin" in calls
+    with effects.service.repository.sessions() as session:
+        assert effects._history(session, intent)[-1].kind == (
+            "reconciled" if native_state == "attached" else "claimed"
+        )
+
+
+@pytest.fixture
 def journal(workspace):
     app, actor, workspace_service, reserve_request, _, _ = workspace
     reserved = workspace_service.reserve(actor, reserve_request)

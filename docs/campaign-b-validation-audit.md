@@ -178,3 +178,8 @@ bringing the integrated baseline total to 2,765 passes and three skips across
 2,768 collected cases. The portable isolation contract/collector milestone is
 documented in `validation-isolation-provisioning.md`; its focused local tests do
 not prove real isolated execution.
+
+Targeted follow-up (2026-10-16): guest execution uses the stricter isolation/command
+wall deadline and a combined stdout/stderr budget shared across invocations.
+Focused guest regressions: 44 passed on the repair tree. Frontend sources are
+unchanged; the prior typecheck, ESLint, Vitest and build evidence is retained.
