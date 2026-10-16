@@ -45,17 +45,33 @@ def classify(source_link, publisher_ids, *, now=None):
         for review in observed.reviews
         if review.evidence_id in reviews
         and review.independent
+        and review.reviewer_id not in publisher_ids
         and review.head_sha == source_link.commit_sha
     }
-    findings = {item.evidence_id for item in observed.findings if not item.resolved}
+    independent_reviews = {
+        review.evidence_id
+        for review in observed.reviews
+        if review.independent
+        and review.reviewer_id not in publisher_ids
+        and review.head_sha == source_link.commit_sha
+        and review.state not in {"pending", "dismissed"}
+    }
+    findings = {
+        item.evidence_id
+        for item in observed.findings
+        if not item.resolved
+        and item.head_sha == source_link.commit_sha
+        and item.review_id in independent_reviews
+    }
     stale_actionable = reviews - review_refs | {
         item.evidence_id
         for item in observed.findings
-        if not item.resolved and item.head_sha != source_link.commit_sha
+        if not item.resolved and item.evidence_id not in findings
     }
     if stale_actionable:
         blockers.append("review_evidence_requires_reconfirmation")
     actionable = review_refs | findings
+    finding_refs = {item.evidence_id for item in observed.findings if not item.resolved}
     failed = set()
     waiting = set()
     for check in observed.checks:
@@ -63,6 +79,9 @@ def classify(source_link, publisher_ids, *, now=None):
             continue
         if check.state in {"failed", "cancelled", "skipped", "unknown", "stale"}:
             failed.add(check.evidence_id)
+        elif check.state in {"queued", "running"}:
+            waiting.add(check.evidence_id)
+        if check.evidence_id in failed | waiting:
             # Publisher IDs are GitHub users, not check-run GitHub App IDs.
             # Only an explicitly app-bound protected requirement establishes
             # the provider for this exact context.
@@ -73,9 +92,7 @@ def classify(source_link, publisher_ids, *, now=None):
                 for requirement in observed.required_checks
             ):
                 blockers.append("check_publisher_unverified")
-        elif check.state in {"queued", "running"}:
-            waiting.add(check.evidence_id)
-    references = actionable | reviews | failed | waiting
+    references = actionable | finding_refs | reviews | failed | waiting
     if len(references) > 32:
         blockers.append("evidence_limit_exceeded")
     # Keep the original full protected observation as the source of overflow;
