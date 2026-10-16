@@ -63,6 +63,8 @@ class ProviderType(StrEnum):
     OLLAMA = "ollama"
     OPENAI_COMPATIBLE = "openai_compatible"
     OPENAI_RESPONSES = "openai_responses"
+    CHATGPT_PLAN = "chatgpt_plan"
+    CODEX = "codex"
 
 
 class UsageQuality(StrEnum):

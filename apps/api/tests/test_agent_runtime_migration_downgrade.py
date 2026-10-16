@@ -220,7 +220,7 @@ def test_safe_runtime_downgrade_and_upgrade_round_trip_preserves_representable_d
     with engine.connect() as connection:
         assert (
             connection.scalar(text("select version_num from alembic_version"))
-            == "20261013_development_dispatch"
+            == "20261016_a_review_join"
         )
     assert "agent_runtime_runs" in set(inspect(engine).get_table_names())
     engine.dispose()

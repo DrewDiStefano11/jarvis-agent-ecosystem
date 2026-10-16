@@ -1,5 +1,14 @@
 # HTTP contracts
 
+Campaign D adds `free_only` to `AutonomousWorkerStatus.modelExecutionMode` and
+updates the advertised database head to `20261013_free_ai`. Existing response
+envelopes and event schema versions are preserved. No HTTP endpoint accepts
+provider allowance evidence, tokens or cloud activation. The environment-only
+activation switch defaults to false and is separate from allowance evidence.
+An exhausted/unverified allowance pauses
+the native runtime with `free_capacity_unavailable`; task status follows the
+existing `under_review` path. See [zero-cost AI](zero-cost-ai.md).
+
 Improvement Lab `SourceProvenance.source_type` also accepts `ci_run`. Its bounded
 `CIRunEvidence`/`CIJobEvidence` import contracts project an operator-exported
 GitHub Actions JSON run. CI source provenance stays incomplete; job conclusions
@@ -314,3 +323,5 @@ or provider dispatch. There is no HTTP model-response importer or activation fla
 No OpenAI API key is read; future Codex app-server activation remains contingent
 on Campaign D's independent billing/credit/recharge safeguards. Admission and
 review alone do not approve native source mutation, validate code or publish it.
+
+Campaign repair (2026-10-16): development dispatch and shared nonbillable quota migrations converge at 20261016_a_review_join without rewriting either deployed predecessor. The development request fixture binds the same captured assembly limits as production admission; tiny-context tests still exercise source truncation refusal.

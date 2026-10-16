@@ -1,5 +1,13 @@
 # Event contracts and transitions
 
+Campaign D records physical dispatch identity in `model.call.started`,
+`model.retry.started`, and `model.fallback.started`, with provider/model,
+`dispatchKind`, and durable `requestCount`. `model.call.failed` records sanitized
+`failureCategory` for each failed physical attempt before retrying or switching.
+These append-only audit/outbox records contain
+no prompt, output, credential, or raw provider body. Existing envelope versions
+and sequence semantics are preserved. See [zero-cost AI](zero-cost-ai.md).
+
 Every `EventEnvelope` includes `eventId`, `schemaVersion`, `eventType`, `timestamp`, `sequenceNumber`, `correlationId`, optional `taskId`/`agentId`, `source`, and typed payload data. Event families are `agent.status.changed`, `task.*`, `approval.*`, `context.*`, `system.*`, `temporary_agent.*`, and `error.*`. A `system.snapshot` is sent immediately after connection.
 
 Phase 2B adds `worker.registered`, `worker.draining`, `worker.stopped`, `task.lease.acquired`, `task.lease.renewed`, `task.lease.released`, and `task.lease.expired`. Completion and failure continue to use compatible `task.completed`, `task.retrying`, and `task.failed` names. Lease events contain the worker ID, attempt number, expiration/checkpoint where applicable, and a non-secret token fingerprint; the bearer token is never published.
