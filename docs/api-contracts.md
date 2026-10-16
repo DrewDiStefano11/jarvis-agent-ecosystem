@@ -1,5 +1,14 @@
 # HTTP contracts
 
+Campaign D adds `free_only` to `AutonomousWorkerStatus.modelExecutionMode` and
+updates the advertised database head to `20261013_free_ai`. Existing response
+envelopes and event schema versions are preserved. No HTTP endpoint accepts
+provider allowance evidence, tokens or cloud activation. The environment-only
+activation switch defaults to false and is separate from allowance evidence.
+An exhausted/unverified allowance pauses
+the native runtime with `free_capacity_unavailable`; task status follows the
+existing `under_review` path. See [zero-cost AI](zero-cost-ai.md).
+
 Improvement Lab `SourceProvenance.source_type` also accepts `ci_run`. Its bounded
 `CIRunEvidence`/`CIJobEvidence` import contracts project an operator-exported
 GitHub Actions JSON run. CI source provenance stays incomplete; job conclusions
@@ -288,3 +297,5 @@ When authenticated remote operator service is disabled, persisted creation appro
 return `SELF_BUILD_APPROVAL_UNAVAILABLE` before intent or native effects. Windows
 inventory validation rejects aliased path components and file/directory collisions
 with `SELF_BUILD_MATERIALIZATION_UNSAFE` before target/branch registration.
+
+Campaign C integration (2026-10-16) retains both native/publication operator routes and current shared model-router persistence. The real composed commit/recovery acceptance case has a bounded 600-second test budget for fixture setup plus two native executions on Windows hosted runners (existing 300-second runs reached the second completion guard before timing out). Assertions, production deadlines, authority checks and recovery invariants are unchanged.

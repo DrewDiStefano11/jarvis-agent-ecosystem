@@ -48,6 +48,7 @@ from app.model_providers.errors import (
     MalformedProviderResponseError,
     ModelProviderError,
     ProviderExecutionDisabledError,
+    QuotaExhaustedError,
     RequestTimeoutError,
     UnknownProviderError,
 )
@@ -123,13 +124,24 @@ class AutonomousWorkerService:
     def validate_enabled(self) -> None:
         if not self.settings.autonomous_worker_enabled:
             raise AutonomousWorkerError("AUTONOMOUS_WORKER_DISABLED", status_code=503)
-        if self.settings.model_execution_mode != "local_only":
+        if self.settings.model_execution_mode not in {"local_only", "free_only"}:
             raise AutonomousWorkerError("MODEL_EXECUTION_DISABLED", status_code=503)
         providers = self.router.registry.list()
-        if any(not provider.is_local for provider in providers):
+        if self.settings.model_execution_mode == "local_only" and any(
+            not provider.is_local for provider in providers
+        ):
             raise AutonomousWorkerError("LOCAL_PROVIDER_REQUIRED", status_code=503)
-        if not providers:
+        if not providers and self.settings.model_execution_mode != "free_only":
             raise AutonomousWorkerError("NO_LOCAL_PROVIDER_AVAILABLE", status_code=503)
+
+    def assert_provider_activation(self, provider_name: str) -> None:
+        if (
+            not self.router.registry.get(provider_name).is_local
+            and not self.settings.verified_cloud_execution_allowed
+        ):
+            raise ProviderExecutionDisabledError(
+                "hosted execution requires separate operator activation", provider=provider_name
+            )
 
     async def run_once(
         self, worker_id: str, *, task_id: str | None = None
@@ -325,6 +337,7 @@ class AutonomousWorkerService:
                 "MODEL_EXECUTION_TIMEOUT",
                 "MODEL_EXECUTION_DISABLED",
                 "LOCAL_PROVIDER_REQUIRED",
+                "FREE_CAPACITY_UNAVAILABLE",
             }:
                 return self._safe_pause_after_failure(
                     snapshot,
@@ -820,7 +833,7 @@ class AutonomousWorkerService:
             initial,
             provider_requests + 1,
         )
-        provider_requests += 1
+        provider_requests = self.executions.get(execution.executionId).requestCount
         responses.append(response)
         parsed, errors = self._parse_result(response.content, request.response_format)
         if parsed is None:
@@ -876,7 +889,7 @@ class AutonomousWorkerService:
                 repair,
                 provider_requests + 1,
             )
-            provider_requests += 1
+            provider_requests = self.executions.get(execution.executionId).requestCount
             responses.append(response)
             parsed, _ = self._parse_result(response.content, request.response_format)
             if parsed is None:
@@ -905,29 +918,87 @@ class AutonomousWorkerService:
         assert request is not None
         self._assert_live_policy(snapshot, actor, worker_id, lease_token)
         execution = self.executions.get(execution_id)
-        if request.correction_policy is not None:
+        free_mode = self.settings.model_execution_mode == "free_only"
+        if not free_mode and request.correction_policy is not None:
             if execution.requestCount >= request_count:
                 raise AutonomousWorkerError("MODEL_DISPATCH_OUTCOME_UNKNOWN")
             self.reserve_planning_dispatch(
                 snapshot, execution, actor, worker_id, lease_token, "worker", request_count
             )
-        self.executions.record_call_started(
-            execution_id,
-            worker_id=worker_id,
-            lease_token=lease_token,
-            request_count=request_count,
-        )
+        if not free_mode:
+            self.executions.record_call_started(
+                execution_id,
+                worker_id=worker_id,
+                lease_token=lease_token,
+                request_count=request_count,
+            )
+
+        physical_count = request_count - 1
+        previous_provider = None
+
+        async def before_dispatch(provider_name: str, model: str) -> None:
+            nonlocal physical_count, previous_provider
+            self._assert_live_policy(snapshot, actor, worker_id, lease_token)
+            self.assert_provider_activation(provider_name)
+            current = self.executions.get(execution_id)
+            if current.requestCount != physical_count:
+                raise AutonomousWorkerError("MODEL_DISPATCH_OUTCOME_UNKNOWN")
+            if physical_count >= request.maximum_provider_requests:
+                raise AutonomousWorkerError("MODEL_EXECUTION_BUDGET_EXCEEDED")
+            physical_count += 1
+            dispatch_kind = (
+                "fallback"
+                if previous_provider and previous_provider != provider_name
+                else "retry"
+                if previous_provider
+                else "repair"
+                if request_count > 1
+                else "initial"
+            )
+            previous_provider = provider_name
+            if request.correction_policy is not None:
+                self.reserve_planning_dispatch(
+                    snapshot, current, actor, worker_id, lease_token, "worker", physical_count
+                )
+            self.executions.record_call_started(
+                execution_id,
+                worker_id=worker_id,
+                lease_token=lease_token,
+                request_count=physical_count,
+                provider=provider_name,
+                model=model,
+                dispatch_kind=dispatch_kind,
+            )
+
+        async def after_failure(provider_name: str, model: str, category: str) -> None:
+            self._assert_live_policy(snapshot, actor, worker_id, lease_token)
+            self.executions.record_provider_failure(
+                execution_id,
+                worker_id=worker_id,
+                lease_token=lease_token,
+                provider=provider_name,
+                model=model,
+                category=category,
+            )
+
         requirements = RoutingRequirements(
             requested_provider=request.provider_preference,
             required_capability=ModelCapability.CHAT,
             preferred_model=request.model_name,
-            prefer_local=True,
-            allow_remote=False,
-            allow_fallback=False,
-            maximum_fallbacks=0,
+            prefer_local=self.settings.model_prefer_local,
+            allow_remote=self.settings.verified_cloud_execution_allowed,
+            allow_fallback=self.settings.verified_cloud_execution_allowed,
+            allow_quota_fallback=self.settings.verified_cloud_execution_allowed,
+            maximum_fallbacks=(
+                min(20, max(0, len(self.router.registry.list()) - 1))
+                if self.settings.verified_cloud_execution_allowed
+                else 0
+            ),
         )
         budget = TaskBudget(
-            maximum_requests=1,
+            maximum_requests=(
+                max(1, request.maximum_provider_requests - physical_count) if free_mode else 1
+            ),
             maximum_output_tokens=request.maximum_output_tokens,
         )
         timeout = self.execution_timeout(snapshot)
@@ -945,21 +1016,34 @@ class AutonomousWorkerService:
                     request=request_payload,
                     requirements=requirements,
                     budget=budget,
+                    **(
+                        {"before_dispatch": before_dispatch, "after_failure": after_failure}
+                        if free_mode
+                        else {}
+                    ),
                 )
         except TimeoutError as exc:
             raise AutonomousWorkerError("MODEL_EXECUTION_TIMEOUT") from exc
         except RequestTimeoutError as exc:
             raise AutonomousWorkerError("MODEL_EXECUTION_TIMEOUT") from exc
+        except QuotaExhaustedError as exc:
+            raise AutonomousWorkerError("FREE_CAPACITY_UNAVAILABLE", status_code=503) from exc
         except BudgetExceededError as exc:
             raise AutonomousWorkerError("MODEL_EXECUTION_BUDGET_EXCEEDED") from exc
         except ProviderExecutionDisabledError as exc:
             raise AutonomousWorkerError("MODEL_EXECUTION_DISABLED", status_code=503) from exc
         except UnknownProviderError as exc:
-            raise AutonomousWorkerError("NO_LOCAL_PROVIDER_AVAILABLE", status_code=503) from exc
+            raise AutonomousWorkerError(
+                "FREE_CAPACITY_UNAVAILABLE" if free_mode else "NO_LOCAL_PROVIDER_AVAILABLE",
+                status_code=503,
+            ) from exc
         except MalformedProviderResponseError as exc:
             raise AutonomousWorkerError("MODEL_OUTPUT_INVALID") from exc
         except ModelProviderError as exc:
-            raise AutonomousWorkerError("NO_LOCAL_PROVIDER_AVAILABLE", status_code=503) from exc
+            raise AutonomousWorkerError(
+                "FREE_CAPACITY_UNAVAILABLE" if free_mode else "NO_LOCAL_PROVIDER_AVAILABLE",
+                status_code=503,
+            ) from exc
         finally:
             heartbeat.cancel()
             try:
@@ -967,6 +1051,8 @@ class AutonomousWorkerService:
             except asyncio.CancelledError:
                 pass
         self._assert_live_policy(snapshot, actor, worker_id, lease_token)
+        if free_mode:
+            request_count = physical_count
         self.executions.record_response_received(
             execution_id,
             worker_id=worker_id,

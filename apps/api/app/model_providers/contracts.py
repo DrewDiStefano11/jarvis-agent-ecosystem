@@ -62,6 +62,8 @@ BUILTIN_ADAPTER_CAPABILITIES = frozenset(
 class ProviderType(StrEnum):
     OLLAMA = "ollama"
     OPENAI_COMPATIBLE = "openai_compatible"
+    CHATGPT_PLAN = "chatgpt_plan"
+    CODEX = "codex"
 
 
 class UsageQuality(StrEnum):
