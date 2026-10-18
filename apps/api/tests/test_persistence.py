@@ -32,7 +32,7 @@ from app.db.models import (
     WorkflowRunRow,
 )
 from app.db.session import create_database_engine
-from app.main import create_app
+from app.main import DATABASE_REVISION, create_app
 from app.services.unit_of_work import UnitOfWork
 
 
@@ -151,8 +151,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     }
     with engine.connect() as connection:
         assert (
-            connection.scalar(text("select version_num from alembic_version"))
-            == "20261016_a_review_join"
+            connection.scalar(text("select version_num from alembic_version")) == DATABASE_REVISION
         )
     engine.dispose()
     command.downgrade(config, "20260723_02")
@@ -199,8 +198,7 @@ def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:
     with create_database_engine(database_url(path)).connect() as connection:
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
         assert (
-            connection.scalar(text("select version_num from alembic_version"))
-            == "20261016_a_review_join"
+            connection.scalar(text("select version_num from alembic_version")) == DATABASE_REVISION
         )
     for revision in (root / "migrations" / "versions").glob("*.py"):
         source = revision.read_text(encoding="utf-8")
@@ -1990,7 +1988,7 @@ def test_sqlite_percent_path_survives_application_and_alembic_roundtrip(
         with create_database_engine(value).connect() as connection:
             assert (
                 connection.scalar(text("SELECT version_num FROM alembic_version"))
-                == "20261016_a_review_join"
+                == DATABASE_REVISION
             )
         assert sorted(p.name for p in tmp_path.glob("*.db")) == [filename]
     finally:

@@ -2,7 +2,7 @@
 
 Campaign D adds `free_only` to `AutonomousWorkerStatus.modelExecutionMode` and
 adds the `20261013_free_ai` migration. The current advertised database head is
-`20261016_a_review_join`, joining quota and development-dispatch history. Existing response
+`20261016_a_baseline_join`, including quota, dispatch and baseline history. Existing response
 envelopes and event schema versions are preserved. No HTTP endpoint accepts
 provider allowance evidence, tokens or cloud activation. The environment-only
 activation switch defaults to false and is separate from allowance evidence.
@@ -325,4 +325,13 @@ No OpenAI API key is read; future Codex app-server activation remains contingent
 on Campaign D's independent billing/credit/recharge safeguards. Admission and
 review alone do not approve native source mutation, validate code or publish it.
 
+
+### Development correction snapshot
+
+POST `/api/development/workspaces/{workspace_id}/iterations/{dispatch_id}/baseline`
+accepts `CaptureDevelopmentBaseline` (native creation authority plus exact approved
+mutation reference) and returns `TypedApiResponse[BaselineSummary]`. It is an
+owner/lease-fenced historical snapshot capture, with no provider dispatch or source
+effect. The private snapshot is not accepted from HTTP/model payloads. The summary
+explicitly grants no freshness, validation, execution or publication authority.
 Campaign repair (2026-10-16): development dispatch and shared nonbillable quota migrations converge at 20261016_a_review_join without rewriting either deployed predecessor. The development request fixture binds the same captured assembly limits as production admission; tiny-context tests still exercise source truncation refusal.

@@ -65,3 +65,9 @@ this execution checkpoint is not a campaign-completion claim.
 Public-repository GitHub-hosted Actions CI is authorized and required for the current
 head. Preserve every validation job and require current-head CI plus independent
 review before a manual merge. Live inference and API-key validation remain disabled.
+
+Targeted follow-up (2026-10-16): the admission policy digest now includes baseline
+capture, verification, and their protected artifact/history dependencies. The
+persisted-admission regression simulates upgrades to each added component and
+verifies rejection of old approval evidence (1 passed; native isolated fixture).
+Frontend sources are unchanged; prior frontend validation evidence is retained.
