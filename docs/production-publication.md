@@ -1,5 +1,10 @@
 # Production publication orchestration
 
+Effect admission rechecks the configured publication profile after validation
+and hosted-CI callbacks. A synchronous profile replacement in either callback
+revokes the captured target, broker and publisher policy before the next remote
+request can be authorized. Callback success cannot preserve an obsolete profile.
+
 Correction triage authenticates failed check providers against the protected
 required-check context and its explicit GitHub App ID. Publisher GitHub user IDs
 are a separate identity namespace and cannot establish check-app authority.
@@ -21,6 +26,13 @@ protected validation service and verified-boundary guard, a hosted-CI cost guard
 and a native commit continuation consumer. These are trusted host adapters, not
 model inputs or enrollment APIs. Configuration installs no key, runner or VM and
 does not enable GitHub workflows. Missing evidence or guards fail closed.
+
+Replacing the trusted profile revokes captured publication/native consumer
+references. Current profile identity is checked before and after validation and
+at publication authority/approval boundaries. Omitted native consumers are cleared;
+they are not inherited from an earlier profile. Invalid replacement inputs leave
+the prior profile intact. An already attempted remote effect is reconciled through
+the protected journal by the current authorized profile, never blindly repeated.
 
 Publication requires the unassigned `self_build.github.publish` task permission,
 an independent authenticated operator's exact-plan approval, current runtime

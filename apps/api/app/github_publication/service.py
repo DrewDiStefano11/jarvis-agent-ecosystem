@@ -23,7 +23,15 @@ def fail(code, status=409):
 
 class PublicationService:
     def __init__(
-        self, native, *, target, publisher_ids, validation, broker=None, hosted_ci_guard=None
+        self,
+        native,
+        *,
+        target,
+        publisher_ids,
+        validation,
+        broker=None,
+        hosted_ci_guard=None,
+        configuration_guard=None,
     ):
         self.native, self.target = native, target
         self.publisher_ids = tuple(publisher_ids)
@@ -35,6 +43,7 @@ class PublicationService:
         ):
             fail("GITHUB_PUBLISHER_AUTHORITY_REQUIRED", 403)
         self.validation, self.broker, self.hosted_ci_guard = validation, broker, hosted_ci_guard
+        self.configuration_guard = configuration_guard
         self.policy_digest = sha256(
             (
                 "".join(
@@ -55,6 +64,8 @@ class PublicationService:
             fail("GITHUB_PUBLICATION_PERMISSION_DENIED", 403)
 
     def configured(self, plan):
+        if self.configuration_guard is not None:
+            require_guard(self.configuration_guard, "GITHUB_PUBLICATION_PROFILE_CHANGED")
         self.target.branch(plan.branch)
         if (
             plan.repository_id != self.target.repository_id
@@ -144,6 +155,7 @@ class PublicationService:
 
     def _persist_approval(self, operator, plan, valid_for_seconds, guard):
         with self.native.repository.leases._write() as session:
+            self.configured(plan)
             row, attempt, *_ = self.native.preparation.live(operator, plan.workspace_id, session)
             self.native.preparation.operator(operator, row, session)
             self.permission(operator, row, session)
@@ -166,10 +178,13 @@ class PublicationService:
                 approval_id=event.id, approved_by=operator.actor_id, expires_at=expiry, plan=plan
             )
             guard(check_authority=False)
+            self.configured(plan)
         self.native.repository.leases.repository.refresh_event_cursor()
         return result
 
     def live(self, actor, request, plan, session):
+        if self.configuration_guard is not None:
+            require_guard(self.configuration_guard, "GITHUB_PUBLICATION_PROFILE_CHANGED")
         self.configured(plan)
         row, attempt, *_ = self.native.preparation.live(
             actor, plan.workspace_id, session, request=request
@@ -204,6 +219,8 @@ class PublicationService:
         )
         self.native.preparation.operator(operator, row, session)
         self.permission(operator, row, session)
+        if self.configuration_guard is not None:
+            require_guard(self.configuration_guard, "GITHUB_PUBLICATION_PROFILE_CHANGED")
         return row
 
     def require_effect(self, actor, request, plan):
@@ -213,5 +230,7 @@ class PublicationService:
         if not callable(self.hosted_ci_guard):
             fail("GITHUB_HOSTED_CI_COST_UNVERIFIED")
         require_guard(self.hosted_ci_guard, "GITHUB_HOSTED_CI_COST_UNVERIFIED")
+        if self.configuration_guard is not None:
+            require_guard(self.configuration_guard, "GITHUB_PUBLICATION_PROFILE_CHANGED")
         if self.broker is None:
             fail("GITHUB_CREDENTIAL_UNAVAILABLE", 503)
