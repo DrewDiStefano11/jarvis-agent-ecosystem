@@ -64,6 +64,657 @@ def isolation_bundle():
     return expected, owner, capsule, content
 
 
+def test_source_payload_roundtrip_and_noncanonical_order(isolation_bundle):
+    from app.validation_runner.source_transfer import freeze_payload, receive_payload
+
+    _, _, capsule, content = isolation_bundle
+    calls = []
+
+    def guard():
+        calls.append("guard")
+
+    records = [(capsule.files[0].path, "100644", content)]
+    payload = freeze_payload(capsule, records, authority_check=guard)
+    assert type(payload) is bytes
+    assert receive_payload(capsule, payload, authority_check=guard) == tuple(records)
+    assert len(calls) >= 6
+
+
+@pytest.mark.parametrize("damage", [None, "boot", "path", "extra", "content", "extent", "padding"])
+def test_optical_source_media_fixed_filesystem_and_integrity(isolation_bundle, damage):
+    from app.validation_runner.media import (
+        DATA_SECTOR,
+        SECTOR,
+        build_source_media,
+        receive_source_media,
+    )
+    from app.validation_runner.source_transfer import freeze_payload
+
+    _, _, capsule, content = isolation_bundle
+    payload = freeze_payload(
+        capsule, [(capsule.files[0].path, "100644", content)], authority_check=lambda: None
+    )
+    medium = build_source_media(capsule, payload, authority_check=lambda: None)
+    assert medium[16 * SECTOR : 16 * SECTOR + 7] == b"\x01CD001\x01"
+    assert medium[17 * SECTOR : 17 * SECTOR + 7] == b"\xffCD001\x01"
+    if damage is None:
+        assert receive_source_media(capsule, medium, authority_check=lambda: None) == payload
+        assert len(medium) % SECTOR == 0
+        return
+    data = bytearray(medium)
+    if damage == "boot":
+        data[16 * SECTOR] = 0
+    elif damage == "path":
+        data[20 * SECTOR + 68 + 33] = ord("/")
+    elif damage == "extra":
+        data += b"\0" * SECTOR
+    elif damage == "extent":
+        data[20 * SECTOR + 68 + 2] = 0
+    elif damage == "content":
+        data[DATA_SECTOR * SECTOR + len(payload) - 1] ^= 1
+    else:
+        data[-1] = 1
+    with pytest.raises(ValueError):
+        receive_source_media(capsule, bytes(data), authority_check=lambda: None)
+
+
+def test_guest_unit_fixed_profile_contains_no_host_channels(isolation_bundle):
+    from app.validation_runner.guest_systemd import unit_arguments
+
+    expected, _, _, _ = isolation_bundle
+    invocation = next(
+        item for item in describe_invocations(expected) if item.gate == "backend_tests"
+    ).invocations[0]
+    args = unit_arguments(
+        "jarvis-validation-" + "a" * 32 + ".service",
+        invocation,
+        executable="/opt/jarvis/bin/python",
+        rootfs="/srv/jarvis/rootfs",
+        source="/srv/jarvis/source",
+        stdout="/srv/jarvis/spool/stdout",
+        stderr="/srv/jarvis/spool/stderr",
+        memory_bytes=1073741824,
+        process_count=32,
+        cpu_count=1,
+        timeout_seconds=30,
+        disk_bytes=1073741824,
+        output_paths=("apps/web/dist",),
+    )
+    for property in (
+        "DynamicUser=yes",
+        "NoNewPrivileges=yes",
+        "CapabilityBoundingSet=",
+        "PrivateNetwork=yes",
+        "PrivateDevices=yes",
+        "ProtectControlGroups=yes",
+        "RestrictNamespaces=yes",
+        "RootDirectory=/srv/jarvis/rootfs",
+        "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+        "MemoryMax=1073741824",
+        "TasksMax=32",
+        "CPUQuota=100%",
+        "KillMode=control-group",
+    ):
+        assert "--property=" + property in args
+    assert "--expand-environment=no" in args and "--no-block" in args
+    assert args[-len(invocation.arguments) :] == list(invocation.arguments)
+    assert not any("AF_VSOCK" in arg or "--shell" in arg for arg in args)
+
+
+@pytest.mark.parametrize("unsafe", ["/etc", "../secret", "apps/api/app", "apps/web/src"])
+def test_guest_unit_refuses_writable_source_or_escape(isolation_bundle, unsafe):
+    from app.validation_runner.guest_systemd import unit_arguments
+
+    expected, _, _, _ = isolation_bundle
+    invocation = describe_invocations(expected)[0].invocations[0]
+    with pytest.raises((ValueError, DomainError)):
+        unit_arguments(
+            "jarvis-validation-" + "a" * 32 + ".service",
+            invocation,
+            executable="/opt/jarvis/bin/python",
+            rootfs="/srv/jarvis/rootfs",
+            source="/srv/jarvis/source",
+            stdout="/srv/jarvis/spool/stdout",
+            stderr="/srv/jarvis/spool/stderr",
+            memory_bytes=1073741824,
+            process_count=32,
+            cpu_count=1,
+            timeout_seconds=30,
+            disk_bytes=1073741824,
+            output_paths=(unsafe,),
+        )
+
+
+def test_guest_systemd_rejects_duplicate_native_status_and_unknown_fields(monkeypatch):
+    from app.validation_runner.guest_systemd import NativeSystemdControl
+
+    control = NativeSystemdControl(
+        systemd_run="C:/native/systemd-run",
+        systemd_run_digest="a" * 64,
+        systemctl="C:/native/systemctl",
+        systemctl_digest="b" * 64,
+        authority_check=lambda: None,
+        cleanup_authority_check=lambda _: None,
+        command_authority_check=lambda _: None,
+    )
+    unit = "jarvis-validation-" + "a" * 32 + ".service"
+    for raw in (
+        b"LoadState=loaded\nExecMainStatus=0\nExecMainStatus=1\n",
+        b"LoadState=loaded\nmodelPassed=true\n",
+    ):
+        monkeypatch.setattr(control, "invoke", lambda *_, value=raw, **__: value)
+        with pytest.raises(DomainError):
+            control.show(unit)
+
+
+def test_guest_native_control_never_runs_on_windows(tmp_path):
+    import sys
+
+    from app.validation_runner.guest_systemd import NativeSystemdControl
+
+    if sys.platform == "linux":
+        pytest.skip("Windows-specific unavailable guest check")
+    calls = []
+    control = NativeSystemdControl(
+        systemd_run=tmp_path / "systemd-run",
+        systemd_run_digest="a" * 64,
+        systemctl=tmp_path / "systemctl",
+        systemctl_digest="b" * 64,
+        authority_check=lambda: calls.append("guard"),
+        cleanup_authority_check=lambda _: None,
+        command_authority_check=lambda _: None,
+    )
+    with pytest.raises(DomainError):
+        control.invoke("run", ["--shell", "arbitrary"])
+    assert not calls
+
+
+def test_optical_source_guest_import_unavailable_on_development_windows(isolation_bundle, tmp_path):
+    import sys
+
+    from app.validation_runner.media import import_optical_source
+
+    if sys.platform == "linux":
+        pytest.skip("Windows unavailable-guest check")
+    _, _, capsule, _ = isolation_bundle
+    with pytest.raises(DomainError):
+        import_optical_source(
+            "/dev/sr0",
+            tmp_path,
+            capsule,
+            image_digest="a" * 64,
+            image_byte_count=1,
+            device_number=1,
+            authority_check=lambda: None,
+        )
+    assert not tuple(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "attach",
+        "detach",
+        "network",
+        "integration",
+        "foreign",
+        "running",
+        "tamper",
+        "inspect-attached",
+        "inspect-detached",
+        "inspect-tamper",
+        "inspect-foreign",
+        "inspect-late-foreign",
+        "inspect-late-running",
+        "inspect-late-network",
+        "inspect-late-checkpoint",
+        "inspect-late-integration",
+        "inspect-late-memory",
+        "inspect-late-startup",
+        "inspect-late-owner",
+        "inspect-late-generation",
+        "inspect-late-identity",
+    ],
+)
+def test_native_powershell_media_protocol_uses_no_guest_services(tmp_path, isolation_bundle, case):
+    import json
+    import os
+    import subprocess
+    from hashlib import sha256
+    from pathlib import Path
+
+    from app.validation_runner.media import build_source_media
+    from app.validation_runner.source_transfer import freeze_payload
+
+    if os.name != "nt":
+        pytest.skip("Native Windows fixed-script fixture")
+    _, _, capsule, content = isolation_bundle
+    payload = freeze_payload(
+        capsule, [(capsule.files[0].path, "100644", content)], authority_check=lambda: None
+    )
+    medium = build_source_media(capsule, payload, authority_check=lambda: None)
+    path = tmp_path / "source.iso"
+    path.write_bytes(medium)
+    script = Path(__file__).resolve().parents[3] / "scripts/hyper-v-validation-control.ps1"
+
+    def quote(value):
+        return "'" + str(value).replace("'", "''") + "'"
+
+    code = (
+        """
+$global:vm = [pscustomobject]@{Id=[Guid]'12345678-1234-1234-1234-123456789abc';
+ Notes='jarvis-validation-v1:"""
+        + "a" * 64
+        + """';State='Off';Generation=2;AutomaticStartAction='Nothing'}
+$global:dvd = $null
+function Import-Module { }
+function Get-ItemProperty { @{MachineGuid='aaaaaaaa-1234-1234-1234-123456789abc'} }
+function Get-VM { $global:vm }
+function Get-VMNetworkAdapter { }
+function Get-VMSnapshot { }
+function Get-VMIntegrationService { }
+function Get-VMMemory { @{DynamicMemoryEnabled=$false} }
+function Get-VMDvdDrive { if ($global:dvd) { $global:dvd } }
+function Add-VMDvdDrive { param($VM,[string]$Path); $global:dvd=[pscustomobject]@{Path=$Path} }
+function Set-VMDvdDrive { param($VMDvdDrive,[string]$Path); $global:dvd.Path=$Path }
+"""
+    )
+    if case == "network":
+        code += "function Get-VMNetworkAdapter { @{ SwitchId=[Guid]::Empty } }\n"
+    elif case == "integration":
+        code += "function Get-VMIntegrationService { @{ Enabled=$true } }\n"
+    elif case == "running":
+        code += "$global:vm.State='Running'\n"
+    elif case == "foreign":
+        code += "$global:dvd=[pscustomobject]@{Path='C:\\foreign.iso'}\n"
+    elif case == "detach":
+        code += "$global:dvd=[pscustomobject]@{Path=" + quote(path) + "}\n"
+    elif case in {"inspect-attached", "inspect-tamper"}:
+        code += "$global:dvd=[pscustomobject]@{Path=" + quote(path) + "}\n"
+    elif case == "inspect-foreign":
+        code += "$global:dvd=[pscustomobject]@{Path='C:\\foreign.iso'}\n"
+    elif case == "inspect-late-foreign":
+        code += "$global:reads=0\nfunction Get-VMDvdDrive { $global:reads++; "
+        code += "if ($global:reads -gt 1) { [pscustomobject]@{Path='C:\\foreign.iso'} } }\n"
+    elif case.startswith("inspect-late-"):
+        code += "$global:dvd=[pscustomobject]@{Path=" + quote(path) + "}\n"
+        changes = {
+            "inspect-late-running": "$global:vm.State='Running'",
+            "inspect-late-startup": "$global:vm.AutomaticStartAction='Start'",
+            "inspect-late-owner": "$global:vm.Notes='foreign'",
+            "inspect-late-generation": "$global:vm.Generation=1",
+            "inspect-late-identity": "$global:vm.Id=[Guid]'bbbbbbbb-1234-1234-1234-123456789abc'",
+        }
+        code += "$global:vmReads=0\nfunction Get-VM { $global:vmReads++; "
+        code += "if ($global:vmReads -gt 1) { " + changes.get(case, "") + " }; $global:vm }\n"
+        late_callbacks = {
+            "inspect-late-network": "function Get-VMNetworkAdapter { if ($global:vmReads -gt 1) { @{SwitchId=[Guid]::Empty} } }",
+            "inspect-late-checkpoint": "function Get-VMSnapshot { if ($global:vmReads -gt 1) { @{Id='late'} } }",
+            "inspect-late-integration": "function Get-VMIntegrationService { if ($global:vmReads -gt 1) { @{Enabled=$true} } }",
+            "inspect-late-memory": "function Get-VMMemory { @{DynamicMemoryEnabled=($global:vmReads -gt 1)} }",
+        }
+        code += late_callbacks.get(case, "") + "\n"
+    if case.startswith("inspect-"):
+        # A read-only recovery must not call any mutating Hyper-V operation.
+        code += "function Add-VMDvdDrive { throw 'unexpected mutation' }\n"
+        code += "function Set-VMDvdDrive { throw 'unexpected mutation' }\n"
+        code += "function Start-VM { throw 'unexpected startup' }\n"
+    image_digest = "f" * 64 if case in {"tamper", "inspect-tamper"} else sha256(medium).hexdigest()
+    action = (
+        "inspect_media"
+        if case.startswith("inspect-")
+        else "detach_media"
+        if case == "detach"
+        else "attach_media"
+    )
+    code += (
+        "& "
+        + quote(script)
+        + " -Operation "
+        + action
+        + " -VmId 12345678-1234-1234-1234-123456789abc -OwnershipDigest "
+        + "a" * 64
+    )
+    code += " -HostMachineGuid aaaaaaaa-1234-1234-1234-123456789abc -MediaPath " + quote(path)
+    code += " -MediaDigest " + image_digest + " -MediaBytes " + str(len(medium))
+    executable = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    result = subprocess.run(
+        [str(executable), "-NoProfile", "-NonInteractive", "-Command", code],
+        capture_output=True,
+        timeout=20,
+    )
+    if case in {"attach", "detach", "inspect-attached", "inspect-detached"}:
+        assert result.returncode == 0, result.stderr.decode(errors="replace")
+        observed = json.loads(result.stdout)
+        assert observed["mediaState"] == (
+            "attached" if case in {"attach", "inspect-attached"} else "detached"
+        )
+        assert observed["commandOutcome"] == "unmeasured" and not observed["executionAuthorized"]
+    else:
+        assert result.returncode != 0 and b"HYPERV_NATIVE_CONTROL_UNAVAILABLE" in result.stderr
+
+
+@pytest.mark.parametrize("damage", ["truncated", "trailing", "content", "magic", "manifest"])
+def test_source_payload_rejects_corrupt_or_incomplete_input(isolation_bundle, damage):
+    from app.validation_runner.source_transfer import MAGIC, freeze_payload, receive_payload
+
+    _, _, capsule, content = isolation_bundle
+
+    def guard():
+        pass
+
+    payload = freeze_payload(
+        capsule, [(capsule.files[0].path, "100644", content)], authority_check=guard
+    )
+    if damage == "truncated":
+        payload = payload[:-1]
+    elif damage == "trailing":
+        payload += b"forged success"
+    elif damage == "content":
+        payload = payload[:-1] + b"!"
+    elif damage == "magic":
+        payload = b"!" + payload[1:]
+    else:
+        index = len(MAGIC) + 4
+        payload = payload[:index] + b"!" + payload[index + 1 :]
+    with pytest.raises(ValueError):
+        receive_payload(capsule, payload, authority_check=guard)
+
+
+@pytest.mark.parametrize(
+    "binding", ["workspace_id", "attempt_id", "approval_id", "lease_fingerprint"]
+)
+def test_source_payload_rejects_cross_authority_substitution(isolation_bundle, binding):
+    from app.models.validation_isolation import SourceCapsule
+    from app.validation_runner.source_transfer import freeze_payload, receive_payload
+
+    _, owner, capsule, content = isolation_bundle
+    payload = freeze_payload(
+        capsule, [(capsule.files[0].path, "100644", content)], authority_check=lambda: None
+    )
+    value = "f" * 64 if binding == "lease_fingerprint" else "foreign"
+    changed = capsule.model_dump(mode="json", exclude={"capsule_digest"})
+    changed["owner"] = owner.model_copy(update={binding: value}).model_dump(mode="json")
+    other = SourceCapsule.model_validate({**changed, "capsule_digest": digest(changed)})
+    with pytest.raises(ValueError, match="BINDING_MISMATCH"):
+        receive_payload(other, payload, authority_check=lambda: None)
+
+
+@pytest.mark.parametrize("bad", ["duplicate", "missing", "mutable", "mode", "unexpected"])
+def test_source_freeze_never_exposes_partial_invalid_transfer(isolation_bundle, bad):
+    from app.validation_runner.source_transfer import freeze_payload
+
+    _, _, capsule, content = isolation_bundle
+    record = (capsule.files[0].path, "100644", content)
+    records = {
+        "duplicate": [record, record],
+        "missing": [],
+        "mutable": [(record[0], record[1], bytearray(content))],
+        "mode": [(record[0], "120000", content)],
+        "unexpected": [(".ssh/id_rsa", "100644", content)],
+    }[bad]
+    with pytest.raises(ValueError):
+        freeze_payload(capsule, records, authority_check=lambda: None)
+
+
+def test_native_source_snapshot_rechecks_authority_and_freezes_bytes(isolation_bundle, tmp_path):
+    from app.validation_runner.source_transfer import export_snapshot, receive_payload
+
+    plan, owner, capsule, content = isolation_bundle
+    path = tmp_path / capsule.files[0].path
+    path.parent.mkdir(parents=True)
+    path.write_bytes(content)
+    calls = []
+
+    def guard(root, checked):
+        assert root == tmp_path and checked == capsule
+        calls.append("guard")
+
+    payload = export_snapshot(
+        tmp_path,
+        capsule,
+        plan,
+        owner=owner,
+        journal_digest=capsule.journal_digest,
+        native_inventory_digest=capsule.inventory_digest,
+        authority_check=guard,
+    )
+    path.write_bytes(b"!" * len(content))
+    assert receive_payload(capsule, payload, authority_check=lambda: None)[0][2] == content
+    assert len(calls) >= 5
+    with pytest.raises(ValueError, match="SOURCE_CHANGED|TOOL_IO_LIMIT"):
+        export_snapshot(
+            tmp_path,
+            capsule,
+            plan,
+            owner=owner,
+            journal_digest=capsule.journal_digest,
+            native_inventory_digest=capsule.inventory_digest,
+            authority_check=guard,
+        )
+
+
+def test_source_snapshot_foreign_root_and_revocation_deny_before_export(isolation_bundle, tmp_path):
+    from app.validation_runner.source_transfer import export_snapshot
+
+    plan, owner, capsule, _ = isolation_bundle
+
+    def denied(root, checked):
+        raise DomainError("AUTHORITY_REVOKED", "Scope revoked", 403)
+
+    with pytest.raises(DomainError, match="Scope revoked"):
+        export_snapshot(
+            tmp_path,
+            capsule,
+            plan,
+            owner=owner,
+            journal_digest=capsule.journal_digest,
+            native_inventory_digest=capsule.inventory_digest,
+            authority_check=denied,
+        )
+
+
+def test_source_transfer_lease_loss_before_return_denies_payload(isolation_bundle):
+    from app.validation_runner.source_transfer import freeze_payload
+
+    _, _, capsule, content = isolation_bundle
+    calls = []
+
+    def guard():
+        calls.append(1)
+        if len(calls) == 3:
+            raise DomainError("LEASE_EXPIRED", "Lease expired", 409)
+
+    with pytest.raises(DomainError):
+        freeze_payload(capsule, [(capsule.files[0].path, "100644", content)], authority_check=guard)
+
+
+def test_linux_guest_import_refuses_windows_and_no_host_files(isolation_bundle, tmp_path):
+    import sys
+
+    from app.validation_runner.source_transfer import import_linux_guest
+
+    if sys.platform == "linux":
+        pytest.skip("Windows-specific unavailable adapter check")
+    _, _, capsule, _ = isolation_bundle
+    with pytest.raises(ValueError, match="GUEST_IMPORT_UNAVAILABLE"):
+        import_linux_guest(tmp_path, capsule, b"invalid", authority_check=lambda: None)
+    assert not tuple(tmp_path.iterdir())
+
+
+def test_native_source_snapshot_refuses_hard_link(isolation_bundle, tmp_path):
+    import os
+
+    from app.validation_runner.source_transfer import export_snapshot
+
+    plan, owner, capsule, content = isolation_bundle
+    foreign = tmp_path / "foreign"
+    foreign.write_bytes(content)
+    path = tmp_path / capsule.files[0].path
+    path.parent.mkdir(parents=True)
+    os.link(foreign, path)
+    with pytest.raises(DomainError):
+        export_snapshot(
+            tmp_path,
+            capsule,
+            plan,
+            owner=owner,
+            journal_digest=capsule.journal_digest,
+            native_inventory_digest=capsule.inventory_digest,
+            authority_check=lambda *_: None,
+        )
+
+
+def test_source_freeze_rejects_duplicate_before_consuming_unbounded_input(isolation_bundle):
+    from app.validation_runner.source_transfer import freeze_payload
+
+    _, _, capsule, content = isolation_bundle
+    count = []
+
+    def endless():
+        while True:
+            count.append(1)
+            yield capsule.files[0].path, "100644", content
+
+    with pytest.raises(ValueError, match="TRANSFER_PATH"):
+        freeze_payload(capsule, endless(), authority_check=lambda: None)
+    assert len(count) == 2
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [None, "unexpected", "occupied", "unprotected", "revoked", "name_limit", "unicode_name"],
+)
+def test_guest_import_descriptor_operations_and_failure_quarantine(
+    isolation_bundle, tmp_path, monkeypatch, failure
+):
+    """Deterministic syscall fixture, never real guest acceptance."""
+    import os
+    import stat
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    from app.validation_runner import source_transfer as transfer
+
+    plan, owner, capsule, content = isolation_bundle
+    if failure == "unicode_name":
+        from app.validation_runner.isolation import build_capsule
+
+        files = [capsule.files[0], capsule.files[0].model_copy(update={"path": "😀" * 70 + ".py"})]
+        capsule = build_capsule(
+            plan,
+            owner=owner,
+            journal_digest=capsule.journal_digest,
+            native_inventory_digest=digest([file.model_dump(mode="json") for file in files]),
+            files=files,
+        )
+    payload = transfer.freeze_payload(
+        capsule,
+        [(file.path, "100644", content) for file in capsule.files],
+        authority_check=lambda: None,
+    )
+    root = tmp_path / "private-guest"
+    paths, infos, children, data, operations = {}, {}, {}, {}, []
+
+    def directory(path, *, private=False):
+        fd = len(infos) + 1
+        paths[path] = fd
+        infos[fd] = SimpleNamespace(
+            st_uid=0, st_dev=1, st_mode=stat.S_IFDIR | (0o700 if private else 0o755)
+        )
+        children[fd] = set()
+        return fd
+
+    for path in (*reversed(root.parents), root):
+        directory(path, private=path == root)
+    if failure == "unprotected":
+        infos[paths[root]].st_mode |= 0o002
+
+    def open_directory(stack, path, parent=None, leaf=None, **kwargs):
+        if parent is not None:
+            assert path == parent.path / leaf and "/" not in leaf and "\\" not in leaf
+        return SimpleNamespace(path=path, fd=paths[path])
+
+    def mkdir(leaf, *, mode, dir_fd):
+        operations.append("mkdir")
+        if failure == "occupied":
+            raise FileExistsError("Unexpected pre-existing entry")
+        parent = next(path for path, fd in paths.items() if fd == dir_fd)
+        directory(parent / leaf, private=True)
+        children[dir_fd].add(leaf)
+
+    @contextmanager
+    def open_file(parent, leaf, flags, **kwargs):
+        key = (parent.fd, leaf)
+        if flags & os.O_CREAT:
+            assert flags & os.O_EXCL
+            fd = len(infos) + 1
+            infos[fd] = SimpleNamespace(st_uid=0, st_dev=1, st_mode=stat.S_IFREG | 0o600)
+            data[key] = [fd, b""]
+            children[parent.fd].add(leaf)
+        yield data[key][0]
+
+    def write(fd, chunk):
+        operations.append("write")
+        entry = next(value for value in data.values() if value[0] == fd)
+        entry[1] += chunk
+        return len(chunk)
+
+    def chmod(fd, mode):
+        infos[fd].st_mode = stat.S_IFMT(infos[fd].st_mode) | mode
+
+    def listdir(fd):
+        result = set(children[fd])
+        if failure == "unexpected" and data and fd == paths[root]:
+            result.add("forged-result.json")
+        return list(result)
+
+    def guard():
+        if failure == "revoked" and "write" in operations:
+            raise DomainError("LEASE_EXPIRED", "Lease expired", 409)
+
+    monkeypatch.setattr(transfer.sys, "platform", "linux")
+    monkeypatch.setattr(transfer, "open_directory", open_directory)
+    monkeypatch.setattr(transfer, "open_file", open_file)
+    monkeypatch.setattr(
+        transfer, "read_bytes", lambda fd, maximum: next(v[1] for v in data.values() if v[0] == fd)
+    )
+    monkeypatch.setattr(
+        transfer,
+        "os",
+        SimpleNamespace(
+            geteuid=lambda: 0,
+            fstat=lambda fd: infos[fd],
+            fpathconf=lambda fd, key: 3 if failure == "name_limit" else 255,
+            mkdir=mkdir,
+            write=write,
+            fchmod=chmod,
+            fsync=lambda fd: operations.append("fsync"),
+            listdir=listdir,
+            O_WRONLY=os.O_WRONLY,
+            O_CREAT=os.O_CREAT,
+            O_EXCL=os.O_EXCL,
+            O_RDONLY=os.O_RDONLY,
+        ),
+    )
+    if failure:
+        with pytest.raises((ValueError, FileExistsError, DomainError)):
+            transfer.import_linux_guest(root, capsule, payload, authority_check=guard)
+        if failure in {"occupied", "unprotected", "name_limit", "unicode_name"}:
+            assert "write" not in operations
+        if failure in {"name_limit", "unicode_name"}:
+            assert "mkdir" not in operations
+        # No cleanup effects are available: uncertainty cannot erase evidence.
+    else:
+        assert (
+            transfer.import_linux_guest(root, capsule, payload, authority_check=guard)
+            == capsule.capsule_digest
+        )
+        entry = next(iter(data.values()))
+        assert entry[1] == content and stat.S_IMODE(infos[entry[0]].st_mode) == 0o444
+        assert stat.S_IMODE(infos[paths[root]].st_mode) == 0o555
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -85,6 +736,63 @@ def test_isolation_transfer_contract_refuses_escape_and_credential_paths(path):
 
     with pytest.raises(ValueError):
         CapsuleFile(path=path, mode="100644", content_digest="a" * 64, byte_count=1)
+
+
+@pytest.mark.parametrize("count", [129, 4096])
+def test_directory_pin_budget_refuses_export_and_import_before_filesystem_effects(
+    isolation_bundle, tmp_path, monkeypatch, count
+):
+    from app.validation_runner import source_transfer as transfer
+    from app.validation_runner.isolation import build_capsule
+
+    plan, owner, original, content = isolation_bundle
+    files = [original.files[0]] + [
+        original.files[0].model_copy(update={"path": f"dir-{index:04d}/source.py"})
+        for index in range(count - 1)
+    ]
+    capsule = build_capsule(
+        plan,
+        owner=owner,
+        journal_digest=original.journal_digest,
+        native_inventory_digest=digest([file.model_dump(mode="json") for file in files]),
+        files=files,
+    )
+    payload = transfer.freeze_payload(
+        capsule,
+        [(file.path, file.mode, content) for file in files],
+        authority_check=lambda: None,
+    )
+    monkeypatch.setattr(
+        transfer, "open_directory", lambda *a, **kw: pytest.fail("No pins before preflight")
+    )
+    with pytest.raises(ValueError, match="DIRECTORY_PIN_LIMIT"):
+        transfer.export_snapshot(
+            tmp_path,
+            capsule,
+            plan,
+            owner=owner,
+            journal_digest=capsule.journal_digest,
+            native_inventory_digest=capsule.inventory_digest,
+            authority_check=lambda *a: None,
+        )
+    monkeypatch.setattr(transfer.sys, "platform", "linux")
+    monkeypatch.setattr(transfer.os, "geteuid", lambda: 0, raising=False)
+    with pytest.raises(ValueError, match="DIRECTORY_PIN_LIMIT"):
+        transfer.import_linux_guest(tmp_path, capsule, payload, authority_check=lambda: None)
+
+
+def test_directory_pin_preflight_stops_at_budget_before_consuming_oversized_tail(tmp_path):
+    from types import SimpleNamespace
+
+    from app.validation_runner.source_transfer import MAX_DIRECTORY_PINS, preflight_directory_pins
+
+    def inventory():
+        for index in range(MAX_DIRECTORY_PINS + 1):
+            yield SimpleNamespace(path=f"directory-{index}/file.py")
+        pytest.fail("Preflight must refuse before consuming the remaining oversized inventory")
+
+    with pytest.raises(ValueError, match="DIRECTORY_PIN_LIMIT"):
+        preflight_directory_pins(tmp_path, inventory())
 
 
 def test_isolation_capsule_exact_transfer_and_authority(isolation_bundle):
@@ -534,6 +1242,207 @@ def test_capsule_subset_cannot_replace_trusted_complete_inventory(isolation_bund
         )
 
 
+@pytest.fixture
+def hyperv_binding():
+    from app.models.hyper_v_control import HyperVBinding
+
+    return HyperVBinding(
+        host_identity="test-host",
+        host_machine_guid="aaaaaaaa-1234-1234-1234-123456789abc",
+        vm_id="12345678-1234-1234-1234-123456789abc",
+        ownership_digest="a" * 64,
+        provisioning_digest="b" * 64,
+        capsule_digest="c" * 64,
+    )
+
+
+def test_native_hyperv_mock_measures_vm_only_and_does_not_invent_guest_success(hyperv_binding):
+    from datetime import UTC, datetime
+
+    from app.validation_runner.hyper_v import NativeHyperVAdapter
+
+    calls = []
+
+    class Transport:
+        def invoke(self, binding, operation):
+            calls.append(operation)
+            return dict(
+                vmId=str(binding.vm_id),
+                ownershipDigest=binding.ownership_digest,
+                hostMachineGuid=str(binding.host_machine_guid),
+                observedAt=datetime.now(UTC).isoformat(),
+                state="off",
+                memoryAssignedBytes=0,
+                memoryStartupBytes=2147483648,
+                cpuCount=1,
+                hostVmUptimeSeconds=0,
+                hostCpuUsagePercent=0,
+                connectedNetworkAdapters=0,
+                checkpointCount=0,
+                dynamicMemory=False,
+                automaticStart="nothing",
+            )
+
+    adapter = NativeHyperVAdapter(Transport(), authority_check=lambda binding, operation: None)
+    measured = adapter.inspect(hyperv_binding)
+    assert measured.command_outcome == "unmeasured" and not measured.execution_authorized
+    assert adapter.stop(hyperv_binding).state == "off"
+    assert calls == ["inspect", "stop", "inspect"]
+    with pytest.raises(DomainError):
+        adapter.execute(hyperv_binding)
+
+
+def test_native_hyperv_refuses_foreign_vm_and_live_authority_loss(hyperv_binding):
+    from app.validation_runner.hyper_v import NativeHyperVAdapter
+
+    class Foreign:
+        def invoke(self, binding, operation):
+            return dict(vmId="foreign", ownershipDigest=binding.ownership_digest)
+
+    adapter = NativeHyperVAdapter(Foreign(), authority_check=lambda binding, operation: None)
+    with pytest.raises(DomainError) as caught:
+        adapter.inspect(hyperv_binding)
+    assert caught.value.code == "HYPERV_OWNER_MISMATCH"
+
+    def revoked(binding, operation):
+        raise DomainError("EMERGENCY_STOP_ACTIVE", "Stopped.", 409)
+
+    adapter.guard = revoked
+    with pytest.raises(DomainError) as caught:
+        adapter.stop(hyperv_binding)
+    assert caught.value.code == "EMERGENCY_STOP_ACTIVE"
+
+
+@pytest.mark.parametrize("payload", [[], "private-native-message"])
+def test_native_hyperv_malformed_response_is_sanitized(hyperv_binding, payload):
+    from app.validation_runner.hyper_v import NativeHyperVAdapter
+
+    class Transport:
+        def invoke(self, binding, operation):
+            return payload
+
+    adapter = NativeHyperVAdapter(Transport(), authority_check=lambda binding, operation: None)
+    with pytest.raises(DomainError) as caught:
+        adapter.inspect(hyperv_binding)
+    assert caught.value.code == "HYPERV_OBSERVATION_INVALID"
+    assert "private-native-message" not in str(caught.value)
+
+
+def test_real_hyperv_operator_enrolled_vm_configuration_only():
+    """Opt-in read-only real VM check. No creation/start/source execution occurs."""
+    import json
+    import os
+    from pathlib import Path
+
+    from app.models.hyper_v_control import HyperVBinding
+    from app.validation_runner.hyper_v import NativeHyperVAdapter, NativeHyperVTransport
+
+    location = os.environ.get("JARVIS_HYPERV_READONLY_ACCEPTANCE")
+    if not location:
+        pytest.skip("Requires operator-enrolled VM and protected native transport config")
+    data = Path(location).read_bytes()
+    if len(data) > 16384:
+        pytest.fail("Native acceptance configuration exceeds bound")
+    config = json.loads(data)
+    binding = HyperVBinding.model_validate(config["binding"])
+
+    def read_only(current, operation):
+        if current != binding or operation != "inspect":
+            raise DomainError("HYPERV_ACCEPTANCE_READ_ONLY", "Read-only inspection required.", 409)
+
+    transport = NativeHyperVTransport(**config["transport"], authority_check=read_only)
+    result = NativeHyperVAdapter(transport, authority_check=read_only).inspect(binding)
+    assert result.state == "off"
+    assert result.connected_network_adapters == 0 and result.checkpoint_count == 0
+    assert not result.dynamic_memory and result.automatic_start == "nothing"
+    assert result.command_outcome == "unmeasured" and not result.execution_authorized
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "inspect",
+        "stop",
+        "unregister",
+        "foreign-owner",
+        "absence",
+        "absence-present",
+        "absence-error",
+    ],
+)
+def test_native_powershell_control_with_mock_hyperv_cmdlets(operation):
+    """Exercise the actual fixed script, with no real Hyper-V invocation."""
+    import json
+    import os
+    import subprocess
+    from pathlib import Path
+
+    if os.name != "nt":
+        pytest.skip("Native Windows PowerShell mock protocol test")
+    executable = Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+    script = Path(__file__).resolve().parents[3] / "scripts/hyper-v-validation-control.ps1"
+    quoted = str(script).replace("'", "''")
+    code = (
+        """
+$global:removed = $false
+$global:fakeVm = [pscustomobject]@{ Id=[Guid]'12345678-1234-1234-1234-123456789abc';
+    Notes='jarvis-validation-v1:"""
+        + "a" * 64
+        + """'; State='Off'; MemoryAssigned=[long]0;
+    AutomaticStartAction='Nothing'; Uptime=[TimeSpan]::Zero; CPUUsage=0 }
+function Import-Module { }
+function Get-ItemProperty { @{ MachineGuid='aaaaaaaa-1234-1234-1234-123456789abc' } }
+function Get-VM { if (-not $global:removed) { $global:fakeVm } }
+function Get-VMNetworkAdapter { }
+function Get-VMSnapshot { }
+function Get-VMProcessor { @{ Count=1 } }
+function Get-VMMemory { @{ Startup=[long]2147483648; DynamicMemoryEnabled=$false } }
+function Stop-VM { $global:fakeVm.State='Off' }
+function Remove-VM { $global:removed=$true }
+"""
+    )
+    if operation == "foreign-owner":
+        code += "$global:fakeVm.Notes='foreign'\n"
+    elif operation == "absence":
+        code += "$global:removed=$true\n"
+    elif operation == "absence-error":
+        code += "function Get-VM { throw 'native inventory unavailable' }\n"
+    action = (
+        "inspect"
+        if operation == "foreign-owner"
+        else "absence"
+        if operation.startswith("absence")
+        else operation
+    )
+    code += (
+        "& '"
+        + quoted
+        + "' -Operation "
+        + action
+        + " -VmId 12345678-1234-1234-1234-123456789abc -OwnershipDigest "
+        + "a" * 64
+        + " -HostMachineGuid aaaaaaaa-1234-1234-1234-123456789abc"
+    )
+    completed = subprocess.run(
+        [str(executable), "-NoProfile", "-NonInteractive", "-Command", code],
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+    if operation in {"foreign-owner", "absence-present", "absence-error"}:
+        assert completed.returncode != 0
+        assert b"HYPERV_NATIVE_CONTROL_UNAVAILABLE" in completed.stderr
+    else:
+        assert completed.returncode == 0, completed.stderr.decode(errors="replace")
+        observed = json.loads(completed.stdout)
+        if operation == "unregister":
+            assert observed["absent"] and not observed["storageCleanupComplete"]
+        elif operation == "absence":
+            assert observed["absent"]
+        else:
+            assert observed["state"] == "off" and observed["connectedNetworkAdapters"] == 0
+
+
 def plan(**options):
     state = CodeState(
         repository_identity="github.com/example/jarvis",
@@ -680,3 +1589,321 @@ def test_invocation_iterator_is_bounded_before_candidate_materialization():
     with pytest.raises(ValueError):
         verify_invocations(expected, unbounded_candidates())
     assert len(consumed) <= 10
+
+
+@pytest.mark.parametrize("valid", [True, False])
+def test_native_hyperv_absence_requires_fresh_successful_binding(hyperv_binding, valid):
+    from app.validation_runner.hyper_v import NativeHyperVAdapter
+
+    calls = []
+
+    class Transport:
+        def invoke(self, binding, operation):
+            assert operation == "absence"
+            calls.append(operation)
+            return {
+                "absent": valid,
+                "vmId": str(binding.vm_id),
+                "hostMachineGuid": str(binding.host_machine_guid),
+                "ownershipDigest": binding.ownership_digest,
+            }
+
+    adapter = NativeHyperVAdapter(Transport(), authority_check=lambda *_: None)
+    if valid:
+        adapter.require_absent(hyperv_binding)
+        adapter.require_absent(hyperv_binding)
+        assert calls == ["absence", "absence"]
+    else:
+        with pytest.raises(DomainError):
+            adapter.require_absent(hyperv_binding)
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        None,
+        "extra",
+        "identity",
+        "acl",
+        "running",
+        "revoked",
+        "interrupted",
+        "hardlink",
+        "ads",
+        "nested",
+    ],
+)
+def test_native_registered_storage_cleanup_fixture(
+    isolation_bundle, hyperv_binding, tmp_path, monkeypatch, failure
+):
+    """Real Windows fixture handles/deletion; ACL and VM guards are mocks."""
+    import os
+
+    from app.models.validation_cleanup import (
+        OwnedStorageEntry,
+        StorageIdentity,
+        StorageRegistration,
+    )
+    from app.validation_runner import cleanup
+    from app.validation_runner.cleanup import cleanup_registered_storage
+
+    if os.name != "nt":
+        pytest.skip("Native Windows cleanup fixture")
+    _, owner, capsule, _ = isolation_bundle
+    root = tmp_path / "dedicated"
+    root.mkdir()
+    allocation = root / ("jarvis-validation-" + "a" * 32)
+    allocation.mkdir()
+    file_parent = allocation
+    if failure == "nested":
+        file_parent = allocation / "VirtualMachines"
+        file_parent.mkdir()
+    file = file_parent / "guest.vhdx"
+    file.write_bytes(b"owned temporary fixture only")
+    service_sid = "S-1-5-21-1-2-3-4567"
+
+    def acl(fd, expected_sid):
+        if failure == "acl" or expected_sid != service_sid:
+            cleanup.refuse()
+
+    monkeypatch.setattr(cleanup, "private_acl", acl)
+
+    def identity(path):
+        info = path.stat()
+        return StorageIdentity(volume_id=info.st_dev, file_id=info.st_ino)
+
+    record = StorageRegistration(
+        binding=hyperv_binding,
+        owner=owner,
+        journal_digest=capsule.journal_digest,
+        dedicated_root_identity=identity(root),
+        allocation_identity=identity(allocation),
+        allocation_name=allocation.name,
+        service_sid=service_sid,
+        entries=(
+            (
+                OwnedStorageEntry(
+                    path="VirtualMachines", kind="directory", identity=identity(file_parent)
+                ),
+            )
+            if failure == "nested"
+            else ()
+        )
+        + (
+            OwnedStorageEntry(
+                path=file.relative_to(allocation).as_posix(), kind="file", identity=identity(file)
+            ),
+        ),
+    )
+    if failure == "extra":
+        (allocation / "unexpected.bin").write_bytes(b"never delete unknown content")
+    elif failure == "hardlink":
+        os.link(file, tmp_path / "external-link")
+    elif failure == "ads":
+        type(file)(str(file) + ":forged").write_bytes(b"unexpected alternate stream")
+    elif failure == "identity":
+        record = record.model_copy(
+            update={
+                "entries": (
+                    record.entries[0].model_copy(
+                        update={
+                            "identity": record.entries[0].identity.model_copy(
+                                update={"file_id": 1}
+                            ),
+                        }
+                    ),
+                )
+            }
+        )
+    guard_calls = []
+
+    def guard(*_):
+        guard_calls.append(1)
+        if failure == "revoked" and len(guard_calls) >= 3:
+            raise DomainError("CLEANUP_REVOKED", "Cleanup permission revoked", 409)
+        if failure == "interrupted" and len(guard_calls) == 4:
+            raise DomainError("CLEANUP_CRASH", "Simulated interruption", 409)
+
+    def absent(_):
+        if failure == "running":
+            raise DomainError("VM_REGISTERED", "VM still registered", 409)
+
+    if failure and failure != "nested":
+        with pytest.raises(DomainError):
+            cleanup_registered_storage(
+                root, record, authority_check=guard, require_vm_absent=absent
+            )
+        if failure == "interrupted":
+            assert not file.exists() and allocation.exists()
+            outcome = cleanup_registered_storage(
+                root, record, authority_check=guard, require_vm_absent=absent
+            )
+            assert outcome["registered_storage_absent"] and not allocation.exists()
+        else:
+            assert file.exists() and allocation.exists()
+    else:
+        outcome = cleanup_registered_storage(
+            root, record, authority_check=guard, require_vm_absent=absent
+        )
+        assert outcome["registered_storage_absent"] and not outcome["capacity_released"]
+        assert root.exists() and not allocation.exists()
+        repeated = cleanup_registered_storage(
+            root, record, authority_check=guard, require_vm_absent=absent
+        )
+        assert repeated["registered_storage_absent"] and not repeated["capacity_released"]
+
+
+def test_native_acl_refuses_unenrolled_owner_without_deletion(tmp_path):
+    import os
+
+    from app.validation_runner.cleanup import private_acl
+
+    if os.name != "nt":
+        pytest.skip("Native Windows ACL inspection")
+    file = tmp_path / "unregistered.bin"
+    file.write_bytes(b"preserve")
+    fd = os.open(file, os.O_RDONLY | os.O_BINARY)
+    try:
+        with pytest.raises(DomainError):
+            private_acl(fd, "S-1-5-21-1-2-3-4567")
+    finally:
+        os.close(fd)
+    assert file.read_bytes() == b"preserve"
+
+
+@pytest.mark.parametrize("case", ["valid", "owner", "public", "unprotected", "callback", "error"])
+def test_cleanup_acl_policy_deterministically_rejects_unsafe_descriptors(monkeypatch, case):
+    import ctypes
+    import sys
+    from types import SimpleNamespace
+
+    from app.validation_runner import cleanup
+
+    service = "S-1-5-21-1-2-3-4567"
+    owner = ctypes.create_string_buffer(16)
+    descriptor = ctypes.create_string_buffer(16)
+    dacl = ctypes.create_string_buffer(8)
+    ctypes.c_ushort.from_buffer(dacl, 4).value = 1
+    entry = ctypes.create_string_buffer(32)
+    entry[0] = b"\x09" if case == "callback" else b"\x00"
+    strings, freed = [], []
+
+    def get(handle, kind, flags, owner_out, group_out, dacl_out, sacl_out, descriptor_out):
+        owner_out._obj.value = ctypes.addressof(owner)
+        dacl_out._obj.value = ctypes.addressof(dacl)
+        descriptor_out._obj.value = ctypes.addressof(descriptor)
+        return 5 if case == "error" else 0
+
+    def control(pointer, flags_out, revision_out):
+        flags_out._obj.value = 0 if case == "unprotected" else 0x1000
+        return 1
+
+    def ace(pointer, index, entry_out):
+        entry_out._obj.value = ctypes.addressof(entry)
+        return 1
+
+    def convert(pointer, output):
+        address = pointer.value if hasattr(pointer, "value") else pointer
+        sid = service
+        if case == "owner" and address == ctypes.addressof(owner):
+            sid = "S-1-5-21-9-9-9-9"
+        if case == "public" and address == ctypes.addressof(entry) + 8:
+            sid = "S-1-1-0"
+        text = ctypes.create_unicode_buffer(sid)
+        strings.append(text)
+        output._obj.value = ctypes.addressof(text)
+        return 1
+
+    def free(pointer):
+        freed.append(pointer.value)
+
+    advapi = SimpleNamespace(
+        GetSecurityInfo=get,
+        GetSecurityDescriptorControl=control,
+        GetAce=ace,
+        ConvertSidToStringSidW=convert,
+    )
+    kernel = SimpleNamespace(LocalFree=free)
+    monkeypatch.setitem(sys.modules, "msvcrt", SimpleNamespace(get_osfhandle=lambda fd: fd))
+    monkeypatch.setattr(
+        ctypes, "WinDLL", lambda name, **_: advapi if name == "advapi32" else kernel, raising=False
+    )
+    if case == "valid":
+        cleanup.private_acl(123, service)
+    else:
+        with pytest.raises(DomainError):
+            cleanup.private_acl(123, service)
+    assert ctypes.addressof(descriptor) in freed
+
+
+@pytest.mark.parametrize("isolation_wall,command_wall", [(2, 30), (30, 2)])
+@pytest.mark.parametrize("isolation_output,command_output", [(7, 100), (100, 7)])
+def test_guest_execution_shares_stricter_limits_across_invocations(
+    isolation_bundle, monkeypatch, isolation_wall, command_wall, isolation_output, command_output
+):
+    from pathlib import PurePosixPath
+    from types import SimpleNamespace
+
+    from app.models.validation_isolation import IsolationLimits
+    from app.validation_runner import guest_systemd as guest
+
+    plan, owner, capsule, _ = isolation_bundle
+    command = SimpleNamespace(timeout_seconds=command_wall, output_limit_bytes=command_output)
+    selected = SimpleNamespace(
+        gate="backend_ruff",
+        command=command,
+        invocations=("first", "second"),
+        invocation_digest="a" * 64,
+    )
+    monkeypatch.setattr(guest, "sys", SimpleNamespace(platform="linux"))
+    monkeypatch.setattr(guest.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(guest, "describe_invocations", lambda _: (selected,))
+    monkeypatch.setattr(guest, "monotonic", lambda: 100)
+    executor = guest.ProtectedGuestExecutor(
+        None,
+        rootfs="/rootfs",
+        source_root="/source",
+        spool_root="/spool",
+        programs={},
+        limits=IsolationLimits(
+            memory_bytes=2147483648,
+            cpu_count=1,
+            disk_bytes=1073741824,
+            process_count=8,
+            wall_seconds=isolation_wall,
+            output_bytes=isolation_output,
+        ),
+        authority_check=lambda: None,
+        source_check=lambda *_: None,
+        claim_execution=lambda *_: None,
+    )
+    executor.rootfs, executor.source, executor.spool = map(
+        PurePosixPath, ("/rootfs", "/source", "/spool")
+    )
+    calls = []
+
+    def run(unit, invocation, selected_command, deadline, output):
+        assert deadline == 102
+        assert selected_command is command
+        calls.append(invocation)
+        # Combined stdout/stderr fits on the first invocation, but not the second.
+        output.consume(b"out")
+        output.consume(b"err")
+        return {"output_bytes": 6}
+
+    monkeypatch.setattr(executor, "_run", run)
+    with pytest.raises(DomainError, match="Protected guest execution"):
+        executor.execute(plan, capsule, owner, "command", "backend_ruff")
+    assert calls == ["first", "second"]
+
+
+def test_guest_output_budget_accepts_exact_combined_limit_then_refuses():
+    from app.validation_runner.guest_systemd import _OutputBudget
+
+    output = _OutputBudget(7)
+    output.consume(b"stdout")
+    output.consume(b"e")
+    assert output.remaining == 0
+    with pytest.raises(DomainError):
+        output.consume(b"x")
+    assert output.remaining == 0

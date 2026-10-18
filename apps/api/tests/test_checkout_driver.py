@@ -191,6 +191,32 @@ def test_supervision_failure_cleans_owned_native_process(checkout, monkeypatch, 
     assert launched[0].stdout.closed and launched[0].stderr.closed
 
 
+@pytest.mark.parametrize("boundary", ["image_pin", "process_start"])
+def test_registration_inactivity_starts_after_native_launch(checkout, monkeypatch, boundary):
+    from contextlib import contextmanager
+
+    import app.self_build.checkout_driver as module
+
+    _, policy, observer, plan, _, _ = checkout
+    clock = [0.0]
+    original = getattr(module, "pinned_image" if boundary == "image_pin" else "owned_process")
+
+    @contextmanager
+    def delayed_setup(*args, **kwargs):
+        with original(*args, **kwargs) as result:
+            clock[0] += observer.inactivity_seconds + 1
+            yield result
+
+    monkeypatch.setattr(module, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        module, "pinned_image" if boundary == "image_pin" else "owned_process", delayed_setup
+    )
+    result = CheckoutDriver(observer, lambda: None).invoke(
+        policy, "registrations", plan, Path(policy.worktree_root) / plan.workspace_id
+    )
+    assert b"worktree " in result
+
+
 def test_mutation_on_unconfined_platform_fails_before_side_effects(checkout, monkeypatch):
     import app.self_build.checkout_driver as module
 
