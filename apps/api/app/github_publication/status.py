@@ -1,9 +1,12 @@
 """Operator-visible state combines fresh native position with dated PR observations."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from app.core.errors import DomainError
+from app.github_publication.current_observation import read_current
 from app.github_publication.journal import PublicationJournal
+from app.github_publication.readiness import assess
+from app.github_publication.transport import GitHubRetry
 from app.models.publication_lifecycle import PublicationStatus
 
 
@@ -64,11 +67,38 @@ def status(native, publication, actor, workspace_id, native_command_id, operatio
         )
         try:
             publication.validation.require(actor, snapshot.plan)
-        except DomainError:
+        except DomainError as error:
             current = False
             value["state"] = "validation_pending"
+            value["error_code"] = error.code
         if current:
-            value["ready_for_manual_merge"] = True
+            try:
+                fresh = read_current(publication, actor, snapshot)
+                value["observation"] = fresh
+                current = (
+                    fresh.head_sha == snapshot.plan.commit_sha
+                    and fresh.head_sha_after_collection == snapshot.plan.commit_sha
+                    and 0 <= (datetime.now(UTC) - fresh.observed_at).total_seconds() <= 300
+                    and assess(fresh).ready_for_manual_merge
+                )
+            except GitHubRetry as error:
+                current = False
+                value["error_code"] = "GITHUB_RETRY_REQUIRED"
+                value["retry_not_before"] = datetime.now(UTC) + timedelta(
+                    seconds=error.retry_after_seconds
+                )
+            except DomainError as error:
+                current = False
+                value["error_code"] = error.code
+                value["state"] = (
+                    "validation_pending"
+                    if error.code.startswith(("GITHUB_VALIDATION_", "VALIDATION_"))
+                    else "blocked"
+                )
+            if current:
+                value["ready_for_manual_merge"] = True
+            elif value["state"] == "completed":
+                value["state"] = "review_pending"
         elif value["state"] == "completed":
             value["state"] = "review_pending"
     return PublicationStatus(**value)
