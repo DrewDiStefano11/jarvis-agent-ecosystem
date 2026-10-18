@@ -1,5 +1,11 @@
 # Production publication orchestration
 
+Correction triage authenticates failed check providers against the protected
+required-check context and its explicit GitHub App ID. Publisher GitHub user IDs
+are a separate identity namespace and cannot establish check-app authority.
+Unbound requirements or mismatched app/context evidence remain blocked; trusted
+failed checks request investigation without authorizing source changes or retries.
+
 Campaign C composes native exact commits, guarded authenticated HTTPS push, draft
 PR reconciliation, protected publication checkpoints and exact-head observation.
 The default application initializes native commit services and exposes typed
@@ -85,8 +91,17 @@ references and observation digest. A must match its separately captured precommi
 baseline; the link is historical and grants no current-source, mutation or
 validation authority. Changed observations or missing checkpoints refuse.
 Correction dispatch awaits A's supported development contract; no competing
-editing engine or automatic correction authority is introduced here. Campaign B
-retains isolation, protected collection and post-commit continuation ownership.
+editing engine or automatic correction authority is introduced here.
+The protected correction-triage GET classifies the linked observation into
+waiting checks, investigation, current review correction, no actionable evidence
+or blocked. Unknown check failures are not fabricated product defects or retries.
+Old unresolved reviews, ambiguous evidence, stale observations and unverified
+publishers remain explicit blockers. More than 32 references blocks the candidate
+and preserves the original full observation, rather than silently truncating it.
+The result binds task/head/link/observation hashes and grants no dispatch or
+mutation authority. A must separately enforce original task scope, budget,
+independent workspace/lineage approval and new exact source plans.
+Campaign B retains isolation, protected collection and post-commit continuation ownership.
 No mocked evidence, ordinary subprocess test execution or state-reader assertion
 can activate production publication.
 
