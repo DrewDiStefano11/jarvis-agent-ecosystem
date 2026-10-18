@@ -11,6 +11,7 @@ from app.model_providers.contracts import (
     validate_safe_identifier,
 )
 from app.models.development_agent import ContextSelection, RepositoryContext
+from app.models.development_publication import PublicationSourceAnchor
 from app.models.development_validation import Contract, Digest
 from app.models.self_build import Identifier
 
@@ -73,6 +74,7 @@ class AdmissionPlan(Contract):
     baseline_id: Digest | None = None
     baseline_snapshot_hash: Digest | None = None
     repair_selection: ContextSelection | None = None
+    publication_source: PublicationSourceAnchor | None = None
 
     @model_serializer(mode="wrap")
     def original_shape(self, handler):
@@ -82,6 +84,7 @@ class AdmissionPlan(Contract):
             "baseline_id",
             "baseline_snapshot_hash",
             "repair_selection",
+            "publication_source",
         ):
             if value[key] is None:
                 value.pop(key)
@@ -95,7 +98,9 @@ class AdmissionPlan(Contract):
             self.baseline_snapshot_hash,
             self.repair_selection,
         )
-        if any(value is not None for value in values) and any(value is None for value in values):
+        if (
+            any(value is not None for value in values) or self.publication_source is not None
+        ) and any(value is None for value in values):
             raise ValueError("DEVELOPMENT_LINEAGE_REFERENCE_INVALID")
         return self
 

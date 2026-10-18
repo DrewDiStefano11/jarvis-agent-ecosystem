@@ -9,6 +9,7 @@ from app.development_agent.baselines import DevelopmentBaselineService
 from app.development_agent.context import RepositoryContextReader, refuse
 from app.development_agent.dispatch import DevelopmentDispatchService, protected_storage
 from app.development_agent.lineage_repository import DevelopmentLineageRow
+from app.development_agent.publication import read_anchor, verify_destination
 from app.development_agent.repository import DevelopmentAdmissionRow, DevelopmentDispatchRow
 from app.models.development_baseline import BaselineRecord
 from app.models.development_dispatch import DevelopmentAdmission
@@ -52,6 +53,12 @@ class DevelopmentLineageService:
         baseline, parent, parent_digest = self.baseline(
             session, actor, admission.plan.baseline_id, depth=depth + 1
         )
+        if admission.plan.publication_source is not None:
+            anchor = read_anchor(
+                self.app, actor, baseline, admission.plan.publication_source.reference
+            )
+            if anchor != admission.plan.publication_source:
+                refuse("DEVELOPMENT_PUBLICATION_LINK_CONFLICT")
         previous = session.get(DevelopmentLineageRow, baseline.context.workspace_id)
         expected_ordinal = (previous.ordinal if previous is not None else 0) + 1
         current = admission.plan
@@ -120,6 +127,12 @@ class DevelopmentLineageService:
         origin, origin_digest = self.origin(session, actor, context.task_id)
         baseline, parent, parent_digest = self.baseline(session, actor, request.baseline_id)
         self.dispatches.remaining_seconds(origin)
+        anchor = (
+            read_anchor(self.app, actor, baseline, request.publication_source)
+            if request.publication_source is not None
+            else None
+        )
+        verify_destination(baseline, context, anchor)
         rows = session.scalars(
             select(DevelopmentLineageRow)
             .where(DevelopmentLineageRow.task_id == context.task_id)
@@ -138,8 +151,6 @@ class DevelopmentLineageService:
             or context.code_state.changes
             or context.code_state.repository_identity
             != baseline.context.code_state.repository_identity
-            or context.code_state.head_sha != baseline.context.code_state.head_sha
-            or context.code_state.base_sha != baseline.context.code_state.base_sha
             or len(rows) >= origin.plan.limits.maximum_dispatches - 1
         ):
             refuse("DEVELOPMENT_CORRECTION_CONTEXT_INVALID")
@@ -173,6 +184,8 @@ class DevelopmentLineageService:
             baseline_snapshot_hash=baseline.snapshot_hash,
             repair_selection=request.repair_selection.model_dump(mode="json"),
         )
+        if anchor is not None:
+            fields["publication_source"] = anchor.model_dump(mode="json")
         from app.models.development_dispatch import AdmissionPlan
 
         effective = AdmissionPlan(**fields, plan_hash=digest(fields))
@@ -213,6 +226,12 @@ class DevelopmentLineageService:
                     or record.admission.approved_by != operator.actor_id
                     or record.admission.plan.baseline_id != request.baseline_id
                     or record.admission.plan.repair_selection != request.repair_selection
+                    or (
+                        record.admission.plan.publication_source.reference
+                        if record.admission.plan.publication_source
+                        else None
+                    )
+                    != request.publication_source
                 ):
                     refuse("DEVELOPMENT_PLAN_CHANGED")
                 replay = True

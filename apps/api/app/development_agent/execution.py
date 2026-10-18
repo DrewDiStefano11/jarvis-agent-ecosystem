@@ -227,6 +227,7 @@ class DevelopmentExecutor:
                 allow_delete=root.plan.limits.allow_delete,
                 commit_guard=commit_guard,
                 baseline=baseline,
+                publication_source=root.plan.publication_source,
                 repair_selection=root.plan.repair_selection,
                 expected_native_context_hash=current.reservation.context.context_hash,
             )

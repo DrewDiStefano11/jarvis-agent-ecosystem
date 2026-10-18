@@ -44,6 +44,7 @@ POLICY_SOURCE_PATHS = (
     "development_agent/baseline_repository.py",
     "development_agent/corrections.py",
     "development_agent/lineages.py",
+    "development_agent/publication.py",
     "development_agent/lineage_repository.py",
     "models/development_baseline.py",
     "models/source_mutation_inspection.py",
@@ -64,6 +65,7 @@ POLICY_SOURCE_PATHS = (
     "models/development_handoff.py",
     "models/development_review.py",
     "models/development_lineage.py",
+    "models/development_publication.py",
     "models/source_mutation.py",
     "models/context.py",
     "models/domain.py",
@@ -946,6 +948,7 @@ class DevelopmentDispatchService:
                 root.plan.repair_selection,
                 references,
                 allow_delete=root.plan.limits.allow_delete,
+                publication_source=root.plan.publication_source,
             )
         expected = plan_source_changes(
             intent, mutation_observation(context, (change.path for change in intent.changes))

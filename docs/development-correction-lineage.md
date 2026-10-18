@@ -14,11 +14,16 @@ implementation. All production model inference remains quarantined.
 
 A completed iteration's acknowledged protected baseline is reference data. The
 operator separately creates and approves an owned native destination workspace
-for the same durable task and repository/base. PreviewCorrectionWorkspace binds
+for the same durable task and repository. Without a publication reference the
+original base and HEAD must match. With a protected publication anchor, the exact
+anchored commit must be both destination base and HEAD. PreviewCorrectionWorkspace binds
 its original creation authority, protected baseline ID and bounded repair paths.
 The preview remeasures a pristine destination while native source/ownership and
-metadata pins are held. Advanced or unrelated Git heads refuse until the protected
-publication commit/source bridge is integrated.
+metadata pins are held. Advanced heads require the protected publication reference
+interface described in [publication-source corrections](development-publication-corrections.md);
+unrelated heads or missing, changed or unread anchor evidence refuse. The reader
+uses the execution owner's durable owner/RBAC scope; independent operator approval
+remains mandatory for the destination plan.
 
 ApproveCorrectionWorkspace additionally binds the execution actor and exact
 preview hash. Actor resolution uses native authentication; the current configured
@@ -61,9 +66,10 @@ previous new.py module, preserves original checkout bytes and retains the origin
 admission plus both reservations. It is implementation evidence, not real model
 quality or Campaign B's independently verified isolated execution.
 
-Remaining integration includes post-publication committed-head bridge consumption,
+The committed-head adapter contract and native fixture are implemented; remaining
+integration includes wiring Campaign C's authenticated protected reader,
 protected validation diagnosis/repair policy and complete operator task orchestration.
 Campaign B's genuine isolated receipts remain required; validation passed and
 publication ready are never inferred from these fixtures. Live coding acceptance
 requires independently verified included-only subscription use, purchased-credit
-exclusion and recharge safeguards. API key use and unverified remote CI remain off.
+exclusion and recharge safeguards. API key use remains off. Standard public GitHub-hosted CI is authorized and required.
