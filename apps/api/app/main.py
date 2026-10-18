@@ -39,6 +39,8 @@ from app.core.config import Settings
 from app.core.errors import DomainError
 from app.core.transitions import InvalidTransitionError, validate_transition
 from app.db.session import create_database_engine, create_session_factory
+from app.development_agent.router import operator_router as development_operator_router
+from app.development_agent.router import router as development_review_router
 from app.identity.router import router as identity_router
 from app.identity.service import IdentityService
 from app.model_providers.factory import build_model_router
@@ -100,7 +102,7 @@ from app.team_selection.router import router as team_selection_router
 from app.tool_execution.router import router as tool_execution_router
 from app.tool_execution.service import ToolExecutionService
 
-DATABASE_REVISION = "20261013_free_ai"
+DATABASE_REVISION = "20261016_a_review_join"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
@@ -312,6 +314,7 @@ def create_app(
         app.include_router(remote_control_router)
         app.include_router(git_operator_router)
         app.include_router(commit_operator_router)
+        app.include_router(development_operator_router)
     app.state.model_router = build_model_router(settings, session_factory)
     app.state.model_execution_repository = ModelExecutionRepository(
         session_factory,
@@ -339,12 +342,26 @@ def create_app(
     app.state.self_build_workspace_service = WorkspaceService(app)
     app.state.self_build_git_service = GitInspectionService(app)
     app.state.self_build_creation_service = WorkspaceCreationService(app)
+    app.state.self_build_commit_service = CommitPreparationService(app)
+    from app.development_agent.config import DevelopmentProviderSettings, build_development_router
     from app.development_agent.context import RepositoryContextReader
+    from app.development_agent.dispatch import DevelopmentDispatchService
+    from app.development_agent.execution import DevelopmentExecutor
     from app.development_agent.proposals import DevelopmentProposalService
+    from app.development_agent.review import DevelopmentReviewService
 
     app.state.development_context_reader = RepositoryContextReader(app)
     app.state.development_proposal_service = DevelopmentProposalService(app)
-    app.state.self_build_commit_service = CommitPreparationService(app)
+    app.state.development_dispatch_service = DevelopmentDispatchService(app)
+    app.state.development_review_service = DevelopmentReviewService(app)
+    app.state.development_provider_settings = DevelopmentProviderSettings()
+    app.state.development_model_router = build_development_router(
+        app.state.development_provider_settings, app.state.model_router
+    )
+    app.state.development_executor = DevelopmentExecutor(
+        app, app.state.development_provider_settings, app.state.development_model_router
+    )
+    app.include_router(development_review_router)
     app.include_router(self_build_router)
     app.include_router(commit_router)
     app.include_router(self_improvement_router)
