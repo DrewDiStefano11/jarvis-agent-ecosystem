@@ -215,6 +215,8 @@ class DevelopmentExecutor:
                 if live_record.response != current.response:
                     refuse("DEVELOPMENT_DISPATCH_CONFLICT")
 
+            with self.dispatches.repository.sessions() as session:
+                baseline = self.dispatches.correction_baseline(session, root)
             editing = self.proposals.persist(
                 actor,
                 workspace_id,
@@ -224,6 +226,9 @@ class DevelopmentExecutor:
                 proposal,
                 allow_delete=root.plan.limits.allow_delete,
                 commit_guard=commit_guard,
+                baseline=baseline,
+                repair_selection=root.plan.repair_selection,
+                expected_native_context_hash=current.reservation.context.context_hash,
             )
         self.check(actor, workspace_id, authority, current.reservation.dispatch_id)
         current = self.dispatches.bind_editing(

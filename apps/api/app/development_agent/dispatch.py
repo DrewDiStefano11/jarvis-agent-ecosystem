@@ -42,6 +42,9 @@ POLICY_SOURCE_PATHS = (
     "development_agent/review.py",
     "development_agent/baselines.py",
     "development_agent/baseline_repository.py",
+    "development_agent/corrections.py",
+    "development_agent/lineages.py",
+    "development_agent/lineage_repository.py",
     "models/development_baseline.py",
     "models/source_mutation_inspection.py",
     "models/source_artifact_verification.py",
@@ -60,6 +63,7 @@ POLICY_SOURCE_PATHS = (
     "models/source_edit_planning.py",
     "models/development_handoff.py",
     "models/development_review.py",
+    "models/development_lineage.py",
     "models/source_mutation.py",
     "models/context.py",
     "models/domain.py",
@@ -197,10 +201,18 @@ class DevelopmentDispatchService:
     def approval_payload(self, plan):
         return dict(planHash=plan.plan_hash, executionActorId=plan.actor_id)
 
-    def root(self, session, actor, workspace_row, authority):
+    def document(self, session, actor, workspace_row, *, depth=0):
+        if depth > 7:
+            refuse("DEVELOPMENT_LINEAGE_INVALID")
         stored = session.get(DevelopmentAdmissionRow, workspace_row.task_id)
         if stored is None:
             refuse("DEVELOPMENT_ADMISSION_REQUIRED")
+        if stored.payload["plan"]["workspace_id"] != workspace_row.id:
+            from app.development_agent.lineages import DevelopmentLineageService
+
+            return DevelopmentLineageService(self.app).validate(
+                session, actor, workspace_row, depth
+            )
         record = DevelopmentAdmission.model_validate(stored.payload)
         plan = record.plan
         _, fingerprint = self.task(session, workspace_row.task_id)
@@ -212,12 +224,8 @@ class DevelopmentDispatchService:
             or plan.actor_id != actor.actor_id
             or plan.workspace_id != workspace_row.id
             or plan.runtime_run_id != workspace_row.runtime_run_id
-            or plan.attempt_id
-            != self.repository.runtime(session, workspace_row.runtime_run_id).active_attempt_id
             or plan.workspace_plan_hash != self.repository.contract(workspace_row).plan.plan_hash
             or plan.workspace_approval_id != workspace_row.approval_id
-            or plan.worker_id != authority.worker_id
-            or plan.lease_fingerprint != digest(authority.lease_token)
             or plan.policy_digest != POLICY_DIGEST
             or plan.assembly_limits != AssemblyLimits.capture(self.app.state.context_assembler)
             or record.approved_by == actor.actor_id
@@ -231,12 +239,30 @@ class DevelopmentDispatchService:
             record.approved_by,
             self.approval_payload(plan),
         )
+        return record, stored.integrity_digest
+
+    def root(self, session, actor, workspace_row, authority):
+        record, integrity = self.document(session, actor, workspace_row)
+        plan = record.plan
+        if (
+            plan.attempt_id
+            != self.repository.runtime(session, workspace_row.runtime_run_id).active_attempt_id
+            or plan.worker_id != authority.worker_id
+            or plan.lease_fingerprint != digest(authority.lease_token)
+        ):
+            refuse("DEVELOPMENT_ADMISSION_CONFLICT")
         self.creation.operator(
             RuntimeActorContext(actor_id=record.approved_by, stable_key="persisted-operator"),
             workspace_row,
             session,
         )
-        return record, stored.integrity_digest
+        return record, integrity
+
+    def root_slot(self, record):
+        parts = ["admission", record.plan.task_id]
+        if record.plan.baseline_id is not None:
+            parts.append(record.plan.workspace_id)
+        return digest(parts)[:40]
 
     def root_metadata(self, record):
         return dict(
@@ -301,7 +327,7 @@ class DevelopmentDispatchService:
         if root:
             plan = record.plan
             run_id, attempt = plan.runtime_run_id, plan.attempt_id
-            slot, phase = digest(["admission", plan.task_id])[:40], "admitted"
+            slot, phase = self.root_slot(record), "admitted"
             protected_digest = digest(record.model_dump(mode="json"))
             metadata = self.root_metadata(record)
         else:
@@ -423,6 +449,26 @@ class DevelopmentDispatchService:
             admissionDigest=reservation.admission_digest,
         )
 
+    def correction_baseline(self, session, root):
+        if root.plan.baseline_id is None:
+            return None
+        from app.development_agent.lineages import DevelopmentLineageService
+
+        actor = RuntimeActorContext(
+            actor_id=root.plan.actor_id, stable_key="protected-development-owner"
+        )
+        return DevelopmentLineageService(self.app).baseline(session, actor, root.plan.baseline_id)[
+            0
+        ]
+
+    def model_context_hash(self, session, root, context):
+        baseline = self.correction_baseline(session, root)
+        if baseline is None:
+            return context.context_hash
+        from app.development_agent.corrections import correction_context_hash
+
+        return correction_context_hash(baseline, context, root.plan.repair_selection)
+
     def dispatch_record(self, session, row, stored, root, root_digest):
         if stored is None:
             refuse("DEVELOPMENT_DISPATCH_REQUIRED")
@@ -447,7 +493,7 @@ class DevelopmentDispatchService:
             or request.task_id != root.plan.task_id
             or request.correlation_id != stored.id
             or request.model != root.plan.limits.model
-            or request.metadata != {"context_hash": context.context_hash}
+            or request.metadata != {"context_hash": self.model_context_hash(session, root, context)}
             or reservation.request_digest != digest(request.model_dump(mode="json"))
             or request.max_output_tokens != root.plan.limits.output_tokens_per_dispatch
             or stored.id != digest([root.plan.task_id, reservation.command_id])
@@ -527,7 +573,7 @@ class DevelopmentDispatchService:
             values = (
                 record.plan.runtime_run_id,
                 record.plan.attempt_id,
-                digest(["admission", record.plan.task_id])[:40],
+                self.root_slot(record),
                 "admitted",
                 digest(record.model_dump(mode="json")),
                 self.root_metadata(record),
@@ -596,10 +642,20 @@ class DevelopmentDispatchService:
                     .order_by(DevelopmentDispatchRow.ordinal)
                     .limit(9)
                 ).all()
-                records = [
-                    self.dispatch_record(session, row, item, root, root_digest)
-                    for item in stored_records
-                ]
+                records = []
+                for item in stored_records:
+                    historical_row = self.repository.lookup(
+                        session, item.payload["reservation"]["context"]["workspace_id"]
+                    )
+                    historical_root, historical_digest = self.document(
+                        session, actor, historical_row
+                    )
+                    self.require_acknowledged(actor, historical_root, root=True)
+                    records.append(
+                        self.dispatch_record(
+                            session, historical_row, item, historical_root, historical_digest
+                        )
+                    )
                 if [item.reservation.ordinal for item in records] != list(
                     range(1, len(records) + 1)
                 ):
@@ -616,8 +672,17 @@ class DevelopmentDispatchService:
                 ):
                     refuse("DEVELOPMENT_BUDGET_EXHAUSTED")
                 task, _ = self.task(session, row.task_id)
+                baseline = self.correction_baseline(session, root)
+                if baseline is not None and context.selection != root.plan.selection:
+                    refuse("DEVELOPMENT_CORRECTION_CONTEXT_INVALID")
                 request, manifest = request_builder.build_request(
-                    self.app.state.context_assembler, task, context, root, dispatch_id, timeout
+                    self.app.state.context_assembler,
+                    task,
+                    context,
+                    root,
+                    dispatch_id,
+                    timeout,
+                    baseline=baseline,
                 )
                 payload = dict(
                     dispatchId=dispatch_id,
@@ -699,7 +764,7 @@ class DevelopmentDispatchService:
                 httpx.Response(200, content=response.content.encode("utf-8")), tools_enabled=True
             )
         )
-        if proposal.context_hash != record.reservation.context.context_hash:
+        if proposal.context_hash != request.metadata["context_hash"]:
             refuse("DEVELOPMENT_RESPONSE_INVALID")
         # Persist known provider evidence before native source-plan interpretation.
         # A semantically invalid edit is repairable within the same root allowance;
@@ -862,15 +927,26 @@ class DevelopmentDispatchService:
         editing = SourceEditingPlanService.record(stored)
         context = record.reservation.context
         proposal = DevelopmentProposal.model_validate_json(record.response.content)
-        intent = compile_proposal(
-            proposal,
-            context,
-            PlanReferences(
-                original_plan_hash=root.plan.workspace_plan_hash,
-                authorization_reference=root.plan.workspace_approval_id,
-            ),
-            allow_delete=root.plan.limits.allow_delete,
+        references = PlanReferences(
+            original_plan_hash=root.plan.workspace_plan_hash,
+            authorization_reference=root.plan.workspace_approval_id,
         )
+        baseline = self.correction_baseline(session, root)
+        if baseline is None:
+            intent = compile_proposal(
+                proposal, context, references, allow_delete=root.plan.limits.allow_delete
+            )
+        else:
+            from app.development_agent.corrections import compile_correction
+
+            intent = compile_correction(
+                proposal,
+                baseline,
+                context,
+                root.plan.repair_selection,
+                references,
+                allow_delete=root.plan.limits.allow_delete,
+            )
         expected = plan_source_changes(
             intent, mutation_observation(context, (change.path for change in intent.changes))
         )

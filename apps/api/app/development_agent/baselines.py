@@ -6,6 +6,7 @@ from app.agent_runtime.repository import RuntimeExecutionFence
 from app.development_agent.baseline_repository import DevelopmentBaselineRow
 from app.development_agent.context import RepositoryContextReader, refuse
 from app.development_agent.dispatch import DevelopmentDispatchService, protected_storage
+from app.development_agent.repository import DevelopmentDispatchRow
 from app.models.agent_runtime import RecordCheckpointCommand
 from app.models.development_baseline import (
     BaselineFile,
@@ -88,6 +89,32 @@ class DevelopmentBaselineService:
             snapshot.dispatch_id,
             session,
         )
+        return self.validate_record(session, actor, workspace_id, root, dispatch, row, record)
+
+    def historical(self, session, actor, baseline_id, root):
+        row = session.get(DevelopmentBaselineRow, baseline_id)
+        if row is None:
+            refuse("DEVELOPMENT_BASELINE_REQUIRED")
+        record = BaselineRecord.model_validate(row.payload)
+        workspace_id = record.snapshot.context.workspace_id
+        workspace = self.dispatches.repository.lookup(session, workspace_id)
+        dispatch = self.dispatches.dispatch_record(
+            session,
+            workspace,
+            session.get(DevelopmentDispatchRow, record.snapshot.dispatch_id),
+            root,
+            digest(root.model_dump(mode="json")),
+        )
+        self.dispatches.require_acknowledged(actor, root, root=True)
+        self.dispatches.require_acknowledged(actor, dispatch)
+        result = self.validate_record(session, actor, workspace_id, root, dispatch, row, record)
+        if self.checkpoint(actor, result)[0] is None:
+            refuse("DEVELOPMENT_CHECKPOINT_REQUIRED")
+        return result
+
+    def validate_record(self, session, actor, workspace_id, root, dispatch, row, record):
+        snapshot = record.snapshot
+        baseline_id = snapshot.baseline_id
         binding = dispatch.editing_binding
         context = snapshot.context
         source = self.history.read(actor, snapshot.editing_record_id)

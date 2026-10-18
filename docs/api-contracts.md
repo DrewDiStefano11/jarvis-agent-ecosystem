@@ -2,7 +2,7 @@
 
 Campaign D adds `free_only` to `AutonomousWorkerStatus.modelExecutionMode` and
 adds the `20261013_free_ai` migration. The current advertised database head is
-`20261016_a_baseline_join`, including quota, dispatch and baseline history. Existing response
+`20261016_a_lineage_join`, including quota, dispatch, baseline and lineage history. Existing response
 envelopes and event schema versions are preserved. No HTTP endpoint accepts
 provider allowance evidence, tokens or cloud activation. The environment-only
 activation switch defaults to false and is separate from allowance evidence.
@@ -334,4 +334,16 @@ mutation reference) and returns `TypedApiResponse[BaselineSummary]`. It is an
 owner/lease-fenced historical snapshot capture, with no provider dispatch or source
 effect. The private snapshot is not accepted from HTTP/model payloads. The summary
 explicitly grants no freshness, validation, execution or publication authority.
+
+
+### Correction workspace approval
+
+POST `/api/development/workspaces/{workspace_id}/correction/preview` accepts
+`PreviewCorrectionWorkspace` and returns `TypedApiResponse[LineagePlan]`.
+POST `/api/remote/development/workspaces/{workspace_id}/correction/approve` accepts
+`ApproveCorrectionWorkspace` and returns `TypedApiResponse[LineageRecord]` under
+existing operator authentication. Each binds a native destination, protected
+baseline and repair scope to the unchanged original task budget. It grants no
+source effect, validation success, live inference activation or publication.
 Campaign repair (2026-10-16): development dispatch and shared nonbillable quota migrations converge at 20261016_a_review_join without rewriting either deployed predecessor. The development request fixture binds the same captured assembly limits as production admission; tiny-context tests still exercise source truncation refusal.
+Baseline and lineage integrations add guarded merge revisions 20261016_a_baseline_join and 20261016_a_lineage_join. Existing branch revision identities remain unchanged; runtime status and OpenAPI advertise the resulting single head.
