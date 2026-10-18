@@ -55,6 +55,9 @@ integrated explicitly; no source-runtime invariant was weakened.
    derives the destination branch from the native workspace and sets
    `expected_remote_sha=None`. It does not yet bind a new corrected commit to the
    original published branch/PR through protected correction lineage.
+   A protected historical direct-child link reader is now implemented and tested;
+   it preserves the original branch/PR and rejects siblings. Publication-plan
+   binding, A's admission guard and external effects are still pending.
 2. Preserve fast-forward history. A's original-base correction path in draft
    #148 is published but unmerged; a sibling commit based on the original base
    cannot be forced over a published commit. Advanced-head admission must be
