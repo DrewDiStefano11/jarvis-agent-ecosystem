@@ -134,7 +134,9 @@ def test_reconfiguration_clears_native_validation_and_replaces_it_safely(tmp_pat
 def test_campaign_routes_compose_without_losing_development_services(
     tmp_path, monkeypatch, remote_enabled
 ):
+    from app.development_agent.baselines import DevelopmentBaselineService
     from app.development_agent.dispatch import DevelopmentDispatchService
+    from app.development_agent.lineages import DevelopmentLineageService
     from app.development_agent.review import DevelopmentReviewService
     from app.self_build.commit_execution import NativeCommitService
 
@@ -164,6 +166,8 @@ def test_campaign_routes_compose_without_losing_development_services(
             assert any(path.startswith(prefix) for path in paths) is remote_enabled
         assert isinstance(app.state.development_dispatch_service, DevelopmentDispatchService)
         assert isinstance(app.state.development_review_service, DevelopmentReviewService)
+        assert isinstance(app.state.development_baseline_service, DevelopmentBaselineService)
+        assert isinstance(app.state.development_lineage_service, DevelopmentLineageService)
         assert isinstance(app.state.self_build_native_commit_service, NativeCommitService)
         assert app.state.development_model_router is not app.state.model_router
         assert getattr(app.state, "native_commit_validation_consumer", None) is None

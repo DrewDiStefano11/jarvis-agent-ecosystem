@@ -12,7 +12,13 @@ from app.models.source_change import SourceContent, SourceEntry, SourceObservati
 from app.models.workspace_creation import CreateWorkspaceRequest
 from app.self_build.change_verifier import INTERNAL, ChangeVerifier
 from app.self_build.policy import digest
-from app.tool_execution.filesystem import open_directory, open_file, read_bytes, repository_parts
+from app.tool_execution.filesystem import (
+    LOCK,
+    open_directory,
+    open_file,
+    read_bytes,
+    repository_parts,
+)
 
 
 def refuse(code):
@@ -48,7 +54,15 @@ class RepositoryContextReader:
         return binding
 
     def inspect(
-        self, actor, workspace_id, authority, selection, *, expected_hash=None, finalize=None
+        self,
+        actor,
+        workspace_id,
+        authority,
+        selection,
+        *,
+        expected_hash=None,
+        finalize=None,
+        native_artifacts=(),
     ):
         try:
             authority = CreateWorkspaceRequest.model_validate(
@@ -62,6 +76,8 @@ class RepositoryContextReader:
         record, nonce, private_digest = self.require_ready(actor, workspace_id, authority)
 
         transaction_session = None
+        native_artifacts = tuple(native_artifacts)
+        artifact_paths = {item.path for item in native_artifacts}
 
         def authority_check():
             if transaction_session is None:
@@ -105,6 +121,10 @@ class RepositoryContextReader:
                     entries.append(SourceEntry(path=path, kind="directory"))
                 for leaf in files:
                     path = (Path(directory) / leaf).relative_to(target).as_posix()
+                    if path == LOCK or path in artifact_paths:
+                        # The native verifier checks coordination metadata and exact
+                        # checkpointed backup identity; none is model source context.
+                        continue
                     if path in INTERNAL:
                         # Native source plans retain sibling topology for the
                         # verified creation marker/Git pointer, never their bytes.
@@ -212,6 +232,8 @@ class RepositoryContextReader:
             return result
 
         try:
-            return verifier.inspect(policy, record, nonce, finalize=capture)
+            return verifier.inspect(
+                policy, record, nonce, finalize=capture, native_artifacts=native_artifacts
+            )
         except (OSError, UnicodeError, ValueError):
             refuse("DEVELOPMENT_CONTEXT_UNAVAILABLE")

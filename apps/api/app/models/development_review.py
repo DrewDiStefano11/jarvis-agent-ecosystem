@@ -4,6 +4,7 @@ from app.models.development_agent import ContextSelection
 from app.models.development_dispatch import DevelopmentLimits
 from app.models.development_validation import Contract, Digest
 from app.models.self_build import Identifier
+from app.models.source_mutation import ApplySourceMutation
 from app.models.workspace_creation import CreateWorkspaceRequest
 
 
@@ -25,3 +26,7 @@ class ReadDevelopmentAdmission(Contract):
 class RunDevelopmentIteration(ReadDevelopmentAdmission):
     selection: ContextSelection
     command_id: Identifier
+
+
+class CaptureDevelopmentBaseline(ReadDevelopmentAdmission):
+    mutation: ApplySourceMutation

@@ -12,12 +12,20 @@ Merge authoritative main 5073e56c0eb5969b13378b68497d6809430757eb into #144
 without rewriting published history. Resolve application wiring by retaining
 both development admission/review and native/publication services and routers,
 including every authenticated operator router. Preserve main's shared provider
-persistence, development executor quarantine and migration join. Retain both
+persistence and development executor quarantine. Restore the existing baseline
+and lineage migration joins and their authoritative advertised revision. Retain both
 API documentation sections. Remove a duplicate commit-preparation construction.
 
-The combined tree adds native/publication modules without removing or changing
-existing main implementation modules beyond application composition. Frontend,
-manifests, workflows and migrations remain identical to main. The shard manifest
+GitHub marked #145/#148/#150 and #147/#149/#151/#153 merged into intermediate
+feature branches, not main. Those later child merges were never propagated to
+#139/#144. Integrate the complete reviewed Campaign A lineage stack at 2add2e7
+and Campaign C source/correction stack at 934bd2f into #144. Preserve profile
+revocation (including captured native consumers), fresh provider observation,
+separate source/PR bases, direct-child correction links, immutable A baselines,
+workspace lineage, publication anchors and task budget continuity.
+
+Frontend, manifests and workflows remain identical to main. Existing Alembic
+migrations from the restored A stack are authoritative; no new schema is invented. The shard manifest
 retains all tests; collection must prove the exact union. A regression checks
 combined services and routes with remote control enabled and disabled. Remote
 schema inspection uses the protected application schema rather than bypassing
