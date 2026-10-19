@@ -42,7 +42,7 @@ def test_native_api_contracts_and_default_validation_refusal(tmp_path):
 
 def test_reconfiguration_clears_native_validation_and_replaces_it_safely(tmp_path, monkeypatch):
     from app.core.errors import DomainError
-    from app.github_publication.deployment import configure
+    from app.github_publication.deployment import ConfiguredNativeConsumer, configure
     from app.github_publication.transport import RepositoryTarget
     from app.self_build.commit_journal import NativeCommitJournal
 
@@ -99,23 +99,34 @@ def test_reconfiguration_clears_native_validation_and_replaces_it_safely(tmp_pat
             return response.json()["error"]["code"]
 
         configure(app, **configuration, native_commit_validation_consumer=previous)
-        assert app.state.native_commit_validation_consumer is previous
+        captured_previous = app.state.native_commit_validation_consumer
+        assert isinstance(captured_previous, ConfiguredNativeConsumer)
+        assert captured_previous.delegate is previous
         assert execute() == "TEST_INTENT_BOUNDARY"
         assert calls == ["previous"] and len(intents) == 1
 
         configure(app, **configuration, native_commit_validation_consumer=None)
         assert app.state.native_commit_validation_consumer is None
         assert execute() == "GIT_COMMIT_VALIDATION_UNAVAILABLE"
+        with pytest.raises(DomainError) as error:
+            captured_previous.require_commit(object(), "workspace", object())
+        assert error.value.code == "GIT_COMMIT_VALIDATION_PROFILE_CHANGED"
         assert calls == ["previous"] and len(intents) == 1
 
         configure(app, **configuration, native_commit_validation_consumer=replacement)
-        assert app.state.native_commit_validation_consumer is replacement
+        captured_replacement = app.state.native_commit_validation_consumer
+        assert isinstance(captured_replacement, ConfiguredNativeConsumer)
+        assert captured_replacement.delegate is replacement
         assert execute() == "TEST_INTENT_BOUNDARY"
         assert calls == ["previous", "replacement"] and len(intents) == 2
 
         # Omitting the optional consumer also explicitly disables the integration.
         configure(app, **configuration)
+        assert app.state.native_commit_validation_consumer is None
         assert execute() == "GIT_COMMIT_VALIDATION_UNAVAILABLE"
+        with pytest.raises(DomainError) as error:
+            captured_replacement.require_commit(object(), "workspace", object())
+        assert error.value.code == "GIT_COMMIT_VALIDATION_PROFILE_CHANGED"
         assert calls == ["previous", "replacement"] and len(intents) == 2
 
 

@@ -1,5 +1,10 @@
 # Production publication orchestration
 
+Effect admission rechecks the configured publication profile after validation
+and hosted-CI callbacks. A synchronous profile replacement in either callback
+revokes the captured target, broker and publisher policy before the next remote
+request can be authorized. Callback success cannot preserve an obsolete profile.
+
 Correction triage authenticates failed check providers against the protected
 required-check context and its explicit GitHub App ID. Publisher GitHub user IDs
 are a separate identity namespace and cannot establish check-app authority.
@@ -22,6 +27,13 @@ and a native commit continuation consumer. These are trusted host adapters, not
 model inputs or enrollment APIs. Configuration installs no key, runner or VM and
 does not enable GitHub workflows. Missing evidence or guards fail closed.
 
+Replacing the trusted profile revokes captured publication/native consumer
+references. Current profile identity is checked before and after validation and
+at publication authority/approval boundaries. Omitted native consumers are cleared;
+they are not inherited from an earlier profile. Invalid replacement inputs leave
+the prior profile intact. An already attempted remote effect is reconciled through
+the protected journal by the current authorized profile, never blindly repeated.
+
 Publication requires the unassigned `self_build.github.publish` task permission,
 an independent authenticated operator's exact-plan approval, current runtime
 attempt/worker/lease, workspace ownership and emergency-stop clearance. The plan
@@ -29,6 +41,23 @@ binds protected native/source identities, repository/base/branch, committed SHA,
 validation journal/plan/state digests, task metadata, publisher identities and the
 complete producer implementation digest. A changed implementation invalidates
 the approved policy. Approval expires; recovery cannot grant authority itself.
+
+The optional `source_base_sha` identifies the source-validation/native parent
+separately from `approved_base_sha`, the approved GitHub PR base. Preview derives
+the source base from protected native history; a supplied value must match the
+native parent and is included in the plan hash. Legacy plans omit the field and
+retain their original serialized shape/hash. B assessment and the source-link
+reader compare source evidence to the effective source base. This does not enable
+advanced-head correction publication: protected original branch/PR lineage and
+A's independent admission/approval remain required integration work.
+
+`correction_link.read_correction_link` now resolves a protected historical direct-
+child reference: original source/publication link, child native history and final
+checkpoint, same task/actor/repository, complete source selection, and unchanged
+original observation. It preserves the original remote branch/PR while identifying
+the child's distinct local branch and source base. Siblings rooted at the original
+main base are rejected. `publication_authority` and `lineage_admission_verified`
+remain false; the reader does not dispatch, approve or publish a correction.
 
 ## Durable phases
 
@@ -73,7 +102,14 @@ cannot replace Campaign B's independently protected committed-head receipts.
 
 `completed` describes publication policy readiness for human review/merge, not a
 merge operation. Current status rejects observations older than five minutes,
-future timestamps, changed native HEAD and invalidated validation. Automatic merge
+future timestamps, changed native HEAD and invalidated validation. Current manual-merge
+readiness also requires a new bounded provider collection under retained native
+source/metadata pins, current profile/task authority and acknowledged journal
+identity. A changed remote head, newly failed check or new review request clears
+readiness even while an older passing observation remains recent. Provider retry
+deadlines and credential/profile errors are reported without sleeping or polling.
+The status read performs no audit mutation, workflow rerun, source dispatch or
+merge. Fresh genuine B validation is checked again after collection. Automatic merge
 is always false. The system neither pushes main nor requests billable workflows.
 
 ## API and integration boundaries
