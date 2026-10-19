@@ -13,14 +13,8 @@ from app.self_build.policy import digest
 pytest_plugins = ["tests.test_git_applied_source"]
 
 
-def test_native_execution_preview_and_separate_operator_approval(applied, monkeypatch):
-    from pathlib import Path
-
-    from app.models.git_execution import ExecuteNativeCommit
-    from app.self_build.commit_index_install import index_names, install_index
-    from app.self_build.commit_journal import INTENT, INTENT_ACK, NativeCommitJournal
-    from app.self_build.commit_source_namespace import source_namespace
-
+@pytest.fixture
+def native_subject(applied):
     app, actor, binding, workspace_id, request, _, target = applied
     binding.bind(actor, workspace_id, request)
     native = NativeCommitService(app)
@@ -29,9 +23,28 @@ def test_native_execution_preview_and_separate_operator_approval(applied, monkey
         inspection_approval_id=request.inspection_approval_id,
         expected_inspection_plan_hash=request.expected_inspection_plan_hash,
     )
-    with pytest.raises(DomainError) as denied:
-        native.preview(actor, workspace_id, body)
-    assert denied.value.code == "GIT_COMMIT_EXECUTION_PERMISSION_DENIED"
+    return dict(
+        app=app,
+        actor=actor,
+        native=native,
+        body=body,
+        workspace_id=workspace_id,
+        request=request,
+        target=target,
+    )
+
+
+@pytest.fixture
+def approved_execution(native_subject):
+    from types import SimpleNamespace
+
+    from app.models.git_execution import ExecuteNativeCommit
+    from app.self_build.commit_journal import NativeCommitJournal
+
+    app, actor, native, body, workspace_id, request, target = (
+        native_subject[name]
+        for name in ("app", "actor", "native", "body", "workspace_id", "request", "target")
+    )
     permission = app.state.identity_service.create_definition(
         "permission",
         CreatePermissionRequest(
@@ -57,24 +70,10 @@ def test_native_execution_preview_and_separate_operator_approval(applied, monkey
             ),
         )
     preview = native.preview(actor, workspace_id, body)
-    assert preview.operation == "git.commit.create"
-    assert preview.applied_source.mutation_checkpoint_id
-    assert preview.index_payload_bytes >= 32 and preview.object_count >= 2
     approval_body = ApproveNativeCommitPlan(
         **body.model_dump(), workspace_id=workspace_id, expected_plan_hash=preview.plan_hash
     )
-    with pytest.raises(DomainError):
-        native.approve(actor, approval_body)
     approval = native.approve(operator, approval_body)
-    assert approval.plan == preview and approval.approved_by == operator.actor_id
-    with native.repository.sessions() as session:
-        events = list(
-            session.scalars(select(AuditEventRow).where(AuditEventRow.event_type == APPROVED))
-        )
-        assert len(events) == 1
-        assert digest(events[0].payload["payload"]["snapshot"]) == preview.snapshot_digest
-    assert request.lease_token not in approval.model_dump_json()
-    assert (target / "source.py").read_bytes() == b"value = 2\n"
     execution_request = ExecuteNativeCommit(
         **body.model_dump(),
         command_id="test-native-intent",
@@ -84,6 +83,76 @@ def test_native_execution_preview_and_separate_operator_approval(applied, monkey
         lease_token=request.lease_token,
     )
     journal = NativeCommitJournal(native)
+    return SimpleNamespace(
+        **native_subject,
+        operator=operator,
+        preview=preview,
+        approval=approval,
+        approval_body=approval_body,
+        execution_request=execution_request,
+        journal=journal,
+    )
+
+
+def test_native_execution_requires_task_permission(native_subject):
+    c = native_subject
+    with pytest.raises(DomainError) as denied:
+        c["native"].preview(c["actor"], c["workspace_id"], c["body"])
+    assert denied.value.code == "GIT_COMMIT_EXECUTION_PERMISSION_DENIED"
+
+
+def test_native_execution_preview_and_separate_operator_approval(approved_execution):
+    c = approved_execution
+    app, actor, native, body, workspace_id, request, target = (
+        getattr(c, name)
+        for name in ("app", "actor", "native", "body", "workspace_id", "request", "target")
+    )
+    operator, preview, approval, approval_body, execution_request, journal = (
+        getattr(c, name)
+        for name in (
+            "operator",
+            "preview",
+            "approval",
+            "approval_body",
+            "execution_request",
+            "journal",
+        )
+    )
+    assert preview.operation == "git.commit.create"
+    assert preview.applied_source.mutation_checkpoint_id
+    assert preview.index_payload_bytes >= 32 and preview.object_count >= 2
+    with pytest.raises(DomainError):
+        native.approve(actor, approval_body)
+    assert approval.plan == preview and approval.approved_by == operator.actor_id
+    with native.repository.sessions() as session:
+        events = list(
+            session.scalars(select(AuditEventRow).where(AuditEventRow.event_type == APPROVED))
+        )
+        assert len(events) == 1
+        assert digest(events[0].payload["payload"]["snapshot"]) == preview.snapshot_digest
+    assert request.lease_token not in approval.model_dump_json()
+    assert (target / "source.py").read_bytes() == b"value = 2\n"
+
+
+def test_native_intent_checkpoint_acknowledgement_recovery(approved_execution, monkeypatch):
+    from app.self_build.commit_journal import INTENT, INTENT_ACK
+
+    c = approved_execution
+    app, actor, native, body, workspace_id, request, target = (
+        getattr(c, name)
+        for name in ("app", "actor", "native", "body", "workspace_id", "request", "target")
+    )
+    operator, preview, approval, approval_body, execution_request, journal = (
+        getattr(c, name)
+        for name in (
+            "operator",
+            "preview",
+            "approval",
+            "approval_body",
+            "execution_request",
+            "journal",
+        )
+    )
     with pytest.raises(DomainError):
         journal.begin(
             actor,
@@ -152,6 +221,33 @@ def test_native_execution_preview_and_separate_operator_approval(applied, monkey
                 )
                 == 1
             )
+
+
+def test_native_durable_object_index_and_ref_recovery(approved_execution):
+    from pathlib import Path
+
+    from app.self_build.commit_index_install import index_names, install_index
+    from app.self_build.commit_source_namespace import source_namespace
+    from app.tool_execution.filesystem import windows_native_path
+
+    c = approved_execution
+    app, actor, native, body, workspace_id, request, target = (
+        getattr(c, name)
+        for name in ("app", "actor", "native", "body", "workspace_id", "request", "target")
+    )
+    operator, preview, approval, approval_body, execution_request, journal = (
+        getattr(c, name)
+        for name in (
+            "operator",
+            "preview",
+            "approval",
+            "approval_body",
+            "execution_request",
+            "journal",
+        )
+    )
+    record = journal.begin(actor, workspace_id, execution_request)
+    renewed_request = execution_request
     captured_plan, snapshot, program, git_metadata = native.measured(
         actor,
         workspace_id,
@@ -178,7 +274,9 @@ def test_native_execution_preview_and_separate_operator_approval(applied, monkey
             source_check,
             git_metadata,
         )
-    metadata = Path(policy.primary_root) / ".git/worktrees" / workspace_id
+    metadata = Path(
+        windows_native_path(Path(policy.primary_root) / ".git/worktrees" / workspace_id)
+    )
     original = (metadata / "index").read_bytes()
     record = journal.transition(
         actor, renewed_request, record, "index_intent", lambda **kwargs: None

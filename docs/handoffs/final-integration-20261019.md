@@ -1,4 +1,4 @@
-# Final integration — 2026-10-19
+# Final integration - 2026-10-19
 
 ## Integration decision
 
@@ -42,8 +42,21 @@ Run Ruff, backend pytest, frontend typecheck/ESLint/Vitest/build, isolated migra
 round-trip, repository-integrity and browser checks. Record exact final-head
 hosted CI and fresh Codex review separately; old success is not current approval.
 Historical #143 system failure included a completion-checkpoint rejection test
-and a timeout in the large native execution approval/staging test. Reproduce
-these against the composition before attributing either to an implementation defect.
+and a timeout in the large native execution approval/staging test. The checkpoint
+regression passes unchanged on this composition. The original native test again
+reached the 300-second timeout while performing repeated protected reads (stack
+capture at 240 seconds and timeout stack retained). Split its independent
+permission, approval, lost-acknowledgement and durable-effect scenarios into
+function-scoped fixtures/tests. All 60 assertion expressions and 20 expected
+exception checks are retained. The global 300-second guard and production
+authority checks are unchanged; composed-service recovery keeps its existing
+separately justified 600-second test budget. The extracted durable-effect case
+also exposed a long Windows path in direct index-stage assertions; use the
+existing windows_native_path helper, as the object-stage assertions already do.
+This changes test access only, retaining inode/payload/foreign-stage checks.
+The four scenarios passed locally under the unchanged guard: approximately
+93 seconds (permission), 180 seconds (approval), 258 seconds (lost acknowledgement)
+and 223 seconds (durable object/index/ref effects).
 
 ## Manual acceptance limits
 
