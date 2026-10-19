@@ -529,6 +529,21 @@ def test_all_repository_ignore_rules_are_enforced():
         assert plan_validation(state(sample), boundary="publication").blocked_paths == (sample,)
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "stitch_jarvis_ai_command_center_redesign.zip",
+        "stitch_jarvis_ai_command_center_redesign (14).zip",
+        "exports/STITCH_JARVIS_AI_COMMAND_CENTER_REDESIGN.ZIP",
+    ],
+)
+def test_generated_stitch_exports_cannot_become_validation_source(path):
+    from app.development_validation.planner import ignored_output
+
+    assert ignored_output(path)
+    assert plan_validation(state(path), boundary="publication").blocked_paths == (path,)
+
+
 @pytest.mark.parametrize("rule", ["new-output/", "!dist/allowed.js", "**/output/", "bad\\rule"])
 def test_changed_or_unsupported_trusted_output_policy_cannot_reuse_evidence(tmp_path, rule):
     import runpy

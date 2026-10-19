@@ -211,6 +211,9 @@ def test_durable_replay_ignores_later_source_but_binds_exact_input(development, 
         )
     assert error.value.code == "SOURCE_EDIT_COMMAND_CONFLICT"
     assert (target / "source.py").read_bytes() == b"value = 3\n"
+    with pytest.raises(DomainError) as changed_expectation:
+        service.persist(*args, original, expected_native_context_hash=context.context_hash)
+    assert changed_expectation.value.code == "SOURCE_EDIT_COMMAND_CONFLICT"
     with app.state.repository.session_factory() as session:
         audit = list(
             session.scalars(

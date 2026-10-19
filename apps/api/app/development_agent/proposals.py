@@ -127,6 +127,10 @@ class DevelopmentProposalService:
         *,
         allow_delete=False,
         commit_guard=None,
+        baseline=None,
+        publication_source=None,
+        repair_selection=None,
+        expected_native_context_hash=None,
     ):
         try:
             authority = CreateWorkspaceRequest.model_validate(
@@ -137,6 +141,32 @@ class DevelopmentProposalService:
             )
             if type(allow_delete) is not bool:
                 raise ValueError("deletion policy must be a trusted boolean")
+            if repair_selection is not None:
+                repair_selection = ContextSelection.model_validate(
+                    repair_selection.model_dump(mode="json", warnings=False)
+                )
+            if baseline is not None:
+                from app.models.development_baseline import BaselineSnapshot
+
+                baseline = BaselineSnapshot.model_validate(
+                    baseline.model_dump(mode="json", warnings=False)
+                )
+                if repair_selection is None:
+                    raise ValueError("correction scope required")
+            if expected_native_context_hash is not None:
+                from app.models.development_validation import Digest
+
+                expected_native_context_hash = TypeAdapter(Digest).validate_python(
+                    expected_native_context_hash
+                )
+            if publication_source is not None:
+                from app.models.development_publication import PublicationSourceAnchor
+
+                if baseline is None:
+                    raise ValueError("publication correction baseline required")
+                publication_source = PublicationSourceAnchor.model_validate(
+                    publication_source.model_dump(mode="json", warnings=False)
+                )
         except (ValueError, TypeError, AttributeError):
             refuse("DEVELOPMENT_REQUEST_INVALID")
         try:
@@ -155,6 +185,24 @@ class DevelopmentProposalService:
                 "selection": selection.model_dump(mode="json"),
                 "proposal": proposal.model_dump(mode="json"),
                 "allow_delete": allow_delete,
+                **(
+                    {"publication_source": publication_source.model_dump(mode="json")}
+                    if publication_source is not None
+                    else {}
+                ),
+                **(
+                    {
+                        "baseline_snapshot_hash": baseline.snapshot_hash if baseline else None,
+                        "repair_selection": repair_selection.model_dump(mode="json")
+                        if repair_selection is not None
+                        else None,
+                        "expected_native_context_hash": expected_native_context_hash,
+                    }
+                    if baseline is not None
+                    or repair_selection is not None
+                    or expected_native_context_hash is not None
+                    else {}
+                ),
             }
         )
         authority_binding = self.reader.require_ready(actor, workspace_id, authority)
@@ -187,7 +235,20 @@ class DevelopmentProposalService:
                     original_plan_hash=reservation.plan.plan_hash,
                     authorization_reference=row.approval_id,
                 )
-            intent = compile_proposal(proposal, context, references, allow_delete=allow_delete)
+            if baseline is None:
+                intent = compile_proposal(proposal, context, references, allow_delete=allow_delete)
+            else:
+                from app.development_agent.corrections import compile_correction
+
+                intent = compile_correction(
+                    proposal,
+                    baseline,
+                    context,
+                    repair_selection,
+                    references,
+                    allow_delete=allow_delete,
+                    publication_source=publication_source,
+                )
             guard()
 
             def final_commit(session):
@@ -216,7 +277,9 @@ class DevelopmentProposalService:
                 workspace_id,
                 authority,
                 selection,
-                expected_hash=proposal.context_hash,
+                expected_hash=proposal.context_hash
+                if baseline is None
+                else expected_native_context_hash,
                 finalize=finalize,
             )
         except DomainError as error:

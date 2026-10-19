@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from typing import Literal
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, field_validator, model_serializer, model_validator
 
 from app.model_providers.contracts import (
     ModelExecutionRequest,
@@ -11,6 +11,7 @@ from app.model_providers.contracts import (
     validate_safe_identifier,
 )
 from app.models.development_agent import ContextSelection, RepositoryContext
+from app.models.development_publication import PublicationSourceAnchor
 from app.models.development_validation import Contract, Digest
 from app.models.self_build import Identifier
 
@@ -69,6 +70,39 @@ class AdmissionPlan(Contract):
     assembly_limits: AssemblyLimits
     policy_digest: Digest
     plan_hash: Digest
+    origin_admission_digest: Digest | None = None
+    baseline_id: Digest | None = None
+    baseline_snapshot_hash: Digest | None = None
+    repair_selection: ContextSelection | None = None
+    publication_source: PublicationSourceAnchor | None = None
+
+    @model_serializer(mode="wrap")
+    def original_shape(self, handler):
+        value = handler(self)
+        for key in (
+            "origin_admission_digest",
+            "baseline_id",
+            "baseline_snapshot_hash",
+            "repair_selection",
+            "publication_source",
+        ):
+            if value[key] is None:
+                value.pop(key)
+        return value
+
+    @model_validator(mode="after")
+    def complete_lineage(self):
+        values = (
+            self.origin_admission_digest,
+            self.baseline_id,
+            self.baseline_snapshot_hash,
+            self.repair_selection,
+        )
+        if (
+            any(value is not None for value in values) or self.publication_source is not None
+        ) and any(value is None for value in values):
+            raise ValueError("DEVELOPMENT_LINEAGE_REFERENCE_INVALID")
+        return self
 
 
 def utc(value):

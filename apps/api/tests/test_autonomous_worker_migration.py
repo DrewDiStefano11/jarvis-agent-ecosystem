@@ -15,6 +15,7 @@ from app.db.models import (
     IdentityPermissionRow,
 )
 from app.db.session import create_database_engine
+from app.main import DATABASE_REVISION
 from tests.test_persistence import database_url
 
 
@@ -60,8 +61,7 @@ def test_phase_2c_upgrade_downgrade_and_reupgrade(tmp_path: Path) -> None:
     with create_database_engine(database_url(path)).connect() as connection:
         assert connection.exec_driver_sql("PRAGMA foreign_keys").scalar() == 1
         assert (
-            connection.scalar(text("select version_num from alembic_version"))
-            == "20261016_a_review_join"
+            connection.scalar(text("select version_num from alembic_version")) == DATABASE_REVISION
         )
 
 

@@ -1,0 +1,63 @@
+"""One bounded exact-head collection; no polling loop, write or review bypass."""
+
+from app.core.errors import DomainError
+from app.github_publication.current_observation import collect_guarded
+from app.github_publication.journal import PublicationJournal
+from app.github_publication.service import fail
+
+
+def observe(service, actor, workspace_id, request, operation_id):
+    from app.self_build.commit_recovery_read import inspect_recovery
+
+    journal = PublicationJournal(service)
+    snapshot = journal.read(actor, workspace_id, operation_id)
+    plan = snapshot.plan
+    if snapshot.pr_number is None:
+        fail("GITHUB_PR_PENDING")
+
+    def pinned(preview, history, program, source_guard):
+        if (
+            program.commit_sha != plan.commit_sha
+            or history.current.plan.plan_hash != plan.native_plan_hash
+        ):
+            fail("GITHUB_NATIVE_COMMIT_CHANGED")
+
+        def guard():
+            source_guard()
+            with service.native.repository.sessions() as session:
+                service.live(actor, request, plan, session)
+            if journal.read(actor, plan.workspace_id, operation_id) != snapshot:
+                fail("GITHUB_PUBLICATION_PROGRESS_CONFLICT")
+
+        measured = collect_guarded(
+            service, snapshot.pr_number, plan.approved_base_sha, guard, expected_branch=plan.branch
+        )
+        validation_digest = None
+        try:
+            service.validation.require(actor, plan)
+            validation_digest = plan.validation_journal_digest
+        except DomainError as error:
+            if not error.code.startswith(("GITHUB_VALIDATION_", "VALIDATION_")):
+                raise
+        guard()
+        result = journal.append(
+            actor,
+            request,
+            operation_id,
+            plan,
+            "observation",
+            source_guard,
+            expected=snapshot,
+            observation=measured.model_dump(mode="json"),
+            validation_confirmed_digest=validation_digest,
+        )
+        return journal.acknowledge(actor, request, result, source_guard)
+
+    return inspect_recovery(
+        service.native,
+        actor,
+        plan.workspace_id,
+        plan.native_command_id,
+        finalize=pinned,
+        request=request,
+    )
