@@ -121,7 +121,7 @@ class DevelopmentBaselineService:
         mutation = source.record
         if (
             digest(row.payload) != row.integrity_digest
-            or baseline_id != snapshot.baseline_id
+            or row.id != baseline_id
             or baseline_id != self.identifier(snapshot.dispatch_id)
             or row.task_id != snapshot.task_id
             or row.dispatch_id != snapshot.dispatch_id

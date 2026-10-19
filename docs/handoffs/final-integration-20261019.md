@@ -74,3 +74,34 @@ activated by this integration.
 Once exact-head CI and independent review pass, merge #144 manually into main,
 then close #143 as superseded. Do not merge #143 afterward. If either gate fails,
 retain both PRs and repair #144; no automatic merge or branch deletion is authorized.
+
+
+## Follow-up to exact-head CI and independent review
+
+Run 39252869459 on 0b2410f reported real failures in autonomy and models;
+neither is classified as a timeout or passing evidence. The accelerated simulator
+control test could finish its workflow between HTTP start and pause. Gate only
+its background step runner with an asyncio event so the real control endpoints,
+durable state transitions and reset cancellation execute without timing races.
+Keep non-running pause refusal assertions.
+
+The removed generated Stitch exports were added to .gitignore without the matching
+packaged validation ignore pattern. Synchronize the trusted planner definition;
+retain exact parity enforcement and verify root, numbered and nested case-varied
+ZIP exports remain blocked as validation source. The changed policy digest
+invalidates earlier validation evidence as designed.
+
+Codex finding 4313898340 identified a tautological baseline identity comparison.
+Bind DevelopmentBaselineRow.id to the protected snapshot baseline ID. A native
+regression moves a valid, coherently hashed payload under a foreign row key and
+requires both stored and historical readers to reject DEVELOPMENT_BASELINE_CONFLICT.
+No migration, API envelope or current runtime data is changed.
+
+The baseline backup-replacement test also normalizes its direct backup read with
+the native Windows path helper; its long-checkout FileNotFoundError is distinct
+from the hosted CI failures, and its drift/inode rejection assertions remain intact.
+
+Follow-up verification: 349 cases passed in the combined simulator/policy/baseline
+run; the separately corrected backup-identity case then passed (80 seconds).
+All 350 focused cases are verified. Full Ruff/format checks passed. Required
+final-head hosted CI and fresh independent review remain merge gates.

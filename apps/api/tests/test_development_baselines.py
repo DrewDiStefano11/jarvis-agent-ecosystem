@@ -298,6 +298,10 @@ async def test_native_baseline_bytes_checkpoint_crash_and_historical_replay(
 
 @pytest.mark.asyncio
 async def test_source_drift_and_replaced_backup_cannot_become_baseline(development):
+    from pathlib import Path
+
+    from app.tool_execution.filesystem import windows_native_path
+
     app, actor, _, authority, _, target, _, context = development
     service, iteration, request = await completed(development)
     args = (actor, context.workspace_id, authority, iteration.dispatch_id, request)
@@ -306,7 +310,7 @@ async def test_source_drift_and_replaced_backup_cannot_become_baseline(developme
         service.capture(*args)
     assert drift.value.code == "DEVELOPMENT_SOURCE_STATE_CONFLICT"
     (target / "source.py").write_bytes(b"value = 2\n")
-    backup = next(target.glob(".jarvis-edit-*.before"))
+    backup = Path(windows_native_path(next(target.glob(".jarvis-edit-*.before"))))
     replacement = target / "replacement.tmp"
     replacement.write_bytes(backup.read_bytes())
     import os
@@ -346,6 +350,35 @@ async def test_coherently_rehashed_baseline_cannot_replace_its_audit(development
         session.commit()
     with pytest.raises(DomainError):
         service.capture(*args)
+
+
+@pytest.mark.asyncio
+async def test_baseline_row_key_must_match_protected_snapshot_for_both_readers(development):
+    app, actor, _, authority, _, target, _, context = development
+    service, iteration, request = await completed(development)
+    record = service.capture(actor, context.workspace_id, authority, iteration.dispatch_id, request)
+    original = record.snapshot.baseline_id
+    foreign = digest(["foreign-baseline-row", original])
+    with app.state.repository.session_factory.begin() as session:
+        row = session.get(DevelopmentBaselineRow, original)
+        row.id = foreign
+        # A coherent payload hash is insufficient when its storage identity differs.
+        row.integrity_digest = digest(row.payload)
+    root, _ = service.dispatches.check(
+        actor, context.workspace_id, authority, iteration.dispatch_id
+    )
+    with app.state.repository.session_factory() as session:
+        assert session.get(DevelopmentBaselineRow, original) is None
+        row = session.get(DevelopmentBaselineRow, foreign)
+        assert row.payload == record.model_dump(mode="json")
+        assert row.integrity_digest == digest(row.payload)
+        with pytest.raises(DomainError) as stored:
+            service.stored(session, actor, context.workspace_id, authority, foreign)
+        assert stored.value.code == "DEVELOPMENT_BASELINE_CONFLICT"
+        with pytest.raises(DomainError) as historical:
+            service.historical(session, actor, foreign, root)
+        assert historical.value.code == "DEVELOPMENT_BASELINE_CONFLICT"
+    assert (target / "source.py").read_bytes() == b"value = 2\n"
 
 
 def test_populated_baseline_migration_refuses_loss_of_snapshot_evidence(tmp_path):

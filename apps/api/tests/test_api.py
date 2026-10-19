@@ -263,8 +263,20 @@ def test_temporary_agent_and_invalid_transition() -> None:
         assert invalid.json()["error"]["code"] == "INVALID_STATE_TRANSITION"
 
 
-def test_simulator_start_pause_resume_reset_and_duplicate_start() -> None:
-    with client() as api:
+def test_simulator_start_pause_resume_reset_and_duplicate_start(monkeypatch) -> None:
+    app = create_app(delay_ms=1)
+    simulator = app.state.simulator
+    release_steps = asyncio.Event()
+    run = simulator._run
+
+    async def gated_run():
+        # Control transitions must not race the accelerated demo's completion.
+        # Reset still cancels the real owned runner; no production state is forged.
+        await release_steps.wait()
+        await run()
+
+    monkeypatch.setattr(simulator, "_run", gated_run)
+    with TestClient(app) as api:
         assert api.post("/api/simulator/start").status_code == 200
         assert api.post("/api/simulator/start").status_code == 409
         assert api.post("/api/simulator/pause").status_code == 200
@@ -272,9 +284,14 @@ def test_simulator_start_pause_resume_reset_and_duplicate_start() -> None:
         assert paused_start.status_code == 409
         assert paused_start.json()["error"]["code"] == "SIMULATOR_RESUME_OR_RESET_REQUIRED"
         assert api.post("/api/simulator/resume").status_code == 200
+        assert simulator.control.currentStep == 0
         reset = api.post("/api/simulator/reset")
         assert reset.json()["data"]["currentStep"] == 0
         assert len(api.get("/api/tasks").json()["data"]) == 4
+        assert simulator._runner is None
+        not_running = api.post("/api/simulator/pause")
+        assert not_running.status_code == 409
+        assert not_running.json()["error"]["code"] == "SIMULATOR_NOT_RUNNING"
 
 
 def test_failure_and_websocket_sequence() -> None:

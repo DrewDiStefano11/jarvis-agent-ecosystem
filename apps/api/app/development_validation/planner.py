@@ -51,6 +51,7 @@ IGNORE_PATTERNS = (
     "apps/web/public/assets/office/office-8192x5460.png",
     "apps/web/public/assets/office/sprites/generated/agent-sheet-01.png",
     "apps/web/public/assets/office/sprites/generated/agent-sheet-06.png",
+    "stitch_jarvis_ai_command_center_redesign*.zip",
 )
 if len(IGNORE_PATTERNS) > 128 or any(
     pattern.startswith("!") or "\\" in pattern or "**" in pattern for pattern in IGNORE_PATTERNS
