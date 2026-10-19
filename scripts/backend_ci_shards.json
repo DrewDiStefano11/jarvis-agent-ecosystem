@@ -88,6 +88,7 @@
     "tests/test_coordination.py",
     "tests/test_independent_verification.py",
     "tests/test_model_provider_contracts.py",
+    "tests/test_development_provider.py",
     "tests/test_model_tool_calls.py",
     "tests/test_model_router.py",
     "tests/test_planning_http_golden_path.py",
@@ -128,6 +129,10 @@
     "tests/test_publication_journal.py",
     "tests/test_publication_orchestrator.py",
     "tests/test_development_agent.py",
+    "tests/test_development_dispatch.py",
+    "tests/test_development_execution.py",
+    "tests/test_development_review.py",
+    "tests/test_development_request.py",
     "tests/test_development_navigation.py"
   ]
 }

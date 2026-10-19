@@ -1,7 +1,8 @@
 # HTTP contracts
 
 Campaign D adds `free_only` to `AutonomousWorkerStatus.modelExecutionMode` and
-updates the advertised database head to `20261013_free_ai`. Existing response
+adds the `20261013_free_ai` migration. The current advertised database head is
+`20261016_a_review_join`, joining quota and development-dispatch history. Existing response
 envelopes and event schema versions are preserved. No HTTP endpoint accepts
 provider allowance evidence, tokens or cloud activation. The environment-only
 activation switch defaults to false and is separate from allowance evidence.
@@ -299,3 +300,30 @@ inventory validation rejects aliased path components and file/directory collisio
 with `SELF_BUILD_MATERIALIZATION_UNSAFE` before target/branch registration.
 
 Campaign C integration (2026-10-16) retains both native/publication operator routes and current shared model-router persistence. The real composed commit/recovery acceptance case has a bounded 600-second test budget for fixture setup plus two native executions on Windows hosted runners (existing 300-second runs reached the second completion guard before timing out). Assertions, production deadlines, authority checks and recovery invariants are unchanged.
+
+## Development admission and source review
+
+OpenAPI now describes authenticated POST endpoints under
+`/api/development/workspaces/{workspace_id}`: `admission/preview`,
+`admission/read`, `iterations`, and `iterations/{dispatch_id}/source-review`.
+They preserve TypedApiResponse envelopes and native runtime actor authentication.
+Admission preview/read require the original native creation authority, lease and
+bounded selection. Source review returns a protected native EditingPlanRecord;
+requests cannot import repository observations, model responses or validation
+results. Plan content is available only under the original task/owner fences.
+
+Independent approval is POST
+`/api/remote/development/workspaces/{workspace_id}/admission/approve`, registered
+only when remote control is enabled. It uses the existing bearer/secure-transport
+operator authentication and resolves the requested execution actor through native
+runtime authentication. Current operator, independent exact preview hash,
+repository ownership, original lease/run/attempt and source pins are rechecked
+by the admission service. A body never supplies permissions or filesystem evidence.
+
+Production `iterations` returns DEVELOPMENT_EXECUTION_DISABLED before reservation
+or provider dispatch. There is no HTTP model-response importer or activation flag.
+No OpenAI API key is read; future Codex app-server activation remains contingent
+on Campaign D's independent billing/credit/recharge safeguards. Admission and
+review alone do not approve native source mutation, validate code or publish it.
+
+Campaign repair (2026-10-16): development dispatch and shared nonbillable quota migrations converge at 20261016_a_review_join without rewriting either deployed predecessor. The development request fixture binds the same captured assembly limits as production admission; tiny-context tests still exercise source truncation refusal.

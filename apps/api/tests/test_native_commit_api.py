@@ -1,5 +1,6 @@
 """Registered native contracts remain effect-free without B's trusted consumer."""
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.agent_runtime.authorization import RuntimeActorContext
@@ -116,3 +117,42 @@ def test_reconfiguration_clears_native_validation_and_replaces_it_safely(tmp_pat
         configure(app, **configuration)
         assert execute() == "GIT_COMMIT_VALIDATION_UNAVAILABLE"
         assert calls == ["previous", "replacement"] and len(intents) == 2
+
+
+@pytest.mark.parametrize("remote_enabled", [False, True])
+def test_campaign_routes_compose_without_losing_development_services(
+    tmp_path, monkeypatch, remote_enabled
+):
+    from app.development_agent.dispatch import DevelopmentDispatchService
+    from app.development_agent.review import DevelopmentReviewService
+    from app.self_build.commit_execution import NativeCommitService
+
+    database_url = "sqlite:///" + (tmp_path / "composition.db").as_posix()
+    monkeypatch.setenv("JARVIS_REMOTE_CONTROL_ENABLED", "false")
+    if remote_enabled:
+        from tests.test_agent_runtime_authorization import create_actor
+
+        seed = create_app(database_url=database_url)
+        operator_id = create_actor(seed, "composition-operator")
+        seed.state.engine.dispose()
+        monkeypatch.setenv("JARVIS_REMOTE_CONTROL_ENABLED", "true")
+        monkeypatch.setenv("JARVIS_REMOTE_OPERATOR_ID", operator_id)
+        monkeypatch.setenv("JARVIS_REMOTE_OPERATOR_TOKEN", "fixture_" + "x" * 48)
+        monkeypatch.setenv("JARVIS_REMOTE_ORIGIN", "https://testserver")
+    app = create_app(database_url=database_url)
+    with TestClient(app):
+        paths = app.openapi()["paths"]
+        assert "/api/development/workspaces/{workspace_id}/admission/preview" in paths
+        assert "/api/self-build/workspaces/{workspace_id}/native-commit" in paths
+        assert "/api/self-build/workspaces/{workspace_id}/publication-status" in paths
+        for prefix in (
+            "/api/remote/development/",
+            "/api/remote/self-build/native-commits/",
+            "/api/remote/self-build/publication",
+        ):
+            assert any(path.startswith(prefix) for path in paths) is remote_enabled
+        assert isinstance(app.state.development_dispatch_service, DevelopmentDispatchService)
+        assert isinstance(app.state.development_review_service, DevelopmentReviewService)
+        assert isinstance(app.state.self_build_native_commit_service, NativeCommitService)
+        assert app.state.development_model_router is not app.state.model_router
+        assert getattr(app.state, "native_commit_validation_consumer", None) is None

@@ -219,3 +219,8 @@ not establish live AI coding quality. Provider/iteration/admission work remains.
 #114 is now merged into codex/source-mutation at 7d802481, but its reviewed head
 0481329a is not reachable from the freshly fetched origin/main dc63ed2. Recovery
 history/source inspection remains unavailable on main and is not imported here.
+
+The stacked provider and durable dispatch milestones are documented in
+[development-provider.md](development-provider.md) and
+[development-dispatch.md](development-dispatch.md). Neither wires production
+inference or completes Campaign A acceptance.

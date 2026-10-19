@@ -75,8 +75,8 @@ publication. Fixture gates prove developer integration only.
 Tests exercise actual native Git, isolated SQLite/runtime checkpoints, original
 index preservation, foreign-stage refusal, metadata fences, ref CAS, interrupted
 index installation, approval renewal, stale workers and lost acknowledgements.
-The composed recovery scenario passed within the unchanged 300-second per-test
-timeout. Final checkpoint and parent/committed state-reader scenarios passed.
+The composed recovery scenario has a 600-second test budget for fixture setup
+and two real native executions. Production deadlines and authority checks are unchanged. Final checkpoint and parent/committed state-reader scenarios passed.
 API tests verify the default missing-consumer refusal.
 
 The earlier full backend baseline passed 2,993 tests, skipped three and had two
