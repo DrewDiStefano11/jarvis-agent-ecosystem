@@ -320,8 +320,7 @@ runtime authentication. Current operator, independent exact preview hash,
 repository ownership, original lease/run/attempt and source pins are rechecked
 by the admission service. A body never supplies permissions or filesystem evidence.
 
-Production `iterations` returns DEVELOPMENT_EXECUTION_DISABLED before reservation
-or provider dispatch. There is no HTTP model-response importer or activation flag.
+Production `iterations` remains disabled by default and for all hosted development providers. An explicitly configured native loopback Ollama path can produce bounded proposals under independently approved admission, including the exact optional `DevelopmentLimits.local_endpoint`. See [local development proposals](local-development-proposals.md). There is no HTTP model-response importer.
 No OpenAI API key is read; future Codex app-server activation remains contingent
 on Campaign D's independent billing/credit/recharge safeguards. Admission and
 review alone do not approve native source mutation, validate code or publish it.

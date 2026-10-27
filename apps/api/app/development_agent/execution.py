@@ -4,7 +4,7 @@ import asyncio
 from contextlib import suppress
 
 from app.core.errors import DomainError
-from app.development_agent.config import development_routing
+from app.development_agent.config import development_routing, local_development_router_enabled
 from app.development_agent.context import refuse
 from app.development_agent.dispatch import DevelopmentDispatchService
 from app.development_agent.proposals import DevelopmentProposalService
@@ -52,9 +52,8 @@ class DevelopmentExecutor:
         self.monitor_interval_seconds = 1.0
 
     def enabled(self):
-        # No environment flag or model assertion can establish billing safeguards.
-        # Deterministic tests inject a test-only executor; production always refuses.
-        refuse("DEVELOPMENT_EXECUTION_DISABLED")
+        if not local_development_router_enabled(self.settings, self.router):
+            refuse("DEVELOPMENT_EXECUTION_DISABLED")
 
     def route(self, root):
         self.enabled()
@@ -69,6 +68,11 @@ class DevelopmentExecutor:
         provider = self.router.registry.get(requirements.requested_provider)
         if provider.default_model != root.plan.limits.model or provider.is_local != (
             self.settings.provider == "local"
+        ):
+            refuse("DEVELOPMENT_PROVIDER_CHANGED")
+        if (
+            self.settings.provider == "local"
+            and root.plan.limits.local_endpoint != provider.base_url
         ):
             refuse("DEVELOPMENT_PROVIDER_CHANGED")
         requirements.provider_allowlist = frozenset({provider.name})
@@ -103,11 +107,23 @@ class DevelopmentExecutor:
             record.reservation.request.timeout_seconds,
         )
         request = record.reservation.request.model_copy(deep=True)
+
+        async def before_dispatch(provider_name, model):
+            live_root, _ = self.check(
+                actor, workspace_id, authority, record.reservation.dispatch_id
+            )
+            if (
+                provider_name != live_root.plan.limits.provider
+                or model != live_root.plan.limits.model
+            ):
+                refuse("DEVELOPMENT_PROVIDER_CHANGED")
+
         # Keep the exact stored request; this outer deadline can only shorten execution.
         provider = asyncio.create_task(
             self.router.execute(
                 request=request,
                 requirements=self.route(root),
+                before_dispatch=before_dispatch,
                 budget=TaskBudget(
                     maximum_requests=1, maximum_output_tokens=request.max_output_tokens
                 ),
