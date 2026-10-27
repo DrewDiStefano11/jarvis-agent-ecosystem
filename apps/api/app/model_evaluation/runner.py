@@ -212,6 +212,15 @@ async def _generate(
         elapsed = (time.perf_counter() - started) * 1000
         return "", elapsed, None, None, EvalFailureCode.PROVIDER_ERROR
     elapsed = (time.perf_counter() - started) * 1000
+    if (
+        response.provider != provider.name
+        or response.model != provider.model_name
+        or response.task_id != request.task_id
+        or response.correlation_id != request.correlation_id
+    ):
+        # Never score a substituted response under the requested identity.
+        # This is a call-level failure, so model-output repair cannot hide it.
+        return "", elapsed, None, None, EvalFailureCode.PROVIDER_ERROR
     return (
         response.content,
         elapsed,

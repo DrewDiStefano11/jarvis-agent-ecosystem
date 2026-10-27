@@ -17,7 +17,7 @@ For the current integration and transfer state, read the [coordinator handoff](d
 - deterministic departments, five permanent agents, tasks, approvals, artifacts, notifications, and audit fixtures
 - installable PWA metadata, offline shell, reconnection states, HTTP refresh fallback, and a 320px mobile layout
 - YAML agent manifests validated by Pydantic
-- SQLite persistence through typed SQLAlchemy models and Alembic head `20261013_free_ai`, including durable shared free AI quotas
+- SQLite persistence through typed SQLAlchemy models and Alembic head `20261016_a_lineage_join`, including durable shared free AI quotas
 - transactional outbox, durable idempotency keys, workflow runs, per-step checkpoints, and safe restart recovery
 - deterministic context assembly with provenance checks, trust ordering, redaction, injection signals, bounded truncation, durable manifests, and review gating
 - registered worker lifecycle, atomic task acquisition, renewable fencing tokens, attempt history, cancellation revocation, and expired-lease recovery
@@ -26,7 +26,7 @@ For the current integration and transfer state, read the [coordinator handoff](d
 
 ## Explicit non-capabilities
 
-Real execution is explicitly enabled and local-only. Workspace tools require separate approval of exact actions, file contents and scope; model text cannot authorize itself. Ready team decompositions can execute assigned intellectual specialist work through the existing local model router, validate checkpoints, progress dependencies, retry within bounds, and synthesize a durable final result. Stale authority or graph inputs require operator reconciliation. Workspace plans remain fixed: read observations do not drive adaptive subsequent reasoning. Code/shell execution, browser research, Git/GitHub, email/calendar/cloud services and spending are unavailable. Demo agents and their metrics/artifacts remain simulated. This is a trusted loopback application, not a publicly authenticated service.
+Real execution is explicitly enabled and local-only. Workspace tools require separate approval of exact actions, file contents and scope; model text cannot authorize itself. Ready team decompositions can execute assigned intellectual specialist work through the existing local model router, validate checkpoints, progress dependencies, retry within bounds, and synthesize a durable final result. Stale authority or graph inputs require operator reconciliation. Workspace plans remain fixed: read observations do not drive adaptive subsequent reasoning. General shell/code execution, browser research and email/calendar integrations remain unavailable. Separately approved native source-editing and Git/publication paths exist; each path retains its separate activation, exact approvals and independent security prerequisites. See [development execution](docs/campaign-a-execution.md) and [isolated validation](docs/confined-validation-runner.md). Demo agents and their metrics/artifacts remain simulated. The default dashboard is loopback-only. A separately configured authenticated direct-TLS CLI boundary is available; remote browser sessions are not implemented. See [remote operation](docs/remote-operation.md).
 
 **Planning** submits local plans, exposes exact workspace action review and displays durable model/tool results. **Business Lab** groups objectives and history using the same tasks and workforce. **Office** reuses the original prototype floor, camera and sprites, with durable placements and a limited verified route catalog; candidate geometry outside that catalog remains unapproved. See the [local setup guide](docs/goal-mode/local-setup.md), [workspace guide](docs/goal-mode/workspace-tools.md) and [acceptance harness](docs/WORKSPACE_ACCEPTANCE.md).
 
@@ -40,8 +40,7 @@ and [Context assembler](docs/context-assembler.md).
 
 This phase is a loopback-only local control plane. The API and WebSocket reject
 non-loopback peers, and the configured web origin must also be loopback. Do not
-expose it through a LAN/public bind or reverse proxy; no user-authentication
-boundary exists yet.
+expose it through a LAN/public bind or reverse proxy; remote access must use the separate authenticated direct-TLS listener described in [remote operation](docs/remote-operation.md).
 
 ## Fresh Windows setup
 
@@ -87,6 +86,10 @@ The autonomous worker is a separate process and never starts with the API by def
 ```powershell
 .\.venv\Scripts\python.exe -m app.autonomous_worker
 ```
+
+## Campaign readiness checkpoint
+
+See the [current campaign readiness report](docs/campaign-readiness-20261027.md) for verified behavior, remaining software and permanent-host acceptance, integration order and startup instructions. Production readiness is not established; fixture completion and passing unit tests do not certify autonomous operation.
 
 ## 24/7 supervised local operation
 
@@ -165,3 +168,5 @@ docs/              Product, API, event, manifest, roadmap, testing docs
 ```
 
 Runtime data defaults to `apps/api/data/jarvis.db` and is ignored by Git. See [autonomous worker](docs/autonomous-worker.md), [persistence](docs/persistence.md), [migrations](docs/migrations.md), [recovery](docs/recovery.md), and [task leases](docs/task-leases.md).
+
+For current development and permanent-host acceptance, see [the host runbook](docs/permanent-host-acceptance.md) and [the campaign checkpoint](docs/handoffs/final-readiness-20261027.md).

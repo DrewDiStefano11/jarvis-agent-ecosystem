@@ -56,6 +56,7 @@
     "tests/test_improvement_backlog.py",
     "tests/test_lifecycle_persistence.py",
     "tests/test_model_evaluation.py",
+    "tests/test_host_acceptance.py",
     "tests/test_office.py",
     "tests/test_outbox_ordering.py",
     "tests/test_research_retrieval_contracts.py",

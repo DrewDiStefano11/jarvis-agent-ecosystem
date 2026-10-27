@@ -243,3 +243,5 @@ baseline → human/policy approval → promote → monitor → rollback if neede
 
 Sandbox execution, local-model hypotheses, approval transitions, promotion,
 monitoring/rollback and autonomous source changes are not implemented here.
+
+Unavailable verified free capacity is an expected zero-spending control condition. Its original failure code remains in observations, but it does not produce a software/model-quality weakness or a proposal to weaken the capacity guard. Actual provider failures and exhausted task execution budgets retain their existing distinct attribution.

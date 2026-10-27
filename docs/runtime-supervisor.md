@@ -227,8 +227,7 @@ into a shell command. Do not place credentials in supervisor settings or its run
 ## Recovery and limitations
 
 If a child crashes, use `status` to see its exit code, last failure, restart count/history, next retry,
-and health. If the supervisor itself fails, Task Scheduler starts it at the next user logon; otherwise
-run `start` manually. A stale state is recoverable because a new daemon must first acquire the OS lock.
+and health. When the supervisor is launched by the updated scheduled task, Task Scheduler owns its foreground daemon and retries a nonzero exit up to three times at one-minute intervals. A clean operator stop exits successfully and is not retried. Existing task registrations require explicit `autostart install` to adopt this policy. A supervisor launched manually through `start` or `restart` is detached and is not covered by Task Scheduler failure retries. A stale state is recoverable because a new daemon must first acquire the OS lock.
 The operator command will not kill a stale PID. Inspect `logs\supervisor.log` and Task Manager before
 manually stopping any process whose ownership cannot be proven.
 
@@ -240,3 +239,5 @@ Limitations:
 - It does not automatically restore a database, update Git, change branches, or roll back code.
 - It preserves the current one-local-API/SQLite deployment boundary and adds no authentication or
   network exposure.
+
+The restart policy follows [Microsoft Task Scheduler RestartOnFailure](https://learn.microsoft.com/en-us/windows/win32/taskschd/taskschedulerschema-restartonfailure-settingstype-element). Task XML and foreground exit propagation are tested without registering a task. Permanent-host acceptance must separately verify actual scheduled launch, deliberate supervisor termination/recovery, retry exhaustion, clean stop and logon behavior. To use scheduled failure recovery after a manual stop/restart, stop the detached runtime and start the registered task from Windows Task Scheduler; avoid a competing daemon. No pre-login boot service is provided.
