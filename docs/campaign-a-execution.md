@@ -71,3 +71,5 @@ capture, verification, and their protected artifact/history dependencies. The
 persisted-admission regression simulates upgrades to each added component and
 verifies rejection of old approval evidence (1 passed; native isolated fixture).
 Frontend sources are unchanged; prior frontend validation evidence is retained.
+
+October 27 integration: the explicitly enabled native loopback Ollama proposal route is connected to existing protected admission and source review. The exact local endpoint is included in operator-approved limits. Hosted development choices remain quarantined; validation and publication are not activated. See [local development proposals](local-development-proposals.md) for the capability and evidence boundary.
