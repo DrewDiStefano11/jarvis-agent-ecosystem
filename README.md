@@ -22,6 +22,7 @@ For the current integration and transfer state, read the [coordinator handoff](d
 - deterministic context assembly with provenance checks, trust ordering, redaction, injection signals, bounded truncation, durable manifests, and review gating
 - registered worker lifecycle, atomic task acquisition, renewable fencing tokens, attempt history, cancellation revocation, and expired-lease recovery
 - advisory self-improvement analysis and comparison records using durable evidence ([guide](docs/self-improvement.md))
+- default-off persistent improvement evidence scheduling and authorized advisory backlog admission ([operator guide](docs/guarded-improvement-scheduler.md))
 - disabled-by-default local planning/review worker with explicit runtime queueing, task fencing, fixed structured output, one repair call, durable staged recovery, and authorization-gated results
 
 ## Explicit non-capabilities

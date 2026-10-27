@@ -6,7 +6,9 @@ class ImprovementService:
     def __init__(self, sessions):
         self.repository = ImprovementRepository(sessions)
 
-    def analyze(self, sources, *, repo_sha, configuration_fingerprint, safety_fingerprint):
+    def analyze(
+        self, sources, *, repo_sha, configuration_fingerprint, safety_fingerprint, authorize=None
+    ):
         if not 1 <= len(sources) <= 64:
             raise ValueError("supply 1..64 evidence sources")
         provenance, observations = [], []
@@ -32,7 +34,7 @@ class ImprovementService:
             sources=provenance,
             observations=observations,
         )
-        return self.repository.save_analysis(analyze(baseline))
+        return self.repository.save_analysis(analyze(baseline), authorize=authorize)
 
     def compare(self, before_id, after_id, proposal_id, attestation):
         before = self.repository.analysis(before_id)

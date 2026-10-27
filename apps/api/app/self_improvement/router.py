@@ -11,6 +11,7 @@ from app.models.improvement_backlog import (
     ImprovementBacklogSelection,
     SelectImprovementRequest,
 )
+from app.models.improvement_schedule import ImprovementScheduleStatus
 from app.models.self_improvement import Analysis, Comparison
 from app.self_improvement.backlog_service import ImprovementBacklogService
 from app.self_improvement.service import ImprovementService
@@ -90,3 +91,9 @@ def baseline(baseline_id: str, request: Request):
 )
 def comparisons(baseline_id: str, request: Request):
     return TypedApiResponse(data=service(request).repository.comparisons(baseline_id))
+
+
+@router.get("/schedule", response_model=TypedApiResponse[ImprovementScheduleStatus])
+def schedule_status(request: Request, actor_id: str = Header(alias="X-Jarvis-Actor-Id")):
+    actor = request.app.state.agent_runtime_service.authenticate_actor(actor_id)
+    return TypedApiResponse(data=request.app.state.improvement_scheduler.status(actor.actor_id))

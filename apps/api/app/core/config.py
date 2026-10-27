@@ -20,6 +20,21 @@ class Settings(BaseSettings):
         hide_input_in_errors=True,
     )
 
+    improvement_schedule_json: str = Field(
+        "{}", alias="JARVIS_IMPROVEMENT_SCHEDULE_JSON", max_length=8192
+    )
+
+    @property
+    def improvement_schedule_policy(self):
+        from app.models.improvement_schedule import ImprovementSchedulePolicy
+
+        return ImprovementSchedulePolicy.model_validate_json(self.improvement_schedule_json)
+
+    @model_validator(mode="after")
+    def validate_improvement_schedule(self):
+        _ = self.improvement_schedule_policy
+        return self
+
     self_build_enabled: bool = Field(False, alias="JARVIS_SELF_BUILD_ENABLED")
     self_build_repositories_json: str = Field(
         "{}", alias="JARVIS_SELF_BUILD_REPOSITORIES_JSON", max_length=32768
