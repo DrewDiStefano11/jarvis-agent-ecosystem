@@ -187,7 +187,7 @@ def cmd_evaluate_local(args: argparse.Namespace) -> int:
     write_evaluation_json(out / "model-evaluation-local.json", evidence)
     write_evaluation_summary(out / "model-evaluation-local-summary.md", evidence)
     print(render_evaluation_summary(evidence))
-    return 0
+    return 0 if report.cases and all(case.passed for case in report.cases) else 1
 
 
 def cmd_production(args):

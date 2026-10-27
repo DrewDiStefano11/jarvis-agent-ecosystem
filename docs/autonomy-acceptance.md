@@ -217,3 +217,7 @@ explicit bounds.
 - Installed local-model evidence requires actual inference on an installed compatible model.
   No reachable Ollama endpoint was available in the validation environment; fixture controls
   and production-service tests must not be presented as real-model acceptance.
+
+Installed-local evaluation exits 0 only for a nonempty run in which every case passes; failed cases exit 1 and unavailable providers exit 2. Evidence is retained for failed evaluations as well as passing ones.
+
+Evaluation rejects a response whose actual provider, model, task or correlation identity differs from its requested evaluation identity. It records the existing provider_error call failure without scoring the returned content or dispatching a repair. Use the exact discovered installed model name, including its tag; substituted models cannot receive another model's passing score.

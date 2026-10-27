@@ -241,3 +241,52 @@ async def test_installed_local_model_evaluation_when_available() -> None:
     assert report.inference_mode == "installed_local"
     assert report.model_name == model
     assert report.metrics["total_calls"] == len(subset)
+
+
+@pytest.mark.parametrize("passing, expected", [(True, 0), (False, 1)])
+def test_local_evaluation_cli_exit_matches_durable_case_results(
+    tmp_path, monkeypatch, passing, expected
+):
+    import importlib.util
+    import json
+    from pathlib import Path
+
+    script = Path(__file__).resolve().parents[3] / "scripts/autonomy-acceptance.py"
+    spec = importlib.util.spec_from_file_location("autonomy_cli_exit", script)
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    cases = all_cases()
+    scripts = (
+        reference_scripts(repetitions=1)
+        if passing
+        else {case.case_id: ["{invalid"] for case in cases}
+    )
+    provider = ScriptedFixtureProvider(scripts)
+
+    async def controlled_provider(*args, **kwargs):
+        return provider
+
+    monkeypatch.setattr(cli, "build_local_provider", controlled_provider)
+    code = cli.main(["evaluate-local", "--out", str(tmp_path), "--repo-sha", "a" * 40])
+    evidence = json.loads((tmp_path / "model-evaluation-local.json").read_text(encoding="utf-8"))
+    assert evidence["cases"]
+    assert all(case["passed"] for case in evidence["cases"]) is passing
+    assert evidence["inference"]["mode"] == "fixture"
+    assert code == expected
+
+
+@pytest.mark.parametrize("field", ["model", "provider", "task_id", "correlation_id"])
+async def test_evaluation_rejects_response_identity_substitution(field):
+    case = case_by_id("capability-basic")
+
+    class SubstitutedProvider(ScriptedFixtureProvider):
+        async def generate(self, request):
+            response = await super().generate(request)
+            return response.model_copy(update={field: "foreign-identity"})
+
+    provider = SubstitutedProvider({case.case_id: [case.reference_output]})
+    report = await run_evaluation(provider, (case,), allow_repair=True)
+    assert report.metrics["case_pass_rate"] == 0.0
+    assert report.failure_codes == {EvalFailureCode.PROVIDER_ERROR.value: 1}
+    assert report.cases[0].attempts[0].output_chars == 0
+    assert len(provider.calls) == 1

@@ -33,7 +33,7 @@ def task_arguments(config: SupervisorConfig) -> str:
             "app.runtime_supervisor",
             "--repository",
             _quoted_argument(str(config.repository)),
-            "start",
+            "daemon",
         ]
     )
 
@@ -72,6 +72,7 @@ def task_xml(config: SupervisorConfig, user_sid: str) -> str:
     <AllowHardTerminate>true</AllowHardTerminate>
     <StartWhenAvailable>true</StartWhenAvailable>
     <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <RestartOnFailure><Interval>PT1M</Interval><Count>3</Count></RestartOnFailure>
     <Priority>7</Priority>
   </Settings>
   <Actions Context="Author"><Exec><Command>{executable}</Command><Arguments>{arguments}</Arguments><WorkingDirectory>{working_directory}</WorkingDirectory></Exec></Actions>
