@@ -101,6 +101,7 @@
     "tests/test_runtime_supervisor.py",
     "tests/test_backup_verification.py",
     "tests/test_self_improvement.py",
+    "tests/test_improvement_schedule.py",
     "tests/test_task_corrections.py",
     "tests/test_task_decomposition.py",
     "tests/test_team_selection.py",

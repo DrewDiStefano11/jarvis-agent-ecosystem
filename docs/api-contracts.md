@@ -348,3 +348,15 @@ baseline and repair scope to the unchanged original task budget. It grants no
 source effect, validation success, live inference activation or publication.
 Campaign repair (2026-10-16): development dispatch and shared nonbillable quota migrations converge at 20261016_a_review_join without rewriting either deployed predecessor. The development request fixture binds the same captured assembly limits as production admission; tiny-context tests still exercise source truncation refusal.
 Baseline and lineage integrations add guarded merge revisions 20261016_a_baseline_join and 20261016_a_lineage_join. Existing branch revision identities remain unchanged; runtime status and OpenAPI advertise the resulting single head.
+
+
+### Guarded improvement schedule status
+
+GET `/api/self-improvement/schedule` returns `TypedApiResponse[ImprovementScheduleStatus]`.
+The local operator boundary, existing `X-Jarvis-Actor-Id` identity authentication and
+`read_improvement` permission on `administrative_function/improvement_schedule` apply.
+The projection contains current enabled/admission flags, interval and the latest
+capture window/result/native task reference for the exact current policy. It does
+not return observations or grant activation, scheduling or execution authority.
+The scheduler contracts and OpenAPI are authoritative; see
+[operator configuration and recovery](guarded-improvement-scheduler.md).
