@@ -1,5 +1,6 @@
 """Protected development admission and dispatch evidence. No mutation authority."""
 
+import re
 from datetime import UTC, datetime
 from typing import Literal
 from urllib.parse import urlsplit
@@ -19,8 +20,9 @@ from app.models.self_build import Identifier
 
 class DevelopmentLimits(Contract):
     provider: Identifier
-    model: str = Field(pattern=r"^[A-Za-z0-9_.:-]{1,200}$")
+    model: str = Field(pattern=r"^[A-Za-z0-9_.:/@-]{1,200}$")
     local_endpoint: str | None = Field(default=None, min_length=1, max_length=300, repr=False)
+    hosted_route_digest: Digest | None = None
     completion_criteria: tuple[str, ...] = Field(min_length=1, max_length=16, repr=False)
     maximum_dispatches: int = Field(default=2, ge=1, le=8, strict=True)
     maximum_reserved_output_tokens: int = Field(default=8192, ge=1, le=131072, strict=True)
@@ -63,12 +65,19 @@ class DevelopmentLimits(Contract):
         value = handler(self)
         if value.get("local_endpoint") is None:
             value.pop("local_endpoint", None)
+        if value.get("hosted_route_digest") is None:
+            value.pop("hosted_route_digest", None)
         return value
 
     @model_validator(mode="after")
     def bounded(self):
         if (
             self.output_tokens_per_dispatch > self.maximum_reserved_output_tokens
+            or (
+                self.hosted_route_digest is None
+                and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", self.model)
+            )
+            or (self.local_endpoint is not None and self.hosted_route_digest is not None)
             or any(not text.strip() for text in self.completion_criteria)
             or len("\n".join(self.completion_criteria)) > 2000
         ):

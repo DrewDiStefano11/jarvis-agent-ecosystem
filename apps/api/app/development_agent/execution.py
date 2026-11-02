@@ -4,7 +4,11 @@ import asyncio
 from contextlib import suppress
 
 from app.core.errors import DomainError
-from app.development_agent.config import development_routing, local_development_router_enabled
+from app.development_agent.config import (
+    development_router_enabled,
+    development_routing,
+    hosted_route_digest,
+)
 from app.development_agent.context import refuse
 from app.development_agent.dispatch import DevelopmentDispatchService
 from app.development_agent.proposals import DevelopmentProposalService
@@ -52,7 +56,10 @@ class DevelopmentExecutor:
         self.monitor_interval_seconds = 1.0
 
     def enabled(self):
-        if not local_development_router_enabled(self.settings, self.router):
+        application_settings = getattr(
+            getattr(getattr(self, "app", None), "state", None), "settings", None
+        )
+        if not development_router_enabled(self.settings, self.router, application_settings):
             refuse("DEVELOPMENT_EXECUTION_DISABLED")
 
     def route(self, root):
@@ -73,6 +80,11 @@ class DevelopmentExecutor:
         if (
             self.settings.provider == "local"
             and root.plan.limits.local_endpoint != provider.base_url
+        ):
+            refuse("DEVELOPMENT_PROVIDER_CHANGED")
+        if (
+            self.settings.provider == "verified"
+            and root.plan.limits.hosted_route_digest != hosted_route_digest(provider)
         ):
             refuse("DEVELOPMENT_PROVIDER_CHANGED")
         requirements.provider_allowlist = frozenset({provider.name})

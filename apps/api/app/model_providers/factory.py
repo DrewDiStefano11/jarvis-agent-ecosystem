@@ -87,6 +87,9 @@ def build_provider_registry(
                         health_strategy=HealthCheckStrategy.CONFIGURATION,
                         free_allowance=grant,
                         free_capacity=capacity,
+                        capabilities=frozenset(
+                            ModelCapability(item) for item in grant.capabilities
+                        ),
                     )
                 )
     priority = {

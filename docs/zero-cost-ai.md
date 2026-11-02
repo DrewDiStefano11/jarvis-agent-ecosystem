@@ -59,6 +59,10 @@ This fragment is not a usable allowance. `billing_enabled` means usage-based
 inference billing, not the existing prepaid subscription. If included-only usage
 cannot be enforced without purchased credits, leave the provider absent.
 Credentials belong in protected local storage/environment, never allowance JSON.
+Optional operator-owned `capabilities` default to `chat` and `text_generation`.
+Coding proposals require explicit `code_generation` and `structured_output`;
+see [hosted development proposals](hosted-development-proposals.md). Capability
+declarations grant no tool access, inference activation or spending authority.
 Hosted API evidence also requires `credential_fingerprint` (SHA-256 of the verified
 key); changing credentials invalidates evidence before client creation.
 

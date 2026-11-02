@@ -359,3 +359,15 @@ capture window/result/native task reference for the exact current policy. It doe
 not return observations or grant activation, scheduling or execution authority.
 The scheduler contracts and OpenAPI are authoritative; see
 [operator configuration and recovery](guarded-improvement-scheduler.md).
+
+### Verified hosted development admission
+
+`DevelopmentLimits.hosted_route_digest` optionally binds the selected development
+provider, fixed endpoint, exact model/capabilities and current Campaign D allowance.
+It cannot coexist with `local_endpoint`; absent optional fields remain omitted
+from serialized historical limits. A changed binding requires new exact native
+admission. `FreeAllowance.capabilities` defaults to chat/text generation and accepts
+only implemented text capabilities. Hosted coding requires explicit code generation
+and structured output plus all existing activation/account/quota controls. These
+contracts grant no source effects, candidate execution or paid inference. See
+[hosted development proposals](hosted-development-proposals.md).

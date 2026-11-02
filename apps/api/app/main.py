@@ -401,7 +401,7 @@ def create_app(
     app.state.development_review_service = DevelopmentReviewService(app)
     app.state.development_provider_settings = DevelopmentProviderSettings()
     app.state.development_model_router = build_development_router(
-        app.state.development_provider_settings, app.state.model_router
+        app.state.development_provider_settings, app.state.model_router, settings
     )
     app.state.development_executor = DevelopmentExecutor(
         app, app.state.development_provider_settings, app.state.development_model_router

@@ -17,6 +17,16 @@ class FreeAllowance(BaseModel):
     session_identity: str | None = Field(default=None, min_length=1, max_length=160)
     shared_bucket: str = Field(min_length=1, max_length=160)
     models: frozenset[str] = Field(min_length=1, max_length=100)
+    capabilities: frozenset[
+        Literal[
+            "chat",
+            "text_generation",
+            "code_generation",
+            "code_editing",
+            "reasoning",
+            "structured_output",
+        ]
+    ] = Field(default=frozenset({"chat", "text_generation"}), min_length=1, max_length=6)
     credential_env: str = Field(pattern=r"^[A-Z][A-Z0-9_]{1,119}$")
     credential_fingerprint: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
     # This must reference account-specific evidence, not a public pricing page.
