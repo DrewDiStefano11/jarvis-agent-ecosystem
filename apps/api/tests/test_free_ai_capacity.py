@@ -78,6 +78,33 @@ def capacity(tmp_path, monkeypatch):
     engine.dispose()
 
 
+class LegacyQuotaProbe:
+    """Test double for provider-independent legacy quota/adapter assertions.
+
+    This is not an acceptance proof. Native Groq acceptance, headers, four limits,
+    concurrency and dispatch fences use the real temporary DB in test_groq_acceptance.
+    """
+
+    def __init__(self, repository):
+        self.repository = repository
+
+    def available(self, grant, model, token_bound):
+        return self.repository.available(grant, model)
+
+    def reserve(self, grant, model, request_id, token_bound):
+        self.repository.reserve(grant, model)
+        return request_id
+
+    def complete(self, *args, **kwargs):
+        pass
+
+    def rejected(self, grant, *args):
+        self.repository.exhaust(grant)
+
+    def uncertain(self, grant, *args):
+        pass
+
+
 def provider(grant, capacity, handler):
     return OpenAICompatibleProvider(
         name=grant.provider,
@@ -88,10 +115,31 @@ def provider(grant, capacity, handler):
         health_strategy=HealthCheckStrategy.CONFIGURATION,
         free_allowance=grant,
         free_capacity=capacity,
+        groq_capacity=LegacyQuotaProbe(capacity) if grant.integration == "groq" else None,
         client=httpx.AsyncClient(
             base_url=compatible_endpoint(grant), transport=httpx.MockTransport(handler)
         ),
     )
+
+
+async def test_groq_cannot_dispatch_with_only_a_legacy_request_allowance(capacity):
+    grant = allowance()
+    capacity.configure([grant])
+    calls = []
+
+    def forbidden(request):
+        calls.append(request)
+        raise AssertionError("Groq request escaped without native four-limit tracking")
+
+    adapter = provider(grant, capacity, forbidden)
+    adapter.groq_capacity = None
+    before = capacity.snapshot()
+    try:
+        with pytest.raises(ProviderExecutionDisabledError):
+            await adapter.execute(ModelExecutionRequest(prompt="test", max_output_tokens=64))
+    finally:
+        await adapter._client.aclose()
+    assert not calls and capacity.snapshot() == before
 
 
 def completion(request):
@@ -106,6 +154,29 @@ def completion(request):
             "usage": {"prompt_tokens": 1, "completion_tokens": 1},
         },
     )
+
+
+async def test_groq_rejects_another_allowed_model_before_capacity_settlement(capacity):
+    from unittest.mock import Mock
+
+    grant = allowance(models=["model", "other-model"])
+    capacity.configure([grant])
+
+    def substituted(request):
+        body = completion(request).json()
+        body["model"] = "other-model"
+        return httpx.Response(200, json=body)
+
+    adapter = provider(grant, capacity, substituted)
+    adapter.groq_capacity.complete = Mock()
+    try:
+        with pytest.raises(MalformedProviderResponseError):
+            await adapter.execute(
+                ModelExecutionRequest(prompt="test", model="model", max_output_tokens=64)
+            )
+        adapter.groq_capacity.complete.assert_not_called()
+    finally:
+        await adapter._client.aclose()
 
 
 def test_campaign_ci_runs_every_required_validation_job_on_standard_runners():
@@ -918,7 +989,11 @@ async def test_real_worker_switches_free_providers_without_local_model(
         service = app.state.autonomous_worker_service
         service.settings.model_execution_mode = "free_only"
         service.settings.model_verified_cloud_enabled = activation != "disabled"
-        first = allowance("local-fake", integration="groq", models=["fixture-model"])
+        first = allowance(
+            "local-fake",
+            integration="gemini" if retry_same_provider else "groq",
+            models=["fixture-model"],
+        )
         second = allowance(
             "second", integration="gemini", account_id="second-account", models=["fixture-model"]
         )

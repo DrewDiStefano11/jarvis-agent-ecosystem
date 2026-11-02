@@ -13,9 +13,38 @@ from app.core.errors import DomainError
 from app.db.models import AuditEventRow, OutboxEventRow
 from app.main import create_app
 from app.models.identity import AssignPermissionRequest, CreateAgentRequest, CreatePermissionRequest
+from tests.groq_testkit import save_with_intercepted_acceptance
 from tests.test_persistence import database_url
 
 SECRET = "gsk_fixture_private_provider_key_1102"
+
+
+@pytest.mark.parametrize("tamper", ["rollback", "delete"])
+def test_profile_projection_cannot_discard_newer_native_history(profile_app, tamper):
+    from copy import deepcopy
+
+    from app.provider_configuration.repository import ModelProviderProfileRow
+
+    app, actor = profile_app
+    service = app.state.provider_configuration_service
+    first = service.save(actor, draft())
+    fields = ("payload", "revision", "private_digest", "encrypted_credential", "last_audit_id")
+    with service.repository.sessions() as session:
+        row = session.get(ModelProviderProfileRow, "groq")
+        before = {name: deepcopy(getattr(row, name)) for name in fields}
+    service.save(
+        actor, draft(selected_model="vendor/other", api_key=None, expected_revision=first.revision)
+    )
+    with app.state.task_leases._write() as session:
+        row = session.get(ModelProviderProfileRow, "groq")
+        if tamper == "delete":
+            session.delete(row)
+        else:
+            for name, value in before.items():
+                setattr(row, name, value)
+    with pytest.raises(DomainError) as rejected:
+        service.list(actor)
+    assert rejected.value.code == "MODEL_CONFIGURATION_CORRUPT"
 
 
 def draft(**changes):
@@ -40,6 +69,22 @@ def test_secret_draft_is_write_only_and_cannot_grant_activation():
         draft(model_verified_cloud_enabled=True)
     with pytest.raises(ValidationError):
         draft(api_key="key\nwith-header-injection")
+
+
+def test_groq_enable_requires_native_capacity_not_only_an_uploaded_grant(profile_app):
+    from hashlib import sha256
+
+    from app.core.errors import DomainError
+    from tests.test_free_ai_capacity import allowance
+
+    app, actor = profile_app
+    grant = allowance(
+        models=["vendor/model"], credential_fingerprint=sha256(SECRET.encode()).hexdigest()
+    )
+    with pytest.raises(DomainError) as rejected:
+        app.state.provider_configuration_service.save(actor, draft(enabled=True, allowance=grant))
+    assert rejected.value.code == "MODEL_GROQ_CAPACITY_UNAVAILABLE"
+    assert app.state.provider_configuration_service.list(actor) == []
 
 
 @pytest.fixture
@@ -177,7 +222,7 @@ def test_restart_uses_saved_evidence_without_exporting_a_key_to_environment(
         models={"vendor/model"}, credential_fingerprint=sha256(SECRET.encode()).hexdigest()
     )
     service = ProviderConfigurationService(app)
-    service.save(actor, draft(enabled=True, allowance=grant))
+    saved = save_with_intercepted_acceptance(service, actor, draft(enabled=True, allowance=grant))
     monkeypatch.setenv("JARVIS_MODEL_EXECUTION_MODE", "free_only")
     monkeypatch.setenv("JARVIS_MODEL_VERIFIED_CLOUD_ENABLED", "true")
     monkeypatch.delenv("JARVIS_MODEL_FREE_ALLOWANCES_JSON", raising=False)
@@ -190,7 +235,15 @@ def test_restart_uses_saved_evidence_without_exporting_a_key_to_environment(
         assert provider.api_key.get_secret_value() == SECRET
         assert os.environ.get("TEST_FREE_KEY") is None
         assert reopened.state.settings.verified_cloud_execution_allowed
-        service.save(actor, draft(enabled=False, api_key=None, expected_revision=1))
+        from app.db.models import SystemStateRow
+
+        with reopened.state.task_leases._write() as session:
+            session.get(SystemStateRow, 1).emergency_stop = True
+        assert not provider.free_eligible("vendor/model")
+        with reopened.state.task_leases._write() as session:
+            session.get(SystemStateRow, 1).emergency_stop = False
+        assert provider.free_eligible("vendor/model")
+        service.save(actor, draft(enabled=False, api_key=None, expected_revision=saved.revision))
         assert not provider.free_eligible("vendor/model")
         import asyncio
 
@@ -215,7 +268,7 @@ def test_saving_verified_profile_never_activates_cloud_inference(profile_app, mo
         models={"vendor/model"}, credential_fingerprint=sha256(SECRET.encode()).hexdigest()
     )
     service = ProviderConfigurationService(app)
-    service.save(actor, draft(enabled=True, allowance=grant))
+    save_with_intercepted_acceptance(service, actor, draft(enabled=True, allowance=grant))
     monkeypatch.setenv("JARVIS_MODEL_EXECUTION_MODE", "free_only")
     monkeypatch.setenv("JARVIS_MODEL_VERIFIED_CLOUD_ENABLED", "false")
     reopened = create_app(
@@ -242,7 +295,9 @@ def test_supervisor_preflight_reads_saved_evidence_without_a_credential_environm
     grant = allowance(
         models={"vendor/model"}, credential_fingerprint=sha256(SECRET.encode()).hexdigest()
     )
-    ProviderConfigurationService(app).save(actor, draft(enabled=True, allowance=grant))
+    save_with_intercepted_acceptance(
+        ProviderConfigurationService(app), actor, draft(enabled=True, allowance=grant)
+    )
     config = make_config(
         tmp_path,
         JARVIS_MODEL_EXECUTION_MODE="free_only",
@@ -314,7 +369,7 @@ def test_profile_cannot_shadow_local_provider_or_rotate_accounts(profile_app):
     grant = allowance(
         models={"vendor/model"}, credential_fingerprint=sha256(SECRET.encode()).hexdigest()
     )
-    service.save(actor, draft(enabled=True, allowance=grant))
+    save_with_intercepted_acceptance(service, actor, draft(enabled=True, allowance=grant))
     second = grant.model_copy(update={"provider": "groq-second", "account_id": "other-account"})
     with pytest.raises(DomainError) as rotation:
         service.save(actor, draft(provider_name="groq-second", enabled=True, allowance=second))
@@ -347,7 +402,7 @@ def test_aggregate_startup_bounds_reject_a_save_without_losing_prior_profiles(
         )
         body = draft(provider_name=name, selected_model=selected, enabled=True, allowance=grant)
         if index < count:
-            service.save(actor, body)
+            save_with_intercepted_acceptance(service, actor, body)
         else:
             with pytest.raises(DomainError) as rejected:
                 service.save(actor, body)

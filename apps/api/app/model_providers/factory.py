@@ -27,6 +27,7 @@ def build_provider_registry(
     credential_resolver=None,
     configuration_guard=None,
     model_assignments=None,
+    groq_capacity=None,
 ) -> ProviderRegistry:
     providers = []
     if settings.model_ollama_enabled:
@@ -100,6 +101,7 @@ def build_provider_registry(
                         health_strategy=HealthCheckStrategy.CONFIGURATION,
                         free_allowance=grant,
                         free_capacity=capacity,
+                        groq_capacity=groq_capacity,
                         capabilities=frozenset(
                             ModelCapability(item) for item in grant.capabilities
                         ),
@@ -124,6 +126,7 @@ def build_model_router(
     credential_resolver=None,
     configuration_guard=None,
     model_assignments=None,
+    groq_capacity=None,
 ) -> ModelRouter:
     retry = RetryExecutor(
         RetryPolicy(
@@ -139,6 +142,7 @@ def build_model_router(
             credential_resolver=credential_resolver,
             configuration_guard=configuration_guard,
             model_assignments=model_assignments,
+            groq_capacity=groq_capacity,
         ),
         retry,
         model_assignments=model_assignments,

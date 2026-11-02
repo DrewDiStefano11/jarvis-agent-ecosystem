@@ -7,6 +7,12 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from app.core.errors import DomainError
 from app.models.domain import TypedApiResponse
+from app.models.groq_acceptance import (
+    ApproveGroqAcceptance,
+    ExecuteGroqAcceptance,
+    GroqAcceptanceView,
+    PrepareGroqAcceptance,
+)
 from app.models.provider_configuration import (
     ModelConfigurationView,
     ModelOperatorSetupRequest,
@@ -73,6 +79,42 @@ def configuration_actor(request):
             "MODEL_CONFIGURATION_PERMISSION_DENIED", "A model operator is required.", 403
         )
     return request.app.state.agent_runtime_service.authenticate_actor(actor_id)
+
+
+@router.post("/groq/acceptance/prepare", response_model=TypedApiResponse[GroqAcceptanceView])
+def prepare_groq_acceptance(body: PrepareGroqAcceptance, request: Request):
+    actor = configuration_actor(request)
+    return TypedApiResponse(data=request.app.state.groq_acceptance_service.prepare(actor, body))
+
+
+@router.get("/groq/acceptance/{identifier}", response_model=TypedApiResponse[GroqAcceptanceView])
+def get_groq_acceptance(identifier: str, request: Request):
+    actor = configuration_actor(request)
+    return TypedApiResponse(data=request.app.state.groq_acceptance_service.get(actor, identifier))
+
+
+@router.post(
+    "/groq/acceptance/{identifier}/approve", response_model=TypedApiResponse[GroqAcceptanceView]
+)
+def approve_groq_acceptance(identifier: str, body: ApproveGroqAcceptance, request: Request):
+    actor = configuration_actor(request)
+    return TypedApiResponse(
+        data=request.app.state.groq_acceptance_service.approve(
+            actor, identifier, body.expected_plan_hash
+        )
+    )
+
+
+@router.post(
+    "/groq/acceptance/{identifier}/execute", response_model=TypedApiResponse[GroqAcceptanceView]
+)
+async def execute_groq_acceptance(identifier: str, body: ExecuteGroqAcceptance, request: Request):
+    actor = configuration_actor(request)
+    return TypedApiResponse(
+        data=await request.app.state.groq_acceptance_service.execute(
+            actor, identifier, body.expected_plan_hash
+        )
+    )
 
 
 @router.get("/profiles", response_model=TypedApiResponse[ModelConfigurationView])

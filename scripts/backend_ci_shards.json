@@ -102,6 +102,8 @@
     "tests/test_model_tool_calls.py",
     "tests/test_model_router.py",
     "tests/test_provider_configuration.py",
+    "tests/test_groq_rate_limits.py",
+    "tests/test_groq_acceptance.py",
     "tests/test_planning_http_golden_path.py",
     "tests/test_remote_system_control.py",
     "tests/test_runtime_supervisor.py",

@@ -47,7 +47,11 @@ def eligible(settings, provider, application_settings):
             )
         ):
             return False
-        require_allowance(grant, settings.model)
+        if grant.integration == "groq":
+            if not provider.free_eligible(settings.model):
+                return False
+        else:
+            require_allowance(grant, settings.model)
     except (ModelProviderError, ValueError):
         return False
     return True
@@ -73,6 +77,7 @@ def build_verified_router(settings, existing, application_settings):
         free_allowance=original.free_allowance,
         free_capacity=original.free_capacity,
         configuration_guard=original.configuration_guard,
+        groq_capacity=original.groq_capacity,
     )
     return ModelRouter(ProviderRegistry([selected]), RetryExecutor(RetryPolicy(maximum_attempts=1)))
 

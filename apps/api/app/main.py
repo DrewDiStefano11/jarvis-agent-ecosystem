@@ -108,7 +108,7 @@ from app.team_selection.router import router as team_selection_router
 from app.tool_execution.router import router as tool_execution_router
 from app.tool_execution.service import ToolExecutionService
 
-DATABASE_REVISION = "20261102_models"
+DATABASE_REVISION = "20261102_groq"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
@@ -370,12 +370,16 @@ def create_app(
         app.include_router(native_commit_operator_router)
         app.include_router(publication_operator_router)
         app.include_router(development_operator_router)
+    from app.provider_configuration.groq_capacity import GroqCapacityStore
+
+    app.state.groq_capacity = GroqCapacityStore(app)
     app.state.model_router = build_model_router(
         settings,
         session_factory,
         credential_resolver=provider_configuration.resolve,
-        configuration_guard=provider_configuration.current,
+        configuration_guard=provider_configuration.live,
         model_assignments=provider_configuration.assignments(),
+        groq_capacity=app.state.groq_capacity,
     )
     app.state.model_execution_repository = ModelExecutionRepository(
         session_factory,
@@ -441,6 +445,9 @@ def create_app(
 
     app.include_router(model_configuration_router)
     app.state.provider_configuration_service = ProviderConfigurationService(app)
+    from app.provider_configuration.groq_acceptance import GroqAcceptanceService
+
+    app.state.groq_acceptance_service = GroqAcceptanceService(app)
     app.include_router(identity_router)
     app.include_router(catalog_router)
     app.include_router(office_router)

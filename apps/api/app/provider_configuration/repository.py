@@ -59,8 +59,17 @@ class ProviderConfigurationRepository:
         self.sessions = sessions
 
     def read(self, session, name):
+        from app.provider_configuration.proofs import latest_proof
+
+        latest = latest_proof(session, CONFIGURED, "providerName", name, "profileRevision")
         row = session.get(ModelProviderProfileRow, name)
         if row is None:
+            if latest is not None:
+                raise DomainError(
+                    "MODEL_CONFIGURATION_CORRUPT",
+                    "Saved provider projection is missing native history.",
+                    409,
+                )
             return None
         try:
             configuration = ProviderProfileConfiguration.model_validate(row.payload)
@@ -71,6 +80,7 @@ class ProviderConfigurationRepository:
                 or row.private_digest != private_digest(row.payload, row.encrypted_credential)
                 or event is None
                 or event.event_type != CONFIGURED
+                or row.last_audit_id != latest
                 or event.payload["payload"]
                 != {
                     "providerName": name,
@@ -95,6 +105,13 @@ class ProviderConfigurationRepository:
                 .limit(21)
             )
         )
+        history = session.scalars(
+            select(AuditEventRow.payload["payload"]["providerName"].as_string())
+            .where(AuditEventRow.event_type == CONFIGURED)
+            .distinct()
+            .limit(21)
+        )
+        names = sorted(set(names) | {name for name in history if name is not None})
         if len(names) > 20:
             raise DomainError(
                 "MODEL_CONFIGURATION_LIMIT", "Provider configuration exceeds its bound.", 409

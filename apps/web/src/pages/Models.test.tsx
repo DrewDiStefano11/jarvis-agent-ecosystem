@@ -17,6 +17,21 @@ beforeEach(() => {
 })
 
 describe('AI provider configuration', () => {
+  it('shows a prepared request without sending until its explicit one-request approval', async () => {
+    const approve=vi.fn().mockResolvedValue(undefined)
+    const profile={provider_name:'groq',integration:'groq',selected_model:'openai/gpt-oss-120b',priority:50,model_assignments:{},enabled:false,revision:2,credential_configured:true,credential_evidence_matches:false,state:'evidence_required'}
+    const acceptance={id:'acceptance-1',plan_hash:'a'.repeat(64),status:'prepared',initialized_capacity:false,result_code:null,
+      plan:{provider_name:'groq',profile_revision:2,expires_at:'2099-01-01T00:00:00Z',endpoint:'https://api.groq.com/openai/v1/chat/completions',maximum_requests:1,paid_ceiling_usd:0,ongoing_activation:false,token_reservation:8000,
+        evidence:{account_id:'fixture-account',model:profile.selected_model,limits:{rpm:30,rpd:1000,tpm:8000,tpd:200000}},request_body:{model:profile.selected_model,max_completion_tokens:512}}}
+    vi.mocked(useAppStore).mockReturnValue({providers:{...providers,data:{...providers.data,profiles:[profile]},acceptance,
+      approveAndExecuteGroqAcceptance:approve,refreshGroqAcceptance:vi.fn()},runtime:{actorId:'model-operator'}} as unknown as ReturnType<typeof useAppStore>)
+    render(<Models/>)
+    expect(approve).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button',{name:'Approve and send exactly one Groq request'}))
+    await waitFor(()=>expect(approve).toHaveBeenCalledWith('acceptance-1','a'.repeat(64)))
+    expect(providers.saveProvider).not.toHaveBeenCalled()
+    expect(screen.getByText(/Hosted execution: inactive/)).toBeInTheDocument()
+  })
   it('submits a write-only key, clears the field, and keeps activation separate', async () => {
     render(<Models/>)
     expect(providers.setActive).toHaveBeenCalledWith(true)

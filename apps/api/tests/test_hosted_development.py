@@ -40,6 +40,9 @@ def application_settings(grant, *, activated=True):
 
 
 def planning_router(capacity, grant, *, capabilities=CAPABILITIES, client=None):
+    from tests.test_free_ai_capacity import LegacyQuotaProbe
+
+    capacity.configure([grant])
     provider = OpenAICompatibleProvider(
         name=grant.provider,
         base_url=compatible_endpoint(grant),
@@ -50,6 +53,7 @@ def planning_router(capacity, grant, *, capabilities=CAPABILITIES, client=None):
         execution_mode="free_only",
         free_allowance=grant,
         free_capacity=capacity,
+        groq_capacity=LegacyQuotaProbe(capacity),
         client=client,
     )
     return ModelRouter(ProviderRegistry([provider]), RetryExecutor(RetryPolicy(maximum_attempts=3)))

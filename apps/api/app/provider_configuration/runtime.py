@@ -7,6 +7,7 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.config import Settings
 from app.core.errors import DomainError
+from app.db.models import SystemStateRow
 from app.provider_configuration.repository import ProviderConfigurationRepository
 
 
@@ -54,6 +55,16 @@ class ProviderConfigurationSnapshot:
                     row.private_digest,
                 )
         except (DomainError, SQLAlchemyError):
+            return False
+
+    def live(self, name):
+        if not self.current(name):
+            return False
+        try:
+            with self.repository.sessions() as session:
+                control = session.get(SystemStateRow, 1)
+                return control is not None and not control.emergency_stop
+        except SQLAlchemyError:
             return False
 
     def resolve(self, grant):

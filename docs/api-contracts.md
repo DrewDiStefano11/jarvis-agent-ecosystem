@@ -1,5 +1,18 @@
 # HTTP contracts
 
+The local model-configuration namespace additionally exposes a separate Groq
+one-request acceptance contract. OpenAPI models `GroqAccountEvidence`,
+`PrepareGroqAcceptance`, `ApproveGroqAcceptance`, `ExecuteGroqAcceptance` and
+`GroqAcceptanceView` are authoritative. POST `/api/model-configuration/groq/acceptance/prepare`
+only prepares account/model evidence. POST `/{identifier}/approve` requires the
+exact `expected_plan_hash` and `confirmation: "approve_exactly_one_groq_request"`;
+POST `/{identifier}/execute` consumes that one-request authority. GET `/{identifier}`
+reads its durable result without inference. All identifier paths share the
+`/api/model-configuration/groq/acceptance` prefix and retain direct-loopback,
+exact-Origin, no-forwarding, active `models.configure` and no-store boundaries.
+Successful response-header observations identify RPD/TPM only; the response never
+asserts unused account-wide RPM/TPD. No endpoint enables ongoing inference.
+
 Campaign D adds `free_only` to `AutonomousWorkerStatus.modelExecutionMode` and
 adds the `20261013_free_ai` migration. The current advertised database head is
 `20261016_a_lineage_join`, including quota, dispatch, baseline and lineage history. Existing response

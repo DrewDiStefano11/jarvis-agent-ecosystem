@@ -9,7 +9,7 @@ from app.agent_runtime.authorization import IdentityRuntimeAuthorizer
 from app.core.errors import DomainError
 from app.db.models import AuditEventRow, SystemStateRow
 from app.model_providers.errors import ModelProviderError
-from app.model_providers.free_capacity import require_allowance
+from app.model_providers.free_capacity import require_allowance, require_nonbillable_account
 from app.models.provider_configuration import (
     ProviderProfileConfiguration,
     ProviderProfileView,
@@ -38,6 +38,7 @@ class ProviderConfigurationService:
                 "Model configuration is not authorized.",
                 403,
             )
+
         decision = self.identity.check_permission_resource_access(
             actor.actor_id,
             "models.configure",
@@ -51,6 +52,12 @@ class ProviderConfigurationService:
                 "Model configuration is not authorized.",
                 403,
             )
+
+    def require_account_evidence(self, grant, model):
+        if grant.integration == "groq":
+            require_nonbillable_account(grant, model)
+        else:
+            require_allowance(grant, model)
 
     def view(self, row, configuration):
         matches = False
@@ -76,7 +83,7 @@ class ProviderConfigurationService:
                         state = "credential_evidence_mismatch"
                     else:
                         try:
-                            require_allowance(grant, configuration.selected_model)
+                            self.require_account_evidence(grant, configuration.selected_model)
                         except ModelProviderError:
                             state = "evidence_expired"
                         else:
@@ -87,6 +94,13 @@ class ProviderConfigurationService:
                                 if self.app.state.settings.verified_cloud_execution_allowed
                                 else "activation_required"
                             )
+                            if (
+                                grant.integration == "groq"
+                                and not self.app.state.groq_capacity.available(
+                                    grant, configuration.selected_model, 1
+                                )
+                            ):
+                                state = "capacity_unavailable"
         return ProviderProfileView(
             **configuration.model_dump(exclude={"allowance"}),
             revision=row.revision,
@@ -200,13 +214,21 @@ class ProviderConfigurationService:
                         409,
                     )
                 try:
-                    require_allowance(grant, configuration.selected_model)
+                    self.require_account_evidence(grant, configuration.selected_model)
                 except ModelProviderError:
                     raise DomainError(
                         "MODEL_ACCOUNT_EVIDENCE_EXPIRED",
                         "Current nonbillable evidence is required.",
                         409,
                     ) from None
+                if grant.integration == "groq" and not self.app.state.groq_capacity.available(
+                    grant, configuration.selected_model, 1
+                ):
+                    raise DomainError(
+                        "MODEL_GROQ_CAPACITY_UNAVAILABLE",
+                        "Native verified Groq capacity is required before enabling this profile.",
+                        409,
+                    )
             payload = canonical_payload(configuration)
             revision = body.expected_revision + 1
             fingerprint = private_digest(payload, encrypted)

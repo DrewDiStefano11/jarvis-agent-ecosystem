@@ -83,6 +83,7 @@ class ProviderProfileView(BaseModel):
         "credential_unavailable",
         "evidence_required",
         "evidence_expired",
+        "capacity_unavailable",
         "credential_evidence_mismatch",
         "disabled",
         "activation_required",

@@ -1,4 +1,6 @@
 .provider-page p { line-height:1.6; overflow-wrap:anywhere; }
+.provider-page pre { white-space:pre-wrap; overflow-wrap:anywhere; max-width:100%; padding:14px; background:#141925; border-radius:6px; }
+.provider-page article button { margin:8px 8px 0 0; }
 .provider-page button { min-height:44px; padding:10px 16px; border:1px solid #aa8ae8; border-radius:6px; background:#7850dc; color:#fff; font:inherit; cursor:pointer; }
 .provider-page button.secondary { background:#1b2030; border-color:#42495d; }
 .provider-page button:disabled { opacity:.6; cursor:wait; }

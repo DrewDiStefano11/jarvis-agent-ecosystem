@@ -28,17 +28,31 @@ def reset_key(grant: FreeAllowance) -> str:
     return grant.resets_at.astimezone(UTC).isoformat()
 
 
-def require_allowance(grant: FreeAllowance, model: str, now: datetime | None = None) -> None:
+def require_nonbillable_account(
+    grant: FreeAllowance, model: str, now: datetime | None = None
+) -> None:
+    """Verify account eligibility only; this never establishes available quota."""
     current = now or datetime.now(UTC)
     if not (
         grant.nonbillable is True
         and grant.billing_enabled is False
         and grant.automatic_recharge is False
         and grant.credit_consumption is False
-        and grant.verified_at <= current < min(grant.valid_until, grant.resets_at)
+        and grant.verified_at <= current < grant.valid_until
         and grant.window_start <= current
         and model in grant.models
     ):
+        raise ProviderExecutionDisabledError(
+            "no current verified nonbillable allowance for this model",
+            provider=grant.provider,
+            model=model,
+        )
+
+
+def require_allowance(grant: FreeAllowance, model: str, now: datetime | None = None) -> None:
+    current = now or datetime.now(UTC)
+    require_nonbillable_account(grant, model, current)
+    if current >= grant.resets_at:
         raise ProviderExecutionDisabledError(
             "no current verified nonbillable allowance for this model",
             provider=grant.provider,
