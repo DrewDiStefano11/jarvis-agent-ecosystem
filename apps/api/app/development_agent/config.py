@@ -114,6 +114,8 @@ def build_development_router(settings, local_router, application_settings=None):
 
 
 def development_router_enabled(settings, router, application_settings=None):
+    if type(settings) is not DevelopmentProviderSettings:
+        return False
     if settings.provider == "verified":
         from app.development_agent.hosted import verified_router_enabled
 

@@ -49,7 +49,7 @@ choice. The certificate must cover the configured host. The server requires real
 HTTPS and exact Host matching; it rejects Forwarded/X-Forwarded headers and has
 no plaintext fallback. Reverse proxy TLS assertions are unsupported. Remote mode
 blocks legacy routes including health/docs/OpenAPI/identity administration,
-WebSockets and browser Origin requests. Its outer gateway checks CORS preflight
+WebSockets and, by default, browser Origin requests. Separately enabled browser sessions and a trusted built remote entry are documented in [browser operation](remote-browser-operation.md). Its outer gateway checks CORS preflight
 before CORS middleware. Inspect authoritative OpenAPI locally, not on this listener.
 
 Set `JARVIS_REMOTE_ORIGIN` and `JARVIS_REMOTE_OPERATOR_TOKEN` on the operator

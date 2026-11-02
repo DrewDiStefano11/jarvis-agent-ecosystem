@@ -108,7 +108,7 @@ from app.team_selection.router import router as team_selection_router
 from app.tool_execution.router import router as tool_execution_router
 from app.tool_execution.service import ToolExecutionService
 
-DATABASE_REVISION = "20261016_a_lineage_join"
+DATABASE_REVISION = "20261102_models"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
@@ -256,12 +256,18 @@ def create_app(
     *,
     recover_interrupted_workflow: bool = True,
 ) -> FastAPI:
-    settings = Settings(JARVIS_DATABASE_URL=database_url) if database_url else Settings()
+    from app.provider_configuration.bootstrap import ProviderRuntimeControls, bootstrap_settings
+    from app.provider_configuration.runtime import ProviderConfigurationSnapshot
+
+    controls = ProviderRuntimeControls()
+    settings = bootstrap_settings(database_url)
     settings.ensure_runtime_directory()
     if settings.auto_migrate:
         _upgrade_database(settings)
     engine = create_database_engine(settings.database_url, settings.sql_echo)
     session_factory = create_session_factory(engine)
+    provider_configuration = ProviderConfigurationSnapshot(session_factory, settings)
+    settings = provider_configuration.settings(settings, controls)
     repository = SqlAlchemyRepository(
         session_factory,
         settings.idempotency_lease_seconds,
@@ -314,6 +320,9 @@ def create_app(
     app.state.simulator = simulator
     app.state.context_assembler = context_assembler
     app.state.settings = settings
+    app.state.provider_configuration = provider_configuration
+    from app.provider_configuration.service import ProviderConfigurationService
+
     app.state.engine = engine
     app.state.task_leases = task_leases
     app.state.identity_service = IdentityService(session_factory)
@@ -350,12 +359,24 @@ def create_app(
             app.state.agent_runtime_repository,
         )
         app.include_router(remote_control_router)
+        if settings.remote_browser_enabled:
+            from app.remote_control.browser import BrowserSessions
+            from app.remote_control.browser import router as browser_router
+
+            app.state.remote_browser_sessions = BrowserSessions(access)
+            app.include_router(browser_router)
         app.include_router(git_operator_router)
         app.include_router(commit_operator_router)
         app.include_router(native_commit_operator_router)
         app.include_router(publication_operator_router)
         app.include_router(development_operator_router)
-    app.state.model_router = build_model_router(settings, session_factory)
+    app.state.model_router = build_model_router(
+        settings,
+        session_factory,
+        credential_resolver=provider_configuration.resolve,
+        configuration_guard=provider_configuration.current,
+        model_assignments=provider_configuration.assignments(),
+    )
     app.state.model_execution_repository = ModelExecutionRepository(
         session_factory,
         outbox_max_attempts=repository.outbox_max_attempts,
@@ -416,6 +437,10 @@ def create_app(
     app.include_router(agent_runtime_router)
     app.include_router(autonomous_worker_router)
     app.include_router(local_planning_setup_router)
+    from app.provider_configuration.router import router as model_configuration_router
+
+    app.include_router(model_configuration_router)
+    app.state.provider_configuration_service = ProviderConfigurationService(app)
     app.include_router(identity_router)
     app.include_router(catalog_router)
     app.include_router(office_router)
@@ -460,7 +485,10 @@ def create_app(
 
     @app.middleware("http")
     async def enforce_local_control_plane(request: Request, call_next):
-        if settings.remote_control_enabled:
+        if (
+            settings.remote_control_enabled
+            and request.scope.get("jarvis.owned_loopback") is not True
+        ):
             return await call_next(request)
         if not _is_loopback_peer(request.client.host if request.client else None):
             return JSONResponse(

@@ -72,6 +72,7 @@ def build_verified_router(settings, existing, application_settings):
         client=original._client,
         free_allowance=original.free_allowance,
         free_capacity=original.free_capacity,
+        configuration_guard=original.configuration_guard,
     )
     return ModelRouter(ProviderRegistry([selected]), RetryExecutor(RetryPolicy(maximum_attempts=1)))
 

@@ -29,6 +29,102 @@ def metadata_repository(tmp_path):
     ), common
 
 
+@pytest.mark.skipif(os.name != "nt", reason="native Windows namespace and file pins")
+@pytest.mark.parametrize("boundary,expected_calls", [("tree", 2), ("objects", 3)])
+def test_namespace_pin_preparation_bounds_authority_without_releasing_files(
+    metadata_repository, monkeypatch, boundary, expected_calls
+):
+    from contextlib import ExitStack
+
+    from app.self_build import checkout_driver
+
+    policy, common = metadata_repository
+    objects = common / "objects"
+    objects.mkdir()
+    for index in range(12):
+        directory = objects / f"o{index:02d}"
+        directory.mkdir()
+        (directory / "item").write_bytes(b"immutable")
+    monkeypatch.setattr(checkout_driver, "monotonic", lambda: 1.0)
+    calls = []
+
+    def authority():
+        calls.append(True)
+
+    with ExitStack() as stack:
+        if boundary == "tree":
+            check = checkout_driver.pin_read_tree(stack, objects, authority)
+        else:
+            check = stack.enter_context(checkout_driver.pinned_object_store(policy, authority))
+        with pytest.raises(PermissionError):
+            (objects / "o00" / "item").write_bytes(b"foreign")
+        check()
+    assert len(calls) == expected_calls
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows namespace and file pins")
+@pytest.mark.parametrize("boundary,last_call", [("tree", 2), ("objects", 3)])
+def test_namespace_pin_preparation_refuses_revoked_final_authority(
+    metadata_repository, monkeypatch, boundary, last_call
+):
+    from contextlib import ExitStack
+
+    from app.self_build import checkout_driver
+
+    policy, common = metadata_repository
+    (common / "objects").mkdir()
+    monkeypatch.setattr(checkout_driver, "monotonic", lambda: 1.0)
+    calls = []
+
+    def authority():
+        calls.append(True)
+        if len(calls) == last_call:
+            raise DomainError("AUTHORITY_REVOKED", "revoked at read boundary", 403)
+
+    with pytest.raises(DomainError, match="revoked at read boundary"):
+        with ExitStack() as stack:
+            if boundary == "tree":
+                checkout_driver.pin_read_tree(stack, common, authority)
+            else:
+                stack.enter_context(checkout_driver.pinned_object_store(policy, authority))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="native Windows namespace and file pins")
+@pytest.mark.parametrize("boundary", ["tree", "objects"])
+def test_namespace_pin_scan_observes_revocation_during_preparation(
+    metadata_repository, monkeypatch, boundary
+):
+    from contextlib import ExitStack
+
+    from app.self_build import checkout_driver
+
+    policy, common = metadata_repository
+    (common / "objects").mkdir()
+    clock = [0.0]
+    checks = []
+    native_open = checkout_driver.open_directory
+    monkeypatch.setattr(checkout_driver, "monotonic", lambda: clock[0])
+
+    def opening(*args, **kwargs):
+        result = native_open(*args, **kwargs)
+        clock[0] += 0.21
+        return result
+
+    def authority():
+        checks.append(clock[0])
+        if clock[0] >= 0.2:
+            raise DomainError("AUTHORITY_REVOKED", "revoked while preparing pins", 403)
+
+    monkeypatch.setattr(checkout_driver, "open_directory", opening)
+    with pytest.raises(DomainError, match="revoked while preparing pins"):
+        with ExitStack() as stack:
+            if boundary == "tree":
+                checkout_driver.pin_read_tree(stack, common, authority)
+            else:
+                stack.enter_context(checkout_driver.pinned_object_store(policy, authority))
+    assert checks[0] == 0.0 and checks[1] >= 0.2
+
+
 @pytest.mark.skipif(os.name != "nt", reason="native Windows metadata pins")
 def test_metadata_snapshot_is_strong_complete_and_deterministic(metadata_repository):
     policy, common = metadata_repository

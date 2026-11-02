@@ -24,6 +24,19 @@ def fail(code, message):
     raise DomainError(code, message, 409)
 
 
+def _scan_authority(authority_check):
+    """Bound only read-only pin preparation; never reuse at an effect boundary."""
+    checked = monotonic()
+
+    def scan():
+        nonlocal checked
+        if monotonic() - checked >= 0.2:
+            authority_check()
+            checked = monotonic()
+
+    return scan
+
+
 @contextmanager
 def pinned_object_store(policy, authority_check):
     """Git mutations may change their own registration/index, never the object store.
@@ -31,6 +44,8 @@ def pinned_object_store(policy, authority_check):
     Keep existing object bytes immutable and observe absent object/alternate names
     throughout each fixed command, including writes to the dedicated index.
     """
+    authority_check()
+    scan_authority = _scan_authority(authority_check)
     with ExitStack() as stack:
         primary_path = Path(policy.primary_root)
         directory = open_directory(stack, Path(primary_path.anchor), internal=True)
@@ -47,21 +62,27 @@ def pinned_object_store(policy, authority_check):
         for parent, directories, files in os.walk(
             objects.path, followlinks=False, onerror=walk_error
         ):
-            authority_check()
+            scan_authority()
             count += len(directories) + len(files)
             if count > 16384:
                 fail("SELF_BUILD_GIT_METADATA_LIMIT", "Object storage exceeds its bounded scope.")
             for name in directories:
+                scan_authority()
                 open_directory(stack, Path(parent) / name, internal=True)
             for name in files:
+                scan_authority()
                 stack.enter_context(pinned_metadata_file(Path(parent) / name))
+        authority_check()
         check()
         yield check
+        authority_check()
         check()
 
 
 def pin_read_tree(stack, path, authority_check, *, maximum=16384):
     """Retain file/namespace stability through the caller's durable publication."""
+    authority_check()
+    scan_authority = _scan_authority(authority_check)
     open_directory(stack, path, internal=True)
     check = stack.enter_context(namespace_watch(path))
     count = 0
@@ -72,14 +93,17 @@ def pin_read_tree(stack, path, authority_check, *, maximum=16384):
     walk_root = Path(windows_native_path(path))
     for parent, directories, files in os.walk(walk_root, followlinks=False, onerror=walk_error):
         parent = Path(path) / Path(parent).relative_to(walk_root)
-        authority_check()
+        scan_authority()
         count += len(directories) + len(files)
         if count > maximum:
             fail("SELF_BUILD_GIT_METADATA_LIMIT", "Final readback exceeds its bounded namespace.")
         for name in directories:
+            scan_authority()
             open_directory(stack, Path(parent) / name, internal=True)
         for name in files:
+            scan_authority()
             stack.enter_context(pinned_metadata_file(Path(parent) / name))
+    authority_check()
     check()
     return check
 

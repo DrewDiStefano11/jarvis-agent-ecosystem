@@ -31,6 +31,15 @@ from app.models.domain import Task
 from app.self_build.policy import digest
 
 POLICY_SOURCE_PATHS = (
+    "provider_configuration/bootstrap.py",
+    "provider_configuration/runtime.py",
+    "provider_configuration/repository.py",
+    "provider_configuration/protection.py",
+    "provider_configuration/service.py",
+    "provider_configuration/router.py",
+    "provider_configuration/provisioning.py",
+    "provider_configuration/metadata.py",
+    "models/provider_configuration.py",
     "development_agent/dispatch.py",
     "development_agent/repository.py",
     "development_agent/request.py",
@@ -53,6 +62,8 @@ POLICY_SOURCE_PATHS = (
     "models/source_artifacts.py",
     "models/git_changes.py",
     "self_build/native_artifacts.py",
+    "self_build/checkout_driver.py",
+    "self_build/commit_metadata.py",
     "source_mutation/inspection.py",
     "source_mutation/history.py",
     "source_mutation/artifacts.py",

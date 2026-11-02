@@ -371,3 +371,49 @@ only implemented text capabilities. Hosted coding requires explicit code generat
 and structured output plus all existing activation/account/quota controls. These
 contracts grant no source effects, candidate execution or paid inference. See
 [hosted development proposals](hosted-development-proposals.md).
+
+### Local model provider configuration
+
+OpenAPI defines `/api/model-configuration/setup`, `/profiles`, and
+`/profiles/{provider_name}/metadata`. Setup requires the explicit
+`configure_model_operator` confirmation and provisions only `models.configure`
+for the `model_configuration` administrative resource. Profile operations require
+that active actor via `X-Jarvis-Actor-Id`, a direct loopback peer and the exact
+configured web Origin. Forwarded requests are rejected. Responses are uncached.
+
+Profile writes use `expected_revision` CAS, write-only `api_key` and explicit
+`clear_credential`. Views exclude credentials and private allowance evidence.
+Native audit and outbox records bind each encrypted profile revision. Saving
+never changes activation flags or queues inference. Restart services after
+configuration changes; old provider snapshots are fenced immediately.
+
+Groq metadata checking performs one bounded fixed-endpoint model-catalog GET,
+with redirects/proxies disabled and sanitized results. Its requested/completed
+audit pair records no response body or key. A missing completion represents an
+interrupted or superseded check; no automatic retry occurs. Catalog access does
+not establish billing eligibility, quota or successful inference. Other hosted
+integrations have no metadata-check capability in this version. See
+[operator setup](provider-configuration.md).
+
+### Separately enabled remote browser transport
+
+POST `/api/remote/session` accepts the configured bearer credential on the exact
+canonical HTTPS Origin and returns `TypedApiResponse[RemoteBrowserSession]` plus
+a Secure/HTTPOnly/SameSite=Strict host-only opaque cookie. POST
+`/api/remote/session/restore` requires that cookie, exact Origin and
+`X-Jarvis-Session: restore`. POST `/api/remote/session/logout` requires the cookie
+and its `X-Jarvis-CSRF` header and returns `TypedApiResponse[bool]`. All existing
+remote operations accept that cookie only with one matching CSRF header; bearer
+plus session credentials are rejected. Existing native permissions and command
+transaction checks still apply. The default browser boundary remains disabled.
+See [browser operation](remote-browser-operation.md); models/OpenAPI are authoritative.
+
+POST `/api/remote/self-build/workspaces/preview` accepts native `WorkspaceIntent`
+and returns `TypedApiResponse[WorkspacePlan]`, requiring remote read and native
+task read permission. It is read-only derivation. The browser uses the existing
+`/api/remote/self-build/workspaces/approve` contract after exact-hash confirmation;
+native actor independence, workspace permission, policy/hash, emergency stop and
+expiry remain authoritative. Runtime browser controls use existing
+`RemoteRuntimeCommand` and current expected run versions. No worker
+confirmation/completion command is added. Local model-configuration routes remain
+outside the remote gateway's dedicated route allowlist.

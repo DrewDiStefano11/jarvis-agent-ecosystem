@@ -69,6 +69,7 @@ class OpenAICompatibleProvider(ProviderBase):
         client: httpx.AsyncClient | None = None,
         free_allowance: FreeAllowance | None = None,
         free_capacity: FreeCapacityRepository | None = None,
+        configuration_guard=None,
     ) -> None:
         if not isinstance(name, str) or not name.strip() or len(name) > 120:
             raise ProviderConfigurationError("provider name must contain 1 to 120 characters")
@@ -128,6 +129,7 @@ class OpenAICompatibleProvider(ProviderBase):
         self._client = client
         self.free_allowance = free_allowance
         self.free_capacity = free_capacity
+        self.configuration_guard = configuration_guard
         if free_allowance is not None:
             from app.model_providers.free_endpoints import compatible_endpoint
 
@@ -151,6 +153,8 @@ class OpenAICompatibleProvider(ProviderBase):
                 )
 
     def free_eligible(self, model: str) -> bool:
+        if self.configuration_guard is not None and not self.configuration_guard():
+            return False
         if self.execution_mode in {"local_only", "free_only"} and self.is_local:
             return True
         return bool(
@@ -187,7 +191,16 @@ class OpenAICompatibleProvider(ProviderBase):
             True,
         )
 
+    def _require_current_configuration(self) -> None:
+        if self.configuration_guard is not None and not self.configuration_guard():
+            from app.model_providers.errors import ProviderExecutionDisabledError
+
+            raise ProviderExecutionDisabledError(
+                "provider configuration changed; reload current settings", provider=self.name
+            )
+
     async def execute(self, request: ModelExecutionRequest) -> ModelExecutionResponse:
+        self._require_current_configuration()
         request = ModelExecutionRequest.model_validate(request.model_dump())
         validate_tool_support(request, self.capabilities, self.name)
         model = request.model or self.default_model
@@ -246,6 +259,7 @@ class OpenAICompatibleProvider(ProviderBase):
         started = perf_counter()
         translated_error: ModelProviderError | None = None
         try:
+            self._require_current_configuration()
             response = await post_model_response(
                 client,
                 "chat/completions",

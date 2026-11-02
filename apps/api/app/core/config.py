@@ -51,6 +51,27 @@ class Settings(BaseSettings):
     sql_echo: bool = Field(False, alias="JARVIS_SQL_ECHO")
     auto_migrate: bool = Field(True, alias="JARVIS_AUTO_MIGRATE")
     simulator_auto_resume: bool = Field(False, alias="JARVIS_SIMULATOR_AUTO_RESUME")
+    remote_browser_enabled: bool = Field(False, alias="JARVIS_REMOTE_BROWSER_ENABLED")
+    remote_browser_assets: Path | None = Field(None, alias="JARVIS_REMOTE_BROWSER_ASSETS")
+
+    @model_validator(mode="after")
+    def validate_remote_browser(self):
+        if self.remote_browser_enabled:
+            directory = self.remote_browser_assets
+            if (
+                not self.remote_control_enabled
+                or directory is None
+                or not directory.is_absolute()
+                or not directory.is_dir()
+                or directory.is_symlink()
+                or not (directory / "remote.html").is_file()
+                or (directory / "remote.html").is_symlink()
+            ):
+                raise ValueError(
+                    "Browser access requires configured remote TLS and a trusted built directory"
+                )
+        return self
+
     remote_control_enabled: bool = Field(False, alias="JARVIS_REMOTE_CONTROL_ENABLED")
     remote_operator_id: str = Field("", alias="JARVIS_REMOTE_OPERATOR_ID", max_length=120)
     remote_operator_token: SecretStr | None = Field(None, alias="JARVIS_REMOTE_OPERATOR_TOKEN")

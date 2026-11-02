@@ -38,3 +38,10 @@ class RemoteSystemStatus(BaseModel):
     recoveryStatus: str = Field(max_length=40)
     eventSessionId: str = Field(max_length=80)
     lastSequenceNumber: int = Field(ge=0)
+
+
+class RemoteBrowserSession(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+    actorId: str = Field(min_length=1, max_length=160)
+    csrfToken: str = Field(pattern=r"^[A-Za-z0-9_-]{43}$")
+    expiresInSeconds: int = Field(ge=1, le=900)

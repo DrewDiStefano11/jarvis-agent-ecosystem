@@ -55,9 +55,29 @@ class RoutingRequirements(BaseModel):
 
 
 class ModelRouter:
-    def __init__(self, registry: ProviderRegistry, retry: RetryExecutor) -> None:
+    def __init__(
+        self,
+        registry: ProviderRegistry,
+        retry: RetryExecutor,
+        *,
+        model_assignments: dict[str, dict[str, str]] | None = None,
+    ) -> None:
         self.registry = registry
         self.retry = retry
+        self.model_assignments = {
+            name: dict(assignments) for name, assignments in (model_assignments or {}).items()
+        }
+
+    def effective_model(self, provider, request, requirements):
+        capability = requirements.required_capability or request.required_capability
+        assignments = self.model_assignments.get(provider.name, {})
+        return (
+            requirements.preferred_model
+            or request.model
+            or assignments.get(capability.value if capability else "")
+            or assignments.get("")
+            or provider.default_model
+        )
 
     async def eligible(
         self,
@@ -86,9 +106,7 @@ class ModelRouter:
             and (requirements.allow_remote or provider.is_local)
             and (
                 not hasattr(provider, "free_eligible")
-                or provider.free_eligible(
-                    requirements.preferred_model or request.model or provider.default_model
-                )
+                or provider.free_eligible(self.effective_model(provider, request, requirements))
             )
         ]
         health = await self.registry.health(candidates)
@@ -96,9 +114,7 @@ class ModelRouter:
 
         available: list[ModelProvider] = []
         for provider in candidates:
-            effective_model = (
-                requirements.preferred_model or request.model or provider.default_model
-            )
+            effective_model = self.effective_model(provider, request, requirements)
             known = await provider.model_available(effective_model)
             if known is not False:
                 available.append(provider)
@@ -158,13 +174,11 @@ class ModelRouter:
             # A prior candidate may have exhausted this same account bucket.
             # Recheck before checkpointing or spending another request slot.
             if hasattr(provider, "free_eligible") and not provider.free_eligible(
-                requirements.preferred_model or request.model or provider.default_model
+                self.effective_model(provider, request, requirements)
             ):
                 continue
             attempted.append(provider.name)
-            effective_model = (
-                requirements.preferred_model or request.model or provider.default_model
-            )
+            effective_model = self.effective_model(provider, request, requirements)
             routed_request = request.model_copy(update={"model": effective_model})
 
             async def dispatch(provider=provider, routed_request=routed_request):

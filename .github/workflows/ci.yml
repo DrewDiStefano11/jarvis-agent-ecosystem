@@ -172,6 +172,12 @@ jobs:
         run: node scripts/build-office-network.cjs
       - run: pnpm exec playwright install --with-deps chromium
         working-directory: apps/web
+      - name: Build authenticated remote UI
+        run: pnpm --dir apps/web build
+      - name: Direct TLS browser operation and native controls
+        run: python scripts/remote_browser_acceptance.py -q --basetemp "${{ runner.temp }}/remote-browser-tests" --junitxml "${{ runner.temp }}/jarvis-browser/remote.xml"
+        env:
+          JARVIS_REMOTE_BROWSER_REPORT_DIR: ${{ runner.temp }}/jarvis-browser/remote
       - name: Real process and frontend submission contract
         run: python scripts/smoke-local-planning.py
       - name: Browser golden path and office interaction checks

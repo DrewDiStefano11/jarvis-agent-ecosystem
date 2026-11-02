@@ -47,6 +47,7 @@ export const runtimeBuildConfig = (mode: string, webDirectory = process.cwd()) =
 export default defineConfig(({ mode }) => {
   return {
     ...runtimeBuildConfig(mode),
+    build: { rollupOptions: { input: { main: resolve(process.cwd(), "index.html"), remote: resolve(process.cwd(), "remote.html") } } },
     server: { port: 5173 },
     test: { environment: 'jsdom', setupFiles: './tests/setup.ts', globals: true, css: true }
   }
