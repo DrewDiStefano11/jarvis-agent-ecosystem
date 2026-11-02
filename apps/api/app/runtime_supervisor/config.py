@@ -352,9 +352,9 @@ class SupervisorConfig:
         execution_mode = values.get("JARVIS_MODEL_EXECUTION_MODE", "disabled").strip()
         ollama_enabled = _bool(values, "JARVIS_MODEL_OLLAMA_ENABLED", False)
         openai_compatible_enabled = _bool(values, "JARVIS_MODEL_OPENAI_COMPATIBLE_ENABLED", False)
-        if worker_enabled and execution_mode != "local_only":
+        if worker_enabled and execution_mode not in {"local_only", "free_only"}:
             raise SupervisorConfigurationError(
-                "enabled autonomous worker requires JARVIS_MODEL_EXECUTION_MODE=local_only"
+                "enabled autonomous worker requires JARVIS_MODEL_EXECUTION_MODE=local_only or free_only"
             )
         if worker_enabled and not values.get("JARVIS_AUTONOMOUS_WORKER_ACTOR_ID", "").strip():
             raise SupervisorConfigurationError(
@@ -364,7 +364,11 @@ class SupervisorConfig:
             raise SupervisorConfigurationError(
                 "enabled autonomous worker requires JARVIS_AUTONOMOUS_WORKER_INSTANCE_ID"
             )
-        if worker_enabled and not (ollama_enabled or openai_compatible_enabled):
+        if (
+            worker_enabled
+            and execution_mode == "local_only"
+            and not (ollama_enabled or openai_compatible_enabled)
+        ):
             raise SupervisorConfigurationError(
                 "enabled autonomous worker requires at least one enabled local model provider"
             )

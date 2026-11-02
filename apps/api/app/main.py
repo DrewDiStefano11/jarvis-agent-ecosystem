@@ -100,6 +100,7 @@ from app.self_build.native_commit_router import router as native_commit_router
 from app.self_build.router import router as self_build_router
 from app.self_build.service import WorkspaceService
 from app.self_improvement.router import router as self_improvement_router
+from app.self_improvement.schedule import ImprovementScheduler, resources_available
 from app.services.events import EventBroker
 from app.services.task_creation import prepare_task_creation
 from app.simulator.engine import SimulatorEngine
@@ -150,6 +151,7 @@ async def _lifespan(app: FastAPI):
     restored_workflow_state = app.state.restored_workflow_state
     lease_recovery_task = None
     office_recovery_task = None
+    improvement_schedule_task = None
     startup_completed = False
 
     async def recover_expired_task_leases() -> None:
@@ -179,6 +181,21 @@ async def _lifespan(app: FastAPI):
                     "Office reconciliation will retry after a database error."
                 )
 
+    async def schedule_improvements() -> None:
+        while True:
+            # One cycle per bounded tick; time-window identity and native claims
+            # arbitrate duplicate processes and recover unfinished captures.
+            try:
+                reachable, current = repository.health_probe(DATABASE_REVISION)
+                if reachable and current:
+                    await app.state.improvement_scheduler.tick()
+            except (DomainError, ValueError, OSError, SQLAlchemyError, RuntimeError):
+                # No exception content: source evidence can contain sensitive data.
+                logging.getLogger(__name__).warning(
+                    "Scheduled improvement deferred; inspect operator policy and native state."
+                )
+            await asyncio.sleep(60)
+
     try:
         repository.record_process_lifecycle(starting=True)
         await broker.dispatch_pending()
@@ -194,11 +211,20 @@ async def _lifespan(app: FastAPI):
         office_recovery_task = asyncio.create_task(reconcile_office())
         app.state.lease_recovery_task = lease_recovery_task
         app.state.office_recovery_task = office_recovery_task
+        if settings.improvement_schedule_policy.enabled:
+            improvement_schedule_task = asyncio.create_task(schedule_improvements())
+        app.state.improvement_schedule_task = improvement_schedule_task
         if restored_workflow_state == "recovery_required" and settings.simulator_auto_resume:
             await simulator.resume()
         startup_completed = True
         yield
     finally:
+        if improvement_schedule_task:
+            improvement_schedule_task.cancel()
+            try:
+                await improvement_schedule_task
+            except asyncio.CancelledError:
+                pass
         if office_recovery_task:
             office_recovery_task.cancel()
             try:
@@ -291,6 +317,13 @@ def create_app(
     app.state.engine = engine
     app.state.task_leases = task_leases
     app.state.identity_service = IdentityService(session_factory)
+    app.state.improvement_scheduler = ImprovementScheduler(
+        repository,
+        broker,
+        app.state.identity_service,
+        settings.improvement_schedule_policy,
+        resources=lambda: resources_available(settings.data_directory),
+    )
     app.state.catalog_service = CatalogService(session_factory)
     app.state.office_service = OfficeService(session_factory)
     app.state.agent_runtime_repository = SqlAlchemyAgentRuntimeRepository(

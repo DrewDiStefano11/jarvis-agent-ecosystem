@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, field_validator, model_serializer, model_validator
 
@@ -19,6 +20,7 @@ from app.models.self_build import Identifier
 class DevelopmentLimits(Contract):
     provider: Identifier
     model: str = Field(pattern=r"^[A-Za-z0-9_.:-]{1,200}$")
+    local_endpoint: str | None = Field(default=None, min_length=1, max_length=300, repr=False)
     completion_criteria: tuple[str, ...] = Field(min_length=1, max_length=16, repr=False)
     maximum_dispatches: int = Field(default=2, ge=1, le=8, strict=True)
     maximum_reserved_output_tokens: int = Field(default=8192, ge=1, le=131072, strict=True)
@@ -27,6 +29,41 @@ class DevelopmentLimits(Contract):
     allow_delete: bool = Field(default=False, strict=True)
 
     _safe_identifiers = field_validator("provider", "model")(validate_safe_identifier)
+
+    @field_validator("local_endpoint")
+    @classmethod
+    def local_endpoint_origin(cls, value):
+        if value is None:
+            return None
+        from app.model_providers.http import is_loopback_endpoint
+
+        try:
+            parsed = urlsplit(value)
+            port = parsed.port
+        except ValueError:
+            raise ValueError("DEVELOPMENT_LOCAL_ENDPOINT_INVALID") from None
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not is_loopback_endpoint(value)
+            or parsed.username
+            or parsed.password
+            or (port is not None and not 1 <= port <= 65535)
+            or value != value.strip()
+            or parsed.netloc.endswith(":")
+            or parsed.query
+            or parsed.fragment
+            or parsed.path not in {"", "/"}
+            or any(ord(character) < 32 or ord(character) == 127 for character in value)
+        ):
+            raise ValueError("DEVELOPMENT_LOCAL_ENDPOINT_INVALID")
+        return value.rstrip("/")
+
+    @model_serializer(mode="wrap")
+    def original_shape(self, handler):
+        value = handler(self)
+        if value.get("local_endpoint") is None:
+            value.pop("local_endpoint", None)
+        return value
 
     @model_validator(mode="after")
     def bounded(self):

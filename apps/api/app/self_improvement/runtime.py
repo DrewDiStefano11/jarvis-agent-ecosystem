@@ -19,6 +19,7 @@ from app.self_improvement.engine import digest
 CONTROL_CODES = frozenset(
     {
         "execution_cancelled",
+        "free_capacity_unavailable",
         "task_cancelled",
         "task_completed_elsewhere",
         "human_review_required",

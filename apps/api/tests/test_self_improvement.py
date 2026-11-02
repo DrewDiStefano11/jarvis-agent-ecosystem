@@ -750,6 +750,8 @@ def test_experiment_output_budget_prevents_multiplicative_payload_growth():
     "code,metric,category,has_weakness",
     [
         ("execution_cancelled", "control_condition", "execution", False),
+        ("free_capacity_unavailable", "control_condition", "execution", False),
+        ("FREE_CAPACITY_UNAVAILABLE", "control_condition", "execution", False),
         ("task_completed_elsewhere", "control_condition", "execution", False),
         ("human_review_required", "control_condition", "execution", False),
         ("provider_execution_disabled", "control_condition", "execution", False),

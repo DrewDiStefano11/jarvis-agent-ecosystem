@@ -4,6 +4,7 @@ import os
 from contextlib import ExitStack
 from hashlib import sha256
 from pathlib import Path
+from time import monotonic
 
 from app.models.git_commit_metadata import CommitMetadataNode, CommitMetadataSnapshot
 from app.self_build.checkout_driver import pin_read_tree
@@ -48,13 +49,24 @@ def measure_metadata(policy, authority_check):
     """
     policy = policy.checked()
     authority_check()
+    checked = monotonic()
+
+    def scan_authority():
+        nonlocal checked
+        # Scans have no effects. Match the native reader's 200 ms revocation
+        # cadence while retaining unconditional opening/final authority fences.
+        # Never memoize authority across measurements or a mutation boundary.
+        if monotonic() - checked >= 0.2:
+            authority_check()
+            checked = monotonic()
+
     path = Path(policy.primary_root) / ".git"
     try:
         with ExitStack() as stack:
             parent = open_directory(stack, Path(path.anchor), internal=True)
             for part in path.parts[1:]:
                 parent = open_directory(stack, parent.path / part, parent, part, internal=True)
-            check = pin_read_tree(stack, path, authority_check)
+            check = pin_read_tree(stack, path, scan_authority)
             root = path.stat()
             nodes, total = [], 0
 
@@ -65,7 +77,7 @@ def measure_metadata(policy, authority_check):
                 path, followlinks=False, onerror=walk_error
             ):
                 check()
-                authority_check()
+                scan_authority()
                 for name in directories:
                     target = Path(directory) / name
                     info = target.stat()
@@ -78,7 +90,7 @@ def measure_metadata(policy, authority_check):
                         )
                     )
                 for name in files:
-                    authority_check()
+                    scan_authority()
                     target = Path(directory) / name
                     relative = target.relative_to(path).as_posix()
                     with open_file(parent, relative, os.O_RDONLY, internal=True) as fd:
@@ -87,7 +99,7 @@ def measure_metadata(policy, authority_check):
                             refuse("GIT_COMMIT_METADATA_BYTE_LIMIT")
                         hasher, observed = sha256(), 0
                         while block := os.read(fd, 65536):
-                            authority_check()
+                            scan_authority()
                             observed += len(block)
                             if observed > info.st_size:
                                 refuse("GIT_COMMIT_METADATA_CHANGED")
