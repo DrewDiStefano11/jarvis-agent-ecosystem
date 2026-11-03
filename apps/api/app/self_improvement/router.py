@@ -71,6 +71,20 @@ def backlog(
         data=backlog_service(request).list_items(actor, offset=offset, limit=limit)
     )
 
+@router.get("/candidates", response_model=TypedApiResponse[list[ImprovementBacklogItem]])
+def candidates(
+    request: Request,
+    offset: int = Query(default=0, ge=0, le=100_000),
+    limit: int = Query(default=20, ge=1, le=100),
+    actor_id: str | None = Header(default=None, alias="X-Jarvis-Actor-Id"),
+):
+    actor = request.app.state.agent_runtime_service.authenticate_actor(actor_id)
+    # Ensure read permission
+    backlog_service(request).authorize(actor, operation="read")
+    repo = CandidateRepository(request.app.state.repository.session_factory)
+    items = repo.get_candidates(limit=limit, offset=offset)
+    return TypedApiResponse(data=items)
+
 
 @router.get("/baselines", response_model=TypedApiResponse[list[Analysis]])
 def baselines(request: Request, limit: int = Query(default=20, ge=1, le=100)):
@@ -90,3 +104,4 @@ def baseline(baseline_id: str, request: Request):
 )
 def comparisons(baseline_id: str, request: Request):
     return TypedApiResponse(data=service(request).repository.comparisons(baseline_id))
+from app.self_improvement.candidate_repository import CandidateRepository
