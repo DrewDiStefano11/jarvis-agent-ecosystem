@@ -1158,6 +1158,7 @@ def create_app(
                 repository=repository,
                 identity_service=app.state.identity_service,
                 model_router=app.state.model_router,
+                event_broker=broker if settings.verified_cloud_execution_allowed else None,
                 settings=settings,
             )
             try:
@@ -1166,6 +1167,7 @@ def create_app(
                 import logging
 
                 logging.getLogger(__name__).warning("Team assignment failed: %s", e)
+                task = repository.get_task_durable(body.taskId)
 
         enricher = ContextEnricher(
             identity_service=app.state.identity_service,
@@ -1584,6 +1586,9 @@ def create_app(
 
     # Keep the remote boundary outside CORS and every other application middleware.
     # Preflight responses must obey the same dedicated-route and transport checks.
+    from app.core.browser_boundary import LocalBrowserBoundary
+
+    app.add_middleware(LocalBrowserBoundary, settings=settings)
     app.add_middleware(RemoteGateway, settings=settings)
     return app
 

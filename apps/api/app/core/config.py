@@ -151,7 +151,7 @@ class Settings(BaseSettings):
         1000, alias="JARVIS_AUTONOMOUS_WORKER_POLL_INTERVAL_MS", ge=100, le=60_000
     )
     autonomous_worker_max_concurrency: int = Field(
-        1, alias="JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY", ge=1, le=1
+        1, alias="JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY", ge=1, le=4
     )
     autonomous_worker_lease_seconds: int = Field(
         60, alias="JARVIS_AUTONOMOUS_WORKER_LEASE_SECONDS", ge=15, le=3600

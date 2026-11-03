@@ -443,3 +443,10 @@ and bounded request index identify one durable dispatch scope. The audit and out
 commit atomically before inference; duplicate/interrupted attempts return
 `PLANNING_DISPATCH_ALREADY_STARTED` without another provider request. Existing
 event sequencing and session semantics remain unchanged.
+
+The optional sidecar concurrency setting accepts 1–4 slots (default 1). Each slot
+uses the existing worker and lease contracts; no event version changes. Invalid
+live concurrency fails with `AUTONOMOUS_WORKER_CONCURRENCY_INVALID`. Direct local
+HTTP and WebSocket access now validates loopback Host and the exact configured
+browser Origin before dispatch, while preserving CLI access without browser
+headers and the remote gateway's separate authentication boundary.

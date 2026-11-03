@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import signal
+import sys
+from hashlib import sha256
 
 from app.autonomous_worker.errors import AutonomousWorkerError
 from app.main import create_app
@@ -33,20 +35,22 @@ async def _run_once_resilient(service, worker_id: str):
 async def _run_once_or_stop(service, worker_id: str, stop: asyncio.Event):
     run_task = asyncio.create_task(_run_once_resilient(service, worker_id))
     stop_task = asyncio.create_task(stop.wait())
-    done, _pending = await asyncio.wait({run_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
-    if stop_task in done:
-        run_task.cancel()
-        try:
-            await run_task
-        except asyncio.CancelledError:
-            pass
-        return None, True
-    stop_task.cancel()
     try:
-        await stop_task
-    except asyncio.CancelledError:
-        pass
-    return await run_task, False
+        done, _pending = await asyncio.wait({run_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
+        if stop_task in done:
+            run_task.cancel()
+            try:
+                await run_task
+            except asyncio.CancelledError:
+                pass
+            return None, True
+        return await run_task, False
+    finally:
+        # Outer cancellation (including another slot failing) must not leave an
+        # inference or stop waiter running after native leases are released.
+        run_task.cancel()
+        stop_task.cancel()
+        await asyncio.gather(run_task, stop_task, return_exceptions=True)
 
 
 def _install_stop_handlers(loop, stop: asyncio.Event) -> None:
@@ -68,39 +72,70 @@ def _install_stop_handlers(loop, stop: asyncio.Event) -> None:
                 pass
 
 
+async def _worker_loop(app, service, worker, stop):
+    settings = app.state.settings
+    while not stop.is_set():
+        app.state.task_leases.heartbeat_worker(worker.id)
+        result, stopping = await _run_once_or_stop(service, worker.id, stop)
+        if stopping:
+            return
+        if result is None:
+            try:
+                await asyncio.wait_for(
+                    stop.wait(), timeout=settings.autonomous_worker_poll_interval_ms / 1000
+                )
+            except TimeoutError:
+                pass
+
+
+def _slot_instance(instance, index):
+    if index == 0:
+        return instance
+    # Bounded, restart-stable additional native registrations; preserve slot zero.
+    return "autonomous-slot-" + sha256(f"{instance}:{index}".encode()).hexdigest()
+
+
 async def run() -> None:
     # The sidecar shares durable services with the API, but it is not an API
     # restart and must never run simulator crash-recovery initialization.
     app = _create_worker_app()
     settings = app.state.settings
     service = app.state.autonomous_worker_service
-    service.validate_enabled()
-    worker = app.state.task_leases.register_worker(
-        "autonomous-planning-worker",
-        settings.autonomous_worker_instance_id,
-        settings.autonomous_worker_lease_seconds,
-        {"kind": "autonomous_planning_review", "maximumConcurrency": 1},
-    )
-    stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    _install_stop_handlers(loop, stop)
+    workers, jobs = [], []
     try:
-        while not stop.is_set():
-            app.state.task_leases.heartbeat_worker(worker.id)
-            result, stopping = await _run_once_or_stop(service, worker.id, stop)
-            if stopping:
-                break
-            if result is None:
-                try:
-                    await asyncio.wait_for(
-                        stop.wait(),
-                        timeout=settings.autonomous_worker_poll_interval_ms / 1000,
-                    )
-                except TimeoutError:
-                    pass
+        service.validate_enabled()
+        concurrency = settings.autonomous_worker_max_concurrency
+        if type(concurrency) is not int or not 1 <= concurrency <= 4:
+            raise AutonomousWorkerError("AUTONOMOUS_WORKER_CONCURRENCY_INVALID")
+        stop = asyncio.Event()
+        _install_stop_handlers(asyncio.get_running_loop(), stop)
+        for index in range(concurrency):
+            workers.append(app.state.task_leases.register_worker(
+                "autonomous-planning-worker",
+                _slot_instance(settings.autonomous_worker_instance_id, index),
+                settings.autonomous_worker_lease_seconds,
+                {"kind": "autonomous_planning_review", "maximumConcurrency": 1,
+                 "poolConcurrency": concurrency, "poolSlot": index + 1},
+            ))
+        jobs = [asyncio.create_task(_worker_loop(app, service, worker, stop)) for worker in workers]
+        await asyncio.gather(*jobs)
     finally:
-        app.state.task_leases.stop_worker(worker.id)
-        app.state.engine.dispose()
+        failing = sys.exc_info()[0] is not None
+        for job in jobs:
+            job.cancel()
+        if jobs:
+            await asyncio.gather(*jobs, return_exceptions=True)
+        cleanup_errors = []
+        try:
+            for worker in workers:
+                try:
+                    app.state.task_leases.stop_worker(worker.id)
+                except Exception as exc:
+                    cleanup_errors.append(exc)
+        finally:
+            app.state.engine.dispose()
+        if cleanup_errors and not failing:
+            raise cleanup_errors[0]
 
 
 def main() -> None:

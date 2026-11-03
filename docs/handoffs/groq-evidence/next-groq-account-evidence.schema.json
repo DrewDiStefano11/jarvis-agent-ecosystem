@@ -1,0 +1,136 @@
+{
+  "$defs": {
+    "GroqLimits": {
+      "additionalProperties": false,
+      "properties": {
+        "rpm": {
+          "maximum": 20000,
+          "minimum": 1,
+          "title": "Rpm",
+          "type": "integer"
+        },
+        "rpd": {
+          "maximum": 20000,
+          "minimum": 1,
+          "title": "Rpd",
+          "type": "integer"
+        },
+        "tpm": {
+          "maximum": 10000000,
+          "minimum": 1,
+          "title": "Tpm",
+          "type": "integer"
+        },
+        "tpd": {
+          "maximum": 1000000000,
+          "minimum": 1,
+          "title": "Tpd",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "rpm",
+        "rpd",
+        "tpm",
+        "tpd"
+      ],
+      "title": "GroqLimits",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "account_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Account Id",
+      "type": "string"
+    },
+    "model": {
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Model",
+      "type": "string"
+    },
+    "credential_fingerprint": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Credential Fingerprint",
+      "type": "string"
+    },
+    "plan": {
+      "const": "Free",
+      "title": "Plan",
+      "type": "string"
+    },
+    "nonbillable": {
+      "const": true,
+      "title": "Nonbillable",
+      "type": "boolean"
+    },
+    "billing_enabled": {
+      "const": false,
+      "title": "Billing Enabled",
+      "type": "boolean"
+    },
+    "credit_consumption": {
+      "const": false,
+      "title": "Credit Consumption",
+      "type": "boolean"
+    },
+    "automatic_recharge": {
+      "const": false,
+      "title": "Automatic Recharge",
+      "type": "boolean"
+    },
+    "limits": {
+      "$ref": "#/$defs/GroqLimits"
+    },
+    "verified_at": {
+      "format": "date-time",
+      "title": "Verified At",
+      "type": "string"
+    },
+    "valid_until": {
+      "format": "date-time",
+      "title": "Valid Until",
+      "type": "string"
+    },
+    "evidence_references": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 8,
+      "minItems": 1,
+      "title": "Evidence References",
+      "type": "array"
+    },
+    "evidence_digest": {
+      "pattern": "^[a-f0-9]{64}$",
+      "title": "Evidence Digest",
+      "type": "string"
+    },
+    "account_key_association_confirmed": {
+      "const": true,
+      "title": "Account Key Association Confirmed",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "account_id",
+    "model",
+    "credential_fingerprint",
+    "plan",
+    "nonbillable",
+    "billing_enabled",
+    "credit_consumption",
+    "automatic_recharge",
+    "limits",
+    "verified_at",
+    "valid_until",
+    "evidence_references",
+    "evidence_digest",
+    "account_key_association_confirmed"
+  ],
+  "title": "GroqAccountEvidence",
+  "type": "object"
+}

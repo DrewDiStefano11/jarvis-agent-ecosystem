@@ -55,7 +55,7 @@ class TeamSelectionService:
         self.event_broker = event_broker
         self.settings = settings
 
-    async def _infer_capabilities(self, task: Task) -> tuple[list[str], list[str], str]:
+    async def _infer_capabilities(self, task: Task, *, commit_guards=None) -> tuple[list[str], list[str], str]:
         schema = RequiredCapabilitiesResult.model_json_schema()
         output_schema = ModelOutputSchema(name="required_capabilities", json_schema=schema)
 
@@ -114,6 +114,16 @@ class TeamSelectionService:
         response = await self.model_router.execute(
             request=request, requirements=requirements, budget=budget, **options
         )
+        if requirements.allow_remote:
+            def authorize_result(session):
+                if not planning_dispatch_allowed(self.settings, self.model_router.registry, response.provider):
+                    raise ProviderExecutionDisabledError("Current planning activation was revoked")
+                PlanningRepository.assert_live_in_session(session, task.id, expected, planning_input)
+
+            with self.repository.session_factory() as session:
+                authorize_result(session)
+            if commit_guards is not None:
+                commit_guards.append(authorize_result)
         payload = json.loads(response.content)
         result = RequiredCapabilitiesResult.model_validate(payload)
         # map_tags returns (valid, invalid)
@@ -222,7 +232,17 @@ class TeamSelectionService:
         if task.teamSelection and task.teamSelection.status == "completed" and not force:
             return task
 
-        required, optional, reason = await self._infer_capabilities(task)
+        commit_guards = []
+        cloud_capable = planning_requirements(self.settings).allow_remote
+        if cloud_capable:
+            # Proposed assignments must not escape through a caller's context
+            # snapshot if the native commit guard rejects their persistence.
+            task = task.model_copy(deep=True)
+        required, optional, reason = await self._infer_capabilities(
+            task, **({"commit_guards": commit_guards} if cloud_capable else {})
+        )
+        if cloud_capable and not commit_guards:
+            raise ProviderExecutionDisabledError("Native planning result authority is required")
 
         workforce = self.identity_service.workforce_snapshot(limit=100)
         manager_id = self._select_manager(task, workforce)
@@ -302,6 +322,7 @@ class TeamSelectionService:
                 task.id,
                 audit={"summary": audit_summary},
                 updated_task=task,
+                authorize=commit_guards[0] if commit_guards else None,
             )
 
         return task

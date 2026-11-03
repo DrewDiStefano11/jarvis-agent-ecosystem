@@ -24,22 +24,7 @@ class PlanningRepository:
                 .where(SystemStateRow.id == 1)
                 .values(updated_at=datetime.now(UTC))
             )
-            if session.get(SystemStateRow, 1).emergency_stop:
-                raise DomainError("EMERGENCY_STOP_ACTIVE", "Emergency stop blocks planning.", 423)
-            row = session.get(TaskRow, task_id)
-            if row is None:
-                raise DomainError("TASK_NOT_FOUND", "Task not found.", 404)
-            task = Task.model_validate(row.payload)
-            if task.startedAt or task.status not in {
-                "queued", "planning", "assigned", "paused", "revision_requested"
-            }:
-                raise DomainError(
-                    "PLANNING_EXECUTION_STARTED", "Task lifecycle no longer permits planning.", 409
-                )
-            if project(task) != expected:
-                raise DomainError("PLANNING_INPUT_CHANGED", "Planning inputs changed.", 409)
-            if validate_live is not None:
-                validate_live(session)
+            self.assert_live_in_session(session, task_id, expected, project, validate_live)
             if intent is not None:
                 if intent.taskId != task_id:
                     raise DomainError("PLANNING_INPUT_CHANGED", "Planning scope changed.", 409)
@@ -55,6 +40,24 @@ class PlanningRepository:
                         "This planning request already started; reconcile its recorded outcome.", 409,
                     )
                 self._event(session, intent)
+
+    @staticmethod
+    def assert_live_in_session(session, task_id, expected, project, validate_live=None):
+        """The caller owns the native write transaction and control-row fence."""
+        if session.get(SystemStateRow, 1).emergency_stop:
+            raise DomainError("EMERGENCY_STOP_ACTIVE", "Emergency stop blocks planning.", 423)
+        row = session.get(TaskRow, task_id)
+        if row is None:
+            raise DomainError("TASK_NOT_FOUND", "Task not found.", 404)
+        task = Task.model_validate(row.payload)
+        if task.startedAt or task.status not in {
+            "queued", "planning", "assigned", "paused", "revision_requested"
+        }:
+            raise DomainError("PLANNING_EXECUTION_STARTED", "Task lifecycle no longer permits planning.", 409)
+        if project(task) != expected:
+            raise DomainError("PLANNING_INPUT_CHANGED", "Planning inputs changed.", 409)
+        if validate_live is not None:
+            validate_live(session)
 
     @staticmethod
     def _event(session, intent):

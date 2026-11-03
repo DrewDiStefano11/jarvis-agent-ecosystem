@@ -9,6 +9,7 @@ from app.decomposition.service import DecompositionService
 from app.model_providers.budget import TaskBudget
 from app.model_providers.contracts import ModelCapability, ModelExecutionRequest
 from app.model_providers.errors import RateLimitError
+from tests.test_context_integration import context_body
 from tests.test_coordination import claim_fixture, install_coordinator_router
 from tests.test_coordination_verification import critic_router
 from tests.test_free_ai_capacity import allowance
@@ -478,3 +479,78 @@ async def test_stale_team_reselection_cannot_adopt_a_newer_native_selection(app)
     with pytest.raises(DomainError) as refused:
         await service()._infer_capabilities(stale)
     assert refused.value.code == "PLANNING_INPUT_CHANGED" and calls == [True]
+
+
+@pytest.mark.parametrize("change", ["task", "stop"])
+async def test_cloud_team_commit_rechecks_native_inputs_in_the_outbox_transaction(app, change, monkeypatch):
+    from app.core.errors import DomainError
+    from app.db.models import SystemStateRow, TaskRow
+    from app.team_selection.service import TeamSelectionService
+
+    task_id, _, router = setup(app)
+    task = app.state.repository.get_task_durable(task_id)
+    original = router.execute
+
+    async def execute(**kwargs):
+        guard = kwargs.pop("before_dispatch")
+        await guard("local-fake", "fixture-model")
+        return await original(**kwargs)
+
+    router.execute = execute
+    emit = app.state.broker.emit
+
+    async def change_at_commit(*args, **kwargs):
+        with app.state.task_leases._write() as session:
+            if change == "task":
+                row = session.get(TaskRow, task_id)
+                row.payload = {**row.payload, "title": "Changed after model response"}
+            else:
+                session.get(SystemStateRow, 1).emergency_stop = True
+        return await emit(*args, **kwargs)
+
+    monkeypatch.setattr(app.state.broker, "emit", change_at_commit)
+    service = TeamSelectionService(
+        app.state.repository, app.state.identity_service, router,
+        event_broker=app.state.broker, settings=hosted_settings(),
+    )
+    with pytest.raises(DomainError):
+        await service.assign_team(task, force=True)
+    assert task.teamSelection.selectionId == app.state.repository.get_task_durable(task_id).teamSelection.selectionId
+    if change == "task":
+        assert app.state.repository.get_task_durable(task_id).title == "Changed after model response"
+
+
+def test_context_cannot_persist_a_team_rejected_by_its_commit_guard(app, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from app.db.models import TaskRow
+
+    task_id, _, router = setup(app)
+    with app.state.task_leases._write() as session:
+        row = session.get(TaskRow, task_id)
+        row.payload = {**row.payload, "teamSelection": None}
+    app.state.repository.reload()
+    app.state.settings.model_execution_mode = "free_only"
+    app.state.settings.model_verified_cloud_enabled = True
+    original, emit = router.execute, app.state.broker.emit
+
+    async def execute(**kwargs):
+        guard = kwargs.pop("before_dispatch")
+        await guard("local-fake", "fixture-model")
+        return await original(**kwargs)
+
+    router.execute = execute
+
+    async def start_before_commit(*args, **kwargs):
+        if args[0] == "team_selection.completed":
+            with app.state.task_leases._write() as session:
+                row = session.get(TaskRow, task_id)
+                row.payload = {**row.payload, "status": "in_progress", "startedAt": "2026-11-02T12:00:00Z"}
+        return await emit(*args, **kwargs)
+
+    monkeypatch.setattr(app.state.broker, "emit", start_before_commit)
+    with TestClient(app) as client:
+        response = client.post("/api/context/assemblies", json=context_body(task_id=task_id))
+    assert response.status_code == 201, response.text
+    task = app.state.repository.get_task_durable(task_id)
+    assert task.teamSelection is None and task.status == "in_progress"

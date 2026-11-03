@@ -1,0 +1,233 @@
+{
+  "additionalProperties": false,
+  "anyOf": [
+    {
+      "properties": {
+        "window_start": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "resets_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "remaining_requests": {
+          "maximum": 1000000,
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "window_start",
+        "resets_at",
+        "remaining_requests"
+      ]
+    },
+    {
+      "properties": {
+        "integration": {
+          "const": "groq"
+        },
+        "window_start": {
+          "type": "null"
+        },
+        "resets_at": {
+          "type": "null"
+        },
+        "remaining_requests": {
+          "type": "null"
+        }
+      }
+    }
+  ],
+  "properties": {
+    "provider": {
+      "maxLength": 120,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "title": "Provider",
+      "type": "string"
+    },
+    "integration": {
+      "enum": [
+        "gemini",
+        "groq",
+        "openrouter",
+        "cloudflare",
+        "chatgpt",
+        "codex"
+      ],
+      "title": "Integration",
+      "type": "string"
+    },
+    "account_id": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Account Id",
+      "type": "string"
+    },
+    "session_identity": {
+      "anyOf": [
+        {
+          "maxLength": 160,
+          "minLength": 1,
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Session Identity"
+    },
+    "shared_bucket": {
+      "maxLength": 160,
+      "minLength": 1,
+      "title": "Shared Bucket",
+      "type": "string"
+    },
+    "models": {
+      "items": {
+        "type": "string"
+      },
+      "maxItems": 100,
+      "minItems": 1,
+      "title": "Models",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "capabilities": {
+      "default": [
+        "chat",
+        "text_generation"
+      ],
+      "items": {
+        "enum": [
+          "chat",
+          "text_generation",
+          "code_generation",
+          "code_editing",
+          "reasoning",
+          "structured_output"
+        ],
+        "type": "string"
+      },
+      "maxItems": 6,
+      "minItems": 1,
+      "title": "Capabilities",
+      "type": "array",
+      "uniqueItems": true
+    },
+    "credential_env": {
+      "pattern": "^[A-Z][A-Z0-9_]{1,119}$",
+      "title": "Credential Env",
+      "type": "string"
+    },
+    "credential_fingerprint": {
+      "anyOf": [
+        {
+          "pattern": "^[a-f0-9]{64}$",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Credential Fingerprint"
+    },
+    "evidence_reference": {
+      "maxLength": 500,
+      "minLength": 1,
+      "title": "Evidence Reference",
+      "type": "string"
+    },
+    "verified_at": {
+      "format": "date-time",
+      "title": "Verified At",
+      "type": "string"
+    },
+    "valid_until": {
+      "format": "date-time",
+      "title": "Valid Until",
+      "type": "string"
+    },
+    "window_start": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Window Start"
+    },
+    "resets_at": {
+      "anyOf": [
+        {
+          "format": "date-time",
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Resets At"
+    },
+    "remaining_requests": {
+      "anyOf": [
+        {
+          "maximum": 1000000,
+          "minimum": 0,
+          "type": "integer"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Remaining Requests"
+    },
+    "nonbillable": {
+      "const": true,
+      "title": "Nonbillable",
+      "type": "boolean"
+    },
+    "automatic_recharge": {
+      "const": false,
+      "title": "Automatic Recharge",
+      "type": "boolean"
+    },
+    "credit_consumption": {
+      "const": false,
+      "title": "Credit Consumption",
+      "type": "boolean"
+    },
+    "billing_enabled": {
+      "const": false,
+      "title": "Billing Enabled",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "provider",
+    "integration",
+    "account_id",
+    "shared_bucket",
+    "models",
+    "credential_env",
+    "evidence_reference",
+    "verified_at",
+    "valid_until",
+    "nonbillable",
+    "automatic_recharge",
+    "credit_consumption",
+    "billing_enabled"
+  ],
+  "title": "FreeAllowance",
+  "type": "object"
+}
