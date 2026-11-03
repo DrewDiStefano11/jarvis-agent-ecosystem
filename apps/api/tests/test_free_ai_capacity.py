@@ -67,6 +67,45 @@ def allowance(provider="groq", **updates) -> FreeAllowance:
     )
 
 
+@pytest.mark.parametrize("integration", ["groq", "gemini", "openrouter", "cloudflare", "chatgpt", "codex"])
+def test_only_native_groq_can_omit_unknown_legacy_quota_window(integration):
+    from app.model_providers.free_capacity import require_allowance, require_nonbillable_account
+
+    value = allowance(
+        integration=integration,
+        models={"vendor/model:free"} if integration == "openrouter" else {"model"},
+    ).model_dump()
+    FreeAllowance.model_validate(value)
+    for field in ("window_start", "resets_at", "remaining_requests"):
+        value.pop(field)
+    if integration != "groq":
+        with pytest.raises(ValidationError):
+            FreeAllowance.model_validate(value)
+        return
+    account_only = FreeAllowance.model_validate(value)
+    assert account_only.window_start is None and account_only.resets_at is None
+    assert account_only.remaining_requests is None
+    require_nonbillable_account(account_only, "model")
+    with pytest.raises(ProviderExecutionDisabledError):
+        require_allowance(account_only, "model")
+
+
+def test_groq_cannot_supply_partial_or_invented_legacy_quota_fields():
+    value = allowance().model_dump()
+    value.pop("window_start")
+    with pytest.raises(ValidationError):
+        FreeAllowance.model_validate(value)
+
+
+def test_legacy_quota_storage_cannot_turn_account_only_evidence_into_capacity(capacity):
+    account_only = FreeAllowance.model_validate(
+        allowance().model_dump(exclude={"window_start", "resets_at", "remaining_requests"})
+    )
+    with pytest.raises(ProviderExecutionDisabledError):
+        capacity.configure([account_only])
+    assert not capacity.available(account_only, "model")
+
+
 @pytest.fixture
 def capacity(tmp_path, monkeypatch):
     url = f"sqlite:///{(tmp_path / 'capacity.db').as_posix()}"

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -28,6 +29,9 @@ from app.model_providers.tool_calls import validate_tool_response
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from app.core.config import Settings
+
 
 class RoutingRequirements(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -52,6 +56,38 @@ class RoutingRequirements(BaseModel):
         if self.allow_quota_fallback and not self.allow_fallback:
             raise ValueError("quota fallback requires allow_fallback")
         return self
+
+
+def planning_requirements(
+    settings: Settings | None,
+    *,
+    requested_provider: str | None = None,
+    preferred_model: str | None = None,
+) -> RoutingRequirements:
+    """Routing only; provider admission and native execution fences remain mandatory."""
+    from app.core.config import Settings
+
+    hosted = type(settings) is Settings and settings.verified_cloud_execution_allowed
+    return RoutingRequirements(
+        requested_provider=requested_provider,
+        preferred_model=preferred_model,
+        required_capability=ModelCapability.CHAT,
+        prefer_local=not hosted or settings.model_prefer_local,
+        allow_remote=hosted,
+        allow_fallback=False,
+    )
+
+
+def planning_dispatch_allowed(settings, registry, provider_name) -> bool:
+    from app.core.config import Settings
+
+    selected = next((provider for provider in registry.list() if provider.name == provider_name), None)
+    return bool(
+        type(settings) is Settings
+        and settings.model_execution_mode in {"local_only", "free_only"}
+        and selected is not None
+        and (selected.is_local is True or settings.verified_cloud_execution_allowed)
+    )
 
 
 class ModelRouter:

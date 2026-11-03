@@ -474,6 +474,12 @@ class CoordinationRepository:
             row.payload = record.model_dump(mode="json")
             self._event(session, record, "model_dispatch_intent")
 
+    def assert_dispatch_live(self, record_id, fence, validate_live):
+        """Recheck authority after awaited selection without reserving another request."""
+        with self._write() as session:
+            _, record = self._record(session, record_id)
+            self._live_record(session, record, fence, validate_live)
+
     def record_synthesis(
         self,
         record_id: str,

@@ -25,16 +25,23 @@ check. Credentials and provider response/error bodies are never displayed.
 
 Before enabling a profile, attach current independently verified account/model
 allowance JSON matching `FreeAllowance` in OpenAPI. Account IDs, exact models,
-capabilities, credential fingerprint, quota window and evidence references must
+capabilities, credential fingerprint and evidence references must
 correspond to the actual account. Public pricing pages, an API key, available quota
 or a free label alone are insufficient. The account must prohibit billing, credit
 consumption, automatic recharge and paid fallback. Reattach current evidence for
 each enabled change. Never put API keys in the evidence file.
 
+For Groq only, `window_start`, `resets_at` and `remaining_requests` may all be
+omitted or null: account evidence does not establish remaining quota. Supplying
+only part of this trio is rejected. The native accepted-response ledger is still
+mandatory before enablement. Other integrations still require all three verified
+quota observations. Do not derive an account's window start from a public limit.
+
 Separate owner approval is still required before setting
 `JARVIS_MODEL_EXECUTION_MODE=free_only` and
 `JARVIS_MODEL_VERIFIED_CLOUD_ENABLED=true`. A saved profile or completed acceptance
-does not grant that approval. Keep Ollama disabled on this machine. Restart
+does not grant that approval. This cloud-only acceptance session keeps Ollama
+disabled on this machine; existing local and hybrid support remains available. Restart
 API/worker/supervisor after configuration changes; saved keys and verified evidence
 load from the native database, without exporting keys to environment variables.
 Changed/disabled profiles immediately fence older provider instances. Explicit
@@ -98,3 +105,27 @@ append-only native proof history, and emergency stop is rechecked before dispatc
 Official Groq references: [model catalog](https://console.groq.com/docs/api-reference#models),
 [billing](https://console.groq.com/docs/billing-faqs), and
 [organization rate limits](https://console.groq.com/docs/rate-limits).
+
+## Local and hybrid planning
+
+Local-only execution and the existing Ollama integrations remain supported.
+Approved cloud planning requires `free_only`, explicit verified-cloud activation,
+current nonbillable account evidence, and each provider's native admission checks.
+When both are available, `JARVIS_MODEL_PREFER_LOCAL=true` keeps local preference;
+explicit provider/model choices retain precedence. Planning stages do not add
+automatic cross-provider fallback. Code generation keeps its separately selected
+local or verified provider and exact native development approval; a mixed registry
+does not turn a local development router into a cloud router.
+
+Team selection, decomposition, specialist execution and independent review share
+this routing policy. Cloud-capable dispatches recheck current native authority
+after awaited provider selection. Planning dispatch intents enter the native audit
+and transactional outbox before the call. Concurrent/interrupted copies of the
+same planning request cannot issue it again; a lost result requires reconciliation.
+Known invalid decomposition output permits at most one bounded repair request.
+
+`JARVIS_DECOMPOSITION_MAXIMUM_OUTPUT_TOKENS` retains the existing 4096-token default
+and accepts 128–4096. An operator may explicitly lower it (for example 512) for a
+small bounded cloud task without changing local defaults. Input/context plus this
+completion reservation must still fit all four Groq limits; reducing a completion
+cap does not create available quota. No setting here activates inference or startup.

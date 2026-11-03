@@ -190,6 +190,7 @@ async def test_correction_review_lost_ack_reuses_verdict_and_result(tmp_path, mo
         router=router,
         verification_criteria=(FIELD,),
         correction_policy=PlanningCorrectionPolicy(),
+        manual_lease_recovery=True,
     )
     try:
         service = app.state.autonomous_worker_service

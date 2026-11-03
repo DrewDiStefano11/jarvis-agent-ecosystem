@@ -430,3 +430,16 @@ expiry remain authoritative. Runtime browser controls use existing
 `RemoteRuntimeCommand` and current expected run versions. No worker
 confirmation/completion command is added. Local model-configuration routes remain
 outside the remote gateway's dedicated route allowlist.
+
+`FreeAllowance` retains its existing complete-window representation. Groq additionally
+accepts account-only evidence with all of `window_start`, `resets_at` and
+`remaining_requests` absent/null; partial windows and absent windows for every other
+integration remain invalid. Its generated JSON Schema describes both alternatives.
+This extension grants no quota: native Groq receipt/header tracking is mandatory.
+
+New event `planning_model.dispatch_intent` uses envelope schema version 1.0 and the
+`PlanningInferenceIntent` payload contract. Its task, planning stage, input fingerprint
+and bounded request index identify one durable dispatch scope. The audit and outbox
+commit atomically before inference; duplicate/interrupted attempts return
+`PLANNING_DISPATCH_ALREADY_STARTED` without another provider request. Existing
+event sequencing and session semantics remain unchanged.

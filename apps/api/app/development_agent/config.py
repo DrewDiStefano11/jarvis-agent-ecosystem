@@ -54,7 +54,7 @@ def _eligible_local_provider(provider):
     return (
         type(provider) is OllamaProvider
         and provider.is_local is True
-        and provider.execution_mode == "local_only"
+        and provider.execution_mode in {"local_only", "free_only"}
         and not provider.default_model.casefold().endswith(("-cloud", ":cloud"))
         and is_loopback_endpoint(provider.base_url)
         and {ModelCapability.CODE_GENERATION, ModelCapability.STRUCTURED_OUTPUT}
@@ -75,6 +75,7 @@ def local_development_router_enabled(settings, router):
     return (
         len(providers) == 1
         and _eligible_local_provider(providers[0])
+        and providers[0].execution_mode == "local_only"
         and providers[0].name == settings.local_provider
         and providers[0].default_model == settings.model
         and ModelCapability.TOOL_CALLING not in providers[0].capabilities

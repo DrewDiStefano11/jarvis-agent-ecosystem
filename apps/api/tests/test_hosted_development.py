@@ -86,6 +86,30 @@ def test_hosted_route_rejects_undeclared_coding_capability(capacity):
     assert build_development_router(configuration(), existing, application_settings(grant)) is None
 
 
+def test_hybrid_registry_preserves_separate_local_and_verified_code_generation(capacity):
+    from app.development_agent.config import development_router_enabled
+    from app.model_providers.ollama import OllamaProvider
+
+    grant = allowance(capabilities=CAPABILITIES)
+    existing = planning_router(capacity, grant)
+    local = OllamaProvider(
+        name="ollama", base_url="http://127.0.0.1:11434", default_model="local-model",
+        capabilities=CAPABILITIES, execution_mode="free_only",
+    )
+    existing = ModelRouter(ProviderRegistry([*existing.registry.list(), local]), existing.retry)
+    local_settings = configuration(provider="local", model="local-model")
+    cloud_settings = configuration()
+    application = application_settings(grant)
+    local_router = build_development_router(local_settings, existing, application)
+    cloud_router = build_development_router(cloud_settings, existing, application)
+    assert local_router is not None and cloud_router is not None
+    assert development_router_enabled(local_settings, local_router, application)
+    assert development_router_enabled(cloud_settings, cloud_router, application)
+    assert local_router.registry.get("ollama").execution_mode == "local_only"
+    assert [provider.name for provider in local_router.registry.list()] == ["ollama"]
+    assert [provider.name for provider in cloud_router.registry.list()] == ["groq"]
+
+
 @pytest.mark.parametrize("model", ["vendor/coding-model:free", "@cf/vendor/coding-model"])
 def test_namespaced_models_require_explicit_hosted_configuration_and_admission(model):
     assert configuration(model=model).model == model

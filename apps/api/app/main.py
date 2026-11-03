@@ -398,6 +398,7 @@ def create_app(
         app.state.agent_runtime_service,
         app.state.model_router,
         task_leases,
+        settings=settings,
         heartbeat_interval_seconds=settings.autonomous_worker_heartbeat_interval_seconds,
         lease_seconds=settings.autonomous_worker_lease_seconds,
     )
@@ -1132,13 +1133,13 @@ def create_app(
             assembly = ContextAssembly.model_validate(replay)
             replay_task = repository.get_task_durable(assembly.taskId)
             if (
-                settings.model_execution_mode == "local_only"
+                (settings.model_execution_mode == "local_only" or settings.verified_cloud_execution_allowed)
                 and replay_task.startedAt is None
                 and replay_task.status
                 in {"queued", "planning", "assigned", "paused", "revision_requested"}
             ):
                 await DecompositionService(
-                    repository, app.state.identity_service, app.state.model_router
+                    repository, app.state.identity_service, app.state.model_router, settings=settings
                 ).prepare(assembly.taskId, assembly.id)
                 await broker.dispatch_pending()
             return ApiResponse(data=assembly)
@@ -1157,6 +1158,7 @@ def create_app(
                 repository=repository,
                 identity_service=app.state.identity_service,
                 model_router=app.state.model_router,
+                settings=settings,
             )
             try:
                 task = await team_selector.assign_team(task)
@@ -1178,7 +1180,7 @@ def create_app(
         existing = repository.context_assemblies.get(item.id)
         if existing is not None:
             if (
-                settings.model_execution_mode == "local_only"
+                (settings.model_execution_mode == "local_only" or settings.verified_cloud_execution_allowed)
                 and task.startedAt is None
                 and task.status
                 in {
@@ -1190,7 +1192,7 @@ def create_app(
                 }
             ):
                 await DecompositionService(
-                    repository, app.state.identity_service, app.state.model_router
+                    repository, app.state.identity_service, app.state.model_router, settings=settings
                 ).prepare(task.id, existing.id)
             completion = idempotency_result(
                 request,
@@ -1242,7 +1244,7 @@ def create_app(
             ),
         )
         if (
-            settings.model_execution_mode == "local_only"
+            (settings.model_execution_mode == "local_only" or settings.verified_cloud_execution_allowed)
             and task.startedAt is None
             and task.status
             in {
@@ -1254,7 +1256,7 @@ def create_app(
             }
         ):
             await DecompositionService(
-                repository, app.state.identity_service, app.state.model_router
+                repository, app.state.identity_service, app.state.model_router, settings=settings
             ).prepare(task.id, item.id)
             await broker.dispatch_pending()
         return ApiResponse(data=item)

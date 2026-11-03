@@ -60,7 +60,7 @@ def build_provider_registry(
     grants = settings.parsed_free_allowances()
     if grants and settings.verified_cloud_execution_allowed and sessions is not None:
         capacity = FreeCapacityRepository(sessions)
-        capacity.configure(grants)
+        capacity.configure([grant for grant in grants if grant.window_start is not None])
         for grant in grants:
             credential = (
                 credential_resolver(grant)

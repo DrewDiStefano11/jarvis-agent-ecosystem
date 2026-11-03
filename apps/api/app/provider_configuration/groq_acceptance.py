@@ -53,7 +53,7 @@ def request_body(model):
                 "strict": True,
                 "schema": {
                     "type": "object",
-                    "properties": {"ok": {"type": "boolean", "const": True}},
+                    "properties": {"ok": {"type": "boolean"}},
                     "required": ["ok"],
                     "additionalProperties": False,
                 },

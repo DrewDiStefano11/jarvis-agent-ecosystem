@@ -21,10 +21,14 @@ def bucket_key(grant: FreeAllowance) -> str:
 
 
 def window_key(grant: FreeAllowance) -> str:
+    if grant.window_start is None:
+        raise ProviderExecutionDisabledError("Legacy quota window is not verified", provider=grant.provider)
     return grant.window_start.astimezone(UTC).isoformat()
 
 
 def reset_key(grant: FreeAllowance) -> str:
+    if grant.resets_at is None:
+        raise ProviderExecutionDisabledError("Legacy quota reset is not verified", provider=grant.provider)
     return grant.resets_at.astimezone(UTC).isoformat()
 
 
@@ -39,7 +43,10 @@ def require_nonbillable_account(
         and grant.automatic_recharge is False
         and grant.credit_consumption is False
         and grant.verified_at <= current < grant.valid_until
-        and grant.window_start <= current
+        and (
+            grant.integration == "groq" and grant.window_start is None
+            or grant.window_start is not None and grant.window_start <= current
+        )
         and model in grant.models
     ):
         raise ProviderExecutionDisabledError(
@@ -52,7 +59,7 @@ def require_nonbillable_account(
 def require_allowance(grant: FreeAllowance, model: str, now: datetime | None = None) -> None:
     current = now or datetime.now(UTC)
     require_nonbillable_account(grant, model, current)
-    if current >= grant.resets_at:
+    if grant.resets_at is None or grant.remaining_requests is None or current >= grant.resets_at:
         raise ProviderExecutionDisabledError(
             "no current verified nonbillable allowance for this model",
             provider=grant.provider,
@@ -73,6 +80,10 @@ class FreeCapacityRepository:
     def configure(self, grants: list[FreeAllowance]) -> None:
         groups: dict[str, FreeAllowance] = {}
         for grant in grants:
+            if any(value is None for value in (grant.window_start, grant.resets_at, grant.remaining_requests)):
+                raise ProviderExecutionDisabledError(
+                    "Legacy quota storage requires complete verified observations", provider=grant.provider
+                )
             key = bucket_key(grant)
             prior = groups.get(key)
             if prior is not None and (

@@ -13,12 +13,12 @@ from app.decomposition.repository import DecompositionRepository, task_input
 from app.model_providers.budget import TaskBudget
 from app.model_providers.contracts import (
     MessageRole,
-    ModelCapability,
     ModelExecutionRequest,
     ModelMessage,
     ModelOutputSchema,
 )
-from app.model_providers.router import RoutingRequirements
+from app.model_providers.errors import ProviderExecutionDisabledError
+from app.model_providers.router import planning_dispatch_allowed, planning_requirements
 from app.models.context import ContextAssembly
 from app.models.decomposition import (
     DecompositionIssue,
@@ -27,6 +27,8 @@ from app.models.decomposition import (
     PlannedSubtask,
     topological_keys,
 )
+from app.models.planning_inference import PlanningInferenceIntent
+from app.repositories.planning import PlanningRepository
 
 
 def fingerprint(value) -> str:
@@ -102,10 +104,11 @@ def assign(proposal, task, workforce):
 
 
 class DecompositionService:
-    def __init__(self, repository, identity_service, model_router):
+    def __init__(self, repository, identity_service, model_router, *, settings=None):
         self.tasks = repository
         self.identities = identity_service
         self.router = model_router
+        self.settings = settings
         self.repository = DecompositionRepository(repository.session_factory)
 
     def _team(self, task, session=None):
@@ -144,18 +147,20 @@ class DecompositionService:
                 eligible.append(agent)
         return eligible
 
-    def _context(self, task_id, assembly_id):
+    def _context(self, task_id, assembly_id, session=None):
         if assembly_id is None:
             return None
-        with self.tasks.session_factory() as session:
-            row = session.get(ContextAssemblyRow, assembly_id)
-            if row is None or row.task_id != task_id:
-                raise DomainError(
-                    "DECOMPOSITION_CONTEXT_MISMATCH",
-                    "Use this task's grounded context assembly.",
-                    409,
-                )
-            return ContextAssembly.model_validate(row.payload)
+        if session is None:
+            with self.tasks.session_factory() as current:
+                return self._context(task_id, assembly_id, current)
+        row = session.get(ContextAssemblyRow, assembly_id)
+        if row is None or row.task_id != task_id:
+            raise DomainError(
+                "DECOMPOSITION_CONTEXT_MISMATCH",
+                "Use this task's grounded context assembly.",
+                409,
+            )
+        return ContextAssembly.model_validate(row.payload)
 
     def _input(self, task, assembly, workforce):
         # Exclude clock-driven workforce state; retain capability and provenance changes.
@@ -215,6 +220,16 @@ class DecompositionService:
         workforce = self._team(task)
         inputs = self._input(task, assembly, workforce)
         digest = fingerprint(inputs)
+
+        def validate_live(session):
+            if session.get(SystemStateRow, 1).emergency_stop:
+                raise DomainError("EMERGENCY_STOP_ACTIVE", "Emergency stop blocks decomposition.", 423)
+            current_context = self._context(task.id, assembly_id, session)
+            if self._input(task, current_context, self._team(task, session)) != inputs:
+                raise DomainError(
+                    "DECOMPOSITION_INPUT_CHANGED", "Grounded planning inputs changed.", 409
+                )
+
         if old and old.inputFingerprint == digest:
             return old
         with self.tasks.session_factory() as session:
@@ -294,24 +309,14 @@ class DecompositionService:
                 )
             ]
         else:
-            await self._infer(record, task, assembly, workforce)
-
-        def validate_live(session):
-            if session.get(SystemStateRow, 1).emergency_stop:
-                raise DomainError(
-                    "EMERGENCY_STOP_ACTIVE", "Emergency stop blocks decomposition persistence.", 423
-                )
-            if self._input(task, assembly, self._team(task, session)) != inputs:
-                raise DomainError(
-                    "DECOMPOSITION_INPUT_CHANGED",
-                    "Selected identity eligibility changed during inference.",
-                    409,
-                )
+            await self._infer(record, task, assembly, workforce, validate_live=validate_live)
 
         result = self.repository.persist(record, task, validate_live)
         return result
 
-    async def _infer(self, record, task, assembly, workforce):
+    async def _infer(self, record, task, assembly, workforce, *, validate_live=None):
+        from app.core.config import Settings
+
         schema = DecompositionProposal.model_json_schema()
         # Assignment proposals are data. Unknown IDs are never used as authority;
         # deterministic selection can repair them within the selected pool.
@@ -358,13 +363,33 @@ class DecompositionService:
                 ),
             ),
         ]
-        budget = TaskBudget(maximum_requests=2, maximum_output_tokens=8192)
-        requirements = RoutingRequirements(
-            required_capability=ModelCapability.CHAT,
-            prefer_local=True,
-            allow_remote=False,
-            allow_fallback=False,
+        maximum_output = (
+            self.settings.decomposition_maximum_output_tokens
+            if type(self.settings) is Settings else 4096
         )
+        budget = TaskBudget(maximum_requests=2, maximum_output_tokens=2 * maximum_output)
+        requirements = planning_requirements(self.settings)
+        if requirements.allow_remote:
+            # Each logical repair gets exactly one physical dispatch, with no retry.
+            budget = TaskBudget(maximum_requests=1, maximum_output_tokens=maximum_output)
+        options = {}
+        if requirements.allow_remote:
+            from app.decomposition.repository import task_input
+
+            async def before_dispatch(provider_name, model):
+                if not planning_dispatch_allowed(self.settings, self.router.registry, provider_name):
+                    raise ProviderExecutionDisabledError("Current planning activation was revoked")
+                if validate_live is None:
+                    raise ProviderExecutionDisabledError("Native planning authority is required")
+                PlanningRepository(self.tasks.session_factory).assert_live(
+                    task.id, task_input(task), task_input, validate_live,
+                    intent=PlanningInferenceIntent.for_request(
+                        task.id, "decomposition", record.inputFingerprint,
+                        record.requestCount, provider_name, model,
+                    ),
+                )
+
+            options["before_dispatch"] = before_dispatch
         for attempt in range(2):
             record.requestCount += 1
             try:
@@ -377,10 +402,11 @@ class DecompositionService:
                         temperature=0.0,
                         prefer_no_reasoning=True,
                         task_id=task.id,
-                        max_output_tokens=4096,
+                        max_output_tokens=maximum_output,
                     ),
                     requirements=requirements,
                     budget=budget,
+                    **options,
                 )
                 record.provider, record.model = response.provider, response.model
                 proposal = DecompositionProposal.model_validate_json(response.content)
@@ -388,6 +414,10 @@ class DecompositionService:
                 record.objectiveSummary = proposal.objectiveSummary
                 record.status = "needs_team_reselection" if record.issues else "ready"
                 return
+            except DomainError as exc:
+                if exc.code == "PLANNING_DISPATCH_ALREADY_STARTED":
+                    raise
+                break
             except (ValidationError, ValueError):
                 if attempt == 0:
                     messages.append(
@@ -402,6 +432,6 @@ class DecompositionService:
         record.issues = [
             DecompositionIssue(
                 code="model_output_invalid",
-                message="Decomposition failed within two attempts. Check the configured local provider and request a new planning revision.",
+                message="Decomposition failed within two attempts. Check the configured provider and request a new planning revision.",
             )
         ]

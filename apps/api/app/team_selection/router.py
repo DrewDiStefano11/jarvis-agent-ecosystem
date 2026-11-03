@@ -31,6 +31,7 @@ async def trigger_team_selection(
         identity_service=request.app.state.identity_service,
         model_router=request.app.state.model_router,
         event_broker=request.app.state.broker,
+        settings=request.app.state.settings,
     )
     task = await team_selector.assign_team(task)
     assert task.teamSelection is not None
@@ -44,15 +45,13 @@ async def trigger_team_reselection(
     repository = request.app.state.repository
     task = repository.get_task_durable(taskId)
 
-    # Force reselection by clearing the current one
-    task.teamSelection = None
-
     team_selector = TeamSelectionService(
         repository=repository,
         identity_service=request.app.state.identity_service,
         model_router=request.app.state.model_router,
         event_broker=request.app.state.broker,
+        settings=request.app.state.settings,
     )
-    task = await team_selector.assign_team(task)
+    task = await team_selector.assign_team(task, force=True)
     assert task.teamSelection is not None
     return TypedApiResponse(data=task.teamSelection)

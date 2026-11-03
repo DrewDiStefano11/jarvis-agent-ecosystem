@@ -12,6 +12,7 @@ def service(request: Request):
         request.app.state.repository,
         request.app.state.identity_service,
         request.app.state.model_router,
+        settings=request.app.state.settings,
     )
 
 

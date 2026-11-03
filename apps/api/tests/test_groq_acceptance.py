@@ -135,6 +135,10 @@ async def test_durable_capacity_reservations_are_atomic_shared_and_do_not_activa
         }
     )
     store = GroqCapacityStore(app)
+    account_only = FreeAllowance.model_validate(
+        grant.model_dump(exclude={"window_start", "resets_at", "remaining_requests"})
+    )
+    assert store.available(account_only, "vendor/model", 1)
     from copy import deepcopy
 
     from app.provider_configuration.groq_repository import GroqRateStateRow, rate_scope

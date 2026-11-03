@@ -172,6 +172,9 @@ class Settings(BaseSettings):
         "disabled", alias="JARVIS_MODEL_EXECUTION_MODE"
     )
     model_verified_cloud_enabled: bool = Field(False, alias="JARVIS_MODEL_VERIFIED_CLOUD_ENABLED")
+    decomposition_maximum_output_tokens: int = Field(
+        4096, alias="JARVIS_DECOMPOSITION_MAXIMUM_OUTPUT_TOKENS", ge=128, le=4096
+    )
     model_ollama_enabled: bool = Field(False, alias="JARVIS_MODEL_OLLAMA_ENABLED")
     model_ollama_name: str = Field(
         "ollama", alias="JARVIS_MODEL_OLLAMA_NAME", min_length=1, max_length=120

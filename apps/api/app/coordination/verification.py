@@ -17,7 +17,7 @@ from app.model_providers.contracts import (
     ModelOutputSchema,
 )
 from app.model_providers.errors import ModelProviderError
-from app.model_providers.router import RoutingRequirements
+from app.model_providers.router import planning_requirements
 from app.models.agent_runtime import RecordCheckpointCommand, canonical_json, stable_hash
 from app.models.verification import (
     CompletionCriterion,
@@ -217,18 +217,16 @@ class NodeVerifier:
                             async with asyncio.timeout(timeout):
                                 return await coordinator.router.execute(
                                     request=model_request,
-                                    requirements=RoutingRequirements(
+                                    requirements=planning_requirements(
+                                        coordinator.settings,
                                         requested_provider=request.provider_preference,
                                         preferred_model=request.model_name,
-                                        required_capability=ModelCapability.CHAT,
-                                        prefer_local=True,
-                                        allow_remote=False,
-                                        allow_fallback=False,
                                     ),
                                     budget=TaskBudget(
                                         maximum_requests=1,
                                         maximum_output_tokens=request.maximum_output_tokens,
                                     ),
+                                    **coordinator.dispatch_options(record.id, fence, actor),
                                 )
 
                         answer = await coordinator._call_with_heartbeat(fence, call())

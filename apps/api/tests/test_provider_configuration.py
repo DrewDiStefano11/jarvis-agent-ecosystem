@@ -71,7 +71,8 @@ def test_secret_draft_is_write_only_and_cannot_grant_activation():
         draft(api_key="key\nwith-header-injection")
 
 
-def test_groq_enable_requires_native_capacity_not_only_an_uploaded_grant(profile_app):
+@pytest.mark.parametrize("account_only", [False, True])
+def test_groq_enable_requires_native_capacity_not_only_an_uploaded_grant(profile_app, account_only):
     from hashlib import sha256
 
     from app.core.errors import DomainError
@@ -81,6 +82,10 @@ def test_groq_enable_requires_native_capacity_not_only_an_uploaded_grant(profile
     grant = allowance(
         models=["vendor/model"], credential_fingerprint=sha256(SECRET.encode()).hexdigest()
     )
+    if account_only:
+        grant = type(grant).model_validate(
+            grant.model_dump(exclude={"window_start", "resets_at", "remaining_requests"})
+        )
     with pytest.raises(DomainError) as rejected:
         app.state.provider_configuration_service.save(actor, draft(enabled=True, allowance=grant))
     assert rejected.value.code == "MODEL_GROQ_CAPACITY_UNAVAILABLE"
@@ -209,8 +214,9 @@ def test_rehashed_profile_cannot_replace_its_native_audit_proof(profile_app):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="actual Windows user-bound credential protection")
+@pytest.mark.parametrize("account_only", [False, True])
 def test_restart_uses_saved_evidence_without_exporting_a_key_to_environment(
-    profile_app, monkeypatch
+    profile_app, monkeypatch, account_only
 ):
     from hashlib import sha256
 
@@ -221,6 +227,10 @@ def test_restart_uses_saved_evidence_without_exporting_a_key_to_environment(
     grant = allowance(
         models={"vendor/model"}, credential_fingerprint=sha256(SECRET.encode()).hexdigest()
     )
+    if account_only:
+        grant = type(grant).model_validate(
+            grant.model_dump(exclude={"window_start", "resets_at", "remaining_requests"})
+        )
     service = ProviderConfigurationService(app)
     saved = save_with_intercepted_acceptance(service, actor, draft(enabled=True, allowance=grant))
     monkeypatch.setenv("JARVIS_MODEL_EXECUTION_MODE", "free_only")
