@@ -60,3 +60,17 @@ class ImprovementBacklogSelection(Contract):
         if self.blocked_proposals > self.scanned_proposals:
             raise ValueError("blocked proposals exceed scan count")
         return self
+
+
+class ImprovementCandidate(Contract):
+    """Recorded opportunity only; no task, selection or execution approval exists."""
+
+    schema_version: Literal["1.0"] = "1.0"
+    baseline_id: Digest
+    proposal_id: Digest
+    weakness_id: Digest
+    scope_key: Digest
+    priority: Literal["critical", "high", "medium", "low"]
+    work_kind: Literal["gather_evidence", "prepare_experiment"]
+    evidence_ids: tuple[Digest, ...] = Field(min_length=1, max_length=4096)
+    experiment_digest: Digest | None
