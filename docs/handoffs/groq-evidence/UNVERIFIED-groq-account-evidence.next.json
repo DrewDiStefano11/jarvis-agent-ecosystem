@@ -1,0 +1,21 @@
+{
+  "account_id": null,
+  "model": "openai/gpt-oss-120b",
+  "credential_fingerprint": null,
+  "plan": null,
+  "nonbillable": null,
+  "billing_enabled": null,
+  "credit_consumption": null,
+  "automatic_recharge": null,
+  "limits": {
+    "rpm": 30,
+    "rpd": 1000,
+    "tpm": 8000,
+    "tpd": 200000
+  },
+  "verified_at": null,
+  "valid_until": null,
+  "evidence_references": null,
+  "evidence_digest": null,
+  "account_key_association_confirmed": null
+}

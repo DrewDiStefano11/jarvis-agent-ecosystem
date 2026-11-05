@@ -3,7 +3,7 @@
 from copy import deepcopy
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, DateTime, String, select
+from sqlalchemy import JSON, DateTime, String, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -25,9 +25,12 @@ class ImprovementRepository:
     def __init__(self, sessions):
         self.sessions = sessions
 
-    def _append(self, id, kind, baseline_id, payload):
+    def _append(self, id, kind, baseline_id, payload, *, authorize=None):
         try:
             with UnitOfWork(self.sessions) as uow:
+                if authorize is not None:
+                    uow.session.execute(text("BEGIN IMMEDIATE"))
+                    authorize(uow.session)
                 uow.session.add(
                     ImprovementRecordRow(
                         id=id,
@@ -39,6 +42,8 @@ class ImprovementRepository:
                 )
         except IntegrityError:
             with self.sessions() as session:
+                if authorize is not None:
+                    authorize(session)
                 row = session.get(ImprovementRecordRow, id)
                 if row is None or row.kind != kind or row.baseline_id != baseline_id:
                     raise
@@ -54,12 +59,16 @@ class ImprovementRepository:
                 return row.payload
         return payload
 
-    def save_analysis(self, analysis: Analysis) -> Analysis:
+    def save_analysis(self, analysis: Analysis, *, authorize=None) -> Analysis:
         # Validate the complete graph before committing, including caller-created
         # model copies (Pydantic's model_copy deliberately skips validation).
         analysis = Analysis.model_validate_json(analysis.model_dump_json())
         payload = self._append(
-            analysis.baseline.id, "analysis", analysis.baseline.id, analysis.model_dump(mode="json")
+            analysis.baseline.id,
+            "analysis",
+            analysis.baseline.id,
+            analysis.model_dump(mode="json"),
+            authorize=authorize,
         )
         return Analysis.model_validate(payload)
 

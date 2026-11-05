@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import select
 
 from app.db.models import AuditEventRow, OutboxEventRow, ToolExecutionRow
-from app.main import create_app
+from app.main import DATABASE_REVISION, create_app
 from app.models.agent_runtime import (
     AutonomousExecutionSpecification,
     CreateAgentRunCommand,
@@ -348,7 +348,8 @@ def test_nonempty_tool_downgrade_refuses_data_loss(tmp_path):
             command.downgrade(migration_config(tmp_path / "tools.db"), "20260905_07")
         with app.state.engine.connect() as connection:
             assert (
-                connection.scalar(text("select version_num from alembic_version")) == "20260905_08"
+                connection.scalar(text("select version_num from alembic_version"))
+                == DATABASE_REVISION
             )
             assert connection.scalar(text("select count(*) from tool_executions")) == 1
 

@@ -164,17 +164,26 @@ def test_unsafe_runtime_downgrade_fails_before_destructive_ddl(tmp_path: Path) -
     command.upgrade(config, "head")
     oversized = "c" * 120
     insert_runtime_fixture(path, correlation_id=oversized)
+    engine = create_engine(database_url(path))
+    schema_query = text(
+        "SELECT type,name,tbl_name,sql FROM sqlite_master "
+        "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name"
+    )
+    with engine.connect() as connection:
+        before_schema = connection.execute(schema_query).all()
 
     with pytest.raises(RuntimeError):
         command.downgrade(config, "a87a487dd714")
 
-    engine = create_engine(database_url(path))
     inspector = inspect(engine)
     tables = set(inspector.get_table_names())
     assert "agent_runtime_runs" in tables
     assert "agent_runtime_events" in tables
     with engine.connect() as connection:
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260729_04"
+        assert connection.execute(schema_query).all() == before_schema
+        assert (
+            connection.scalar(text("select version_num from alembic_version")) == DATABASE_REVISION
+        )
         assert connection.scalar(text("select count(*) from agent_runtime_runs")) == 1
         assert connection.scalar(text("select count(*) from agent_runtime_events")) == 1
         assert (

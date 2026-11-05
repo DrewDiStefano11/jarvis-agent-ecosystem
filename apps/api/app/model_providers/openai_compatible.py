@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
 from enum import StrEnum
 from hashlib import sha256
 from time import perf_counter
 from typing import Any
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 import httpx
 from pydantic import SecretStr, ValidationError
@@ -24,9 +27,11 @@ from app.model_providers.errors import (
     MalformedProviderResponseError,
     ModelProviderError,
     ProviderConfigurationError,
+    ProviderExecutionDisabledError,
     QuotaExhaustedError,
 )
 from app.model_providers.free_capacity import FreeCapacityRepository, require_allowance
+from app.model_providers.groq_rate_limits import RateBlocked
 from app.model_providers.http import is_loopback_endpoint, translate_http_error
 from app.model_providers.policy import (
     provider_network_health_allowed,
@@ -69,6 +74,8 @@ class OpenAICompatibleProvider(ProviderBase):
         client: httpx.AsyncClient | None = None,
         free_allowance: FreeAllowance | None = None,
         free_capacity: FreeCapacityRepository | None = None,
+        configuration_guard=None,
+        groq_capacity=None,
     ) -> None:
         if not isinstance(name, str) or not name.strip() or len(name) > 120:
             raise ProviderConfigurationError("provider name must contain 1 to 120 characters")
@@ -128,6 +135,8 @@ class OpenAICompatibleProvider(ProviderBase):
         self._client = client
         self.free_allowance = free_allowance
         self.free_capacity = free_capacity
+        self.configuration_guard = configuration_guard
+        self.groq_capacity = groq_capacity
         if free_allowance is not None:
             from app.model_providers.free_endpoints import compatible_endpoint
 
@@ -151,8 +160,16 @@ class OpenAICompatibleProvider(ProviderBase):
                 )
 
     def free_eligible(self, model: str) -> bool:
+        if self.configuration_guard is not None and not self.configuration_guard():
+            return False
         if self.execution_mode in {"local_only", "free_only"} and self.is_local:
             return True
+        if self.free_allowance is not None and self.free_allowance.integration == "groq":
+            return bool(
+                self.execution_mode == "free_only"
+                and self.groq_capacity is not None
+                and self.groq_capacity.available(self.free_allowance, model, 1)
+            )
         return bool(
             self.execution_mode == "free_only"
             and self.free_allowance is not None
@@ -187,14 +204,53 @@ class OpenAICompatibleProvider(ProviderBase):
             True,
         )
 
+    def _require_current_configuration(self) -> None:
+        if self.configuration_guard is not None and not self.configuration_guard():
+            from app.model_providers.errors import ProviderExecutionDisabledError
+
+            raise ProviderExecutionDisabledError(
+                "provider configuration changed; reload current settings", provider=self.name
+            )
+
     async def execute(self, request: ModelExecutionRequest) -> ModelExecutionResponse:
+        groq = self.free_allowance is not None and self.free_allowance.integration == "groq"
+        if groq and self.groq_capacity is None:
+            raise ProviderExecutionDisabledError(
+                "Groq requires native four-limit tracking", provider=self.name
+            )
+        context = {"reserved": False, "settled": False, "id": uuid4().hex} if groq else None
+        try:
+            return await self._execute(request, context)
+        except BaseException as error:
+            if context is not None:
+                if context["reserved"] and not context["settled"]:
+                    self.groq_capacity.uncertain(
+                        self.free_allowance, context["model"], context["id"]
+                    )
+                if isinstance(error, ModelProviderError):
+                    # An uncertain physical request must never be transparently
+                    # replayed, and 429 deadlines belong to the durable ledger.
+                    error.retryable = False
+            raise
+
+    async def _execute(self, request, groq_context=None) -> ModelExecutionResponse:
+        self._require_current_configuration()
         request = ModelExecutionRequest.model_validate(request.model_dump())
+        if groq_context is not None and request.max_output_tokens is None:
+            request = request.model_copy(update={"max_output_tokens": 512})
         validate_tool_support(request, self.capabilities, self.name)
         model = request.model or self.default_model
         verified = False
         if self.execution_mode == "free_only" and self.free_allowance is not None:
-            require_allowance(self.free_allowance, model)
-            verified = self.free_capacity is not None
+            if self.free_allowance.integration == "groq":
+                if groq_context is None or self.groq_capacity is None:
+                    raise ProviderExecutionDisabledError(
+                        "Groq requires native four-limit tracking", provider=self.name
+                    )
+                verified = True
+            else:
+                require_allowance(self.free_allowance, model)
+                verified = self.free_capacity is not None
         require_live_provider_execution(
             provider=self.name,
             model=model,
@@ -204,7 +260,7 @@ class OpenAICompatibleProvider(ProviderBase):
             is_local=self.is_local,
             verified_nonbillable=verified,
         )
-        if verified:
+        if verified and groq_context is None:
             assert self.free_capacity is not None and self.free_allowance is not None
             self.free_capacity.reserve(self.free_allowance, model)
         payload: dict[str, Any] = {
@@ -227,6 +283,13 @@ class OpenAICompatibleProvider(ProviderBase):
             payload["temperature"] = request.temperature
         if request.max_output_tokens is not None:
             payload["max_tokens"] = request.max_output_tokens
+        if groq_context is not None:
+            if request.max_output_tokens is None:
+                raise ProviderExecutionDisabledError(
+                    "Groq requires a bounded completion", provider=self.name
+                )
+            payload.pop("max_tokens", None)
+            payload["max_completion_tokens"] = request.max_output_tokens
         if request.tools:
             payload["tools"] = [tool.wire_definition() for tool in request.tools]
         if (
@@ -240,12 +303,40 @@ class OpenAICompatibleProvider(ProviderBase):
                     "schema": request.output_schema.json_schema,
                 },
             }
+        if groq_context is not None:
+            # UTF-8 bytes bound byte-level tokenization; retain conservative
+            # message framing and a fixed envelope margin in addition to output.
+            groq_context["bound"] = (
+                len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                + 64 * len(request.messages)
+                + 1024
+                + request.max_output_tokens
+            )
+            groq_context["model"] = model
         # Compatible servers have no shared switch for disabling reasoning.
         # This preference never authorizes extra requests or a larger token budget.
         client, owned = self._client_or_new()
         started = perf_counter()
         translated_error: ModelProviderError | None = None
         try:
+            self._require_current_configuration()
+            if groq_context is not None:
+                try:
+                    self.groq_capacity.reserve(
+                        self.free_allowance, model, groq_context["id"], groq_context["bound"]
+                    )
+                except RateBlocked as blocked:
+                    raise QuotaExhaustedError(
+                        "Groq capacity is unavailable",
+                        provider=self.name,
+                        model=model,
+                        metadata={
+                            "dimensions": list(blocked.dimensions),
+                            "retry_at": blocked.retry_at.isoformat() if blocked.retry_at else None,
+                        },
+                    ) from None
+                groq_context["reserved"] = True
+            self._require_current_configuration()
             response = await post_model_response(
                 client,
                 "chat/completions",
@@ -256,6 +347,13 @@ class OpenAICompatibleProvider(ProviderBase):
                 headers=self._headers() if self._client is not None else None,
                 timeout=request.timeout_seconds or self.timeout_seconds,
             )
+            if groq_context is not None:
+                groq_context["received_at"] = datetime.now(UTC)
+                if response.status_code == 429:
+                    self.groq_capacity.rejected(
+                        self.free_allowance, model, groq_context["id"], response.headers
+                    )
+                    groq_context["settled"] = True
             response.raise_for_status()
             try:
                 body = decode_model_response(response, tools_enabled=bool(request.tools))
@@ -281,6 +379,7 @@ class OpenAICompatibleProvider(ProviderBase):
             if (
                 isinstance(translated_error, QuotaExhaustedError)
                 and self.free_allowance is not None
+                and groq_context is None
             ):
                 assert self.free_capacity is not None
                 self.free_capacity.exhaust(self.free_allowance)
@@ -304,8 +403,10 @@ class OpenAICompatibleProvider(ProviderBase):
             and normalized["model"] not in self.free_allowance.models
         ):
             raise _malformed(self.name, model, "provider returned an unverified model")
+        if groq_context is not None and normalized["model"] != model:
+            raise _malformed(self.name, model, "Groq returned a different model")
         try:
-            return ModelExecutionResponse(
+            result = ModelExecutionResponse(
                 content=normalized["content"],
                 tool_requests=normalized["tool_requests"],
                 tool_request_id=request.tool_request_id,
@@ -333,6 +434,23 @@ class OpenAICompatibleProvider(ProviderBase):
             error = None
         if error is not None:
             raise error
+        if groq_context is not None:
+            if (
+                result.usage_quality != UsageQuality.EXACT
+                or result.output_tokens > request.max_output_tokens
+                or result.total_tokens > groq_context["bound"]
+            ):
+                raise _malformed(self.name, model, "Groq usage does not match the reserved bounds")
+            self.groq_capacity.complete(
+                self.free_allowance,
+                model,
+                groq_context["id"],
+                result.total_tokens,
+                response.headers,
+                received_at=groq_context["received_at"],
+            )
+            groq_context["settled"] = True
+        return result
 
     async def health_check(self) -> ProviderHealth:
         network_allowed = provider_network_health_allowed() or self._network_allowed()

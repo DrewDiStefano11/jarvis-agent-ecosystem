@@ -21,7 +21,13 @@ from app.model_providers.router import ModelRouter, RoutingRequirements
 
 
 def build_provider_registry(
-    settings: Settings, sessions: sessionmaker[Session] | None = None
+    settings: Settings,
+    sessions: sessionmaker[Session] | None = None,
+    *,
+    credential_resolver=None,
+    configuration_guard=None,
+    model_assignments=None,
+    groq_capacity=None,
 ) -> ProviderRegistry:
     providers = []
     if settings.model_ollama_enabled:
@@ -54,9 +60,13 @@ def build_provider_registry(
     grants = settings.parsed_free_allowances()
     if grants and settings.verified_cloud_execution_allowed and sessions is not None:
         capacity = FreeCapacityRepository(sessions)
-        capacity.configure(grants)
+        capacity.configure([grant for grant in grants if grant.window_start is not None])
         for grant in grants:
-            credential = os.environ.get(grant.credential_env)
+            credential = (
+                credential_resolver(grant)
+                if credential_resolver
+                else os.environ.get(grant.credential_env)
+            )
             if not credential and grant.integration != "codex":
                 continue
             if grant.integration in {"chatgpt", "codex"}:
@@ -81,12 +91,23 @@ def build_provider_registry(
                     OpenAICompatibleProvider(
                         name=grant.provider,
                         base_url=compatible_endpoint(grant),
-                        api_key=SecretStr(credential),
-                        default_model=sorted(grant.models)[0],
+                        api_key=credential
+                        if isinstance(credential, SecretStr)
+                        else SecretStr(credential),
+                        default_model=(model_assignments or {})
+                        .get(grant.provider, {})
+                        .get("", sorted(grant.models)[0]),
                         execution_mode="free_only",
                         health_strategy=HealthCheckStrategy.CONFIGURATION,
                         free_allowance=grant,
                         free_capacity=capacity,
+                        groq_capacity=groq_capacity,
+                        capabilities=frozenset(
+                            ModelCapability(item) for item in grant.capabilities
+                        ),
+                        configuration_guard=(lambda name=grant.provider: configuration_guard(name))
+                        if configuration_guard
+                        else None,
                     )
                 )
     priority = {
@@ -99,7 +120,13 @@ def build_provider_registry(
 
 
 def build_model_router(
-    settings: Settings, sessions: sessionmaker[Session] | None = None
+    settings: Settings,
+    sessions: sessionmaker[Session] | None = None,
+    *,
+    credential_resolver=None,
+    configuration_guard=None,
+    model_assignments=None,
+    groq_capacity=None,
 ) -> ModelRouter:
     retry = RetryExecutor(
         RetryPolicy(
@@ -108,7 +135,18 @@ def build_model_router(
             maximum_backoff_seconds=settings.model_retry_maximum_backoff_seconds,
         )
     )
-    return ModelRouter(build_provider_registry(settings, sessions), retry)
+    return ModelRouter(
+        build_provider_registry(
+            settings,
+            sessions,
+            credential_resolver=credential_resolver,
+            configuration_guard=configuration_guard,
+            model_assignments=model_assignments,
+            groq_capacity=groq_capacity,
+        ),
+        retry,
+        model_assignments=model_assignments,
+    )
 
 
 def build_default_task_budget(settings: Settings) -> TaskBudget:

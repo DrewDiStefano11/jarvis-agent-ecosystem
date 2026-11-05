@@ -571,6 +571,46 @@ def test_enabled_worker_requires_existing_local_only_configuration(tmp_path: Pat
     assert config.worker_enabled is True
 
 
+@pytest.mark.parametrize("activate", [False, True])
+def test_cloud_only_worker_configuration_needs_no_local_provider(
+    tmp_path: Path, activate, monkeypatch
+) -> None:
+    from tests.test_free_ai_capacity import allowance
+
+    config = make_config(
+        tmp_path,
+        JARVIS_AUTONOMOUS_WORKER_ENABLED="true",
+        JARVIS_MODEL_EXECUTION_MODE="free_only",
+        JARVIS_MODEL_VERIFIED_CLOUD_ENABLED=str(activate).lower(),
+        JARVIS_MODEL_FREE_ALLOWANCES_JSON=json.dumps([allowance().model_dump(mode="json")]),
+        JARVIS_AUTONOMOUS_WORKER_ACTOR_ID="worker-actor",
+        JARVIS_AUTONOMOUS_WORKER_INSTANCE_ID="worker-instance",
+    )
+    assert config.worker_enabled is True
+    assert config.ollama_relevant is False
+    assert {item.name: item for item in build_process_registry(config)}["autonomous_worker"].enabled
+    monkeypatch.setattr(
+        "app.runtime_supervisor.doctor.probe_http",
+        lambda *_args, **_kwargs: pytest.fail("disabled Ollama must not be probed"),
+    )
+    checks = {item["name"]: item for item in run_doctor(config)["checks"]}
+    assert checks["ollama"]["detail"] == "not required by current configuration"
+    assert checks["application_configuration"]["status"] == "pass"
+    assert not config.runtime_home.exists()
+
+
+def test_cloud_activation_still_requires_account_specific_allowance(tmp_path: Path) -> None:
+    with pytest.raises(SupervisorConfigurationError, match="account-specific allowance"):
+        make_config(
+            tmp_path,
+            JARVIS_AUTONOMOUS_WORKER_ENABLED="true",
+            JARVIS_MODEL_EXECUTION_MODE="free_only",
+            JARVIS_MODEL_VERIFIED_CLOUD_ENABLED="true",
+            JARVIS_AUTONOMOUS_WORKER_ACTOR_ID="worker-actor",
+            JARVIS_AUTONOMOUS_WORKER_INSTANCE_ID="worker-instance",
+        )
+
+
 def test_enabled_openai_compatible_provider_requires_complete_application_settings(
     tmp_path: Path,
 ) -> None:
@@ -1847,3 +1887,35 @@ def test_health_failure_retains_child_that_survives_forced_termination(tmp_path:
     assert managed.termination_failed is True
     assert managed.restart_count == 1
     assert probe_calls == 3
+
+
+def test_scheduled_task_owns_daemon_and_bounds_failure_restarts(tmp_path: Path) -> None:
+    import xml.etree.ElementTree as ET
+
+    config = make_config(tmp_path)
+    document = ET.fromstring(task_xml(config, "S-1-5-21-123"))
+    ns = {"t": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
+    arguments = document.findtext("t:Actions/t:Exec/t:Arguments", namespaces=ns)
+    assert arguments.endswith(" daemon")
+    assert str(config.repository) in arguments
+    assert document.findtext("t:Settings/t:RestartOnFailure/t:Interval", namespaces=ns) == "PT1M"
+    assert document.findtext("t:Settings/t:RestartOnFailure/t:Count", namespaces=ns) == "3"
+    assert document.findtext("t:Settings/t:MultipleInstancesPolicy", namespaces=ns) == "IgnoreNew"
+    assert (
+        document.findtext("t:Principals/t:Principal/t:RunLevel", namespaces=ns) == "LeastPrivilege"
+    )
+
+
+@pytest.mark.parametrize("daemon_exit", [0, 1, 2])
+def test_foreground_daemon_exit_reaches_scheduler(
+    tmp_path: Path, monkeypatch, daemon_exit: int
+) -> None:
+    config = make_config(tmp_path)
+    monkeypatch.setattr(cli.SupervisorConfig, "load", lambda *_: config)
+    monkeypatch.setattr(
+        cli, "RuntimeSupervisor", lambda *_: SimpleNamespace(run=lambda: daemon_exit)
+    )
+    monkeypatch.setattr(
+        cli, "_spawn_daemon", lambda *_: pytest.fail("scheduled daemon must not detach")
+    )
+    assert cli.main(["--repository", str(config.repository), "daemon"]) == daemon_exit

@@ -20,6 +20,21 @@ class Settings(BaseSettings):
         hide_input_in_errors=True,
     )
 
+    improvement_schedule_json: str = Field(
+        "{}", alias="JARVIS_IMPROVEMENT_SCHEDULE_JSON", max_length=8192
+    )
+
+    @property
+    def improvement_schedule_policy(self):
+        from app.models.improvement_schedule import ImprovementSchedulePolicy
+
+        return ImprovementSchedulePolicy.model_validate_json(self.improvement_schedule_json)
+
+    @model_validator(mode="after")
+    def validate_improvement_schedule(self):
+        _ = self.improvement_schedule_policy
+        return self
+
     self_build_enabled: bool = Field(False, alias="JARVIS_SELF_BUILD_ENABLED")
     self_build_repositories_json: str = Field(
         "{}", alias="JARVIS_SELF_BUILD_REPOSITORIES_JSON", max_length=32768
@@ -36,6 +51,27 @@ class Settings(BaseSettings):
     sql_echo: bool = Field(False, alias="JARVIS_SQL_ECHO")
     auto_migrate: bool = Field(True, alias="JARVIS_AUTO_MIGRATE")
     simulator_auto_resume: bool = Field(False, alias="JARVIS_SIMULATOR_AUTO_RESUME")
+    remote_browser_enabled: bool = Field(False, alias="JARVIS_REMOTE_BROWSER_ENABLED")
+    remote_browser_assets: Path | None = Field(None, alias="JARVIS_REMOTE_BROWSER_ASSETS")
+
+    @model_validator(mode="after")
+    def validate_remote_browser(self):
+        if self.remote_browser_enabled:
+            directory = self.remote_browser_assets
+            if (
+                not self.remote_control_enabled
+                or directory is None
+                or not directory.is_absolute()
+                or not directory.is_dir()
+                or directory.is_symlink()
+                or not (directory / "remote.html").is_file()
+                or (directory / "remote.html").is_symlink()
+            ):
+                raise ValueError(
+                    "Browser access requires configured remote TLS and a trusted built directory"
+                )
+        return self
+
     remote_control_enabled: bool = Field(False, alias="JARVIS_REMOTE_CONTROL_ENABLED")
     remote_operator_id: str = Field("", alias="JARVIS_REMOTE_OPERATOR_ID", max_length=120)
     remote_operator_token: SecretStr | None = Field(None, alias="JARVIS_REMOTE_OPERATOR_TOKEN")
@@ -115,7 +151,7 @@ class Settings(BaseSettings):
         1000, alias="JARVIS_AUTONOMOUS_WORKER_POLL_INTERVAL_MS", ge=100, le=60_000
     )
     autonomous_worker_max_concurrency: int = Field(
-        1, alias="JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY", ge=1, le=1
+        1, alias="JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY", ge=1, le=4
     )
     autonomous_worker_lease_seconds: int = Field(
         60, alias="JARVIS_AUTONOMOUS_WORKER_LEASE_SECONDS", ge=15, le=3600
@@ -136,6 +172,9 @@ class Settings(BaseSettings):
         "disabled", alias="JARVIS_MODEL_EXECUTION_MODE"
     )
     model_verified_cloud_enabled: bool = Field(False, alias="JARVIS_MODEL_VERIFIED_CLOUD_ENABLED")
+    decomposition_maximum_output_tokens: int = Field(
+        4096, alias="JARVIS_DECOMPOSITION_MAXIMUM_OUTPUT_TOKENS", ge=128, le=4096
+    )
     model_ollama_enabled: bool = Field(False, alias="JARVIS_MODEL_OLLAMA_ENABLED")
     model_ollama_name: str = Field(
         "ollama", alias="JARVIS_MODEL_OLLAMA_NAME", min_length=1, max_length=120

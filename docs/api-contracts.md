@@ -1,5 +1,18 @@
 # HTTP contracts
 
+The local model-configuration namespace additionally exposes a separate Groq
+one-request acceptance contract. OpenAPI models `GroqAccountEvidence`,
+`PrepareGroqAcceptance`, `ApproveGroqAcceptance`, `ExecuteGroqAcceptance` and
+`GroqAcceptanceView` are authoritative. POST `/api/model-configuration/groq/acceptance/prepare`
+only prepares account/model evidence. POST `/{identifier}/approve` requires the
+exact `expected_plan_hash` and `confirmation: "approve_exactly_one_groq_request"`;
+POST `/{identifier}/execute` consumes that one-request authority. GET `/{identifier}`
+reads its durable result without inference. All identifier paths share the
+`/api/model-configuration/groq/acceptance` prefix and retain direct-loopback,
+exact-Origin, no-forwarding, active `models.configure` and no-store boundaries.
+Successful response-header observations identify RPD/TPM only; the response never
+asserts unused account-wide RPM/TPD. No endpoint enables ongoing inference.
+
 Campaign D adds `free_only` to `AutonomousWorkerStatus.modelExecutionMode` and
 adds the `20261013_free_ai` migration. The current advertised database head is
 `20261016_a_lineage_join`, including quota, dispatch, baseline and lineage history. Existing response
@@ -320,8 +333,7 @@ runtime authentication. Current operator, independent exact preview hash,
 repository ownership, original lease/run/attempt and source pins are rechecked
 by the admission service. A body never supplies permissions or filesystem evidence.
 
-Production `iterations` returns DEVELOPMENT_EXECUTION_DISABLED before reservation
-or provider dispatch. There is no HTTP model-response importer or activation flag.
+Production `iterations` remains disabled by default and for all hosted development providers. An explicitly configured native loopback Ollama path can produce bounded proposals under independently approved admission, including the exact optional `DevelopmentLimits.local_endpoint`. See [local development proposals](local-development-proposals.md). There is no HTTP model-response importer.
 No OpenAI API key is read; future Codex app-server activation remains contingent
 on Campaign D's independent billing/credit/recharge safeguards. Admission and
 review alone do not approve native source mutation, validate code or publish it.
@@ -348,3 +360,93 @@ baseline and repair scope to the unchanged original task budget. It grants no
 source effect, validation success, live inference activation or publication.
 Campaign repair (2026-10-16): development dispatch and shared nonbillable quota migrations converge at 20261016_a_review_join without rewriting either deployed predecessor. The development request fixture binds the same captured assembly limits as production admission; tiny-context tests still exercise source truncation refusal.
 Baseline and lineage integrations add guarded merge revisions 20261016_a_baseline_join and 20261016_a_lineage_join. Existing branch revision identities remain unchanged; runtime status and OpenAPI advertise the resulting single head.
+
+
+### Guarded improvement schedule status
+
+GET `/api/self-improvement/schedule` returns `TypedApiResponse[ImprovementScheduleStatus]`.
+The local operator boundary, existing `X-Jarvis-Actor-Id` identity authentication and
+`read_improvement` permission on `administrative_function/improvement_schedule` apply.
+The projection contains current enabled/admission flags, interval and the latest
+capture window/result/native task reference for the exact current policy. It does
+not return observations or grant activation, scheduling or execution authority.
+The scheduler contracts and OpenAPI are authoritative; see
+[operator configuration and recovery](guarded-improvement-scheduler.md).
+
+### Verified hosted development admission
+
+`DevelopmentLimits.hosted_route_digest` optionally binds the selected development
+provider, fixed endpoint, exact model/capabilities and current Campaign D allowance.
+It cannot coexist with `local_endpoint`; absent optional fields remain omitted
+from serialized historical limits. A changed binding requires new exact native
+admission. `FreeAllowance.capabilities` defaults to chat/text generation and accepts
+only implemented text capabilities. Hosted coding requires explicit code generation
+and structured output plus all existing activation/account/quota controls. These
+contracts grant no source effects, candidate execution or paid inference. See
+[hosted development proposals](hosted-development-proposals.md).
+
+### Local model provider configuration
+
+OpenAPI defines `/api/model-configuration/setup`, `/profiles`, and
+`/profiles/{provider_name}/metadata`. Setup requires the explicit
+`configure_model_operator` confirmation and provisions only `models.configure`
+for the `model_configuration` administrative resource. Profile operations require
+that active actor via `X-Jarvis-Actor-Id`, a direct loopback peer and the exact
+configured web Origin. Forwarded requests are rejected. Responses are uncached.
+
+Profile writes use `expected_revision` CAS, write-only `api_key` and explicit
+`clear_credential`. Views exclude credentials and private allowance evidence.
+Native audit and outbox records bind each encrypted profile revision. Saving
+never changes activation flags or queues inference. Restart services after
+configuration changes; old provider snapshots are fenced immediately.
+
+Groq metadata checking performs one bounded fixed-endpoint model-catalog GET,
+with redirects/proxies disabled and sanitized results. Its requested/completed
+audit pair records no response body or key. A missing completion represents an
+interrupted or superseded check; no automatic retry occurs. Catalog access does
+not establish billing eligibility, quota or successful inference. Other hosted
+integrations have no metadata-check capability in this version. See
+[operator setup](provider-configuration.md).
+
+### Separately enabled remote browser transport
+
+POST `/api/remote/session` accepts the configured bearer credential on the exact
+canonical HTTPS Origin and returns `TypedApiResponse[RemoteBrowserSession]` plus
+a Secure/HTTPOnly/SameSite=Strict host-only opaque cookie. POST
+`/api/remote/session/restore` requires that cookie, exact Origin and
+`X-Jarvis-Session: restore`. POST `/api/remote/session/logout` requires the cookie
+and its `X-Jarvis-CSRF` header and returns `TypedApiResponse[bool]`. All existing
+remote operations accept that cookie only with one matching CSRF header; bearer
+plus session credentials are rejected. Existing native permissions and command
+transaction checks still apply. The default browser boundary remains disabled.
+See [browser operation](remote-browser-operation.md); models/OpenAPI are authoritative.
+
+POST `/api/remote/self-build/workspaces/preview` accepts native `WorkspaceIntent`
+and returns `TypedApiResponse[WorkspacePlan]`, requiring remote read and native
+task read permission. It is read-only derivation. The browser uses the existing
+`/api/remote/self-build/workspaces/approve` contract after exact-hash confirmation;
+native actor independence, workspace permission, policy/hash, emergency stop and
+expiry remain authoritative. Runtime browser controls use existing
+`RemoteRuntimeCommand` and current expected run versions. No worker
+confirmation/completion command is added. Local model-configuration routes remain
+outside the remote gateway's dedicated route allowlist.
+
+`FreeAllowance` retains its existing complete-window representation. Groq additionally
+accepts account-only evidence with all of `window_start`, `resets_at` and
+`remaining_requests` absent/null; partial windows and absent windows for every other
+integration remain invalid. Its generated JSON Schema describes both alternatives.
+This extension grants no quota: native Groq receipt/header tracking is mandatory.
+
+New event `planning_model.dispatch_intent` uses envelope schema version 1.0 and the
+`PlanningInferenceIntent` payload contract. Its task, planning stage, input fingerprint
+and bounded request index identify one durable dispatch scope. The audit and outbox
+commit atomically before inference; duplicate/interrupted attempts return
+`PLANNING_DISPATCH_ALREADY_STARTED` without another provider request. Existing
+event sequencing and session semantics remain unchanged.
+
+The optional sidecar concurrency setting accepts 1–4 slots (default 1). Each slot
+uses the existing worker and lease contracts; no event version changes. Invalid
+live concurrency fails with `AUTONOMOUS_WORKER_CONCURRENCY_INVALID`. Direct local
+HTTP and WebSocket access now validates loopback Host and the exact configured
+browser Origin before dispatch, while preserving CLI access without browser
+headers and the remote gateway's separate authentication boundary.

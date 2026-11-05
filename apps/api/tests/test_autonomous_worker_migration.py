@@ -99,7 +99,9 @@ def test_phase_2c_downgrade_refuses_unrepresentable_rows_before_ddl(tmp_path: Pa
     guarded = create_engine(database_url(path))
     assert "model_executions" in inspect(guarded).get_table_names()
     with guarded.connect() as connection:
-        assert connection.scalar(text("select version_num from alembic_version")) == "20260729_05"
+        assert (
+            connection.scalar(text("select version_num from alembic_version")) == DATABASE_REVISION
+        )
     guarded.dispose()
 
 

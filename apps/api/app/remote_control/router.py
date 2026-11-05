@@ -27,6 +27,8 @@ from app.models.self_build import (
     ApproveWorkspaceRequest,
     WorkspaceAbandonApproval,
     WorkspaceApproval,
+    WorkspaceIntent,
+    WorkspacePlan,
 )
 from app.remote_control.service import RemoteControlService
 
@@ -37,7 +39,7 @@ def service(request: Request) -> RemoteControlService:
     return request.app.state.remote_control_service
 
 
-def actor(request: Request) -> RuntimeActorContext:
+def bearer_actor(request: Request) -> RuntimeActorContext:
     credentials = request.headers.getlist("authorization")
     claimed = request.headers.getlist("x-jarvis-actor-id")
     if len(credentials) != 1 or len(claimed) > 1:
@@ -49,6 +51,27 @@ def actor(request: Request) -> RuntimeActorContext:
         secure_transport=request.scope.get("scheme") == "https",
         claimed_actor_id=claimed[0] if claimed else None,
     )
+
+
+def actor(request: Request) -> RuntimeActorContext:
+    from app.remote_control.browser import cookie_token
+
+    token = cookie_token(request)
+    credentials = request.headers.getlist("authorization")
+    if credentials and token:
+        raise DomainError("REMOTE_AUTHENTICATION_REQUIRED", "Ambiguous credentials.", 401)
+    if credentials:
+        return bearer_actor(request)
+    if not token or not request.app.state.settings.remote_browser_enabled:
+        return bearer_actor(request)
+    csrf = request.headers.getlist("x-jarvis-csrf")
+    claimed = request.headers.getlist("x-jarvis-actor-id")
+    if len(csrf) != 1 or len(claimed) > 1:
+        raise DomainError("REMOTE_CSRF_REQUIRED", "One session CSRF header required.", 403)
+    principal, _ = request.app.state.remote_browser_sessions.authenticate(token, csrf[0])
+    if claimed and claimed != [principal.actor_id]:
+        raise DomainError("REMOTE_ACTOR_MISMATCH", "Credential and actor must match.", 403)
+    return principal
 
 
 Actor = Annotated[RuntimeActorContext, Depends(actor)]
@@ -190,4 +213,12 @@ def approve_workspace_abandon(
 ):
     return TypedApiResponse(
         data=request.app.state.self_build_workspace_service.approve_abandon(principal, body)
+    )
+
+
+@router.post("/self-build/workspaces/preview", response_model=TypedApiResponse[WorkspacePlan])
+def preview_workspace(body: WorkspaceIntent, request: Request, principal: Actor):
+    service(request).access.authorize(principal, "read")
+    return TypedApiResponse(
+        data=request.app.state.self_build_workspace_service.preview(principal, body)
     )

@@ -375,7 +375,7 @@ def test_migration_one_head_populated_upgrade_guarded_downgrade_reupgrade(databa
     with pytest.raises(RuntimeError, match="Export self-improvement"):
         command.downgrade(config, "20260906_10")
     with sessions() as session:
-        assert session.scalar(text("SELECT version_num FROM alembic_version")) == "20261002_si"
+        assert session.scalar(text("SELECT version_num FROM alembic_version")) == DATABASE_REVISION
 
 
 def test_analysis_does_not_mutate_source_configuration_or_emergency_stop(database, tmp_path):
@@ -750,6 +750,8 @@ def test_experiment_output_budget_prevents_multiplicative_payload_growth():
     "code,metric,category,has_weakness",
     [
         ("execution_cancelled", "control_condition", "execution", False),
+        ("free_capacity_unavailable", "control_condition", "execution", False),
+        ("FREE_CAPACITY_UNAVAILABLE", "control_condition", "execution", False),
         ("task_completed_elsewhere", "control_condition", "execution", False),
         ("human_review_required", "control_condition", "execution", False),
         ("provider_execution_disabled", "control_condition", "execution", False),

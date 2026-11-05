@@ -55,13 +55,25 @@ class RemoteGateway:
     def __init__(self, app, *, settings: Settings):
         self.app = app
         self.enabled = settings.remote_control_enabled
+        self.browser_enabled = settings.remote_browser_enabled
+        self.origin = (
+            str(httpx.URL(settings.remote_origin)).rstrip("/") if settings.remote_origin else ""
+        )
         self.authority = normalize_authority(urlsplit(settings.remote_origin).netloc)
         if self.enabled and self.authority is None:
             raise ValueError("Remote HTTPS authority is invalid.")
         self.budget = RequestBudget(settings.remote_requests_per_minute)
 
     async def __call__(self, scope, receive, send):
-        if not self.enabled or scope["type"] not in {"http", "websocket"}:
+        if (
+            not self.enabled
+            or scope["type"] not in {"http", "websocket"}
+            or (
+                scope.get("jarvis.owned_loopback") is True
+                and not scope.get("path", "").startswith(("/api/remote/", "/assets/"))
+                and scope.get("path") != "/remote"
+            )
+        ):
             return await self.app(scope, receive, send)
         if scope["type"] == "websocket":
             await send({"type": "websocket.close", "code": 1008})
@@ -79,12 +91,26 @@ class RemoteGateway:
             code, message = "REMOTE_SECURE_TRANSPORT_REQUIRED", "Direct HTTPS is required."
         elif hosts != [self.authority]:
             code, message = "REMOTE_HOST_REJECTED", "Remote authority does not match configuration."
-        elif not scope.get("path", "").startswith("/api/remote/"):
+        elif not (
+            scope.get("path", "").startswith("/api/remote/")
+            or self.browser_enabled
+            and scope.get("method") == "GET"
+            and (scope.get("path") == "/remote" or scope.get("path", "").startswith("/assets/"))
+        ):
             code, message = (
                 "REMOTE_ROUTE_UNAVAILABLE",
                 "Only dedicated remote routes are available.",
             )
-        elif any(key == b"origin" for key, _ in headers):
+        elif self.browser_enabled and (
+            [value.decode("latin-1") for key, value in headers if key == b"origin"]
+            not in ([], [self.origin])
+            or any(
+                key == b"sec-fetch-site" and value not in (b"same-origin", b"none")
+                for key, value in headers
+            )
+        ):
+            code, message = "REMOTE_ORIGIN_REJECTED", "Same-origin browser access required."
+        elif not self.browser_enabled and any(key == b"origin" for key, _ in headers):
             # This first surface is an operator CLI API, with no browser CORS authority.
             code, message = "REMOTE_ORIGIN_REJECTED", "Browser-origin remote access is unavailable."
         if code is not None:
@@ -150,7 +176,17 @@ class RemoteGateway:
                     (key, value)
                     for key, value in message.get("headers", [])
                     if key != b"cache-control"
-                ] + [(b"cache-control", b"no-store")]
+                ] + [
+                    (b"cache-control", b"no-store"),
+                    (b"x-content-type-options", b"nosniff"),
+                    (b"referrer-policy", b"no-referrer"),
+                    (
+                        b"content-security-policy",
+                        b"default-src 'none'; script-src 'self'; "
+                        b"style-src 'self'; connect-src 'self'; img-src 'self' data:; "
+                        b"font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+                    ),
+                ]
             await send(message)
 
         await self.app(scope, bounded_receive, private_send)

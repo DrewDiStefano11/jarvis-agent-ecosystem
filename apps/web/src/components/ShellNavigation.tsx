@@ -16,6 +16,7 @@ export const navigationGroups = [
   { label: 'Observe', links: [
     { to: '/audit', label: 'Activity', icon: 'activity', mobile: false },
     { to: '/system', label: 'System', icon: 'system', mobile: false },
+    { to: '/models', label: 'AI providers', icon: 'system', mobile: false },
   ] },
 ] as const
 export const navigationLinks = navigationGroups.flatMap(group => [...group.links])

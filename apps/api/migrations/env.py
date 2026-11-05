@@ -12,6 +12,8 @@ from app.db.base import Base
 from app.development_agent import baseline_repository as baseline_models  # noqa: F401
 from app.development_agent import lineage_repository as lineage_models  # noqa: F401
 from app.development_agent import repository as development_models  # noqa: F401
+from app.provider_configuration import groq_repository as groq_capacity_models  # noqa: F401
+from app.provider_configuration import repository as provider_configuration_models  # noqa: F401
 from app.self_improvement import repository as improvement_models  # noqa: F401
 from app.source_edit_planning import repository as source_plan_models  # noqa: F401
 from app.source_mutation import repository as source_mutation_models  # noqa: F401
@@ -46,13 +48,26 @@ def run_migrations_online() -> None:
         poolclass=pool.NullPool,
     )
     with connectable.connect() as connection:
-        connection.exec_driver_sql("PRAGMA foreign_keys=ON")
-        connection.commit()
+        if connection.dialect.name == "sqlite":
+            connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+            connection.commit()
+            # Python's legacy SQLite mode does not BEGIN for DDL. Start a real
+            # transaction before Alembic so a later retention guard rolls back
+            # every earlier downgrade step, including the version table.
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
         context.configure(
-            connection=connection, target_metadata=target_metadata, render_as_batch=True
+            connection=connection,
+            target_metadata=target_metadata,
+            render_as_batch=True,
+            transactional_ddl=True,
         )
-        with context.begin_transaction():
-            context.run_migrations()
+        try:
+            with context.begin_transaction():
+                context.run_migrations()
+            connection.commit()
+        except BaseException:
+            connection.rollback()
+            raise
 
 
 if context.is_offline_mode():

@@ -529,10 +529,12 @@ def test_autonomous_worker_max_concurrency_config(monkeypatch: pytest.MonkeyPatc
 
     from app.core.config import Settings
 
-    monkeypatch.setenv("JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY", "1")
-    s = Settings()
-    assert s.autonomous_worker_max_concurrency == 1
-
-    monkeypatch.setenv("JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY", "2")
-    with pytest.raises(pydantic.ValidationError):
-        Settings()
+    monkeypatch.delenv("JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY", raising=False)
+    assert Settings(_env_file=None).autonomous_worker_max_concurrency == 1
+    for concurrency in (1, 2, 3, 4):
+        monkeypatch.setenv("JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY", str(concurrency))
+        assert Settings(_env_file=None).autonomous_worker_max_concurrency == concurrency
+    for invalid in ("0", "5", "-1", "1.5", "unbounded"):
+        monkeypatch.setenv("JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY", invalid)
+        with pytest.raises(pydantic.ValidationError):
+            Settings(_env_file=None)

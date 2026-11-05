@@ -91,6 +91,35 @@ class FakeProvider:
         )
 
 
+@pytest.mark.parametrize(
+    "request_model,preferred_model,expected",
+    [
+        (None, None, "assigned-model"),
+        ("request-model", None, "request-model"),
+        ("request-model", "explicit-model", "explicit-model"),
+    ],
+)
+async def test_task_category_assignment_preserves_explicit_model_choices(
+    request_model, preferred_model, expected
+):
+    provider = FakeProvider("configured")
+    router = ModelRouter(
+        ProviderRegistry([provider]),
+        RetryExecutor(RetryPolicy(maximum_attempts=1)),
+        model_assignments={"configured": {"chat": "assigned-model"}},
+    )
+    response = await router.execute(
+        request=ModelExecutionRequest(
+            prompt="reason", model=request_model, required_capability=ModelCapability.CHAT
+        ),
+        requirements=RoutingRequirements(preferred_model=preferred_model),
+        budget=TaskBudget(maximum_requests=1),
+    )
+    assert response.model == expected
+    assert provider.availability_calls == [expected]
+    assert provider.execute_calls == [expected]
+
+
 def _response(
     provider: str,
     model: str,

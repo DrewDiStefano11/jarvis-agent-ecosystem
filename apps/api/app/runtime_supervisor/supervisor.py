@@ -386,6 +386,12 @@ class RuntimeSupervisor:
             return
         log = component_logger(self.logger, managed.definition.name)  # type: ignore[arg-type]
         environment = dict(self.config.environment)
+        if managed.definition.name != "api" or self.config.remote_listener is None:
+            # Explicit overrides also prevent child dotenv files restoring credentials.
+            environment["JARVIS_REMOTE_CONTROL_ENABLED"] = "false"
+            environment["JARVIS_REMOTE_BROWSER_ENABLED"] = "false"
+            environment["JARVIS_REMOTE_OPERATOR_TOKEN"] = ""
+            environment["JARVIS_SUPERVISOR_REMOTE_ENABLED"] = "false"
         environment.setdefault("PYTHONUTF8", "1")
         creationflags = 0
         if os.name == "nt":
@@ -478,6 +484,21 @@ class RuntimeSupervisor:
             result = HealthResult(False, "unavailable", "endpoint not owned by managed process")
         if managed.definition.name == "api":
             self.last_api_health = result
+            listener = self.config.remote_listener
+            if result.available and listener is not None:
+                from app.runtime_supervisor.remote_listener import probe_remote
+
+                if process is None or not self.port_owner(process.pid, listener.port):
+                    return HealthResult(False, "unavailable", "TLS endpoint not owned by API")
+                remote = probe_remote(listener)
+                if process_identity(process.pid) != managed.process_identity or not self.port_owner(
+                    process.pid, listener.port
+                ):
+                    return HealthResult(False, "unavailable", "TLS endpoint ownership changed")
+                if not remote.available:
+                    return remote
+                if remote.status != "healthy":
+                    return HealthResult(True, remote.status, remote.detail, result.payload)
         return result
 
     def _monitor_once(self) -> None:

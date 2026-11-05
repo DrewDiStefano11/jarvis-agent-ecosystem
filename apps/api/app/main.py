@@ -100,6 +100,7 @@ from app.self_build.native_commit_router import router as native_commit_router
 from app.self_build.router import router as self_build_router
 from app.self_build.service import WorkspaceService
 from app.self_improvement.router import router as self_improvement_router
+from app.self_improvement.schedule import ImprovementScheduler, resources_available
 from app.services.events import EventBroker
 from app.services.task_creation import prepare_task_creation
 from app.simulator.engine import SimulatorEngine
@@ -107,7 +108,7 @@ from app.team_selection.router import router as team_selection_router
 from app.tool_execution.router import router as tool_execution_router
 from app.tool_execution.service import ToolExecutionService
 
-DATABASE_REVISION = "20261016_a_lineage_join"
+DATABASE_REVISION = "20261102_groq"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
@@ -150,6 +151,7 @@ async def _lifespan(app: FastAPI):
     restored_workflow_state = app.state.restored_workflow_state
     lease_recovery_task = None
     office_recovery_task = None
+    improvement_schedule_task = None
     startup_completed = False
 
     async def recover_expired_task_leases() -> None:
@@ -179,6 +181,21 @@ async def _lifespan(app: FastAPI):
                     "Office reconciliation will retry after a database error."
                 )
 
+    async def schedule_improvements() -> None:
+        while True:
+            # One cycle per bounded tick; time-window identity and native claims
+            # arbitrate duplicate processes and recover unfinished captures.
+            try:
+                reachable, current = repository.health_probe(DATABASE_REVISION)
+                if reachable and current:
+                    await app.state.improvement_scheduler.tick()
+            except (DomainError, ValueError, OSError, SQLAlchemyError, RuntimeError):
+                # No exception content: source evidence can contain sensitive data.
+                logging.getLogger(__name__).warning(
+                    "Scheduled improvement deferred; inspect operator policy and native state."
+                )
+            await asyncio.sleep(60)
+
     try:
         repository.record_process_lifecycle(starting=True)
         await broker.dispatch_pending()
@@ -194,11 +211,20 @@ async def _lifespan(app: FastAPI):
         office_recovery_task = asyncio.create_task(reconcile_office())
         app.state.lease_recovery_task = lease_recovery_task
         app.state.office_recovery_task = office_recovery_task
+        if settings.improvement_schedule_policy.enabled:
+            improvement_schedule_task = asyncio.create_task(schedule_improvements())
+        app.state.improvement_schedule_task = improvement_schedule_task
         if restored_workflow_state == "recovery_required" and settings.simulator_auto_resume:
             await simulator.resume()
         startup_completed = True
         yield
     finally:
+        if improvement_schedule_task:
+            improvement_schedule_task.cancel()
+            try:
+                await improvement_schedule_task
+            except asyncio.CancelledError:
+                pass
         if office_recovery_task:
             office_recovery_task.cancel()
             try:
@@ -230,12 +256,18 @@ def create_app(
     *,
     recover_interrupted_workflow: bool = True,
 ) -> FastAPI:
-    settings = Settings(JARVIS_DATABASE_URL=database_url) if database_url else Settings()
+    from app.provider_configuration.bootstrap import ProviderRuntimeControls, bootstrap_settings
+    from app.provider_configuration.runtime import ProviderConfigurationSnapshot
+
+    controls = ProviderRuntimeControls()
+    settings = bootstrap_settings(database_url)
     settings.ensure_runtime_directory()
     if settings.auto_migrate:
         _upgrade_database(settings)
     engine = create_database_engine(settings.database_url, settings.sql_echo)
     session_factory = create_session_factory(engine)
+    provider_configuration = ProviderConfigurationSnapshot(session_factory, settings)
+    settings = provider_configuration.settings(settings, controls)
     repository = SqlAlchemyRepository(
         session_factory,
         settings.idempotency_lease_seconds,
@@ -288,9 +320,19 @@ def create_app(
     app.state.simulator = simulator
     app.state.context_assembler = context_assembler
     app.state.settings = settings
+    app.state.provider_configuration = provider_configuration
+    from app.provider_configuration.service import ProviderConfigurationService
+
     app.state.engine = engine
     app.state.task_leases = task_leases
     app.state.identity_service = IdentityService(session_factory)
+    app.state.improvement_scheduler = ImprovementScheduler(
+        repository,
+        broker,
+        app.state.identity_service,
+        settings.improvement_schedule_policy,
+        resources=lambda: resources_available(settings.data_directory),
+    )
     app.state.catalog_service = CatalogService(session_factory)
     app.state.office_service = OfficeService(session_factory)
     app.state.agent_runtime_repository = SqlAlchemyAgentRuntimeRepository(
@@ -317,12 +359,28 @@ def create_app(
             app.state.agent_runtime_repository,
         )
         app.include_router(remote_control_router)
+        if settings.remote_browser_enabled:
+            from app.remote_control.browser import BrowserSessions
+            from app.remote_control.browser import router as browser_router
+
+            app.state.remote_browser_sessions = BrowserSessions(access)
+            app.include_router(browser_router)
         app.include_router(git_operator_router)
         app.include_router(commit_operator_router)
         app.include_router(native_commit_operator_router)
         app.include_router(publication_operator_router)
         app.include_router(development_operator_router)
-    app.state.model_router = build_model_router(settings, session_factory)
+    from app.provider_configuration.groq_capacity import GroqCapacityStore
+
+    app.state.groq_capacity = GroqCapacityStore(app)
+    app.state.model_router = build_model_router(
+        settings,
+        session_factory,
+        credential_resolver=provider_configuration.resolve,
+        configuration_guard=provider_configuration.live,
+        model_assignments=provider_configuration.assignments(),
+        groq_capacity=app.state.groq_capacity,
+    )
     app.state.model_execution_repository = ModelExecutionRepository(
         session_factory,
         outbox_max_attempts=repository.outbox_max_attempts,
@@ -340,6 +398,7 @@ def create_app(
         app.state.agent_runtime_service,
         app.state.model_router,
         task_leases,
+        settings=settings,
         heartbeat_interval_seconds=settings.autonomous_worker_heartbeat_interval_seconds,
         lease_seconds=settings.autonomous_worker_lease_seconds,
     )
@@ -368,7 +427,7 @@ def create_app(
     app.state.development_review_service = DevelopmentReviewService(app)
     app.state.development_provider_settings = DevelopmentProviderSettings()
     app.state.development_model_router = build_development_router(
-        app.state.development_provider_settings, app.state.model_router
+        app.state.development_provider_settings, app.state.model_router, settings
     )
     app.state.development_executor = DevelopmentExecutor(
         app, app.state.development_provider_settings, app.state.development_model_router
@@ -383,6 +442,13 @@ def create_app(
     app.include_router(agent_runtime_router)
     app.include_router(autonomous_worker_router)
     app.include_router(local_planning_setup_router)
+    from app.provider_configuration.router import router as model_configuration_router
+
+    app.include_router(model_configuration_router)
+    app.state.provider_configuration_service = ProviderConfigurationService(app)
+    from app.provider_configuration.groq_acceptance import GroqAcceptanceService
+
+    app.state.groq_acceptance_service = GroqAcceptanceService(app)
     app.include_router(identity_router)
     app.include_router(catalog_router)
     app.include_router(office_router)
@@ -427,7 +493,10 @@ def create_app(
 
     @app.middleware("http")
     async def enforce_local_control_plane(request: Request, call_next):
-        if settings.remote_control_enabled:
+        if (
+            settings.remote_control_enabled
+            and request.scope.get("jarvis.owned_loopback") is not True
+        ):
             return await call_next(request)
         if not _is_loopback_peer(request.client.host if request.client else None):
             return JSONResponse(
@@ -1064,13 +1133,19 @@ def create_app(
             assembly = ContextAssembly.model_validate(replay)
             replay_task = repository.get_task_durable(assembly.taskId)
             if (
-                settings.model_execution_mode == "local_only"
+                (
+                    settings.model_execution_mode == "local_only"
+                    or settings.verified_cloud_execution_allowed
+                )
                 and replay_task.startedAt is None
                 and replay_task.status
                 in {"queued", "planning", "assigned", "paused", "revision_requested"}
             ):
                 await DecompositionService(
-                    repository, app.state.identity_service, app.state.model_router
+                    repository,
+                    app.state.identity_service,
+                    app.state.model_router,
+                    settings=settings,
                 ).prepare(assembly.taskId, assembly.id)
                 await broker.dispatch_pending()
             return ApiResponse(data=assembly)
@@ -1089,6 +1164,8 @@ def create_app(
                 repository=repository,
                 identity_service=app.state.identity_service,
                 model_router=app.state.model_router,
+                event_broker=broker if settings.verified_cloud_execution_allowed else None,
+                settings=settings,
             )
             try:
                 task = await team_selector.assign_team(task)
@@ -1096,6 +1173,7 @@ def create_app(
                 import logging
 
                 logging.getLogger(__name__).warning("Team assignment failed: %s", e)
+                task = repository.get_task_durable(body.taskId)
 
         enricher = ContextEnricher(
             identity_service=app.state.identity_service,
@@ -1110,7 +1188,10 @@ def create_app(
         existing = repository.context_assemblies.get(item.id)
         if existing is not None:
             if (
-                settings.model_execution_mode == "local_only"
+                (
+                    settings.model_execution_mode == "local_only"
+                    or settings.verified_cloud_execution_allowed
+                )
                 and task.startedAt is None
                 and task.status
                 in {
@@ -1122,7 +1203,10 @@ def create_app(
                 }
             ):
                 await DecompositionService(
-                    repository, app.state.identity_service, app.state.model_router
+                    repository,
+                    app.state.identity_service,
+                    app.state.model_router,
+                    settings=settings,
                 ).prepare(task.id, existing.id)
             completion = idempotency_result(
                 request,
@@ -1174,7 +1258,10 @@ def create_app(
             ),
         )
         if (
-            settings.model_execution_mode == "local_only"
+            (
+                settings.model_execution_mode == "local_only"
+                or settings.verified_cloud_execution_allowed
+            )
             and task.startedAt is None
             and task.status
             in {
@@ -1186,7 +1273,7 @@ def create_app(
             }
         ):
             await DecompositionService(
-                repository, app.state.identity_service, app.state.model_router
+                repository, app.state.identity_service, app.state.model_router, settings=settings
             ).prepare(task.id, item.id)
             await broker.dispatch_pending()
         return ApiResponse(data=item)
@@ -1514,6 +1601,9 @@ def create_app(
 
     # Keep the remote boundary outside CORS and every other application middleware.
     # Preflight responses must obey the same dedicated-route and transport checks.
+    from app.core.browser_boundary import LocalBrowserBoundary
+
+    app.add_middleware(LocalBrowserBoundary, settings=settings)
     app.add_middleware(RemoteGateway, settings=settings)
     return app
 

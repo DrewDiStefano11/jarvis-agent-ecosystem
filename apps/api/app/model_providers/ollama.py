@@ -102,7 +102,7 @@ class OllamaProvider(ProviderBase):
         request = ModelExecutionRequest.model_validate(request.model_dump())
         validate_tool_support(request, self.capabilities, self.name)
         model = request.model or self.default_model
-        if self.execution_mode == "free_only" and model.endswith(("-cloud", ":cloud")):
+        if model.casefold().endswith(("-cloud", ":cloud")):
             raise ProviderExecutionDisabledError(
                 "Ollama cloud models are not verified local inference"
             )

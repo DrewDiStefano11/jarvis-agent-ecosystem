@@ -35,7 +35,7 @@ class ImprovementBacklogService:
                 "IMPROVEMENT_BACKLOG_PERMISSION_DENIED", "Backlog access is denied.", 403
             )
 
-    async def select(self, actor, request, idempotency_key):
+    async def select(self, actor, request, idempotency_key, *, additional_authorize=None):
         self.authorize(actor)
         self.backlog.assert_supported()
         request = SelectImprovementRequest.model_validate_json(request.model_dump_json())
@@ -112,6 +112,8 @@ class ImprovementBacklogService:
 
                 def admit(session, selected=entry):
                     self.authorize(actor, session)
+                    if additional_authorize is not None:
+                        additional_authorize(session)
                     self.backlog.admit_in_session(session, selected)
 
                 try:
@@ -154,6 +156,12 @@ class ImprovementBacklogService:
                 scanned_proposals=len(candidates),
                 blocked_proposals=blocked,
             )
+
+            def authorize_empty(session):
+                self.authorize(actor, session)
+                if additional_authorize is not None:
+                    additional_authorize(session)
+
             self.repository.complete_idempotency(
                 IdempotencyResult(
                     key=key,
@@ -163,7 +171,7 @@ class ImprovementBacklogService:
                     body={"data": result.model_dump(mode="json")},
                     lease_expires_at=claim.lease_expires_at,
                 ),
-                authorize=lambda session: self.authorize(actor, session),
+                authorize=authorize_empty,
             )
             return result
         finally:

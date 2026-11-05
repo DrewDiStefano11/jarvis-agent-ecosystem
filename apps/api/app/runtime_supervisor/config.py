@@ -13,7 +13,8 @@ from pydantic import ValidationError
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import ArgumentError
 
-from app.core.config import Settings
+from app.provider_configuration.bootstrap import validate_supervisor_settings
+from app.runtime_supervisor.remote_listener import RemoteListener
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FALSE_VALUES = {"0", "false", "no", "off"}
@@ -319,6 +320,7 @@ class SupervisorConfig:
     disk_warning_bytes: int
     disk_critical_bytes: int
     environment: dict[str, str]
+    remote_listener: RemoteListener | None = None
 
     @classmethod
     def load(cls, repository: Path, environ: dict[str, str] | None = None) -> SupervisorConfig:
@@ -352,9 +354,9 @@ class SupervisorConfig:
         execution_mode = values.get("JARVIS_MODEL_EXECUTION_MODE", "disabled").strip()
         ollama_enabled = _bool(values, "JARVIS_MODEL_OLLAMA_ENABLED", False)
         openai_compatible_enabled = _bool(values, "JARVIS_MODEL_OPENAI_COMPATIBLE_ENABLED", False)
-        if worker_enabled and execution_mode != "local_only":
+        if worker_enabled and execution_mode not in {"local_only", "free_only"}:
             raise SupervisorConfigurationError(
-                "enabled autonomous worker requires JARVIS_MODEL_EXECUTION_MODE=local_only"
+                "enabled autonomous worker requires JARVIS_MODEL_EXECUTION_MODE=local_only or free_only"
             )
         if worker_enabled and not values.get("JARVIS_AUTONOMOUS_WORKER_ACTOR_ID", "").strip():
             raise SupervisorConfigurationError(
@@ -364,7 +366,11 @@ class SupervisorConfig:
             raise SupervisorConfigurationError(
                 "enabled autonomous worker requires JARVIS_AUTONOMOUS_WORKER_INSTANCE_ID"
             )
-        if worker_enabled and not (ollama_enabled or openai_compatible_enabled):
+        if (
+            worker_enabled
+            and execution_mode == "local_only"
+            and not (ollama_enabled or openai_compatible_enabled)
+        ):
             raise SupervisorConfigurationError(
                 "enabled autonomous worker requires at least one enabled local model provider"
             )
@@ -432,7 +438,7 @@ class SupervisorConfig:
         environment["VITE_API_BASE_URL"] = vite_api
         environment["VITE_WS_URL"] = vite_ws
         try:
-            Settings(_env_file=None, **environment)
+            validate_supervisor_settings(environment, _sqlite_path(repository, database_url))
         except ValidationError as exc:
             details = "; ".join(
                 str(error["msg"]) for error in exc.errors(include_input=False, include_url=False)
@@ -440,6 +446,10 @@ class SupervisorConfig:
             raise SupervisorConfigurationError(
                 f"application settings are invalid: {details}"
             ) from exc
+        try:
+            remote_listener = RemoteListener.load(values, local_ports={api_port, web_port})
+        except ValueError as exc:
+            raise SupervisorConfigurationError(str(exc)) from exc
         return cls(
             repository=repository,
             runtime_home=_safe_runtime_home(repository, values, coordination_home),
@@ -501,6 +511,7 @@ class SupervisorConfig:
                 10_995_116_277_760,
             ),
             environment=environment,
+            remote_listener=remote_listener,
         ).validated()
 
     def validated(self) -> SupervisorConfig:

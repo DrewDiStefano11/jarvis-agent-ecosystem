@@ -15,6 +15,7 @@ import { useCoordinationState } from './useCoordinationState'
 import { useDecompositionState } from './useDecompositionState'
 import { useOfficeState } from './useOfficeState'
 import { useToolExecutionState } from './useToolExecutionState'
+import { useProviderConfigurationState } from './useProviderConfigurationState'
 import type {
   Agent,
   Approval,
@@ -52,6 +53,7 @@ interface Store extends AppState {
   runtime: ReturnType<typeof useRuntimeState>
   office: ReturnType<typeof useOfficeState>
   tools: ReturnType<typeof useToolExecutionState>
+  providers: ReturnType<typeof useProviderConfigurationState>
   refresh: () => Promise<void>
   action: <T>(path: string, body?: unknown) => Promise<T>
   selectAgent: (id: string | null) => void
@@ -125,6 +127,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
   const catalog = useCatalogState(runtime.refreshRuntime)
   const office = useOfficeState(state.lastSync)
   const tools = useToolExecutionState(runtime.actorId, runtime.taskId, state.lastSync)
+  const providers = useProviderConfigurationState(runtime.actorId, runtime.selectActor)
   const [selectedAgentId, selectAgent] = useState<string | null>(null)
   const [selectedTaskId, selectTask] = useState<string | null>(null)
   const coordination = useCoordinationState(selectedTaskId ?? runtime.taskId, state.lastSync)
@@ -370,6 +373,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       coordination,
       office,
       tools,
+      providers,
       refresh,
       action,
       selectAgent,
@@ -377,7 +381,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       selectedAgentId,
       selectedTaskId,
     }),
-    [state, runtime, catalog, decomposition, coordination, office, tools, refresh, action, selectedAgentId, selectedTaskId],
+    [state, runtime, catalog, decomposition, coordination, office, tools, providers, refresh, action, selectedAgentId, selectedTaskId],
   )
   return <Context.Provider value={value}>{children}</Context.Provider>
 }

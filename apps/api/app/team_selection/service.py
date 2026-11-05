@@ -1,6 +1,7 @@
 import json
 import logging
 from datetime import UTC, datetime
+from hashlib import sha256
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -10,14 +11,16 @@ from app.identity.service import IdentityService
 from app.model_providers.budget import TaskBudget
 from app.model_providers.contracts import (
     MessageRole,
-    ModelCapability,
     ModelExecutionRequest,
     ModelMessage,
     ModelOutputSchema,
 )
-from app.model_providers.router import ModelRouter, RoutingRequirements
+from app.model_providers.errors import ProviderExecutionDisabledError
+from app.model_providers.router import ModelRouter, planning_dispatch_allowed, planning_requirements
 from app.models.domain import Task
+from app.models.planning_inference import PlanningInferenceIntent
 from app.models.team_selection import TeamSelectionRationale, TeamSelectionRecord
+from app.repositories.planning import PlanningRepository
 from app.repositories.protocols import Repository
 from app.services.events import EventBroker
 
@@ -43,13 +46,18 @@ class TeamSelectionService:
         identity_service: IdentityService,
         model_router: ModelRouter,
         event_broker: EventBroker | None = None,
+        *,
+        settings=None,
     ) -> None:
         self.repository = repository
         self.identity_service = identity_service
         self.model_router = model_router
         self.event_broker = event_broker
+        self.settings = settings
 
-    async def _infer_capabilities(self, task: Task) -> tuple[list[str], list[str], str]:
+    async def _infer_capabilities(
+        self, task: Task, *, commit_guards=None
+    ) -> tuple[list[str], list[str], str]:
         schema = RequiredCapabilitiesResult.model_json_schema()
         output_schema = ModelOutputSchema(name="required_capabilities", json_schema=schema)
 
@@ -78,17 +86,65 @@ class TeamSelectionService:
             task_id=task.id,
         )
 
-        requirements = RoutingRequirements(
-            required_capability=ModelCapability.CHAT,
-            prefer_local=True,
-            allow_remote=False,
-            allow_fallback=False,
-        )
+        requirements = planning_requirements(self.settings)
         budget = TaskBudget(maximum_requests=1, maximum_output_tokens=1024)
+        options = {}
+        if requirements.allow_remote:
+
+            def planning_input(current):
+                value = current.model_dump(
+                    mode="json",
+                    include={
+                        "title",
+                        "description",
+                        "request",
+                        "projectId",
+                        "assignedManagerId",
+                        "assignedAgentIds",
+                    },
+                )
+                value["previousSelectionId"] = (
+                    current.teamSelection.selectionId if current.teamSelection else None
+                )
+                return value
+
+            expected = planning_input(task)
+            input_fingerprint = sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()
+
+            async def before_dispatch(provider_name, model):
+                if not planning_dispatch_allowed(
+                    self.settings, self.model_router.registry, provider_name
+                ):
+                    raise ProviderExecutionDisabledError("Current planning activation was revoked")
+                PlanningRepository(self.repository.session_factory).assert_live(
+                    task.id,
+                    expected,
+                    planning_input,
+                    intent=PlanningInferenceIntent.for_request(
+                        task.id, "team_selection", input_fingerprint, 1, provider_name, model
+                    ),
+                )
+
+            options["before_dispatch"] = before_dispatch
 
         response = await self.model_router.execute(
-            request=request, requirements=requirements, budget=budget
+            request=request, requirements=requirements, budget=budget, **options
         )
+        if requirements.allow_remote:
+
+            def authorize_result(session):
+                if not planning_dispatch_allowed(
+                    self.settings, self.model_router.registry, response.provider
+                ):
+                    raise ProviderExecutionDisabledError("Current planning activation was revoked")
+                PlanningRepository.assert_live_in_session(
+                    session, task.id, expected, planning_input
+                )
+
+            with self.repository.session_factory() as session:
+                authorize_result(session)
+            if commit_guards is not None:
+                commit_guards.append(authorize_result)
         payload = json.loads(response.content)
         result = RequiredCapabilitiesResult.model_validate(payload)
         # map_tags returns (valid, invalid)
@@ -191,13 +247,23 @@ class TeamSelectionService:
 
         return selected_specialists, sorted(uncovered)
 
-    async def assign_team(self, task: Task) -> Task:
+    async def assign_team(self, task: Task, *, force: bool = False) -> Task:
         # Avoid duplicate work if we already have a successful team selection that matches the task
         # Re-selection is possible if teamSelection status was blocked, etc.
-        if task.teamSelection and task.teamSelection.status == "completed":
+        if task.teamSelection and task.teamSelection.status == "completed" and not force:
             return task
 
-        required, optional, reason = await self._infer_capabilities(task)
+        commit_guards = []
+        cloud_capable = planning_requirements(self.settings).allow_remote
+        if cloud_capable:
+            # Proposed assignments must not escape through a caller's context
+            # snapshot if the native commit guard rejects their persistence.
+            task = task.model_copy(deep=True)
+        required, optional, reason = await self._infer_capabilities(
+            task, **({"commit_guards": commit_guards} if cloud_capable else {})
+        )
+        if cloud_capable and not commit_guards:
+            raise ProviderExecutionDisabledError("Native planning result authority is required")
 
         workforce = self.identity_service.workforce_snapshot(limit=100)
         manager_id = self._select_manager(task, workforce)
@@ -277,6 +343,7 @@ class TeamSelectionService:
                 task.id,
                 audit={"summary": audit_summary},
                 updated_task=task,
+                authorize=commit_guards[0] if commit_guards else None,
             )
 
         return task

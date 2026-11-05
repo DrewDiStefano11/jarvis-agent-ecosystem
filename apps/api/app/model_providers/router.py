@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -27,6 +28,9 @@ from app.model_providers.retry import RetryExecutor
 from app.model_providers.tool_calls import validate_tool_response
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.core.config import Settings
 
 
 class RoutingRequirements(BaseModel):
@@ -54,10 +58,64 @@ class RoutingRequirements(BaseModel):
         return self
 
 
+def planning_requirements(
+    settings: Settings | None,
+    *,
+    requested_provider: str | None = None,
+    preferred_model: str | None = None,
+) -> RoutingRequirements:
+    """Routing only; provider admission and native execution fences remain mandatory."""
+    from app.core.config import Settings
+
+    hosted = type(settings) is Settings and settings.verified_cloud_execution_allowed
+    return RoutingRequirements(
+        requested_provider=requested_provider,
+        preferred_model=preferred_model,
+        required_capability=ModelCapability.CHAT,
+        prefer_local=not hosted or settings.model_prefer_local,
+        allow_remote=hosted,
+        allow_fallback=False,
+    )
+
+
+def planning_dispatch_allowed(settings, registry, provider_name) -> bool:
+    from app.core.config import Settings
+
+    selected = next(
+        (provider for provider in registry.list() if provider.name == provider_name), None
+    )
+    return bool(
+        type(settings) is Settings
+        and settings.model_execution_mode in {"local_only", "free_only"}
+        and selected is not None
+        and (selected.is_local is True or settings.verified_cloud_execution_allowed)
+    )
+
+
 class ModelRouter:
-    def __init__(self, registry: ProviderRegistry, retry: RetryExecutor) -> None:
+    def __init__(
+        self,
+        registry: ProviderRegistry,
+        retry: RetryExecutor,
+        *,
+        model_assignments: dict[str, dict[str, str]] | None = None,
+    ) -> None:
         self.registry = registry
         self.retry = retry
+        self.model_assignments = {
+            name: dict(assignments) for name, assignments in (model_assignments or {}).items()
+        }
+
+    def effective_model(self, provider, request, requirements):
+        capability = requirements.required_capability or request.required_capability
+        assignments = self.model_assignments.get(provider.name, {})
+        return (
+            requirements.preferred_model
+            or request.model
+            or assignments.get(capability.value if capability else "")
+            or assignments.get("")
+            or provider.default_model
+        )
 
     async def eligible(
         self,
@@ -86,9 +144,7 @@ class ModelRouter:
             and (requirements.allow_remote or provider.is_local)
             and (
                 not hasattr(provider, "free_eligible")
-                or provider.free_eligible(
-                    requirements.preferred_model or request.model or provider.default_model
-                )
+                or provider.free_eligible(self.effective_model(provider, request, requirements))
             )
         ]
         health = await self.registry.health(candidates)
@@ -96,9 +152,7 @@ class ModelRouter:
 
         available: list[ModelProvider] = []
         for provider in candidates:
-            effective_model = (
-                requirements.preferred_model or request.model or provider.default_model
-            )
+            effective_model = self.effective_model(provider, request, requirements)
             known = await provider.model_available(effective_model)
             if known is not False:
                 available.append(provider)
@@ -158,13 +212,11 @@ class ModelRouter:
             # A prior candidate may have exhausted this same account bucket.
             # Recheck before checkpointing or spending another request slot.
             if hasattr(provider, "free_eligible") and not provider.free_eligible(
-                requirements.preferred_model or request.model or provider.default_model
+                self.effective_model(provider, request, requirements)
             ):
                 continue
             attempted.append(provider.name)
-            effective_model = (
-                requirements.preferred_model or request.model or provider.default_model
-            )
+            effective_model = self.effective_model(provider, request, requirements)
             routed_request = request.model_copy(update={"model": effective_model})
 
             async def dispatch(provider=provider, routed_request=routed_request):

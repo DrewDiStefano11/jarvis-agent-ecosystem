@@ -23,7 +23,7 @@ from app.model_providers.contracts import (
     ModelOutputSchema,
 )
 from app.model_providers.errors import ModelProviderError
-from app.model_providers.router import RoutingRequirements
+from app.model_providers.router import planning_requirements
 from app.models.agent_runtime import (
     RecordCheckpointCommand,
     canonical_json,
@@ -389,13 +389,10 @@ class IndependentVerifier:
                                     ),
                                     prefer_no_reasoning=True,
                                 ),
-                                requirements=RoutingRequirements(
+                                requirements=planning_requirements(
+                                    self.worker.settings,
                                     requested_provider=request.provider_preference,
                                     preferred_model=request.model_name,
-                                    required_capability=ModelCapability.CHAT,
-                                    prefer_local=True,
-                                    allow_remote=self.worker.settings.verified_cloud_execution_allowed,
-                                    allow_fallback=False,
                                 ),
                                 budget=TaskBudget(
                                     maximum_requests=1,

@@ -1,5 +1,29 @@
 # Local autonomous planning/review worker
 
+## Current provider and concurrency support
+
+The local-only behavior described below remains available with Ollama and loopback
+OpenAI-compatible providers. Approved hosted execution additionally uses the
+`free_only` routing and native provider evidence described in
+[provider configuration](provider-configuration.md). Hybrid routing preserves the
+configured local preference; provider failures never grant fallback authority.
+
+`JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY` defaults to `1` and accepts integers
+from `1` through `4`. An explicitly started worker process registers one native
+worker per slot, with distinct stable instance IDs and one active task per slot.
+This overlaps independent queued runtime tasks; it does not remove graph
+dependencies or authorize extra provider requests. Every slot retains task leases,
+runtime authorization, budgets, checkpoints and emergency stop checks.
+
+Idle slots only inspect eligible durable work. They do not poll models or submit
+inference. Shutdown cancels and awaits all in-flight iterations before stopping
+native workers and releasing their leases. This setting neither starts a worker
+nor enables inference or permanent startup.
+
+Team-selection results also recheck task inputs, current routing and emergency
+stop inside the transaction that writes the task and its outbox event. A late
+task edit or stop therefore prevents stale model results from being committed.
+
 ## Boundary
 
 Phase 2C adds one real autonomous path: a dedicated local process may consume an explicitly queued Agent Runtime run whose `autonomous_execution.execution_type` is `planning_review`. It acquires the run's exact task through the existing fenced lease service, loads the one explicitly referenced completed Context Assembly, calls one structurally loopback provider, validates a fixed result, stores it once, and completes or pauses the runtime and task.
