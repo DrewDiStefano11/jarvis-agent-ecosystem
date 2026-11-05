@@ -55,7 +55,9 @@ class TeamSelectionService:
         self.event_broker = event_broker
         self.settings = settings
 
-    async def _infer_capabilities(self, task: Task, *, commit_guards=None) -> tuple[list[str], list[str], str]:
+    async def _infer_capabilities(
+        self, task: Task, *, commit_guards=None
+    ) -> tuple[list[str], list[str], str]:
         schema = RequiredCapabilitiesResult.model_json_schema()
         output_schema = ModelOutputSchema(name="required_capabilities", json_schema=schema)
 
@@ -88,22 +90,36 @@ class TeamSelectionService:
         budget = TaskBudget(maximum_requests=1, maximum_output_tokens=1024)
         options = {}
         if requirements.allow_remote:
+
             def planning_input(current):
-                value = current.model_dump(mode="json", include={
-                        "title", "description", "request", "projectId",
-                        "assignedManagerId", "assignedAgentIds",
-                    })
-                value["previousSelectionId"] = current.teamSelection.selectionId if current.teamSelection else None
+                value = current.model_dump(
+                    mode="json",
+                    include={
+                        "title",
+                        "description",
+                        "request",
+                        "projectId",
+                        "assignedManagerId",
+                        "assignedAgentIds",
+                    },
+                )
+                value["previousSelectionId"] = (
+                    current.teamSelection.selectionId if current.teamSelection else None
+                )
                 return value
 
             expected = planning_input(task)
             input_fingerprint = sha256(json.dumps(expected, sort_keys=True).encode()).hexdigest()
 
             async def before_dispatch(provider_name, model):
-                if not planning_dispatch_allowed(self.settings, self.model_router.registry, provider_name):
+                if not planning_dispatch_allowed(
+                    self.settings, self.model_router.registry, provider_name
+                ):
                     raise ProviderExecutionDisabledError("Current planning activation was revoked")
                 PlanningRepository(self.repository.session_factory).assert_live(
-                    task.id, expected, planning_input,
+                    task.id,
+                    expected,
+                    planning_input,
                     intent=PlanningInferenceIntent.for_request(
                         task.id, "team_selection", input_fingerprint, 1, provider_name, model
                     ),
@@ -115,10 +131,15 @@ class TeamSelectionService:
             request=request, requirements=requirements, budget=budget, **options
         )
         if requirements.allow_remote:
+
             def authorize_result(session):
-                if not planning_dispatch_allowed(self.settings, self.model_router.registry, response.provider):
+                if not planning_dispatch_allowed(
+                    self.settings, self.model_router.registry, response.provider
+                ):
                     raise ProviderExecutionDisabledError("Current planning activation was revoked")
-                PlanningRepository.assert_live_in_session(session, task.id, expected, planning_input)
+                PlanningRepository.assert_live_in_session(
+                    session, task.id, expected, planning_input
+                )
 
             with self.repository.session_factory() as session:
                 authorize_result(session)

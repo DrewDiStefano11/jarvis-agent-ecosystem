@@ -24,6 +24,11 @@ class PlanningInferenceIntent(BaseModel):
             json.dumps([task_id, stage, fingerprint, index], separators=(",", ":")).encode()
         ).hexdigest()
         return cls(
-            taskId=task_id, stage=stage, inputFingerprint=fingerprint,
-            requestIndex=index, planningScope=scope, provider=provider, model=model,
+            taskId=task_id,
+            stage=stage,
+            inputFingerprint=fingerprint,
+            requestIndex=index,
+            planningScope=scope,
+            provider=provider,
+            model=model,
         )

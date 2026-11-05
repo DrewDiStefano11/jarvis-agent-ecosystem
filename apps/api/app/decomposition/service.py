@@ -223,7 +223,9 @@ class DecompositionService:
 
         def validate_live(session):
             if session.get(SystemStateRow, 1).emergency_stop:
-                raise DomainError("EMERGENCY_STOP_ACTIVE", "Emergency stop blocks decomposition.", 423)
+                raise DomainError(
+                    "EMERGENCY_STOP_ACTIVE", "Emergency stop blocks decomposition.", 423
+                )
             current_context = self._context(task.id, assembly_id, session)
             if self._input(task, current_context, self._team(task, session)) != inputs:
                 raise DomainError(
@@ -365,7 +367,8 @@ class DecompositionService:
         ]
         maximum_output = (
             self.settings.decomposition_maximum_output_tokens
-            if type(self.settings) is Settings else 4096
+            if type(self.settings) is Settings
+            else 4096
         )
         budget = TaskBudget(maximum_requests=2, maximum_output_tokens=2 * maximum_output)
         requirements = planning_requirements(self.settings)
@@ -377,15 +380,24 @@ class DecompositionService:
             from app.decomposition.repository import task_input
 
             async def before_dispatch(provider_name, model):
-                if not planning_dispatch_allowed(self.settings, self.router.registry, provider_name):
+                if not planning_dispatch_allowed(
+                    self.settings, self.router.registry, provider_name
+                ):
                     raise ProviderExecutionDisabledError("Current planning activation was revoked")
                 if validate_live is None:
                     raise ProviderExecutionDisabledError("Native planning authority is required")
                 PlanningRepository(self.tasks.session_factory).assert_live(
-                    task.id, task_input(task), task_input, validate_live,
+                    task.id,
+                    task_input(task),
+                    task_input,
+                    validate_live,
                     intent=PlanningInferenceIntent.for_request(
-                        task.id, "decomposition", record.inputFingerprint,
-                        record.requestCount, provider_name, model,
+                        task.id,
+                        "decomposition",
+                        record.inputFingerprint,
+                        record.requestCount,
+                        provider_name,
+                        model,
                     ),
                 )
 

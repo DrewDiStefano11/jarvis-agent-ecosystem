@@ -348,7 +348,8 @@ def test_nonempty_tool_downgrade_refuses_data_loss(tmp_path):
             command.downgrade(migration_config(tmp_path / "tools.db"), "20260905_07")
         with app.state.engine.connect() as connection:
             assert (
-                connection.scalar(text("select version_num from alembic_version")) == DATABASE_REVISION
+                connection.scalar(text("select version_num from alembic_version"))
+                == DATABASE_REVISION
             )
             assert connection.scalar(text("select count(*) from tool_executions")) == 1
 

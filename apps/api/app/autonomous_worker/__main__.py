@@ -36,7 +36,9 @@ async def _run_once_or_stop(service, worker_id: str, stop: asyncio.Event):
     run_task = asyncio.create_task(_run_once_resilient(service, worker_id))
     stop_task = asyncio.create_task(stop.wait())
     try:
-        done, _pending = await asyncio.wait({run_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
+        done, _pending = await asyncio.wait(
+            {run_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+        )
         if stop_task in done:
             run_task.cancel()
             try:
@@ -110,13 +112,19 @@ async def run() -> None:
         stop = asyncio.Event()
         _install_stop_handlers(asyncio.get_running_loop(), stop)
         for index in range(concurrency):
-            workers.append(app.state.task_leases.register_worker(
-                "autonomous-planning-worker",
-                _slot_instance(settings.autonomous_worker_instance_id, index),
-                settings.autonomous_worker_lease_seconds,
-                {"kind": "autonomous_planning_review", "maximumConcurrency": 1,
-                 "poolConcurrency": concurrency, "poolSlot": index + 1},
-            ))
+            workers.append(
+                app.state.task_leases.register_worker(
+                    "autonomous-planning-worker",
+                    _slot_instance(settings.autonomous_worker_instance_id, index),
+                    settings.autonomous_worker_lease_seconds,
+                    {
+                        "kind": "autonomous_planning_review",
+                        "maximumConcurrency": 1,
+                        "poolConcurrency": concurrency,
+                        "poolSlot": index + 1,
+                    },
+                )
+            )
         jobs = [asyncio.create_task(_worker_loop(app, service, worker, stop)) for worker in workers]
         await asyncio.gather(*jobs)
     finally:

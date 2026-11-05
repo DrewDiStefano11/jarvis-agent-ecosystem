@@ -9,7 +9,9 @@ import app.autonomous_worker.__main__ as worker_main
 
 
 @pytest.mark.parametrize("size", [1, 2, 4])
-async def test_worker_pool_uses_bounded_distinct_slots_and_cancels_before_shutdown(monkeypatch, size):
+async def test_worker_pool_uses_bounded_distinct_slots_and_cancels_before_shutdown(
+    monkeypatch, size
+):
     registrations, stopped, entered, cancelled = [], [], set(), set()
     all_entered = asyncio.Event()
     captured_stop = []
@@ -42,18 +44,23 @@ async def test_worker_pool_uses_bounded_distinct_slots_and_cancels_before_shutdo
                 cancelled.add(worker_id)
                 raise
 
-    app = SimpleNamespace(state=SimpleNamespace(
-        settings=SimpleNamespace(
-            autonomous_worker_max_concurrency=size,
-            autonomous_worker_instance_id=instance,
-            autonomous_worker_lease_seconds=60,
-            autonomous_worker_poll_interval_ms=100,
-        ),
-        autonomous_worker_service=Service(), task_leases=Leases(),
-        engine=SimpleNamespace(dispose=lambda: disposed.append(True)),
-    ))
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            settings=SimpleNamespace(
+                autonomous_worker_max_concurrency=size,
+                autonomous_worker_instance_id=instance,
+                autonomous_worker_lease_seconds=60,
+                autonomous_worker_poll_interval_ms=100,
+            ),
+            autonomous_worker_service=Service(),
+            task_leases=Leases(),
+            engine=SimpleNamespace(dispose=lambda: disposed.append(True)),
+        )
+    )
     monkeypatch.setattr(worker_main, "_create_worker_app", lambda: app)
-    monkeypatch.setattr(worker_main, "_install_stop_handlers", lambda loop, stop: captured_stop.append(stop))
+    monkeypatch.setattr(
+        worker_main, "_install_stop_handlers", lambda loop, stop: captured_stop.append(stop)
+    )
     run = asyncio.create_task(worker_main.run())
     try:
         await asyncio.wait_for(all_entered.wait(), 3)
@@ -76,12 +83,14 @@ async def test_disabled_worker_never_registers_pool_or_starts_work(monkeypatch):
         def validate_enabled(self):
             raise AutonomousWorkerError("AUTONOMOUS_WORKER_DISABLED")
 
-    app = SimpleNamespace(state=SimpleNamespace(
-        settings=SimpleNamespace(autonomous_worker_max_concurrency=4),
-        autonomous_worker_service=Service(),
-        task_leases=SimpleNamespace(register_worker=lambda *args: registered.append(args)),
-        engine=SimpleNamespace(dispose=lambda: disposed.append(True)),
-    ))
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            settings=SimpleNamespace(autonomous_worker_max_concurrency=4),
+            autonomous_worker_service=Service(),
+            task_leases=SimpleNamespace(register_worker=lambda *args: registered.append(args)),
+            engine=SimpleNamespace(dispose=lambda: disposed.append(True)),
+        )
+    )
     monkeypatch.setattr(worker_main, "_create_worker_app", lambda: app)
     with pytest.raises(AutonomousWorkerError):
         await worker_main.run()
@@ -116,7 +125,9 @@ async def test_outer_cancellation_waits_for_the_inflight_iteration_to_cancel():
         await asyncio.gather(*inner_tasks, return_exceptions=True)
 
 
-async def test_two_native_queued_tasks_overlap_complete_and_idle_without_more_inference(tmp_path, monkeypatch):
+async def test_two_native_queued_tasks_overlap_complete_and_idle_without_more_inference(
+    tmp_path, monkeypatch
+):
     import json
 
     from fastapi.testclient import TestClient
@@ -152,7 +163,12 @@ async def test_two_native_queued_tasks_overlap_complete_and_idle_without_more_in
     with TestClient(app) as client:
         queue_only_demo_task(app)
         second = app.state.repository.tasks["task-completed"]
-        second.status, second.startedAt, second.completedAt, second.result = "queued", None, None, None
+        second.status, second.startedAt, second.completedAt, second.result = (
+            "queued",
+            None,
+            None,
+            None,
+        )
         app.state.repository.persist()
         from app.models.identity import AssignPermissionRequest
 
@@ -161,7 +177,9 @@ async def test_two_native_queued_tasks_overlap_complete_and_idle_without_more_in
             app.state.identity_service.assign_permission(
                 actor_id,
                 AssignPermissionRequest(
-                    permission_id=permission.id, effect="allow", resource_type="task",
+                    permission_id=permission.id,
+                    effect="allow",
+                    resource_type="task",
                     resource_id="task-completed",
                 ),
             )
@@ -187,11 +205,15 @@ async def test_two_native_queued_tasks_overlap_complete_and_idle_without_more_in
 
         monkeypatch.setattr(service, "run_once", observe)
         monkeypatch.setattr(worker_main, "_create_worker_app", lambda: app)
-        monkeypatch.setattr(worker_main, "_install_stop_handlers", lambda loop, stop: stop_holder.append(stop))
+        monkeypatch.setattr(
+            worker_main, "_install_stop_handlers", lambda loop, stop: stop_holder.append(stop)
+        )
         running = asyncio.create_task(worker_main.run())
         try:
             await asyncio.wait_for(entered.wait(), 10)
-            assert len(router.requests) == 0  # Both calls are still held before their intercepted responses.
+            assert (
+                len(router.requests) == 0
+            )  # Both calls are still held before their intercepted responses.
             release.set()
             await asyncio.wait_for(idle.wait(), 10)
         finally:
@@ -203,4 +225,8 @@ async def test_two_native_queued_tasks_overlap_complete_and_idle_without_more_in
         with app.state.model_execution_repository.sessions() as session:
             rows = list(session.scalars(select(ModelExecutionRow)))
         assert len(rows) == 2 and len({row.worker_id for row in rows}) == 2
-        assert all(app.state.agent_runtime_service.repository.load_run(f"pool-run-{index}").state == "succeeded" for index in range(2))
+        assert all(
+            app.state.agent_runtime_service.repository.load_run(f"pool-run-{index}").state
+            == "succeeded"
+            for index in range(2)
+        )

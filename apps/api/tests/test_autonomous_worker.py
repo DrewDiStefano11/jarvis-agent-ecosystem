@@ -485,8 +485,18 @@ def test_configuration_is_disabled_and_local_only_is_fail_closed() -> None:
         ).autonomous_worker_max_concurrency
         == 1
     )
-    assert Settings(_env_file=None, JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY="2").autonomous_worker_max_concurrency == 2
-    assert Settings(_env_file=None, JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY=4).autonomous_worker_max_concurrency == 4
+    assert (
+        Settings(
+            _env_file=None, JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY="2"
+        ).autonomous_worker_max_concurrency
+        == 2
+    )
+    assert (
+        Settings(
+            _env_file=None, JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY=4
+        ).autonomous_worker_max_concurrency
+        == 4
+    )
     with pytest.raises(ValidationError):
         Settings(_env_file=None, JARVIS_AUTONOMOUS_WORKER_MAX_CONCURRENCY=0)
 

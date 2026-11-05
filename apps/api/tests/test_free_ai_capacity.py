@@ -67,7 +67,9 @@ def allowance(provider="groq", **updates) -> FreeAllowance:
     )
 
 
-@pytest.mark.parametrize("integration", ["groq", "gemini", "openrouter", "cloudflare", "chatgpt", "codex"])
+@pytest.mark.parametrize(
+    "integration", ["groq", "gemini", "openrouter", "cloudflare", "chatgpt", "codex"]
+)
 def test_only_native_groq_can_omit_unknown_legacy_quota_window(integration):
     from app.model_providers.free_capacity import require_allowance, require_nonbillable_account
 

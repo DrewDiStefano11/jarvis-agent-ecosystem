@@ -1133,13 +1133,19 @@ def create_app(
             assembly = ContextAssembly.model_validate(replay)
             replay_task = repository.get_task_durable(assembly.taskId)
             if (
-                (settings.model_execution_mode == "local_only" or settings.verified_cloud_execution_allowed)
+                (
+                    settings.model_execution_mode == "local_only"
+                    or settings.verified_cloud_execution_allowed
+                )
                 and replay_task.startedAt is None
                 and replay_task.status
                 in {"queued", "planning", "assigned", "paused", "revision_requested"}
             ):
                 await DecompositionService(
-                    repository, app.state.identity_service, app.state.model_router, settings=settings
+                    repository,
+                    app.state.identity_service,
+                    app.state.model_router,
+                    settings=settings,
                 ).prepare(assembly.taskId, assembly.id)
                 await broker.dispatch_pending()
             return ApiResponse(data=assembly)
@@ -1182,7 +1188,10 @@ def create_app(
         existing = repository.context_assemblies.get(item.id)
         if existing is not None:
             if (
-                (settings.model_execution_mode == "local_only" or settings.verified_cloud_execution_allowed)
+                (
+                    settings.model_execution_mode == "local_only"
+                    or settings.verified_cloud_execution_allowed
+                )
                 and task.startedAt is None
                 and task.status
                 in {
@@ -1194,7 +1203,10 @@ def create_app(
                 }
             ):
                 await DecompositionService(
-                    repository, app.state.identity_service, app.state.model_router, settings=settings
+                    repository,
+                    app.state.identity_service,
+                    app.state.model_router,
+                    settings=settings,
                 ).prepare(task.id, existing.id)
             completion = idempotency_result(
                 request,
@@ -1246,7 +1258,10 @@ def create_app(
             ),
         )
         if (
-            (settings.model_execution_mode == "local_only" or settings.verified_cloud_execution_allowed)
+            (
+                settings.model_execution_mode == "local_only"
+                or settings.verified_cloud_execution_allowed
+            )
             and task.startedAt is None
             and task.status
             in {

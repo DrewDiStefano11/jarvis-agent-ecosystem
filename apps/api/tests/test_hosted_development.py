@@ -93,8 +93,11 @@ def test_hybrid_registry_preserves_separate_local_and_verified_code_generation(c
     grant = allowance(capabilities=CAPABILITIES)
     existing = planning_router(capacity, grant)
     local = OllamaProvider(
-        name="ollama", base_url="http://127.0.0.1:11434", default_model="local-model",
-        capabilities=CAPABILITIES, execution_mode="free_only",
+        name="ollama",
+        base_url="http://127.0.0.1:11434",
+        default_model="local-model",
+        capabilities=CAPABILITIES,
+        execution_mode="free_only",
     )
     existing = ModelRouter(ProviderRegistry([*existing.registry.list(), local]), existing.retry)
     local_settings = configuration(provider="local", model="local-model")

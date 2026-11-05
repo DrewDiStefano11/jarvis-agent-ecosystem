@@ -29,7 +29,10 @@ _QUOTA_WINDOW_SCHEMA = {
 
 class FreeAllowance(BaseModel):
     model_config = ConfigDict(
-        extra="forbid", frozen=True, hide_input_in_errors=True, str_strip_whitespace=True,
+        extra="forbid",
+        frozen=True,
+        hide_input_in_errors=True,
+        str_strip_whitespace=True,
         json_schema_extra=_QUOTA_WINDOW_SCHEMA,
     )
 
@@ -98,7 +101,9 @@ class FreeAllowance(BaseModel):
             if not self.window_start < self.resets_at:
                 raise ValueError("invalid quota window")
             if self.verified_at < self.window_start:
-                raise ValueError("quota evidence must be verified within its actual allowance window")
+                raise ValueError(
+                    "quota evidence must be verified within its actual allowance window"
+                )
         if self.integration == "openrouter" and any(not m.endswith(":free") for m in self.models):
             raise ValueError("OpenRouter requires exact :free models")
         if self.integration in {"chatgpt", "codex"} and self.credential_env == "OPENAI_API_KEY":

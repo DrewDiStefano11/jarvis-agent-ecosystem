@@ -1736,6 +1736,7 @@ def test_patch_cors_preflight_and_existing_methods(service):
             messages.append(message)
 
         headers = [
+            (b"host", b"127.0.0.1:8000"),
             (b"origin", b"http://localhost:5173"),
             (b"access-control-request-method", method.encode()),
             (b"access-control-request-headers", b"content-type"),

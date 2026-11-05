@@ -41,15 +41,19 @@ class LocalBrowserBoundary:
         if not authority or not (test_host or _loopback(hostname)):
             code = "LOCAL_BROWSER_HOST_REJECTED"
         path = scope.get("path", "")
-        configuration = path == "/api/model-configuration" or path.startswith("/api/model-configuration/")
+        configuration = path == "/api/model-configuration" or path.startswith(
+            "/api/model-configuration/"
+        )
         origins = [value.decode("latin-1") for key, value in headers if key == b"origin"]
         sites = [value for key, value in headers if key == b"sec-fetch-site"]
         if code is None and len(origins) > 1:
             code = "LOCAL_BROWSER_ORIGIN_REJECTED"
         if code is None and not configuration and scope.get("method") != "OPTIONS":
             if (
-                origins and origins != [self.origin]
-                or not origins and any(site not in {b"none", b"same-origin"} for site in sites)
+                origins
+                and origins != [self.origin]
+                or not origins
+                and any(site not in {b"none", b"same-origin"} for site in sites)
                 or len(sites) > 1
             ):
                 code = "LOCAL_BROWSER_ORIGIN_REJECTED"
@@ -63,9 +67,22 @@ class LocalBrowserBoundary:
         if code is None:
             return await self.app(scope, receive, send)
         if scope["type"] == "websocket":
-            return await send({"type": "websocket.close", "code": 1008, "reason": "Local browser authority required."})
+            return await send(
+                {
+                    "type": "websocket.close",
+                    "code": 1008,
+                    "reason": "Local browser authority required.",
+                }
+            )
         response = JSONResponse(
-            {"error": {"code": code, "message": "Use the configured local dashboard or a direct loopback client.", "details": {}}},
-            status_code=403, headers={"Cache-Control": "no-store"},
+            {
+                "error": {
+                    "code": code,
+                    "message": "Use the configured local dashboard or a direct loopback client.",
+                    "details": {},
+                }
+            },
+            status_code=403,
+            headers={"Cache-Control": "no-store"},
         )
         return await response(scope, receive, send)

@@ -181,7 +181,9 @@ def test_unsafe_runtime_downgrade_fails_before_destructive_ddl(tmp_path: Path) -
     assert "agent_runtime_events" in tables
     with engine.connect() as connection:
         assert connection.execute(schema_query).all() == before_schema
-        assert connection.scalar(text("select version_num from alembic_version")) == DATABASE_REVISION
+        assert (
+            connection.scalar(text("select version_num from alembic_version")) == DATABASE_REVISION
+        )
         assert connection.scalar(text("select count(*) from agent_runtime_runs")) == 1
         assert connection.scalar(text("select count(*) from agent_runtime_events")) == 1
         assert (

@@ -55,7 +55,9 @@ def test_cross_origin_websocket_cannot_receive_a_snapshot(local_app):
     app, _ = local_app
     with TestClient(app, base_url="http://127.0.0.1:8000") as client:
         with pytest.raises(WebSocketDisconnect) as refused:
-            with client.websocket_connect("/ws/events", headers={"Origin": "http://evil.example"}) as socket:
+            with client.websocket_connect(
+                "/ws/events", headers={"Origin": "http://evil.example"}
+            ) as socket:
                 socket.receive_json()
     assert refused.value.code == 1008
 
@@ -63,7 +65,38 @@ def test_cross_origin_websocket_cannot_receive_a_snapshot(local_app):
 def test_duplicate_origins_cannot_smuggle_browser_authority(local_app):
     app, calls = local_app
     with TestClient(app, base_url="http://127.0.0.1:8000") as client:
-        response = client.post("/api/boundary-probe", headers=[
-            ("Origin", "http://localhost:5173"), ("Origin", "http://evil.example")
-        ])
+        response = client.post(
+            "/api/boundary-probe",
+            headers=[("Origin", "http://localhost:5173"), ("Origin", "http://evil.example")],
+        )
     assert response.status_code == 403 and calls == []
+
+
+@pytest.mark.parametrize(
+    ("host", "origin", "expected"),
+    [
+        ("127.0.0.1:8000", "http://localhost:5173", 200),
+        ("localhost:8000", "http://localhost:5173", 200),
+        ("[::1]:8000", "http://localhost:5173", 200),
+        ("rebind.example:8000", "http://localhost:5173", 403),
+        ("127.0.0.1:8000", "http://evil.example", 400),
+    ],
+)
+def test_preflight_retains_host_boundary_and_cors_policy(local_app, host, origin, expected):
+    app, calls = local_app
+    with TestClient(app, base_url="http://127.0.0.1:8000") as client:
+        response = client.options(
+            "/api/boundary-probe",
+            headers={
+                "Host": host,
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+    assert response.status_code == expected
+    assert calls == []
+    if expected == 200:
+        assert response.headers["access-control-allow-origin"] == origin
+    else:
+        assert "access-control-allow-origin" not in response.headers

@@ -106,7 +106,9 @@ async def test_specialist_critic_and_synthesis_retain_native_checkpoints(app, pr
     assert record.status == "completed", record.model_dump(mode="json")
     assert record.modelDispatchCount == 7
     assert {name for name, _ in observed} == {
-        "SpecialistResult", "SynthesisResult", "independent_node_verdict"
+        "SpecialistResult",
+        "SynthesisResult",
+        "independent_node_verdict",
     }
     assert all(policy.allow_remote is (mode != "local") for _, policy in observed)
     assert all(policy.prefer_local is (mode != "cloud") for _, policy in observed)
@@ -132,7 +134,9 @@ async def test_team_assignment_uses_the_same_explicit_routing_policy(app, mode):
     service = TeamSelectionService(
         app.state.repository, app.state.identity_service, router, settings=execution_settings(mode)
     )
-    required, _, _ = await service._infer_capabilities(app.state.repository.get_task_durable(task_id))
+    required, _, _ = await service._infer_capabilities(
+        app.state.repository.get_task_durable(task_id)
+    )
     assert required == ["research.market"]
     assert len(observed) == 1 and observed[0].allow_remote is (mode != "local")
     assert observed[0].prefer_local is (mode != "cloud")
@@ -141,8 +145,12 @@ async def test_team_assignment_uses_the_same_explicit_routing_policy(app, mode):
 @pytest.mark.parametrize("capability", [ModelCapability.CHAT, ModelCapability.CODE_GENERATION])
 @pytest.mark.parametrize(
     "mode,explicit,expected",
-    [("local", None, "ollama"), ("cloud", None, "groq"),
-     ("hybrid", None, "ollama"), ("hybrid", "groq", "groq")],
+    [
+        ("local", None, "ollama"),
+        ("cloud", None, "groq"),
+        ("hybrid", None, "ollama"),
+        ("hybrid", "groq", "groq"),
+    ],
 )
 async def test_both_available_routes_chat_and_generation_without_losing_local_support(
     mode, explicit, expected, capability
@@ -154,7 +162,9 @@ async def test_both_available_routes_chat_and_generation_without_losing_local_su
     capabilities = frozenset({ModelCapability.CHAT, ModelCapability.CODE_GENERATION})
     local = FakeProvider("ollama", capabilities=capabilities)
     cloud = FakeProvider("groq", local=False, capabilities=capabilities)
-    router = ModelRouter(ProviderRegistry([cloud, local]), RetryExecutor(RetryPolicy(maximum_attempts=1)))
+    router = ModelRouter(
+        ProviderRegistry([cloud, local]), RetryExecutor(RetryPolicy(maximum_attempts=1))
+    )
     policy = planning_requirements(execution_settings(mode), requested_provider=explicit)
     policy.required_capability = capability
     result = await router.execute(
@@ -175,7 +185,9 @@ async def test_nonretryable_groq_failure_cannot_schedule_another_coordinator_req
 
     async def execute(**kwargs):
         calls.append(kwargs["request"].output_schema.name)
-        failure = RateLimitError("Intercepted provider cooldown", provider="groq", retry_after_seconds=60)
+        failure = RateLimitError(
+            "Intercepted provider cooldown", provider="groq", retry_after_seconds=60
+        )
         failure.retryable = False
         raise failure
 
@@ -239,8 +251,10 @@ async def test_cloud_activation_revoked_during_health_prevents_dispatch(app, pre
     options = coordinator.dispatch_options(record.id, fence, actor)
     with pytest.raises(DomainError):
         await coordinator.router.execute(
-            request=ModelExecutionRequest(prompt="Intercepted fixture"), requirements=policy,
-            budget=TaskBudget(maximum_requests=1), **options,
+            request=ModelExecutionRequest(prompt="Intercepted fixture"),
+            requirements=policy,
+            budget=TaskBudget(maximum_requests=1),
+            **options,
         )
     assert provider.health_calls == 1 and provider.execute_calls == []
 
@@ -263,7 +277,9 @@ async def test_planning_activation_revoked_during_health_sends_no_request(app, s
             return health
 
     provider = RevokingProvider("groq", local=False)
-    router = ModelRouter(ProviderRegistry([provider]), RetryExecutor(RetryPolicy(maximum_attempts=1)))
+    router = ModelRouter(
+        ProviderRegistry([provider]), RetryExecutor(RetryPolicy(maximum_attempts=1))
+    )
     if stage == "decomposition":
         service = DecompositionService(
             app.state.repository, app.state.identity_service, router, settings=settings
@@ -281,10 +297,13 @@ async def test_planning_activation_revoked_during_health_sends_no_request(app, s
 
 
 @pytest.mark.parametrize("limit", [512, 4096])
-async def test_decomposition_output_budget_can_be_bounded_without_changing_local_default(app, limit):
+async def test_decomposition_output_budget_can_be_bounded_without_changing_local_default(
+    app, limit
+):
     task_id, assembly_id, router = setup(app)
     settings = Settings(
-        _env_file=None, JARVIS_MODEL_EXECUTION_MODE="local_only",
+        _env_file=None,
+        JARVIS_MODEL_EXECUTION_MODE="local_only",
         JARVIS_DECOMPOSITION_MAXIMUM_OUTPUT_TOKENS=limit,
     )
     budgets = []
@@ -327,7 +346,9 @@ async def test_planning_native_changes_during_health_prevent_model_dispatch(app,
             return health
 
     provider = ChangingProvider("groq", local=False)
-    router = ModelRouter(ProviderRegistry([provider]), RetryExecutor(RetryPolicy(maximum_attempts=1)))
+    router = ModelRouter(
+        ProviderRegistry([provider]), RetryExecutor(RetryPolicy(maximum_attempts=1))
+    )
     try:
         if stage == "decomposition":
             await DecompositionService(
@@ -428,23 +449,50 @@ async def test_known_invalid_cloud_decomposition_repairs_once_with_two_durable_i
     from tests.test_task_decomposition import proposal
 
     task_id, assembly_id, _ = setup(app)
-    provider = FakeProvider("groq", local=False, results=[
-        ModelExecutionResponse(content="invalid", provider="groq", model="groq-model", latency_ms=1,
-                               input_tokens=1, output_tokens=1, total_tokens=2),
-        ModelExecutionResponse(content=json.dumps(proposal()), provider="groq", model="groq-model", latency_ms=1,
-                               input_tokens=1, output_tokens=1, total_tokens=2),
-    ])
-    router = ModelRouter(ProviderRegistry([provider]), RetryExecutor(RetryPolicy(maximum_attempts=3)))
+    provider = FakeProvider(
+        "groq",
+        local=False,
+        results=[
+            ModelExecutionResponse(
+                content="invalid",
+                provider="groq",
+                model="groq-model",
+                latency_ms=1,
+                input_tokens=1,
+                output_tokens=1,
+                total_tokens=2,
+            ),
+            ModelExecutionResponse(
+                content=json.dumps(proposal()),
+                provider="groq",
+                model="groq-model",
+                latency_ms=1,
+                input_tokens=1,
+                output_tokens=1,
+                total_tokens=2,
+            ),
+        ],
+    )
+    router = ModelRouter(
+        ProviderRegistry([provider]), RetryExecutor(RetryPolicy(maximum_attempts=3))
+    )
     service = DecompositionService(
         app.state.repository, app.state.identity_service, router, settings=hosted_settings()
     )
     result = await service.prepare(task_id, assembly_id)
     assert result.status == "ready" and len(provider.execute_calls) == 2
     with app.state.repository.session_factory() as session:
-        assert session.scalar(select(func.count()).select_from(AuditEventRow).where(
-            AuditEventRow.event_type == "planning_model.dispatch_intent",
-            AuditEventRow.task_id == task_id,
-        )) == 2
+        assert (
+            session.scalar(
+                select(func.count())
+                .select_from(AuditEventRow)
+                .where(
+                    AuditEventRow.event_type == "planning_model.dispatch_intent",
+                    AuditEventRow.task_id == task_id,
+                )
+            )
+            == 2
+        )
 
 
 async def test_stale_team_reselection_cannot_adopt_a_newer_native_selection(app):
@@ -473,16 +521,22 @@ async def test_stale_team_reselection_cannot_adopt_a_newer_native_selection(app)
     await service()._infer_capabilities(stale)
     with app.state.task_leases._write() as session:
         row = session.get(TaskRow, task_id)
-        row.payload = {**row.payload, "teamSelection": {
-            **row.payload["teamSelection"], "selectionId": "sel-newer-native-selection"
-        }}
+        row.payload = {
+            **row.payload,
+            "teamSelection": {
+                **row.payload["teamSelection"],
+                "selectionId": "sel-newer-native-selection",
+            },
+        }
     with pytest.raises(DomainError) as refused:
         await service()._infer_capabilities(stale)
     assert refused.value.code == "PLANNING_INPUT_CHANGED" and calls == [True]
 
 
 @pytest.mark.parametrize("change", ["task", "stop"])
-async def test_cloud_team_commit_rechecks_native_inputs_in_the_outbox_transaction(app, change, monkeypatch):
+async def test_cloud_team_commit_rechecks_native_inputs_in_the_outbox_transaction(
+    app, change, monkeypatch
+):
     from app.core.errors import DomainError
     from app.db.models import SystemStateRow, TaskRow
     from app.team_selection.service import TeamSelectionService
@@ -510,14 +564,22 @@ async def test_cloud_team_commit_rechecks_native_inputs_in_the_outbox_transactio
 
     monkeypatch.setattr(app.state.broker, "emit", change_at_commit)
     service = TeamSelectionService(
-        app.state.repository, app.state.identity_service, router,
-        event_broker=app.state.broker, settings=hosted_settings(),
+        app.state.repository,
+        app.state.identity_service,
+        router,
+        event_broker=app.state.broker,
+        settings=hosted_settings(),
     )
     with pytest.raises(DomainError):
         await service.assign_team(task, force=True)
-    assert task.teamSelection.selectionId == app.state.repository.get_task_durable(task_id).teamSelection.selectionId
+    assert (
+        task.teamSelection.selectionId
+        == app.state.repository.get_task_durable(task_id).teamSelection.selectionId
+    )
     if change == "task":
-        assert app.state.repository.get_task_durable(task_id).title == "Changed after model response"
+        assert (
+            app.state.repository.get_task_durable(task_id).title == "Changed after model response"
+        )
 
 
 def test_context_cannot_persist_a_team_rejected_by_its_commit_guard(app, monkeypatch):
@@ -545,7 +607,11 @@ def test_context_cannot_persist_a_team_rejected_by_its_commit_guard(app, monkeyp
         if args[0] == "team_selection.completed":
             with app.state.task_leases._write() as session:
                 row = session.get(TaskRow, task_id)
-                row.payload = {**row.payload, "status": "in_progress", "startedAt": "2026-11-02T12:00:00Z"}
+                row.payload = {
+                    **row.payload,
+                    "status": "in_progress",
+                    "startedAt": "2026-11-02T12:00:00Z",
+                }
         return await emit(*args, **kwargs)
 
     monkeypatch.setattr(app.state.broker, "emit", start_before_commit)

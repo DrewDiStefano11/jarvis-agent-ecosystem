@@ -81,7 +81,9 @@ def planning_requirements(
 def planning_dispatch_allowed(settings, registry, provider_name) -> bool:
     from app.core.config import Settings
 
-    selected = next((provider for provider in registry.list() if provider.name == provider_name), None)
+    selected = next(
+        (provider for provider in registry.list() if provider.name == provider_name), None
+    )
     return bool(
         type(settings) is Settings
         and settings.model_execution_mode in {"local_only", "free_only"}
