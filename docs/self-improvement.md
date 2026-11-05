@@ -269,7 +269,8 @@ Each candidate contains baseline/proposal/weakness IDs, semantic scope, evidence
 references, priority, advisory work kind and optional experiment digest. It has no
 task ID, pending status, selected actor or selection time. Reads do not invoke a
 model, create tasks, append audit/outbox events or approve experiments. Analyses
-and admission state are read in one database snapshot, with existing backlog scan
+and admission state are read in one SQLite snapshot (other dialects return the
+existing `IMPROVEMENT_BACKLOG_DATABASE_UNSUPPORTED` error), with existing backlog scan
 bounds and corrupt-lineage refusals preserved. Concurrent changes can make a
 returned candidate stale immediately after the read; use its baseline ID with
 `POST /api/self-improvement/backlog/select`, whose native transaction rechecks

@@ -2,6 +2,7 @@
 
 from sqlalchemy import select, text
 
+from app.core.errors import DomainError
 from app.models.improvement_backlog import ImprovementCandidate
 from app.models.self_improvement import Analysis
 from app.self_improvement.backlog_repository import ImprovementBacklogRepository
@@ -23,8 +24,13 @@ class CandidateRepository:
         with self.sessions() as session:
             # Python sqlite's legacy transaction mode does not BEGIN on SELECT.
             # An explicit read transaction keeps analyses and admissions consistent.
-            if session.get_bind().dialect.name == "sqlite":
-                session.execute(text("BEGIN"))
+            if session.get_bind().dialect.name != "sqlite":
+                raise DomainError(
+                    "IMPROVEMENT_BACKLOG_DATABASE_UNSUPPORTED",
+                    "Candidate discovery currently requires a SQLite read snapshot.",
+                    409,
+                )
+            session.execute(text("BEGIN"))
             rows = session.scalars(
                 select(ImprovementRecordRow)
                 .where(ImprovementRecordRow.kind == "analysis")

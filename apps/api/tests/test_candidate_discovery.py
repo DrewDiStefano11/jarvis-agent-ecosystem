@@ -212,3 +212,11 @@ def test_read_snapshot_does_not_mix_a_concurrent_capture(candidates):
         event.remove(app.state.engine, "after_cursor_execute", after_read)
     assert [item.baseline_id for item in items] == [original.baseline.id]
     assert len(service.list_candidates(actor)) == 2
+
+
+def test_unsupported_database_refuses_inconsistent_snapshot(candidates, monkeypatch):
+    app, *_ = candidates
+    monkeypatch.setattr(app.state.engine.dialect, "name", "postgresql")
+    with pytest.raises(DomainError) as error:
+        CandidateRepository(app.state.repository.session_factory).get_candidates()
+    assert error.value.code == "IMPROVEMENT_BACKLOG_DATABASE_UNSUPPORTED"

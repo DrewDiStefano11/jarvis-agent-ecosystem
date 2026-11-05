@@ -28,3 +28,11 @@ The WIP uses nonexistent SessionFactory import; treats scalar baseline ID string
 ## Next actions
 
 Read the new discovery PR's exact-head CI and complete both local system checks. Keep #160 intact until its replacement validates; no merging. Continue independent readiness checks and publish the memory/host-guide change separately. Final host-only tests (live providers, model quality/resources, reboot/logon, protected VM, separate-device remote transport, sustained soak) remain NOT TESTED. No Ollama installed, paid inference activated, startup registered or production data changed.
+
+
+Review follow-up: discovery now explicitly refuses non-SQLite dialects using the
+existing unsupported-database error, so the promised consistent read snapshot
+cannot silently degrade on another isolation mode. Added one regression; focused
+suite is 43 passed. Recollect and rerun the models shard for the new 4168-node
+union; existing runtime/autonomy/system test selections are unchanged. The next
+push supersedes the first #161 head and restarts hosted checks intentionally.
