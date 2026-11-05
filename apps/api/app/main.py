@@ -1176,6 +1176,7 @@ def create_app(
                 task = repository.get_task_durable(body.taskId)
 
         enricher = ContextEnricher(
+            executions=app.state.model_execution_repository,
             identity_service=app.state.identity_service,
             settings=settings,
             repository=repository,

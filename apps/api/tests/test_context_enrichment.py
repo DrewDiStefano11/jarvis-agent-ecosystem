@@ -83,8 +83,13 @@ class MockModelExecutionRepo:
     def __init__(self, executions: list = None):
         self.executions = executions or []
 
-    def list_for_task(self, task_id: str) -> list:
-        return [e for e in self.executions if getattr(e, "taskId", "") == task_id]
+    def list_context_results(self, task_id: str, *, limit: int = 2) -> list:
+        results = [
+            e
+            for e in self.executions
+            if e.taskId == task_id and e.stage in ("completed", "human_review_required")
+        ]
+        return sorted(results, key=lambda e: e.completedAt, reverse=True)[:limit]
 
 
 class MockRepository:
@@ -426,7 +431,8 @@ def test_prior_results_includes_completed_executions():
     enricher = ContextEnricher(
         identity_service=MockIdentityService(),
         settings=MockSettings(),
-        repository=MockRepository(executions=executions),
+        repository=MockRepository(),
+        executions=MockModelExecutionRepo(executions),
         tool_registry=MockToolRegistry(),
     )
     sources = enricher.enrich("t1")
@@ -446,7 +452,8 @@ def test_prior_results_truncates_long_summaries():
     enricher = ContextEnricher(
         identity_service=MockIdentityService(),
         settings=MockSettings(),
-        repository=MockRepository(executions=executions),
+        repository=MockRepository(),
+        executions=MockModelExecutionRepo(executions),
         tool_registry=MockToolRegistry(),
     )
     sources = enricher.enrich("t1")

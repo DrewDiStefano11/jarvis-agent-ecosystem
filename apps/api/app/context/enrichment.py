@@ -13,6 +13,7 @@ from app.models.context import (
 )
 
 if TYPE_CHECKING:
+    from app.autonomous_worker.repository import ModelExecutionRepository
     from app.core.config import Settings
     from app.identity.service import IdentityService
 
@@ -75,11 +76,13 @@ class ContextEnricher:
         settings: Settings,
         repository: object,
         tool_registry: object | None = None,
+        executions: ModelExecutionRepository | None = None,
     ) -> None:
         self.identity_service = identity_service
         self.settings = settings
         self.repository = repository
         self.tool_registry = tool_registry
+        self.executions = executions
 
     def enrich(
         self, task_id: str, actor_id: str | None = None, *, task=None
@@ -420,30 +423,9 @@ class ContextEnricher:
     def _prior_results(self, task_id: str) -> list[ContextSource]:
         """Build prior model execution summaries for this task."""
         sources: list[ContextSource] = []
-        results: list[object] = []
-
-        # Try the model execution repository
-        if hasattr(self.repository, "model_execution_repository"):
-            repo = self.repository.model_execution_repository
-            if hasattr(repo, "list_for_task"):
-                results = repo.list_for_task(task_id)
-        elif hasattr(self.repository, "model_executions"):
-            all_executions = self.repository.model_executions
-            if isinstance(all_executions, dict):
-                results = [
-                    v for v in all_executions.values() if getattr(v, "taskId", "") == task_id
-                ]
-
-        # Filter to completed results and take most recent
-        completed = [
-            r for r in results if getattr(r, "stage", "") in ("completed", "human_review_required")
-        ]
-        # Sort by completedAt descending
-        completed.sort(
-            key=lambda r: getattr(r, "completedAt", "") or getattr(r, "createdAt", ""),
-            reverse=True,
-        )
-        completed = completed[:_MAX_PRIOR_RESULTS]
+        if self.executions is None:
+            return sources
+        completed = self.executions.list_context_results(task_id, limit=_MAX_PRIOR_RESULTS)
 
         for i, result in enumerate(completed):
             result_summary = ""
