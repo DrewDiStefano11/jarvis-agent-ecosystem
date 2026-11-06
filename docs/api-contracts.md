@@ -450,3 +450,12 @@ live concurrency fails with `AUTONOMOUS_WORKER_CONCURRENCY_INVALID`. Direct loca
 HTTP and WebSocket access now validates loopback Host and the exact configured
 browser Origin before dispatch, while preserving CLI access without browser
 headers and the remote gateway's separate authentication boundary.
+
+
+`GET /api/self-improvement/candidates` adds the typed `ImprovementCandidate`
+contract in the existing response envelope. Local operator and native backlog
+read permission are required. Discovery is advisory over the latest eight
+persisted analyses; pagination follows native ordering and scope deduplication.
+No selected/task fields or execution authority are returned. Existing backlog
+selection, error codes, events, sequence semantics and Alembic head are unchanged.
+See [discovery semantics](self-improvement.md#read-only-candidate-discovery).

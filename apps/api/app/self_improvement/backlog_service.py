@@ -13,6 +13,7 @@ from app.models.improvement_backlog import (
 from app.repositories.sqlalchemy import IdempotencyResult
 from app.self_improvement.backlog_repository import ImprovementBacklogRepository
 from app.self_improvement.backlog_selection import ordered_candidates
+from app.self_improvement.candidate_repository import CandidateRepository
 from app.self_improvement.engine import digest
 from app.services.task_creation import prepare_task_creation
 
@@ -180,3 +181,9 @@ class ImprovementBacklogService:
     def list_items(self, actor, *, offset=0, limit=20):
         self.authorize(actor, operation="read")
         return self.backlog.items(offset=offset, limit=limit)
+
+    def list_candidates(self, actor, *, offset=0, limit=20):
+        self.authorize(actor, operation="read")
+        return CandidateRepository(self.repository.session_factory).get_candidates(
+            offset=offset, limit=limit
+        )

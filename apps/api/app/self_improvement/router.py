@@ -9,6 +9,7 @@ from app.models.domain import TypedApiResponse
 from app.models.improvement_backlog import (
     ImprovementBacklogItem,
     ImprovementBacklogSelection,
+    ImprovementCandidate,
     SelectImprovementRequest,
 )
 from app.models.improvement_schedule import ImprovementScheduleStatus
@@ -70,6 +71,19 @@ def backlog(
     actor = request.app.state.agent_runtime_service.authenticate_actor(actor_id)
     return TypedApiResponse(
         data=backlog_service(request).list_items(actor, offset=offset, limit=limit)
+    )
+
+
+@router.get("/candidates", response_model=TypedApiResponse[list[ImprovementCandidate]])
+def candidates(
+    request: Request,
+    offset: int = Query(default=0, ge=0, le=100_000),
+    limit: int = Query(default=20, ge=1, le=100),
+    actor_id: str | None = Header(default=None, alias="X-Jarvis-Actor-Id"),
+):
+    actor = request.app.state.agent_runtime_service.authenticate_actor(actor_id)
+    return TypedApiResponse(
+        data=backlog_service(request).list_candidates(actor, offset=offset, limit=limit)
     )
 
 

@@ -245,3 +245,34 @@ Sandbox execution, local-model hypotheses, approval transitions, promotion,
 monitoring/rollback and autonomous source changes are not implemented here.
 
 Unavailable verified free capacity is an expected zero-spending control condition. Its original failure code remains in observations, but it does not produce a software/model-quality weakness or a proposal to weaken the capacity guard. Actual provider failures and exhausted task execution budgets retain their existing distinct attribution.
+
+
+## Read-only candidate discovery
+
+`GET /api/self-improvement/candidates` returns
+`TypedApiResponse[list[ImprovementCandidate]]`. It requires a local caller, an
+active authenticated `X-Jarvis-Actor-Id`, and the existing `read_improvement`
+permission on administrative function `improvement_backlog`. A read permission
+does not grant selection or execution authority.
+
+Discovery examines the **eight most recently persisted analyses** (persistence
+time descending, baseline ID ascending on ties), matching the native selector's
+bounded input batch. This is an advisory window, not an exhaustive history scan.
+Healthy analyses occupy window slots but contribute no fabricated opportunities.
+Within that window, native selection ordering applies: priority, confidence,
+affected subjects, frequency, newest baseline capture, baseline ID, proposal ID.
+Already admitted proposal IDs and all active semantic backlog scopes are excluded;
+only the first remaining candidate per semantic scope is shown. Pagination follows
+filtering/deduplication: `offset` 0–100000, `limit` 1–100 (default 20).
+
+Each candidate contains baseline/proposal/weakness IDs, semantic scope, evidence
+references, priority, advisory work kind and optional experiment digest. It has no
+task ID, pending status, selected actor or selection time. Reads do not invoke a
+model, create tasks, append audit/outbox events or approve experiments. Analyses
+and admission state are read in one SQLite snapshot (other dialects return the
+existing `IMPROVEMENT_BACKLOG_DATABASE_UNSUPPORTED` error), with existing backlog scan
+bounds and corrupt-lineage refusals preserved. Concurrent changes can make a
+returned candidate stale immediately after the read; use its baseline ID with
+`POST /api/self-improvement/backlog/select`, whose native transaction rechecks
+current permission, stop state and duplicate admission. Discovery is unavailable
+through the remote gateway's allowlist.

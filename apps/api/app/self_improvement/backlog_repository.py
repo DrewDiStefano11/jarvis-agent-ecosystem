@@ -49,23 +49,23 @@ class ImprovementBacklogRepository:
 
     def admission_state(self, baseline_ids):
         with self.sessions() as session:
-            rows = session.scalars(
-                select(ImprovementRecordRow)
-                .where(
-                    ImprovementRecordRow.kind == ENTRY_KIND,
-                    ImprovementRecordRow.baseline_id.in_(baseline_ids),
-                )
-                .limit(2049)
-            ).all()
-            if len(rows) > 2048:
-                raise DomainError(
-                    "IMPROVEMENT_BACKLOG_SCAN_LIMIT", "Backlog scan bound exceeded.", 409
-                )
-            admitted = {
-                ImprovementBacklogEntry.model_validate(row.payload).proposal_id for row in rows
-            }
-            _, scopes = self.active_scopes_in_session(session)
-            return admitted, scopes
+            return self.admission_state_in_session(session, baseline_ids)
+
+    @staticmethod
+    def admission_state_in_session(session, baseline_ids):
+        rows = session.scalars(
+            select(ImprovementRecordRow)
+            .where(
+                ImprovementRecordRow.kind == ENTRY_KIND,
+                ImprovementRecordRow.baseline_id.in_(baseline_ids),
+            )
+            .limit(2049)
+        ).all()
+        if len(rows) > 2048:
+            raise DomainError("IMPROVEMENT_BACKLOG_SCAN_LIMIT", "Backlog scan bound exceeded.", 409)
+        admitted = {ImprovementBacklogEntry.model_validate(row.payload).proposal_id for row in rows}
+        _, scopes = ImprovementBacklogRepository.active_scopes_in_session(session)
+        return admitted, scopes
 
     @staticmethod
     def active_scopes_in_session(session):
