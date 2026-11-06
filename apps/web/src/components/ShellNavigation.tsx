@@ -3,7 +3,8 @@ import { NavIcon } from './NavIcon'
 
 export const navigationGroups = [
   { label: 'Operations', links: [
-    { to: '/', label: 'Overview', icon: 'overview', mobile: true },
+    { to: '/', label: 'Home', icon: 'overview', mobile: true },
+    { to: '/mission-control', label: 'Overview', icon: 'overview', mobile: false },
     { to: '/tasks', label: 'Tasks', icon: 'tasks', mobile: true },
     { to: '/agents', label: 'Agents', icon: 'agents', mobile: false },
     { to: '/approvals', label: 'Approvals', icon: 'approvals', mobile: true },

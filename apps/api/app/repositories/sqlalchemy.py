@@ -35,8 +35,10 @@ from app.db.models import (
     WorkflowCheckpointRow,
     WorkflowRunRow,
 )
+from app.goals.repository import persist_goal
 from app.models.context import ContextAssemblerStatus, ContextAssembly
 from app.models.domain import Agent, Approval, Artifact, AuditEvent, Department, Notification, Task
+from app.models.goals import Goal
 from app.services.seed import build_seed
 from app.services.task_creation import validate_correction_source
 from app.services.unit_of_work import UnitOfWork
@@ -627,6 +629,7 @@ class SqlAlchemyRepository:
         idempotency: IdempotencyResult | None = None,
         *,
         created_task: Task | None = None,
+        created_goal: Goal | None = None,
         created_context: tuple[ContextAssembly, Task] | None = None,
         updated_task: Task | None = None,
         authorize: Callable[[Session], None] | None = None,
@@ -722,6 +725,8 @@ class SqlAlchemyRepository:
                     # The sequence update above serializes this write with worker
                     # commits. Never flush the API's stale task/agent cache here.
                     self._insert_created_task(session, created_task)
+                    if created_goal is not None:
+                        persist_goal(session, created_goal)
                 elif created_context is not None:
                     self._persist_created_context(session, *created_context)
                 elif updated_task is not None:

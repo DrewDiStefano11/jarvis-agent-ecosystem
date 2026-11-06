@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.context import ContextAssembly
 from app.models.domain import EventEnvelope, Task
+from app.models.goals import Goal
 from app.repositories.sqlalchemy import IdempotencyResult, SqlAlchemyRepository
 
 
@@ -82,6 +83,7 @@ class EventBroker:
         audit: dict[str, object] | None = None,
         idempotency: IdempotencyResult | None = None,
         created_task: Task | None = None,
+        created_goal: Goal | None = None,
         created_context: tuple[ContextAssembly, Task] | None = None,
         updated_task: Task | None = None,
         authorize: Callable[[Session], None] | None = None,
@@ -106,6 +108,8 @@ class EventBroker:
             if audit:
                 envelope["_audit"] = audit
             authorization = {"authorize": authorize} if authorize is not None else {}
+            if created_goal is not None:
+                authorization["created_goal"] = created_goal
             if system_emergency_stop is not None:
                 authorization["system_emergency_stop"] = system_emergency_stop
             try:

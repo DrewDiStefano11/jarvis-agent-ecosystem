@@ -6,6 +6,7 @@ import { NavIcon } from './components/NavIcon'
 import { Status } from './components/Status'
 import { navigationLinks as links, ShellNavigation } from './components/ShellNavigation'
 import { useAppStore } from './state/AppStore'
+import { Home } from './pages/Home'
 import { Dashboard } from './pages/Dashboard'
 import { Tasks } from './pages/Tasks'
 import { Agents } from './pages/Agents'
@@ -24,7 +25,7 @@ function RouteTitle() {
   return null
 }
 function NotFound() {
-  return <section className="empty"><h1>Page not found</h1><p>The requested Jarvis view does not exist.</p><Link className="primary" to="/">Return to overview</Link></section>
+  return <section className="empty"><h1>Page not found</h1><p>The requested Jarvis view does not exist.</p><Link className="primary" to="/mission-control">Return to overview</Link></section>
 }
 export default function App() {
   const [controlError, setControlError] = useState('')
@@ -58,7 +59,7 @@ export default function App() {
       <main id="main-content" className="content" tabIndex={-1}>
         {stale && <div className="sync-banner" role="status"><div><strong>Data may be stale</strong><p>{error ?? (resyncRequired ? 'Reconciling an event sequence gap.' : 'The event stream is disconnected; HTTP refresh remains available.')} Last synchronized: {lastSync ? new Date(lastSync).toLocaleString() : 'never'}.</p></div><button className="secondary" disabled={refreshing} onClick={async () => { setRefreshing(true); try { await refresh() } finally { setRefreshing(false) } }}>{refreshing ? 'Refreshing…' : 'Refresh state'}</button></div>}
         {controlError && <p role="alert">{controlError}</p>}
-        <Suspense fallback={<p role="status">Loading workspace...</p>}><Routes><Route path="/" element={<Dashboard/>}/><Route path="/tasks" element={<Tasks/>}/><Route path="/agents" element={<Agents/>}/><Route path="/approvals" element={<Approvals/>}/><Route path="/audit" element={<Audit/>}/><Route path="/runtime" element={<Runtime/>}/><Route path="/lab" element={<BusinessLab/>}/><Route path="/office" element={<Suspense fallback={<p>Loading office…</p>}><Office/></Suspense>}/><Route path="/system" element={<System/>}/><Route path="/models" element={<Models/>}/><Route path="*" element={<NotFound/>}/></Routes></Suspense>
+        <Suspense fallback={<p role="status">Loading workspace...</p>}><Routes><Route path="/" element={<Home/>}/><Route path="/mission-control" element={<Dashboard/>}/><Route path="/work" element={<Tasks/>}/><Route path="/inbox" element={<Approvals/>}/><Route path="/tasks" element={<Tasks/>}/><Route path="/agents" element={<Agents/>}/><Route path="/approvals" element={<Approvals/>}/><Route path="/audit" element={<Audit/>}/><Route path="/runtime" element={<Runtime/>}/><Route path="/lab" element={<BusinessLab/>}/><Route path="/office" element={<Suspense fallback={<p>Loading office…</p>}><Office/></Suspense>}/><Route path="/system" element={<System/>}/><Route path="/models" element={<Models/>}/><Route path="*" element={<NotFound/>}/></Routes></Suspense>
       </main>
       <nav className={`mobile-nav${more ? ' mobile-nav-expanded' : ''}`} aria-label="Mobile primary">{links.filter(link => 'mobile' in link && link.mobile).map(link => <NavLink key={link.to} to={link.to} end={link.to === '/'} className="mobile-main-link" aria-label={link.to === '/approvals' && pending > 0 ? `${link.label}, ${pending} pending approval records` : link.label} onClick={() => setMore(false)}><NavIcon name={link.icon}/><small>{link.label}</small></NavLink>)}<button className="mobile-more" aria-expanded={more} aria-label={more ? 'Close more navigation' : 'More navigation'} onClick={() => setMore(value => !value)}><span aria-hidden="true">{more ? '×' : '•••'}</span><small>More</small></button>{more && links.filter(link => !('mobile' in link && link.mobile)).map(link => <NavLink key={link.to} to={link.to} className="mobile-extra-link" onClick={() => setMore(false)}><NavIcon name={link.icon}/><small>{link.label}</small></NavLink>)}</nav>
     </div>{selectedAgentId && <AgentDetails/>}{selectedTaskId && <TaskDetails/>}
