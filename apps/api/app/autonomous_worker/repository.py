@@ -64,8 +64,10 @@ class ModelExecutionRepository:
         sessions: sessionmaker[Session],
         *,
         outbox_max_attempts: int,
+        goal_settings=None,
     ) -> None:
         self.sessions = sessions
+        self.goal_settings = goal_settings
         self.outbox_max_attempts = outbox_max_attempts
 
     @contextmanager
@@ -374,6 +376,16 @@ class ModelExecutionRepository:
                 now,
             )
             self._require_target_active(session, snapshot.specification.agent_id)
+            from app.goal_planning.guards import require_goal_consent
+
+            require_goal_consent(
+                session,
+                snapshot.specification.task_id,
+                run_id=snapshot.specification.run_id,
+                actor_id=snapshot.specification.agent_id,
+                specification=snapshot.specification,
+                settings=self.goal_settings,
+            )
             existing = session.get(ModelExecutionRow, execution_id)
             if existing is not None:
                 return self._contract(existing)
@@ -1089,14 +1101,23 @@ class ModelExecutionRepository:
             raise AutonomousWorkerError("MODEL_RESULT_PERSISTENCE_FAILED", status_code=404)
         return row
 
-    @staticmethod
+    def goal_review_required(self, task_id):
+        from app.goal_planning.guards import requires_goal_review
+
+        with self.sessions() as session:
+            return requires_goal_review(session, task_id)
+
     def _require_task_fence(
+        self,
         session: Session,
         task_id: str,
         worker_id: str,
         lease_token: str,
         now: datetime,
     ) -> None:
+        from app.goal_planning.guards import require_goal_consent
+
+        require_goal_consent(session, task_id, settings=self.goal_settings)
         state = session.get(SystemStateRow, 1)
         if state is not None and state.emergency_stop:
             raise AutonomousWorkerError("EXECUTION_EMERGENCY_STOPPED", status_code=423)
@@ -1109,17 +1130,25 @@ class ModelExecutionRepository:
         ):
             raise AutonomousWorkerError("EXECUTION_LEASE_LOST")
 
-    @classmethod
     def _require_fence(
-        cls,
+        self,
         session: Session,
         row: ModelExecutionRow,
         worker_id: str,
         lease_token: str,
         now: datetime,
     ) -> None:
-        cls._require_task_fence(session, row.task_id, worker_id, lease_token, now)
-        cls._require_target_active(session, row.target_agent_id)
+        self._require_task_fence(session, row.task_id, worker_id, lease_token, now)
+        from app.goal_planning.guards import require_goal_consent
+
+        require_goal_consent(
+            session,
+            row.task_id,
+            run_id=row.runtime_run_id,
+            actor_id=row.target_agent_id,
+            settings=self.goal_settings,
+        )
+        self._require_target_active(session, row.target_agent_id)
 
     @staticmethod
     def _require_target_active(session: Session, agent_id: str) -> None:

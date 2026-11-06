@@ -191,6 +191,11 @@ jobs:
           JARVIS_SMOKE_BROWSER: 'true'
           JARVIS_SMOKE_OFFICE: 'true'
           SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/jarvis-browser/live-office
+      - name: Home bounded planning, review and accepted output
+        run: python scripts/smoke-local-planning.py
+        env:
+          JARVIS_SMOKE_HOME: 'true'
+          SMOKE_ARTIFACT_DIR: ${{ runner.temp }}/jarvis-browser/home-planning
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -212,6 +212,9 @@ class DecompositionService:
         return record
 
     async def prepare(self, task_id, assembly_id=None):
+        from app.goal_planning.guards import require_unbound_goal_work
+
+        require_unbound_goal_work(self.repository, task_id)
         task = self.tasks.get_task_durable(task_id)
         old = self.repository.current(task_id)
         if assembly_id is None and old:

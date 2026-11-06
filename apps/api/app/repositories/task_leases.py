@@ -41,10 +41,12 @@ class TaskLeaseRepository:
         repository: SqlAlchemyRepository,
         session_factory: sessionmaker[Session],
         default_lease_seconds: int,
+        goal_settings=None,
     ) -> None:
         self.repository = repository
         self.session_factory = session_factory
         self.default_lease_seconds = default_lease_seconds
+        self.goal_settings = goal_settings
 
     @contextmanager
     def _write(self) -> Iterator[Session]:
@@ -106,6 +108,7 @@ class TaskLeaseRepository:
         new: str | None = None,
         payload: dict[str, Any] | None = None,
         actor_identity_id: str | None = None,
+        source: str = "task-lease-service",
     ) -> None:
         state = session.get(SystemStateRow, 1)
         if state is None:
@@ -124,7 +127,7 @@ class TaskLeaseRepository:
             eventSessionId=state.event_session_id,
             correlationId=correlation_id,
             taskId=task_id,
-            source="task-lease-service",
+            source=source,
             payload=event_payload,
         ).model_dump(mode="json")
         session.add(
@@ -325,6 +328,31 @@ class TaskLeaseRepository:
                 ~active_lease,
                 ~unsatisfied_dependency,
             )
+            from app.goal_planning.repository import GoalPlanningAdmissionRow, GoalPlanningPolicyRow
+
+            unavailable_goal = exists(
+                select(GoalPlanningAdmissionRow.goal_id)
+                .join(
+                    GoalPlanningPolicyRow,
+                    GoalPlanningPolicyRow.id == GoalPlanningAdmissionRow.policy_id,
+                )
+                .where(
+                    GoalPlanningAdmissionRow.task_id == TaskRow.id,
+                    (GoalPlanningPolicyRow.enabled.is_(False))
+                    | (GoalPlanningPolicyRow.expires_at <= now)
+                    | (GoalPlanningPolicyRow.policy_hash != GoalPlanningAdmissionRow.policy_hash),
+                )
+            )
+            task_query = task_query.where(~unavailable_goal)
+            if self.goal_settings is not None:
+                different_worker = exists(
+                    select(GoalPlanningAdmissionRow.goal_id).where(
+                        GoalPlanningAdmissionRow.task_id == TaskRow.id,
+                        GoalPlanningAdmissionRow.worker_actor_id
+                        != self.goal_settings.autonomous_worker_actor_id.strip(),
+                    )
+                )
+                task_query = task_query.where(~different_worker)
             if task_id is not None:
                 task_query = task_query.where(TaskRow.id == task_id)
             task = session.scalar(

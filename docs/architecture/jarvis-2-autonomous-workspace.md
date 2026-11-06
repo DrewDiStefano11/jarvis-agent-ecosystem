@@ -70,6 +70,21 @@ Every source milestone includes focused tests, required quality gates, browser i
 
 ## Saved-result review vertical slice
 
+The follow-on Home slice now permits explicitly consented direct planning rather
+than making every submission a draft. Ordinary submissions remain draft-only
+unless they capture the exact live scope described in api-contracts. Home shows
+native work and authorized full structured output; Inbox/Library remain the same
+review/artifact authorities. Every consent-backed output requires the operator,
+independently of the model's original review flag.
+
+The authority binding is stored atomically with native goal/task/context and timed
+task-specific grants. Native runtime/lease/model boundaries enforce the captured
+worker/run/context/budget and live consent. Native runs/checkpoints, not an
+additional goal execution engine, own recovery. Direct context uses the existing
+ContextAssembler, actual-wire budget validator and native context persistence
+inside the task-created transaction. The legacy context route remains available
+for unrelated work and rejects captured-task expansion before organizational calls.
+
 Inbox now renders the full persisted structured planning result, including every
 recommendation, assumption, risk, missing-information item and generation reference.
 A dedicated explicit local reviewer setup owns read/review authority independently
@@ -87,5 +102,6 @@ accepted output. Both views use the shared `useResultsState` in `apps/web/src/st
 
 The Library slice currently covers accepted structured planning outputs. Uploads,
 general attachment ingestion, project organization, retention controls and the
-complete six-destination navigation remain later campaign work. Automatic Home
-admission remains disabled and no live provider acceptance was performed.
+complete six-destination navigation remain later campaign work. Home planning
+consent is disabled by default and must be captured explicitly; this campaign has
+performed no live provider acceptance or production activation.

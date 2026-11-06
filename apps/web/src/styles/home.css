@@ -1,4 +1,13 @@
 .conversation-home { max-width: 920px; margin: 0 auto; padding: 4px 0 36px; }
+.goal-planning-controls { margin: 20px 0 28px; border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; background: var(--surface); font-size: .85rem; color: var(--muted); line-height: 1.6; }
+.goal-planning-controls summary { cursor: pointer; color: var(--text); font-weight: 600; }
+.goal-planning-controls summary span { float: right; color: var(--muted); font-size: .75rem; font-weight: 400; }
+.goal-planning-controls label { display: flex; align-items: center; gap: 12px; }
+.goal-planning-controls input[type=number] { width: 75px; padding: 8px; }
+.goal-plan-choice { display: flex!important; align-items: center; gap: 8px; font-size: .8rem; margin-top: 12px; }
+.goal-plan-choice input { width: auto; }
+.home-saved-output { margin-top: 24px; padding: 22px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+@media(max-width:480px) { .goal-planning-controls summary span { float: none; display: block; } .home-saved-output { padding: 16px; } }
 .home-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 62px; }
 .home-heading p { color: var(--muted); font-size: .86rem; }
 .home-wordmark { display: flex; align-items: center; gap: 10px; font-weight: 650; font-size: 1.1rem; }

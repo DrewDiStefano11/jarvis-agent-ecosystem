@@ -68,6 +68,10 @@ class GoalRepository:
 
     @staticmethod
     def project(session, row):
+        from app.goal_planning.repository import GoalPlanningAdmissionRow
+        from app.models.goal_planning import GoalPlanningLink
+
+        admission = session.get(GoalPlanningAdmissionRow, row.id)
         conversation = session.get(ConversationRow, row.conversation_id)
         messages = session.scalars(
             select(MessageRow)
@@ -88,6 +92,13 @@ class GoalRepository:
                 )
                 for message in messages
             ],
+            planning=None
+            if admission is None
+            else GoalPlanningLink(
+                policyId=admission.policy_id,
+                policyHash=admission.policy_hash,
+                runId=admission.run_id,
+            ),
         )
 
     def get(self, goal_id):

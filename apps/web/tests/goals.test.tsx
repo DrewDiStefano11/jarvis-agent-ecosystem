@@ -7,6 +7,41 @@ const reply = (data: unknown) => ({ ok: true, json: async () => ({ data }) }) as
 beforeEach(() => sessionStorage.clear())
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks() })
 
+test('captured planning scope and actor survive policy changes and lost acknowledgement', async () => {
+  let digest = 'a'.repeat(64)
+  const fetcher = vi.fn(async (url, init) => {
+    if (String(url).endsWith('/operator')) return reply({ actorId: 'goal-operator' })
+    if (String(url).endsWith('/policy')) return reply({ id: 'policy-one', policyHash: digest, enabled: true, revision: 1, maximumGoals: 3, admittedGoals: 0, expiresAt: '2099-01-01T00:00:00Z', unavailableReason: null })
+    if (init?.method === 'POST') throw new Error('Acknowledgement lost')
+    return reply([])
+  })
+  vi.stubGlobal('fetch', fetcher)
+  const first = renderHook(() => useGoalsState())
+  await act(async () => { await first.result.current.planning.refresh() })
+  await act(async () => { await first.result.current.submit('Review schedules', true).catch(() => undefined) })
+  const original = fetcher.mock.calls.find(([, init]) => init?.method === 'POST')![1]!
+  expect(JSON.parse(String(original.body)).planningConsent.policyHash).toBe('a'.repeat(64))
+  first.unmount()
+  digest = 'b'.repeat(64)
+  const second = renderHook(() => useGoalsState())
+  await act(async () => { await second.result.current.planning.refresh() })
+  await act(async () => { await second.result.current.submit('Review schedules', true).catch(() => undefined) })
+  const posts = fetcher.mock.calls.filter(([, init]) => init?.method === 'POST')
+  expect(posts[1]![1]!.body).toBe(original.body)
+  expect(posts[1]![1]!.headers).toEqual(original.headers)
+})
+
+test('an old pending draft never gains newly enabled planning authority', async () => {
+  sessionStorage.setItem('jarvis.goal.pending.v1', JSON.stringify({ key: 'original-draft', request: 'Review schedules' }))
+  const fetcher = vi.fn(async (url, init) => String(url).endsWith('/operator') ? reply({ actorId: 'operator' }) : String(url).endsWith('/policy') ? reply({ enabled: true, id: 'policy-one', policyHash: 'a'.repeat(64), expiresAt: '2099-01-01T00:00:00Z' }) : reply(init?.method === 'POST' ? goal : []))
+  vi.stubGlobal('fetch', fetcher)
+  const hook = renderHook(() => useGoalsState())
+  await act(async () => { await hook.result.current.planning.refresh(); await hook.result.current.submit('Review schedules', true) })
+  const post = fetcher.mock.calls.find(([, init]) => init?.method === 'POST')![1]!
+  expect(post.body).toBe(JSON.stringify({ request: 'Review schedules' }))
+  expect(post.headers).toEqual({ 'Content-Type': 'application/json', 'Idempotency-Key': 'original-draft' })
+})
+
 test('saves one draft, selects its persisted conversation and loads history', async () => {
   vi.stubGlobal('fetch', vi.fn(async (_url, init) => reply(init?.method === 'POST' ? goal : [])))
   const { result } = renderHook(() => useGoalsState())

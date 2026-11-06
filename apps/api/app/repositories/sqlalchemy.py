@@ -633,6 +633,7 @@ class SqlAlchemyRepository:
         created_context: tuple[ContextAssembly, Task] | None = None,
         updated_task: Task | None = None,
         authorize: Callable[[Session], None] | None = None,
+        domain_effects: Callable[[Session], None] | None = None,
         system_emergency_stop: bool | None = None,
     ) -> dict[str, Any]:
         if system_emergency_stop is not None and authorize is None:
@@ -757,6 +758,8 @@ class SqlAlchemyRepository:
                 )
                 if pending_checkpoint:
                     self._write_checkpoint(session, pending_checkpoint)
+                if domain_effects is not None:
+                    domain_effects(session)
                 if idempotency:
                     self._store_idempotency(session, idempotency)
         except Exception:

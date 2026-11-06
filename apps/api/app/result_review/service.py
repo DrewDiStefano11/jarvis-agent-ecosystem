@@ -69,6 +69,8 @@ class ResultReviewService:
                 )
 
     def _position(self, session, row, command=None):
+        from app.goal_planning.guards import requires_goal_review
+
         execution = ModelExecutionRepository._contract(row)
         task_row = session.scalar(
             select(TaskRow).where(TaskRow.id == row.task_id).with_for_update()
@@ -81,7 +83,7 @@ class ResultReviewService:
         if (
             execution.stage != "human_review_required"
             or not isinstance(execution.result, PlanningReviewResult)
-            or not execution.requiresHumanReview
+            or not (execution.requiresHumanReview or requires_goal_review(session, row.task_id))
             or target is None
             or not target.is_enabled
             or target.lifecycle_state != "active"
@@ -463,3 +465,14 @@ class ResultReviewService:
                 if len(items) == 100:
                     break
             return items
+
+    def task_executions(self, actor_id, task_id):
+        with self.sessions() as session:
+            self.authorize(actor_id, task_id, session=session)
+            rows = session.scalars(
+                select(ModelExecutionRow)
+                .where(ModelExecutionRow.task_id == task_id)
+                .order_by(ModelExecutionRow.created_at.desc())
+                .limit(20)
+            )
+            return [ModelExecutionRepository._contract(row) for row in rows]
