@@ -137,6 +137,7 @@ class AgentRuntimeRepository(ExecutionLedgerAppender, Protocol):
         require_execution_enabled: bool = False,
         execution_fence: RuntimeExecutionFence | None = None,
         commit_guard=None,
+        domain_effects=None,
     ) -> ProcessedCommandRecord | None: ...
 
 
@@ -330,10 +331,13 @@ class InMemoryAgentRuntimeRepository(AgentRuntimeRepository):
         require_execution_enabled: bool = False,
         execution_fence: RuntimeExecutionFence | None = None,
         commit_guard=None,
+        domain_effects=None,
     ) -> ProcessedCommandRecord | None:
         run_id = snapshot.specification.run_id
         if commit_guard is not None:
             raise RuntimeError("Transactional guards require a durable runtime repository")
+        if domain_effects is not None:
+            raise RuntimeError("Transactional domain effects require a durable runtime repository")
         with self._lock:
             existing_snapshot = self._snapshots.get(run_id)
             existing_events = self._events.get(run_id, [])
