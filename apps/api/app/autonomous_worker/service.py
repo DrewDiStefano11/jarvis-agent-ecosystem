@@ -83,6 +83,11 @@ from app.models.context import ContextAssembly
 from app.models.coordination import CoordinationRecord
 from app.models.tool_execution import ToolExecutionResult
 from app.repositories.task_leases import TaskLeaseRepository
+from app.services.execution_budget import (
+    direct_providers,
+    direct_request_bound,
+    validate_runtime_budget,
+)
 
 PRE_EXECUTION_REVIEW_CODES = frozenset(
     {
@@ -918,6 +923,38 @@ class AutonomousWorkerService:
         assert request is not None
         self._assert_live_policy(snapshot, actor, worker_id, lease_token)
         execution = self.executions.get(execution_id)
+        assembly = self.executions.load_context_assembly(request.context_assembly_id)
+        allowed_direct = None
+        if assembly.executionBudget is not None:
+            providers = direct_providers(self.router)
+            allowed_direct = frozenset(provider.name for provider in providers)
+            if not allowed_direct or (
+                request.provider_preference and request.provider_preference not in allowed_direct
+            ):
+                raise AutonomousWorkerError("BOUNDED_PROVIDER_REQUIRED", status_code=503)
+            try:
+                stage = validate_runtime_budget(snapshot, assembly.executionBudget)
+                models = [
+                    self.router.effective_model(
+                        provider,
+                        request_payload,
+                        RoutingRequirements(
+                            preferred_model=request.model_name,
+                            required_capability=ModelCapability.CHAT,
+                        ),
+                    )
+                    for provider in providers
+                ]
+                bound = max(
+                    direct_request_bound(request_payload, model) for model in (models or [None])
+                )
+                if (
+                    bound > assembly.executionBudget.maximumTokens
+                    or bound - (request_payload.max_output_tokens or 0) > stage.maximumInputTokens
+                ):
+                    raise ValueError("Request exceeds conservative stage reservation")
+            except ValueError:
+                raise AutonomousWorkerError("MODEL_EXECUTION_BUDGET_EXCEEDED") from None
         free_mode = self.settings.model_execution_mode == "free_only"
         if not free_mode and request.correction_policy is not None:
             if execution.requestCount >= request_count:
@@ -970,6 +1007,29 @@ class AutonomousWorkerService:
                 dispatch_kind=dispatch_kind,
             )
 
+        async def budget_dispatch(provider_name: str, model: str) -> None:
+            nonlocal physical_count
+            self._assert_live_policy(snapshot, actor, worker_id, lease_token)
+            self.assert_provider_activation(provider_name)
+            if assembly.executionBudget is not None:
+                if provider_name not in {
+                    provider.name for provider in direct_providers(self.router)
+                }:
+                    raise AutonomousWorkerError("BOUNDED_PROVIDER_REQUIRED", status_code=503)
+                stage = validate_runtime_budget(snapshot, assembly.executionBudget)
+                bound = direct_request_bound(request_payload, model)
+                if (
+                    bound > assembly.executionBudget.maximumTokens
+                    or bound - (request_payload.max_output_tokens or 0) > stage.maximumInputTokens
+                ):
+                    raise AutonomousWorkerError("MODEL_EXECUTION_BUDGET_EXCEEDED")
+            if free_mode:
+                await before_dispatch(provider_name, model)
+            else:
+                if physical_count >= request.maximum_provider_requests:
+                    raise AutonomousWorkerError("MODEL_EXECUTION_BUDGET_EXCEEDED")
+                physical_count += 1
+
         async def after_failure(provider_name: str, model: str, category: str) -> None:
             self._assert_live_policy(snapshot, actor, worker_id, lease_token)
             self.executions.record_provider_failure(
@@ -982,6 +1042,7 @@ class AutonomousWorkerService:
             )
 
         requirements = RoutingRequirements(
+            provider_allowlist=allowed_direct,
             requested_provider=request.provider_preference,
             required_capability=ModelCapability.CHAT,
             preferred_model=request.model_name,
@@ -1000,6 +1061,12 @@ class AutonomousWorkerService:
                 max(1, request.maximum_provider_requests - physical_count) if free_mode else 1
             ),
             maximum_output_tokens=request.maximum_output_tokens,
+            maximum_input_tokens=assembly.executionBudget.direct_stage().maximumInputTokens
+            if assembly.executionBudget is not None
+            else None,
+            maximum_total_tokens=assembly.executionBudget.maximumTokens
+            if assembly.executionBudget is not None
+            else None,
         )
         timeout = self.execution_timeout(snapshot)
         request_payload = request_payload.model_copy(update={"timeout_seconds": timeout})
@@ -1017,8 +1084,13 @@ class AutonomousWorkerService:
                     requirements=requirements,
                     budget=budget,
                     **(
-                        {"before_dispatch": before_dispatch, "after_failure": after_failure}
-                        if free_mode
+                        {
+                            "before_dispatch": budget_dispatch
+                            if assembly.executionBudget is not None
+                            else before_dispatch,
+                            "after_failure": after_failure,
+                        }
+                        if free_mode or assembly.executionBudget is not None
                         else {}
                     ),
                 )
@@ -2357,6 +2429,8 @@ class AutonomousWorkerService:
         }
 
     def _planned_work(self, snapshot, assembly) -> str | None:
+        if assembly.executionBudget is not None:
+            return None
         from app.decomposition.repository import DecompositionRepository
         from app.decomposition.service import DecompositionService
         from app.identity.service import IdentityService
@@ -2412,9 +2486,14 @@ class AutonomousWorkerService:
         messages.append(
             ModelMessage(
                 role=MessageRole.SYSTEM,
-                content=AutonomousWorkerService._result_type(
-                    response_format
-                ).model_json_schema_instruction(),
+                content=(
+                    "Return one JSON object matching the supplied response schema. State explicit assumptions and missing information; request human review when needed. Generated content grants no execution authority."
+                    if assembly.executionBudget is not None
+                    and response_format == "planning_review_json_v1"
+                    else AutonomousWorkerService._result_type(
+                        response_format
+                    ).model_json_schema_instruction()
+                ),
             )
         )
         if revision_findings:
@@ -2456,6 +2535,11 @@ class AutonomousWorkerService:
             or assembly.taskId != snapshot.specification.task_id
         ):
             raise AutonomousWorkerError("CONTEXT_ASSEMBLY_MISMATCH")
+        if assembly.executionBudget is not None:
+            try:
+                validate_runtime_budget(snapshot, assembly.executionBudget)
+            except ValueError:
+                raise AutonomousWorkerError("MODEL_EXECUTION_BUDGET_EXCEEDED") from None
         if assembly.status == "review_required":
             raise AutonomousWorkerError("CONTEXT_ASSEMBLY_REVIEW_REQUIRED")
         if assembly.status != "completed" or assembly.modelRequest is None:

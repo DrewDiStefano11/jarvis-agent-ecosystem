@@ -345,6 +345,7 @@ class ContextAssembler:
         )
         assembly = ContextAssembly(
             id=assembly_id,
+            executionBudget=command.executionBudget,
             taskId=task.id,
             projectId=command.projectId,
             status=status,

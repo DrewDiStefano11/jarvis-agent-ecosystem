@@ -28,7 +28,7 @@ test('workspace proposals retain their explicit mode and never invoke tools whil
 
 test.each([true, false])('planning replays captured output format without upgrading old submissions: %s', async current => {
   const submission = newPlanningSubmission(task, 'actor-test', 'actor-test')
-  if (!current) delete submission.responseFormat
+  if (!current) { delete submission.responseFormat; delete submission.budgetProfile }
   const captured = JSON.parse(JSON.stringify(submission))
   await submitPlanning(captured)
   await submitPlanning(captured)
@@ -52,4 +52,23 @@ test('submitPlanning sends the selected planning actor ID in X-Jarvis-Actor-Id h
     'Idempotency-Key': `planning-context-${submission.id}`,
     'X-Jarvis-Actor-Id': 'actor-12345'
   })
+})
+
+test('new planning captures one direct request and a persisted aggregate budget', async () => {
+  const submission = newPlanningSubmission(task, 'actor-test', 'actor-test')
+  await submitPlanning(submission)
+  const calls = vi.mocked(request).mock.calls
+  const context = JSON.parse(calls[0]![1]!.body as string)
+  expect(context.executionBudget).toMatchObject({ maximumRequests: 1, maximumTokens: 7500, maximumAttempts: 1 })
+  expect(context.executionBudget.stages).toEqual([{ stage: 'planning', maximumRequests: 1, maximumInputTokens: 5964, maximumOutputTokens: 1536 }])
+  const command = JSON.parse(calls[1]![1]!.body as string)
+  expect(command.specification.maximum_permitted_attempts).toBe(1)
+  expect(command.specification.autonomous_execution).toMatchObject({ maximum_provider_requests: 1, maximum_repair_calls: 0, maximum_output_tokens: 1536 })
+})
+
+test('an inconsistent captured direct profile is rejected before any HTTP command', async () => {
+  const submission = newPlanningSubmission(task, 'actor-test', 'actor-test')
+  delete submission.responseFormat
+  await expect(submitPlanning(submission)).rejects.toThrow(/profile|format/i)
+  expect(request).not.toHaveBeenCalled()
 })

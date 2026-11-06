@@ -500,3 +500,41 @@ permanent erasure; the broader campaign remains incomplete. The prior dashboard
 is preserved at `/mission-control`; all former task, agent, planning, approval,
 Office, project, audit, system and model routes remain. `/work` and `/inbox` are
 compatible aliases during navigation migration.
+
+## Bounded direct planning (stacked on Jarvis intake)
+
+Opt-in context requests may supply `executionBudget`: `maximumRequests`,
+`maximumTokens`, `maximumAttempts` and unique `stages`. Each stage names one of
+team_selection, decomposition, planning, specialist_execution, independent_review,
+synthesis, validation, retry, repair or correction and specifies maximum requests,
+input tokens and output tokens. Integers are strict; stage request sums and full
+request token reservations must fit aggregate maxima. Budgets limit execution and
+never grant provider, identity, tool or source authority.
+
+The currently supported graph is exactly one planning request/attempt. Other
+stages may have zero caps; enabled multi-stage graphs return
+`EXECUTION_GRAPH_UNSUPPORTED` before organizational inference. Direct requests skip
+legacy team selection/decomposition on initial assembly and replay, preserve the
+budget in the immutable assembly input hash/payload, and preflight the actual
+worker messages/schema/UTF-8 framing/completion bound before context persistence.
+Oversized requests return `EXECUTION_BUDGET_EXCEEDED` without dispatch.
+
+Bounded direct planning requires exact native Ollama/OpenAI-compatible adapters
+with CHAT and STRUCTURED_OUTPUT support. Unsupported/unconfigured implementations
+return `BOUNDED_PROVIDER_REQUIRED` (503), including ChatGPT/Codex transports whose
+native turns do not enforce this physical completion/request envelope. This
+restriction does not remove their legacy integrations. The direct worker applies
+an explicit provider allowlist, rechecks the exact routed adapter/model and
+request envelope before transport, and enforces reported input/output/total caps.
+Existing account eligibility, activation, current native quota, RBAC, leases,
+checkpoints and emergency stop remain mandatory. The admitted one-request graph
+uses its normal atomic native reservation; there is no second quota ledger.
+
+New browser planning submissions capture immutable `budgetProfile: "direct-v1"`:
+one request/attempt, 7,500 conservative total tokens (5,964 input/framing/schema +
+1,536 output), no extra model review/repair/retry. Recovery retains that profile
+with original IDs and input hash; inconsistent profile/output-format records are
+rejected. Existing saved submissions without a profile keep their exact legacy
+body; workspace-plan/tool authorization is unchanged. Do not change direct-v1
+numbers when adding future profiles. General multi-agent graph reservations,
+configurable UI budgets and standing automatic Home admission remain unfinished.
