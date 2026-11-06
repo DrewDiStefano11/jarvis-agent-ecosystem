@@ -1,5 +1,14 @@
 # Jarvis 2.0 campaign ledger
 
+## Publication — PR166, exact behavioral source
+
+Published draft PR166: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/166
+Branch `codex/jarvis-goal-planning`, behavioral source
+`d3647cf2119f5f69fa5edfcb9f240a8e36e14e06`, exact base PR165/e041.
+New hosted run `42289987854` was pending at publication; do not poll repeatedly.
+The final verification results immediately below apply to d3647cf source. This
+publication note is documentation only. No merge, activation or deployment.
+
 ## Current authoritative checkpoint — bounded Home planning implemented
 
 This supersedes the older “no implementation yet” and branch-alignment notes
