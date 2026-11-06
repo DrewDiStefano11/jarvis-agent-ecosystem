@@ -85,3 +85,13 @@ When `maximumContextTokens` is omitted, the prototype-compatible `estimatedToken
 - SQLite and the in-process outbox dispatcher target one local API process.
 
 The Phase 2C worker maps the provider-neutral request through a deterministic adapter, preserves context as user data, appends one fixed output-schema system instruction, and records a separate execution-request hash. A future tokenizer can replace the estimator behind the budget interface without changing API or stored manifest fields. Filesystem, model, and tool access remain outside the assembler.
+
+
+Completed planning results are read from the native durable execution repository
+when the API assembles context. The query is restricted to the same task and the
+two newest completed/human-review executions (completion time, then execution ID).
+Failed/in-flight results are excluded. The prior summary remains bounded to 500
+characters and `prior_model_output` source/trust, with normal injection/redaction
+and context-budget rules. Restart does not erase that history or promote it to
+trusted instructions. This supplies task-scoped recall, not a cross-task memory
+store or self-modifying policy.

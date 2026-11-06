@@ -448,6 +448,27 @@ class ModelExecutionRepository:
             )
             return [self._contract(row) for row in rows]
 
+    def list_context_results(self, task_id: str, *, limit: int = 2) -> list[ModelExecutionResult]:
+        """Bounded, task-scoped completed memory; model output retains its trust level."""
+        if not 1 <= limit <= 100:
+            raise ValueError("invalid prior-result limit")
+        with self.sessions() as session:
+            rows = session.scalars(
+                select(ModelExecutionRow)
+                .where(
+                    ModelExecutionRow.task_id == task_id,
+                    ModelExecutionRow.stage.in_(("completed", "human_review_required")),
+                )
+                .order_by(
+                    func.coalesce(
+                        ModelExecutionRow.completed_at, ModelExecutionRow.created_at
+                    ).desc(),
+                    ModelExecutionRow.execution_id,
+                )
+                .limit(limit)
+            )
+            return [self._contract(row) for row in rows]
+
     def record_call_started(
         self,
         execution_id: str,

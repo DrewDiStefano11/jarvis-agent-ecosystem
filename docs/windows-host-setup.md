@@ -7,8 +7,9 @@ establish live model quality, protected execution or 24/7 host acceptance.
 ## Install a reviewed revision with safe defaults
 
 Install Git, Python 3.12, Node 22 and pnpm 11. Use a local disk and an ordinary
-Windows user. Choose an owner-reviewed full commit SHA from PR #159 until it is
-merged; `main` does not yet contain this integration. In PowerShell:
+Windows user. PR #159 is merged at `f4cad147bde5243c9f0073c1204852af52a403cb`.
+Choose an owner-reviewed full commit SHA containing the accepted readiness fixes;
+record that exact revision for installation and recovery. In PowerShell:
 
 ```powershell
 git clone https://github.com/DrewDiStefano11/jarvis-agent-ecosystem.git
@@ -134,3 +135,27 @@ Before updates, stop, back up and record the deployed source/configuration. Prom
 only an owner-reviewed revision with compatible migrations. Populated append-only
 history and encrypted credential state require an explicit recovery plan; do not
 blindly downgrade or overwrite them. No automatic merge/promotion is authorized.
+
+
+## Development-safe repeated-cycle regression
+
+After installing dependencies, run this from `apps/api` with the API interpreter:
+
+```powershell
+& ./.venv/Scripts/python.exe -m pytest tests/test_offline_operation_cycles.py tests/test_worker_pool.py tests/test_planning_review_orchestration.py tests/test_coordination_verification.py tests/test_context_integration.py tests/test_improvement_schedule.py tests/test_groq_rate_limits.py tests/test_runtime_supervisor.py --timeout=300 -q
+```
+
+These tests drive native services, isolated SQLite databases and intercepted model
+responses. They cover repeated task completion with fresh app/service instances,
+zero additional calls on idle polls, persistent task-scoped result recall,
+checkpoint/acknowledgement recovery, bounded worker overlap, independent critique,
+correction, advisory scheduling, stop/revocation, rate limits and supervisor/
+backup/Task Scheduler contracts. Context recalls at most two recent completed or
+human-review results for the same task, at `prior_model_output` trust; it is not
+cross-task knowledge or permission to execute a remembered instruction.
+
+Also run the real isolated supervisor and API/worker process smokes documented in
+[the readiness record](handoffs/software-readiness-20261105.md). Contract tests do
+not register Task Scheduler startup or prove reboot/logon recovery. Intercepted
+model responses do not measure live Ollama/Groq quality, cancellation or resource
+usage. Actual host activation and the bounded soak remain separate acceptance.

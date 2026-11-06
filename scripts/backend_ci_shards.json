@@ -30,6 +30,7 @@
     "tests/test_autonomous_runtime_admission.py",
     "tests/test_autonomous_worker.py",
     "tests/test_worker_pool.py",
+    "tests/test_offline_operation_cycles.py",
     "tests/test_context_assembler.py",
     "tests/test_coordination_migration.py",
     "tests/test_coordination_verification.py",
