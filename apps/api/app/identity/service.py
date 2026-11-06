@@ -489,89 +489,91 @@ class IdentityService:
     def assign_permission(self, agent_id: str, data):
         with UnitOfWork(self.sessions) as uow:
             assert uow.session
-            agent = self._agent(uow.session, agent_id)
-            permission = uow.session.get(IdentityPermissionRow, data.permission_id)
-            if agent.lifecycle_state != "active" or not agent.is_enabled:
-                raise DomainError(
-                    "AGENT_INACTIVE", "Only active agents may receive permission assignments.", 409
-                )
-            if not permission:
-                raise DomainError("PERMISSION_NOT_FOUND", "Permission was not found.", 404)
-            if data.resource_type is not None and data.resource_type != permission.resource_type:
-                raise DomainError(
-                    "PERMISSION_SCOPE_MISMATCH",
-                    "Assignment resource type must match the permission definition.",
-                    409,
-                )
-            self._validate_attribution(uow.session, data.assigned_by)
-            starts_at, expires_at = effective_interval(data)
-            if data.starts_at is None:
-                starts_at = _distinct_generated_start(
-                    uow.session,
-                    AgentPermissionAssignmentRow,
-                    starts_at,
-                    AgentPermissionAssignmentRow.agent_id == agent_id,
-                    AgentPermissionAssignmentRow.permission_id == data.permission_id,
-                    AgentPermissionAssignmentRow.effect == data.effect,
-                    AgentPermissionAssignmentRow.resource_type.is_(None)
-                    if data.resource_type is None
-                    else AgentPermissionAssignmentRow.resource_type == data.resource_type,
-                    AgentPermissionAssignmentRow.resource_id.is_(None)
-                    if data.resource_id is None
-                    else AgentPermissionAssignmentRow.resource_id == data.resource_id,
-                )
-            infinity = datetime.max.replace(tzinfo=UTC)
-            duplicate = uow.session.scalar(
-                select(AgentPermissionAssignmentRow.id).where(
-                    AgentPermissionAssignmentRow.agent_id == agent_id,
-                    AgentPermissionAssignmentRow.permission_id == data.permission_id,
-                    AgentPermissionAssignmentRow.effect == data.effect,
-                    AgentPermissionAssignmentRow.revoked_at.is_(None),
-                    AgentPermissionAssignmentRow.starts_at
-                    < (expires_at if expires_at is not None else infinity),
-                    or_(
-                        AgentPermissionAssignmentRow.expires_at.is_(None),
-                        AgentPermissionAssignmentRow.expires_at > starts_at,
-                    ),
-                    AgentPermissionAssignmentRow.resource_type.is_(None)
-                    if data.resource_type is None
-                    else AgentPermissionAssignmentRow.resource_type == data.resource_type,
-                    AgentPermissionAssignmentRow.resource_id.is_(None)
-                    if data.resource_id is None
-                    else AgentPermissionAssignmentRow.resource_id == data.resource_id,
-                )
+            return self.assign_permission_in_session(uow.session, agent_id, data)
+
+    def assign_permission_in_session(self, session: Session, agent_id: str, data):
+        """Share the caller transaction without changing native grant validation."""
+        agent = self._agent(session, agent_id)
+        permission = session.get(IdentityPermissionRow, data.permission_id)
+        if agent.lifecycle_state != "active" or not agent.is_enabled:
+            raise DomainError(
+                "AGENT_INACTIVE", "Only active agents may receive permission assignments.", 409
             )
-            if duplicate:
-                raise DomainError(
-                    "DUPLICATE_ASSIGNMENT", "Equivalent assignment already exists.", 409
-                )
-            values = data.model_dump()
-            values["starts_at"] = starts_at
-            values["expires_at"] = expires_at
-            row = AgentPermissionAssignmentRow(id=uid("aperm"), agent_id=agent_id, **values)
-            uow.session.add(row)
-            self._audit(
-                uow.session,
-                f"permission.{'granted' if data.effect == 'allow' else 'denied'}",
-                "agent",
-                agent_id,
-                data.assigned_by,
-                data.reason,
-                {
-                    "assignment_id": row.id,
-                    "permission_id": row.permission_id,
-                    "effect": row.effect,
-                    "resource_type": row.resource_type,
-                    "resource_id": row.resource_id,
-                },
+        if not permission:
+            raise DomainError("PERMISSION_NOT_FOUND", "Permission was not found.", 404)
+        if data.resource_type is not None and data.resource_type != permission.resource_type:
+            raise DomainError(
+                "PERMISSION_SCOPE_MISMATCH",
+                "Assignment resource type must match the permission definition.",
+                409,
             )
-            try:
-                uow.session.flush()
-            except IntegrityError as exc:
-                raise DomainError(
-                    "DUPLICATE_ASSIGNMENT", "Equivalent assignment already exists.", 409
-                ) from exc
-            return row
+        self._validate_attribution(session, data.assigned_by)
+        starts_at, expires_at = effective_interval(data)
+        if data.starts_at is None:
+            starts_at = _distinct_generated_start(
+                session,
+                AgentPermissionAssignmentRow,
+                starts_at,
+                AgentPermissionAssignmentRow.agent_id == agent_id,
+                AgentPermissionAssignmentRow.permission_id == data.permission_id,
+                AgentPermissionAssignmentRow.effect == data.effect,
+                AgentPermissionAssignmentRow.resource_type.is_(None)
+                if data.resource_type is None
+                else AgentPermissionAssignmentRow.resource_type == data.resource_type,
+                AgentPermissionAssignmentRow.resource_id.is_(None)
+                if data.resource_id is None
+                else AgentPermissionAssignmentRow.resource_id == data.resource_id,
+            )
+        infinity = datetime.max.replace(tzinfo=UTC)
+        duplicate = session.scalar(
+            select(AgentPermissionAssignmentRow.id).where(
+                AgentPermissionAssignmentRow.agent_id == agent_id,
+                AgentPermissionAssignmentRow.permission_id == data.permission_id,
+                AgentPermissionAssignmentRow.effect == data.effect,
+                AgentPermissionAssignmentRow.revoked_at.is_(None),
+                AgentPermissionAssignmentRow.starts_at
+                < (expires_at if expires_at is not None else infinity),
+                or_(
+                    AgentPermissionAssignmentRow.expires_at.is_(None),
+                    AgentPermissionAssignmentRow.expires_at > starts_at,
+                ),
+                AgentPermissionAssignmentRow.resource_type.is_(None)
+                if data.resource_type is None
+                else AgentPermissionAssignmentRow.resource_type == data.resource_type,
+                AgentPermissionAssignmentRow.resource_id.is_(None)
+                if data.resource_id is None
+                else AgentPermissionAssignmentRow.resource_id == data.resource_id,
+            )
+        )
+        if duplicate:
+            raise DomainError("DUPLICATE_ASSIGNMENT", "Equivalent assignment already exists.", 409)
+        values = data.model_dump()
+        values["starts_at"] = starts_at
+        values["expires_at"] = expires_at
+        row = AgentPermissionAssignmentRow(id=uid("aperm"), agent_id=agent_id, **values)
+        session.add(row)
+        self._audit(
+            session,
+            f"permission.{'granted' if data.effect == 'allow' else 'denied'}",
+            "agent",
+            agent_id,
+            data.assigned_by,
+            data.reason,
+            {
+                "assignment_id": row.id,
+                "permission_id": row.permission_id,
+                "effect": row.effect,
+                "resource_type": row.resource_type,
+                "resource_id": row.resource_id,
+            },
+        )
+        try:
+            session.flush()
+        except IntegrityError as exc:
+            raise DomainError(
+                "DUPLICATE_ASSIGNMENT", "Equivalent assignment already exists.", 409
+            ) from exc
+        return row
 
     def check_permission(
         self,

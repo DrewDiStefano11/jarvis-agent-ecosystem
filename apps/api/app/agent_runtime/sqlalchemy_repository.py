@@ -71,8 +71,11 @@ def load(text, cls):
 
 
 class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
-    def __init__(self, sessions: sessionmaker[Session], *, outbox_max_attempts: int = 10):
+    def __init__(
+        self, sessions: sessionmaker[Session], *, outbox_max_attempts: int = 10, goal_settings=None
+    ):
         self.sessions = sessions
+        self.goal_settings = goal_settings
         self.outbox_max_attempts = outbox_max_attempts
         self._commit_lock = RLock()
         self._commit_authorizer: ContextVar[Callable[[Session, AgentRunSnapshot], None] | None] = (
@@ -233,10 +236,13 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
     ):
         run_id = snapshot.specification.run_id
         events = tuple(events)
-        autonomous_admission = snapshot.specification.autonomous_execution is not None and any(
+        run_admission = any(
             event.event_type
             in {AgentRuntimeEventType.RUN_CREATED, AgentRuntimeEventType.RUN_QUEUED}
             for event in events
+        )
+        autonomous_admission = (
+            snapshot.specification.autonomous_execution is not None and run_admission
         )
         try:
             with self._commit_lock, self.sessions.begin() as s:
@@ -250,13 +256,14 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                     # SQLite ignores FOR UPDATE. Acquire its write fence before
                     # reading either the replay record or the authoritative task.
                     s.execute(text("BEGIN IMMEDIATE"))
-                if commit_authorizer is not None:
+                if commit_authorizer is not None or autonomous_admission:
                     s.execute(
                         update(SystemStateRow)
                         .where(SystemStateRow.id == 1)
                         .values(updated_at=datetime.now(UTC))
                     )
-                    commit_authorizer(s, snapshot)
+                    if commit_authorizer is not None:
+                        commit_authorizer(s, snapshot)
                 replay = self._replay_processed_command(s, run_id, processed_command)
                 if replay is not None:
                     return replay
@@ -287,6 +294,17 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                         )
                 if execution_fence is not None:
                     self._require_execution_fence(s, snapshot, execution_fence)
+                if run_admission:
+                    from app.goal_planning.guards import require_goal_consent
+
+                    require_goal_consent(
+                        s,
+                        snapshot.specification.task_id,
+                        run_id=run_id,
+                        actor_id=snapshot.specification.agent_id,
+                        specification=snapshot.specification,
+                        settings=self.goal_settings,
+                    )
                 if autonomous_admission:
                     # The worker only claims queued/retrying tasks. Hold the
                     # durable task lock through this command commit so a stale

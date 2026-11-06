@@ -1,5 +1,158 @@
 # Jarvis 2.0 campaign ledger
 
+## Current authoritative checkpoint — bounded Home planning implemented
+
+This supersedes the older “no implementation yet” and branch-alignment notes
+below. Active checkout: `.local/worktrees/jarvis-retention` within the original
+jarvis-stage-budgets checkout; CURRENT branch `codex/jarvis-goal-planning`, exact
+base `e041eab10b4da893612d3029aaa277c38c4f5f2b` (unmerged draft PR165). The
+former empty cherry-pick was rebased onto that exact base; own changes were
+restored from a retained stash. No original dirty checkout, live data, credentials
+or production settings were changed. Always set workdir explicitly.
+
+Implemented: explicit default-disabled, hashed, expiring direct-v1 consent (1–20
+new goals; UI one-hour expiry), captured atomically with native goal/task/context,
+narrow timed native grants and one admission slot. Native runtime, leases and
+model execution fence exact worker/run/context/input/budget and current consent;
+legacy metadata omission and organizational context expansion cannot widen it.
+No secondary workflow/quota engine or scheduler. Native provider activation,
+quota, stop and recovery remain authoritative. Old drafts never gain consent.
+
+Shared Home state preserves exact consent/actor/idempotency intent through lost
+acknowledgement and reload. Actual native status and authorized five-item output
+appear in Home; separate results reviewer setup owns review. Consent-backed
+outputs always await human review, even if the immutable original model review
+flag is false. Accept through Inbox creates the existing hash-verified Library
+artifact. Neither setup nor navigation activates providers/workers or inference.
+
+New final-source verification (working source on e041, commit identity recorded
+at publication): Ruff format/check for apps/api AND scripts passed (611 files);
+4232 tests collected with complete shard coverage; focused goal/intake/review/
+parent-authorization suites passed 56 tests, then a new populated-authority
+migration downgrade/integrity test passed separately. The latter test initially
+used a nonexistent repository.engine attribute; corrected to its session bind.
+Frontend typecheck, ESLint, all 271 Vitest tests/40 files, and production build
+passed. Final actual-API/separate-worker/browser acceptance passed using one
+owned loopback deterministic request; lost acknowledgement/reload stayed one
+native goal task/run, original model review flag=false, full output/accept/download,
+untouched older draft, all six widths, no browser errors, restart/hash preservation
+and zero additional fixture calls. Log `.local/goal-planning/browser-checkpoint.log`.
+No external model requests or live acceptance occurred.
+
+Retained earlier evidence, NOT claimed as complete final-head validation:
+runtime437 passed; autonomy547 passed; models1391 passed/1 failed/3 explicit
+Windows skips. The models failure was the parent-deletion race caused by an
+overly broad write fence. It was fixed; the complete parent suite plus goal tests
+passed23 and the final focused56 includes the complete parent suite again.
+Do not call that original models shard all-passing. Blank migration cycle passed.
+Independent read-only review caught worker-setting drift and retry UI disabling;
+both fixed. Existing native worker suite66 passed before later narrow refinements.
+
+Long local system shard session49996 is still running and progressing (~4% at
+last observation) in this checkout; `.local/goal-planning/full-system.log` and
+`full-system/` retain diagnostics. Earlier original review system session74101
+also remains separate. Do not restart either merely because it is slow.
+PR165 e041 CI run42278273756: nine jobs successful, backend-tests-system still
+in progress at this checkpoint. No skipped check is passing evidence. Preserve
+all checks and leave PRs draft while required exact-head CI is unresolved.
+
+Next: publish this tested slice as a stacked draft against PR165, record source
+SHA/PR/run IDs and finish unresolved validation. Then continue the first lifecycle
+journey: safe task archive/Trash/restore/eligible content erasure (research proposal
+in docs/plans/jarvis-2-retention-research.md), alongside remaining conversation
+clarification/follow-up, general stage budget graphs, Work/projects, files/sources,
+Mission Control/Settings and complete navigation/notifications/recurring work.
+No campaign completion claim is warranted. Do not merge or activate live inference.
+
+## Latest continuation — Home planning next, CI formatting repaired
+
+PR165 current head is `e041eab10b4da893612d3029aaa277c38c4f5f2b` (formatting/import
+ordering follow-up to behavioral215315c). Initial215315c hosted jobs passed
+frontend, autonomy, migrations, repository integrity and Linux Git. Backend static
+and runtime-browser stopped on formatting of models.py/main.py/smoke-local-planning.py;
+their downstream skips are not passes. Corrected all three and the script import
+order, then ran exact `ruff format apps/api scripts --check` (603files),
+`ruff check apps/api scripts`, complete shard coverage (4216collected), and a fresh
+24-test review suite: all pass. Logs `collection-final.log`, `after-format.log`.
+PR body now records the failure/correction and remains draft pending new-head CI.
+No CI gates were removed or weakened. Original local system session74101 continues
+through native Git tests (last seen4%); do not restart it merely for duration.
+
+Latest CI checkpoint JSON at `.local/result-review/ci-checkpoint.json`: PR163 run
+42264800321 and PR164 run42268195126 had all listed jobs successful except their
+still-running system shards. PR165 old-head run42277008444 had the results above.
+Do not repeatedly poll unchanged status; inspect again after meaningful work.
+
+The next highest-priority gap is Home still saving drafts, so close bounded native
+Home planning before implementing archive/Trash. Retention notes remain saved.
+The isolated checkout path is still `.local/worktrees/jarvis-retention` inside this
+original permitted root, but its CURRENT branch is `codex/jarvis-goal-planning`.
+It is based on215315c and carries the formatting follow-up as cherry-pick
+`09519ca0b2798f844ceb42c786432a18a5c69f6f` (application source matches PR165 head).
+The empty `codex/jarvis-retention` branch is preserved; no branches were deleted.
+New checkout has only dirty ledger and two untracked plans; NO new implementation
+or tests have been written there yet. Always set workdir explicitly because the
+tool default cwd still points at the original result-review checkout.
+
+Read `docs/plans/jarvis-2-goal-planning.md` there and resolve the authority boundary
+before implementing: versioned/hashed/expiring default-disabled direct-v1 consent,
+captured only on an explicit new Home submission; narrow task-scoped worker grants
+with consent expiry; no global runtime/admin/tool grants; no provider activation or
+worker startup; native current provider/quota/lease/checkpoint/outbox checks. A
+persisted goal/task authority binding must be rechecked by native admission AND
+actual model-dispatch fences independently of caller-supplied run metadata. Use
+native runs/checkpoints as recovery position, not a new goal workflow engine. Old
+draft/pending submissions must not automatically acquire new authority. Native
+task-created transaction should atomically consume one bounded authority slot and
+capture its exact scope; identical replay consumes no second slot.
+
+Existing anchors inspected: main.py create_goal970 and context creation1134–1360;
+ContextAssembler plus direct_providers/validate_direct_assembly and EventBroker's
+created_context/authorize callback; repository._insert_created_task; task_leases
+acquire_task; worker provisioning/setup_router automatically picks configured
+worker but its assign_permission calls currently own separate transactions. New
+scope provisioning likely needs a real native in-session method rather than
+orphan task grants or hidden domain writes in authorization callbacks. Ensure
+revoked/expired consent cannot be bypassed by manually omitting run metadata for
+the linked task. Preserve native explicit manual planning semantics for unrelated
+tasks. All tests must use deterministic fixtures/native inert adapters; no live
+Groq/Ollama calls or production records, settings or credentials.
+
+Next action: write failing focused consent/default-disabled/scope/replay tests,
+implement the bounded native authority and shared Home path, actual fixture-browser
+journey without manual worker identity selection, then required tests and stacked
+draft PR. Review PR165 new-head CI at a sensible milestone; repair actual failures.
+The entire campaign remains active and incomplete.
+
+## Published result-review source and isolated continuation
+
+Draft PR165: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/165,
+source `215315c494dadb66202e874e5a90589d48d0db1d`, base PR164. The full system
+shard remains in progress (session74101; same original review checkout/log path).
+Hosted exact-head CI run42277008444 was in progress at initial discovery. Keep
+draft/not-ready until applicable checks complete; never treat skipped checks as
+passing. No merge/deployment/live inference occurred.
+
+Final focused review suite is now24 passing, including live lease/run/child and
+corrupt-result fences, full audit/outbox/processed-command rollback counts, and
+populated migration downgrade refusal. Log `guards-verified.log`. Full models run
+finished1392passed/3explicit skips; runtime437passed. The autonomy523pass/1failure
+was the advertised migration default; complete API47passed after correction as
+described below. Final browser and frontend build pass on the published application
+source. The last plan item remains unchecked because full system/hosted gates are
+pending, not because the feature was left unimplemented.
+
+To keep this source stable for its live system tests, next development is isolated
+at `C:/Users/DDistefano/.codex/worktrees/jarvis-stage-budgets/jarvis-agent-ecosystem/.local/worktrees/jarvis-retention`,
+branch `codex/jarvis-retention`, based explicitly on unmerged215315c. The native
+worktree is inside the already permitted writable root; `.local/worktrees` is
+Git-ignored. No source changes to retention yet. Planning notes are in the original
+checkout `.local/result-review/next-retention-notes.md`. Preserve untracked earlier
+`.local-stage-*.log`; they were intentionally not committed. Future commands must
+set the new workdir explicitly; original cwd still points to the result-review
+checkout. Copy this newest publication checkpoint into the retention ledger before
+continuing there.
+
 ## Resume here — native result review, November 6
 
 Current worktree is `C:/Users/DDistefano/.codex/worktrees/jarvis-stage-budgets/jarvis-agent-ecosystem`,

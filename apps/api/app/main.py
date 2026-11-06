@@ -112,7 +112,7 @@ from app.team_selection.router import router as team_selection_router
 from app.tool_execution.router import router as tool_execution_router
 from app.tool_execution.service import ToolExecutionService
 
-DATABASE_REVISION = "20261106_results"
+DATABASE_REVISION = "20261106_goal_plans"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
@@ -277,7 +277,9 @@ def create_app(
         settings.idempotency_lease_seconds,
         settings.outbox_max_attempts,
     )
-    task_leases = TaskLeaseRepository(repository, session_factory, settings.task_lease_seconds)
+    task_leases = TaskLeaseRepository(
+        repository, session_factory, settings.task_lease_seconds, goal_settings=settings
+    )
     restored_workflow_state = (
         repository.mark_interrupted_workflow() if recover_interrupted_workflow else None
     )
@@ -340,7 +342,7 @@ def create_app(
     app.state.catalog_service = CatalogService(session_factory)
     app.state.office_service = OfficeService(session_factory)
     app.state.agent_runtime_repository = SqlAlchemyAgentRuntimeRepository(
-        session_factory, outbox_max_attempts=repository.outbox_max_attempts
+        session_factory, outbox_max_attempts=repository.outbox_max_attempts, goal_settings=settings
     )
     app.state.agent_runtime_service = AgentRuntimeService(
         app.state.agent_runtime_repository,
@@ -388,6 +390,7 @@ def create_app(
     app.state.model_execution_repository = ModelExecutionRepository(
         session_factory,
         outbox_max_attempts=repository.outbox_max_attempts,
+        goal_settings=settings,
     )
     from app.result_review.router import router as result_review_router
     from app.result_review.service import ResultReviewService
@@ -396,6 +399,11 @@ def create_app(
         session_factory, app.state.identity_service, app.state.agent_runtime_service, task_leases
     )
     app.include_router(result_review_router)
+    from app.goal_planning.router import router as goal_planning_router
+    from app.goal_planning.service import GoalPlanningService
+
+    app.state.goal_planning_service = GoalPlanningService(app)
+    app.include_router(goal_planning_router)
     app.state.autonomous_worker_service = AutonomousWorkerService(
         settings=settings,
         executions=app.state.model_execution_repository,
@@ -521,7 +529,7 @@ def create_app(
                 },
             )
         response = await call_next(request)
-        if request.url.path.startswith("/api/results"):
+        if request.url.path.startswith(("/api/results", "/api/goal-planning")):
             response.headers["Cache-Control"] = "no-store"
         if (
             request.method in {"POST", "PATCH"}
@@ -981,9 +989,22 @@ def create_app(
         ],
     ):
         payload = body.model_dump(mode="json")
+        actor_id = None
+        if body.planningConsent is not None:
+            from app.goal_planning.router import operator
+
+            actor_id = operator(request)
+            payload["planningActorId"] = actor_id
         if replay := replay_idempotent(request, idempotency_key, "goal.create", payload):
+            if body.planningConsent is not None:
+                app.state.goal_planning_service.admit_saved(actor_id, replay["id"])
             return TypedApiResponse(data=Goal.model_validate(replay))
         goal, item = prepare_goal(body)
+        effects = None
+        if body.planningConsent is not None:
+            effects = app.state.goal_planning_service.prepare_capture(
+                actor_id, goal, item, body.planningConsent
+            )
         await save_goal(
             broker,
             goal,
@@ -991,7 +1012,11 @@ def create_app(
             idempotency_result(
                 request, idempotency_key, "goal.create", payload, goal, 201, goal.id
             ),
+            domain_effects=effects,
+            actor_id=actor_id,
         )
+        if actor_id is not None:
+            app.state.goal_planning_service.admit_saved(actor_id, goal.id)
         return TypedApiResponse(data=goal)
 
     @app.post("/api/tasks", response_model=ApiResponse, status_code=201)
@@ -1140,6 +1165,10 @@ def create_app(
         x_jarvis_actor_id: Annotated[str | None, Header(alias="X-Jarvis-Actor-Id")] = None,
     ) -> ApiResponse | JSONResponse:
         from fastapi import HTTPException
+
+        from app.goal_planning.guards import require_unbound_goal_work
+
+        require_unbound_goal_work(repository, body.taskId)
 
         for source in body.sources:
             if source.trustLevel in {

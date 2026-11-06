@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from app.autonomous_worker.provisioning import _find_actor
 from app.core.errors import DomainError
+from app.models.autonomous_worker import ModelExecutionResult
 from app.models.domain import TypedApiResponse
 from app.models.result_review import (
     ResultReviewer,
@@ -93,3 +94,12 @@ def content(artifact_id: str, request: Request):
 @router.get("/artifacts", response_model=TypedApiResponse[list[ReviewedArtifact]])
 def artifacts(request: Request):
     return TypedApiResponse(data=request.app.state.result_review_service.artifacts(actor(request)))
+
+
+@router.get(
+    "/tasks/{task_id}/executions", response_model=TypedApiResponse[list[ModelExecutionResult]]
+)
+def task_executions(task_id: str, request: Request):
+    return TypedApiResponse(
+        data=request.app.state.result_review_service.task_executions(actor(request), task_id)
+    )

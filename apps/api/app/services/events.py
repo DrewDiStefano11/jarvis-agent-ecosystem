@@ -87,6 +87,7 @@ class EventBroker:
         created_context: tuple[ContextAssembly, Task] | None = None,
         updated_task: Task | None = None,
         authorize: Callable[[Session], None] | None = None,
+        domain_effects: Callable[[Session], None] | None = None,
         system_emergency_stop: bool | None = None,
     ) -> EventEnvelope:
         if not self.repository:
@@ -108,6 +109,8 @@ class EventBroker:
             if audit:
                 envelope["_audit"] = audit
             authorization = {"authorize": authorize} if authorize is not None else {}
+            if domain_effects is not None:
+                authorization["domain_effects"] = domain_effects
             if created_goal is not None:
                 authorization["created_goal"] = created_goal
             if system_emergency_stop is not None:

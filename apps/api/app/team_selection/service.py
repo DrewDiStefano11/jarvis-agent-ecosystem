@@ -248,6 +248,9 @@ class TeamSelectionService:
         return selected_specialists, sorted(uncovered)
 
     async def assign_team(self, task: Task, *, force: bool = False) -> Task:
+        from app.goal_planning.guards import require_unbound_goal_work
+
+        require_unbound_goal_work(self.repository, task.id)
         # Avoid duplicate work if we already have a successful team selection that matches the task
         # Re-selection is possible if teamSelection status was blocked, etc.
         if task.teamSelection and task.teamSelection.status == "completed" and not force:
