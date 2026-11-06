@@ -17,7 +17,7 @@ const { chromium } = require(path.join(process.env.SMOKE_WEB, 'node_modules/play
   fs.mkdirSync(output, { recursive: true })
   try {
     await page.goto(process.env.SMOKE_UI)
-    await page.getByRole('heading', { name: 'Mission Control' }).waitFor()
+    await page.getByRole('heading', { name: 'What would you like to accomplish?' }).waitFor()
     const nav = page.getByRole('navigation', { name: 'Primary', exact: true })
     await nav.getByRole('link', { name: 'Tasks', exact: true }).click()
     await page.getByRole('button', { name: 'New task', exact: true }).click()
@@ -168,3 +168,4 @@ const { chromium } = require(path.join(process.env.SMOKE_WEB, 'node_modules/play
     await browser.close()
   }
 })().catch(error => { console.error(error); process.exitCode = 1 })
+

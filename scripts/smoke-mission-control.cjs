@@ -74,7 +74,7 @@ async function stop(child) {
     page.on('console', message => { if (message.type() === 'error' && !message.text().includes('net::ERR_FAILED')) errors.push(message.text()) })
     page.on('response', response => { if (response.status() >= 400) failures.push(`${response.status()} ${response.url()}`) })
     page.on('request', request => { if (['POST', 'PATCH'].includes(request.method())) writes.push(new URL(request.url()).pathname) })
-    await page.goto(ui)
+    await page.goto(`${ui}/mission-control`)
     await page.getByRole('heading', { name: 'Mission Control', exact: true }).waitFor()
     await page.locator('.status-connected').waitFor()
     assert.equal(await page.title(), 'Overview · Jarvis')
@@ -182,3 +182,4 @@ async function stop(child) {
     for (const child of processes.reverse()) await stop(child)
   }
 })().catch(error => { console.error(error); process.exitCode=1 })
+

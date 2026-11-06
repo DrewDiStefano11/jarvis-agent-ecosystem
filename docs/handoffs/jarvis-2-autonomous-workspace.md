@@ -91,3 +91,16 @@ local/cloud execution is permitted. Existing planning.ts hardcodes 3 attempts,
 owns durable four-dimension accounting; extend admission across stages without a
 parallel quota ledger. Design and test before enabling any new path. Keep drafts
 inert until separately activated standing policy and complete admission checks.
+
+Publication: source commit 11b7dd2, draft PR #163:
+https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/163
+Published without merge; full local system shard and hosted checks remain pending.
+Continue budgets in a separate managed checkout based explicitly on this PR's
+commit so this worktree/source remains unchanged for the running system tests.
+
+Follow-up: legacy browser acceptance scripts still expected Overview at the old
+root. Updated smoke-browser to wait for Home and smoke-mission-control to open
+/mission-control. Actual API/separate-worker/Playwright legacy planning transport
+passed (fixture inference only): submission/correction, lost acknowledgement and
+reload/recovery, one result per task, Office camera/regions, desktop/mobile.
+Backend application/test source remains identical to 11b7dd2 for running shards.
