@@ -907,7 +907,9 @@ class ModelExecutionRow(Base):
 class ResultReviewRow(Base):
     __tablename__ = "result_reviews"
     id: Mapped[str] = mapped_column(String(80), primary_key=True)
-    execution_id: Mapped[str] = mapped_column(ForeignKey("model_executions.execution_id"), unique=True)
+    execution_id: Mapped[str] = mapped_column(
+        ForeignKey("model_executions.execution_id"), unique=True
+    )
     actor_id: Mapped[str] = mapped_column(ForeignKey("identity_agents.id"))
     command_id: Mapped[str] = mapped_column(String(200))
     result_hash: Mapped[str] = mapped_column(String(64))

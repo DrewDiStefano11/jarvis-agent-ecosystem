@@ -392,7 +392,9 @@ def create_app(
     from app.result_review.router import router as result_review_router
     from app.result_review.service import ResultReviewService
 
-    app.state.result_review_service = ResultReviewService(session_factory, app.state.identity_service, app.state.agent_runtime_service, task_leases)
+    app.state.result_review_service = ResultReviewService(
+        session_factory, app.state.identity_service, app.state.agent_runtime_service, task_leases
+    )
     app.include_router(result_review_router)
     app.state.autonomous_worker_service = AutonomousWorkerService(
         settings=settings,
