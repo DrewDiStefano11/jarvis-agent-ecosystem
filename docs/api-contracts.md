@@ -459,3 +459,44 @@ persisted analyses; pagination follows native ordering and scope deduplication.
 No selected/task fields or execution authority are returned. Existing backlog
 selection, error codes, events, sequence semantics and Alembic head are unchanged.
 See [discovery semantics](self-improvement.md#read-only-candidate-discovery).
+
+## Durable goal drafts (Jarvis 2.0 intake slice)
+
+`POST /api/goals` accepts strict `CreateGoalRequest` with `request` (3–2000
+characters, at least three characters after trimming). It preserves the original
+text unchanged and requires `Idempotency-Key` (1–120 characters). The 201 response
+is `TypedApiResponse[Goal]`: `id`, `conversationId`, `taskId`, display-only `title`,
+`disposition: "draft"`, UTC `createdAt` and original user `messages`. Replaying the
+same key/body returns the original result; a changed payload conflicts through
+native idempotency. No context assembly, provider reservation, model call, worker
+selection or runtime queue is authorized or performed by intake.
+
+`GET /api/goals?offset=0&limit=30` returns recent drafts, newest first (ID tie
+break), with offset 0–100000 and limit 1–100. `GET /api/goals/{goal_id}` restores
+one saved conversation; an unknown ID returns `GOAL_NOT_FOUND` (404).
+
+These endpoints use the existing trusted local operator peer/Host/Origin boundary,
+matching local task intake. They are not added to the separately authenticated
+remote gateway allowlist. Draft saving may occur while emergency stop is active;
+it conveys no execution authority. Native runtime, RBAC and exact-scope checks
+remain required for future admission.
+
+Migration `20261106_goals`, following `20261102_groq`, adds
+`workspace_conversations`, `workspace_messages` and `workspace_goals`, with foreign
+keys linking original input to one existing native task. The goal/message/task,
+`task.created` audit/outbox event and completed idempotency response commit in the
+same native transaction. The event adds optional `goalId` while preserving the
+existing task payload, schema version and sequence allocation. Downgrade refuses
+to discard any saved conversation, message or goal. No existing runtime state or
+credentials are migrated by these tables.
+
+Home (`/`) exposes draft intake and the latest 30 saved conversations through
+`apps/web/src/state/useGoalsState.ts`. A pending request/key is retained in this
+browser tab's session storage before dispatch. Explicit retry reuses the exact
+request/key after a lost acknowledgement or reload. Storage denial prevents
+submission and displays an error. This slice does not implement conversational
+follow-up, autonomous execution, result review, attachments, archive/trash or
+permanent erasure; the broader campaign remains incomplete. The prior dashboard
+is preserved at `/mission-control`; all former task, agent, planning, approval,
+Office, project, audit, system and model routes remain. `/work` and `/inbox` are
+compatible aliases during navigation migration.

@@ -19,7 +19,7 @@ const healthySystem = {
   autonomousWorker: { enabled: false, status: 'disabled', providerReady: false },
 } as unknown as SystemStatus
 let store: ReturnType<typeof useAppStore>
-function renderShell() { return render(<MemoryRouter><App/></MemoryRouter>) }
+function renderShell() { return render(<MemoryRouter initialEntries={["/mission-control"]}><App/></MemoryRouter>) }
 test('new task works in place and preserves a draft after closing', async () => {
   renderShell()
   await userEvent.click(screen.getByRole('button', { name: 'New task' }))
@@ -143,7 +143,7 @@ test('mobile More reveals destinations after its trigger in keyboard order', asy
   expect(mobile.queryByRole('link', { name: 'Office' })).not.toBeInTheDocument()
   await userEvent.click(mobile.getByRole('button', { name: 'More navigation' }))
   await userEvent.tab()
-  expect(mobile.getByRole('link', { name: 'Agents' })).toHaveFocus()
+  expect(mobile.getByRole('link', { name: 'Overview' })).toHaveFocus()
 })
 function QueryNavigation() {
   const navigate = useNavigate()
@@ -172,7 +172,7 @@ test('shell blocks stale resume while preserving emergency stop and reconciled r
   store.system = { ...healthySystem, emergencyStop: true }
   store.error = 'Read failed'
   const view = renderShell()
-  const rerender = () => view.rerender(<MemoryRouter><App/></MemoryRouter>)
+  const rerender = () => view.rerender(<MemoryRouter initialEntries={["/mission-control"]}><App/></MemoryRouter>)
   expect(screen.getByRole('button', { name: 'Resume system' })).toBeDisabled()
   await userEvent.click(screen.getByRole('button', { name: 'Resume system' }))
   expect(store.action).not.toHaveBeenCalled()

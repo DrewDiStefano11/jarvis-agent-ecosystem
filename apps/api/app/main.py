@@ -14,7 +14,7 @@ from uuid import uuid4
 
 from alembic import command
 from alembic.config import Config
-from fastapi import FastAPI, Header, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -43,6 +43,8 @@ from app.development_agent.router import operator_router as development_operator
 from app.development_agent.router import router as development_review_router
 from app.github_publication.router import operator_router as publication_operator_router
 from app.github_publication.router import router as publication_router
+from app.goals.repository import GoalRepository
+from app.goals.service import prepare_goal, save_goal
 from app.identity.router import router as identity_router
 from app.identity.service import IdentityService
 from app.model_providers.factory import build_model_router
@@ -80,6 +82,7 @@ from app.models.domain import (
     Task,
     TypedApiResponse,
 )
+from app.models.goals import CreateGoalRequest, Goal
 from app.office.router import router as office_router
 from app.office.service import OfficeService
 from app.remote_control.access import RemoteControlAccess
@@ -108,7 +111,7 @@ from app.team_selection.router import router as team_selection_router
 from app.tool_execution.router import router as tool_execution_router
 from app.tool_execution.service import ToolExecutionService
 
-DATABASE_REVISION = "20261102_groq"
+DATABASE_REVISION = "20261106_goals"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
@@ -948,6 +951,38 @@ def create_app(
     @app.get("/api/tasks/{task_id}", response_model=ApiResponse)
     async def task(task_id: str) -> ApiResponse:
         return ApiResponse(data=repository.get_task_durable(task_id))
+
+    @app.get("/api/goals", response_model=TypedApiResponse[list[Goal]])
+    def list_goals(offset: int = Query(0, ge=0, le=100_000), limit: int = Query(30, ge=1, le=100)):
+        return TypedApiResponse(
+            data=GoalRepository(repository.session_factory).list(offset=offset, limit=limit)
+        )
+
+    @app.get("/api/goals/{goal_id}", response_model=TypedApiResponse[Goal])
+    def get_goal(goal_id: str):
+        return TypedApiResponse(data=GoalRepository(repository.session_factory).get(goal_id))
+
+    @app.post("/api/goals", response_model=TypedApiResponse[Goal], status_code=201)
+    async def create_goal(
+        request: Request,
+        body: CreateGoalRequest,
+        idempotency_key: Annotated[
+            str, Header(alias="Idempotency-Key", min_length=1, max_length=120)
+        ],
+    ):
+        payload = body.model_dump(mode="json")
+        if replay := replay_idempotent(request, idempotency_key, "goal.create", payload):
+            return TypedApiResponse(data=Goal.model_validate(replay))
+        goal, item = prepare_goal(body)
+        await save_goal(
+            broker,
+            goal,
+            item,
+            idempotency_result(
+                request, idempotency_key, "goal.create", payload, goal, 201, goal.id
+            ),
+        )
+        return TypedApiResponse(data=goal)
 
     @app.post("/api/tasks", response_model=ApiResponse, status_code=201)
     async def create_task(
