@@ -105,6 +105,7 @@ from app.self_build.service import WorkspaceService
 from app.self_improvement.router import router as self_improvement_router
 from app.self_improvement.schedule import ImprovementScheduler, resources_available
 from app.services.events import EventBroker
+from app.services.execution_budget import direct_providers, validate_direct_assembly
 from app.services.task_creation import prepare_task_creation
 from app.simulator.engine import SimulatorEngine
 from app.team_selection.router import router as team_selection_router
@@ -1157,6 +1158,17 @@ def create_app(
                     detail=f"Client cannot forge backend-owned source types ({source.sourceType})",
                 )
 
+        if body.executionBudget is not None:
+            try:
+                stage = body.executionBudget.direct_stage()
+            except ValueError as exc:
+                raise DomainError("EXECUTION_GRAPH_UNSUPPORTED", str(exc), 409) from None
+            if body.policy.reservedOutputTokens > stage.maximumOutputTokens:
+                raise DomainError(
+                    "EXECUTION_BUDGET_EXCEEDED",
+                    "Context output exceeds approved planning cap.",
+                    422,
+                )
         payload = body.model_dump(mode="json")
         replay = replay_idempotent(
             request,
@@ -1168,7 +1180,8 @@ def create_app(
             assembly = ContextAssembly.model_validate(replay)
             replay_task = repository.get_task_durable(assembly.taskId)
             if (
-                (
+                body.executionBudget is None
+                and (
                     settings.model_execution_mode == "local_only"
                     or settings.verified_cloud_execution_allowed
                 )
@@ -1192,7 +1205,9 @@ def create_app(
 
         task = repository.get_task_durable(body.taskId)
 
-        if not task.teamSelection or task.teamSelection.status != "completed":
+        if body.executionBudget is None and (
+            not task.teamSelection or task.teamSelection.status != "completed"
+        ):
             from app.team_selection.service import TeamSelectionService
 
             team_selector = TeamSelectionService(
@@ -1217,14 +1232,39 @@ def create_app(
             repository=repository,
             tool_registry=getattr(app.state, "tool_execution_service", None),
         )
-        system_sources = enricher.enrich(body.taskId, actor_id=actor_id, task=task)
+        system_sources = (
+            []
+            if body.executionBudget is not None
+            else enricher.enrich(body.taskId, actor_id=actor_id, task=task)
+        )
         body.sources.extend(system_sources)
 
         item = context_assembler.assemble(task, body)
+        if item.executionBudget is not None:
+            providers = direct_providers(app.state.model_router)
+            if not providers:
+                raise DomainError(
+                    "BOUNDED_PROVIDER_REQUIRED",
+                    "Direct planning requires a configured adapter that enforces one structured request and its completion cap.",
+                    503,
+                )
+            try:
+                validate_direct_assembly(
+                    item,
+                    tuple(
+                        app.state.model_router.model_assignments.get(provider.name, {}).get("chat")
+                        or provider.default_model
+                        for provider in providers
+                        if provider.default_model
+                    ),
+                )
+            except ValueError as exc:
+                raise DomainError("EXECUTION_BUDGET_EXCEEDED", str(exc), 422) from None
         existing = repository.context_assemblies.get(item.id)
         if existing is not None:
             if (
-                (
+                body.executionBudget is None
+                and (
                     settings.model_execution_mode == "local_only"
                     or settings.verified_cloud_execution_allowed
                 )
@@ -1294,7 +1334,8 @@ def create_app(
             ),
         )
         if (
-            (
+            body.executionBudget is None
+            and (
                 settings.model_execution_mode == "local_only"
                 or settings.verified_cloud_execution_allowed
             )

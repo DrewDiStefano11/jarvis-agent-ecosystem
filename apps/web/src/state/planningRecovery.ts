@@ -16,6 +16,7 @@ export interface SavedPlanningSubmission {
   targetId: string
   taskId: string
   inputHash: string
+  budgetProfile?: PlanningSubmission['budgetProfile']
   responseFormat?: PlanningSubmission['responseFormat']
 }
 export interface PlanningRecoveryList { items: SavedPlanningSubmission[]; warning: string }
@@ -30,9 +31,11 @@ function parseSaved(value: string): SavedPlanningSubmission | null {
     || !identifier(record.targetId) || !identifier(record.taskId)
     || typeof record.timestamp !== 'string' || !Number.isFinite(Date.parse(record.timestamp))
     || typeof record.inputHash !== 'string' || !/^[a-f0-9]{64}$/.test(record.inputHash)
+    || (record.budgetProfile !== undefined && (record.budgetProfile !== 'direct-v1' || record.responseFormat !== 'planning_review_json_v1'))
     || (record.responseFormat !== undefined && record.responseFormat !== 'planning_review_json_v1' && record.responseFormat !== 'workspace_plan_json_v1')) return null
   return { version: 1, id: record.id, timestamp: record.timestamp, actorId: record.actorId,
     targetId: record.targetId, taskId: record.taskId, inputHash: record.inputHash,
+    ...(record.budgetProfile === undefined ? {} : { budgetProfile: record.budgetProfile }),
     ...(record.responseFormat === undefined ? {} : { responseFormat: record.responseFormat }) }
 }
 
@@ -63,6 +66,7 @@ export async function rememberPlanningSubmission(submission: PlanningSubmission)
   const record: SavedPlanningSubmission = { version: 1, id: submission.id,
     timestamp: submission.timestamp, actorId: submission.actorId, targetId: submission.targetId,
     taskId: submission.task.id, inputHash: await inputHash(submission.task),
+    ...(submission.budgetProfile === undefined ? {} : { budgetProfile: submission.budgetProfile }),
     ...(submission.responseFormat === undefined ? {} : { responseFormat: submission.responseFormat }) }
   try { localStorage.setItem(`${PREFIX}${record.id}`, JSON.stringify(record)); return '' }
   catch { return 'Browser retry storage is unavailable. Keep this page open while submitting and inspect history after a reload.' }
@@ -78,5 +82,5 @@ export async function restorePlanningSubmission(saved: SavedPlanningSubmission, 
     throw new Error('The task input changed. Inspect the original run in history; this submission cannot be replayed with different input.')
   }
   return { id: saved.id, timestamp: saved.timestamp, actorId: saved.actorId, targetId: saved.targetId,
-    task: structuredClone(task), ...(saved.responseFormat === undefined ? {} : { responseFormat: saved.responseFormat }) }
+    task: structuredClone(task), ...(saved.budgetProfile === undefined ? {} : { budgetProfile: saved.budgetProfile }), ...(saved.responseFormat === undefined ? {} : { responseFormat: saved.responseFormat }) }
 }

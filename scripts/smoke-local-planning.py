@@ -21,6 +21,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.error import URLError
 from urllib.request import urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -158,6 +159,7 @@ def main():
                     "JARVIS_MODEL_OLLAMA_ENABLED": "true",
                     "JARVIS_MODEL_OLLAMA_BASE_URL": f"http://127.0.0.1:{provider.server_port}",
                     "JARVIS_MODEL_OLLAMA_MODEL": "fixture-model",
+                    "JARVIS_MODEL_OLLAMA_CAPABILITIES": "chat,text_generation,structured_output",
                     "JARVIS_MODEL_PROVIDER_PRIORITY": "ollama",
                 }
             )
@@ -336,14 +338,14 @@ for (const name of ['client', 'planning']) {
                     )
                 ]
 
-                assert len(team_calls) == expected_tasks, (
-                    f"Expected {expected_tasks} team capability requests, got {len(team_calls)}"
+                assert len(team_calls) == 0, (
+                    f"Direct budget permits no team capability requests, got {len(team_calls)}"
                 )
                 assert len(plan_calls) == expected_tasks, (
                     f"Expected {expected_tasks} planning requests, got {len(plan_calls)}"
                 )
-                assert len(calls) == expected_tasks * 2, (
-                    f"Expected exactly {expected_tasks * 2} total inference requests, got {len(calls)}"
+                assert len(calls) == expected_tasks, (
+                    f"Expected exactly {expected_tasks} total inference requests, got {len(calls)}"
                 )
                 print(
                     "PASS: API + separate worker + frontend command replay + durable reviewed result"
@@ -352,6 +354,68 @@ for (const name of ['client', 'planning']) {
                     process.terminate()
                 for process in reversed(processes):
                     process.wait(timeout=10)
+                processes.clear()
+                # Reopen the actual API process with execution disabled against
+                # the same disposable database. Budgets/results must survive.
+                restarted_env = {
+                    **env,
+                    "JARVIS_AUTONOMOUS_WORKER_ENABLED": "false",
+                    "JARVIS_MODEL_EXECUTION_MODE": "disabled",
+                }
+                restarted = subprocess.Popen(
+                    [
+                        sys.executable,
+                        "-m",
+                        "uvicorn",
+                        "app.main:app",
+                        "--host",
+                        "127.0.0.1",
+                        "--port",
+                        str(port),
+                    ],
+                    cwd=API,
+                    env=restarted_env,
+                    stdout=logs,
+                    stderr=logs,
+                )
+                processes.append(restarted)
+                deadline = time.monotonic() + 30
+                while True:
+                    try:
+                        with urlopen(
+                            f"http://127.0.0.1:{port}/api/health", timeout=1
+                        ) as response:
+                            if response.status == 200:
+                                break
+                    except (URLError, TimeoutError, OSError):
+                        if time.monotonic() >= deadline or restarted.poll() is not None:
+                            raise RuntimeError(
+                                "Isolated API restart did not become ready"
+                            ) from None
+                        time.sleep(0.05)
+                with urlopen(
+                    f"http://127.0.0.1:{port}/api/context/assemblies", timeout=5
+                ) as response:
+                    stored = json.load(response)["data"]
+                assert len(stored) == expected_tasks
+                for assembly in stored:
+                    assert assembly["executionBudget"]["maximumRequests"] == 1
+                    assert assembly["executionBudget"]["maximumTokens"] == 7500
+                    with urlopen(
+                        f"http://127.0.0.1:{port}/api/tasks/{assembly['taskId']}",
+                        timeout=5,
+                    ) as response:
+                        saved_task = json.load(response)["data"]
+                    assert saved_task["status"] == "completed" and saved_task[
+                        "result"
+                    ].startswith("model-execution:")
+                time.sleep(0.25)
+                assert len(calls) == expected_tasks
+                print(
+                    "PASS: actual API restart retains immutable one-request envelopes and completed results; zero additional fixture calls"
+                )
+                restarted.terminate()
+                restarted.wait(timeout=10)
                 processes.clear()
     finally:
         for process in reversed(processes):

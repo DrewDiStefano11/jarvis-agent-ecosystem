@@ -5,13 +5,25 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from app.models.agent_runtime import SafeMetadataValue, normalize_safe_metadata
+from app.models.execution_budget import ExecutionBudget
 
 
 class ContextContract(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+class BudgetContextContract(ContextContract):
+    executionBudget: ExecutionBudget | None = None
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_serialization(self, handler):
+        value = handler(self)
+        if self.executionBudget is None:
+            value.pop("executionBudget", None)
+        return value
 
 
 class TrustLevel(StrEnum):
@@ -149,7 +161,7 @@ class ContextPolicy(ContextContract):
         return self
 
 
-class CreateContextAssemblyRequest(ContextContract):
+class CreateContextAssemblyRequest(BudgetContextContract):
     taskId: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
     projectId: str = Field(min_length=1, max_length=120)
     allowedResultType: str = Field(
@@ -279,7 +291,7 @@ class ContextAssemblyReport(ContextContract):
     finalAssemblyStatus: Literal["completed", "review_required"]
 
 
-class ContextAssembly(ContextContract):
+class ContextAssembly(BudgetContextContract):
     id: str
     schemaVersion: str = "1.0"
     taskId: str

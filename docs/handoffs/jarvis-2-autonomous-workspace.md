@@ -104,3 +104,68 @@ root. Updated smoke-browser to wait for Home and smoke-mission-control to open
 passed (fixture inference only): submission/correction, lost acknowledgement and
 reload/recovery, one result per task, Office camera/regions, desktop/mobile.
 Backend application/test source remains identical to 11b7dd2 for running shards.
+## Next active milestone
+
+PR #163 at 11b7dd2 is the explicit dependency for codex/jarvis-stage-budgets,
+managed worktree C:/Users/DDistefano/.codex/worktrees/jarvis-stage-budgets/jarvis-agent-ecosystem.
+The original intake checkout is retained unchanged for its running system suite
+and exact-source evidence. Stage-budget design/plan: docs/plans/jarvis-2-stage-budgets.md.
+No stage-budget implementation or test pass claimed yet. One-request direct graph
+is the next supported slice; general multi-stage aggregate reservation remains
+unsupported until it can be enforced through native quota authority.
+
+## Budget slice implementation / resume evidence
+
+Current branch: codex/jarvis-stage-budgets. Explicit dependency PR #163; its latest
+published follow-up is 3dcd1fe049e5f5bff00f5b5fb57217f18397857d. Budget branch started
+at 11b7dd2 and must incorporate/rebase onto that follow-up before publication.
+
+Implemented opt-in strict frozen stage/aggregate limits persisted with context;
+normal new Planning submissions capture direct-v1 (one request/attempt, no hidden
+team/decomposition/repair calls). Replay preserves the captured profile; true
+legacy and workspace submissions remain compatible. Worker caps scope, routed
+model, conservative complete wire body and reported input/output/total usage.
+Configured native Groq/account/rate checks remain authoritative; no quota ledger
+or activation bypass was introduced. Unsupported multi-stage graphs stay blocked.
+
+Review found a P1: subscription/Codex transports omit physical completion caps and
+can hide native inference stages. Reproduced with inert type fixtures, then fixed
+by exact native adapter type/capability filter, routing allowlist and predispatch
+recheck. Two MockTransport tests inspect actual Ollama num_predict/format and
+compatible max_tokens/response_format. Rejected fixtures now advertise the same
+CHAT/STRUCTURED_OUTPUT metadata to prove metadata cannot grant the guarantee.
+Reviewer rechecked and found no residual blocker.
+
+Observed tests before final commit:
+- 14 new budget tests pass; 90 relevant backend worker/context/output/HTTP tests
+  pass, including legacy behavior. Ruff clean after formatting; last frontend-only
+  profile consistency guard does not change that backend evidence.
+- Frontend full suite 264 passed/build passed before one additional captured-profile
+  regression; focused12 profile/recovery tests, typecheck and ESLint pass after it.
+  Rerun final complete frontend/build before commit.
+- Actual API+separateworker+frontend command replay fixture pass: one physical
+  planning fixture call per task and zero organizational model calls.
+- Actual Playwright browser original/corrected tasks, lost acknowledgement/reload,
+  source preservation, Office camera/regions and desktop/mobile pass. Actual API
+  restart retains immutable one-request envelopes and completed result links; no
+  additional fixture calls. Output .local-stage-browser.log; screenshots at
+  C:/Users/DDistefano/.codex/visualizations/2026/11/06/01a1b1d4-40d7-7460-9d48-a0c80cc95b17/direct-planning.
+- Initial failed browser timeout was missing pinned Office assets in fresh checkout;
+  ran office:assets. Later503 was the deterministic fixture's default chat-only
+  metadata; explicitly declared its tested structured-output capability in the
+  disposable harness. No live model/provider setting changed.
+- First transport attempt failed closed at requestCount0 because duplicated schema
+  instructions exceeded the cap. Direct structured mode now sends its schema once
+  through the actual adapter contract; full conservative preflight precedes context
+  commit, with exact model recheck before dispatch. No real inference occurred.
+
+PR163 hosted run42264800321 at exact3dcd1fe: frontend (CI Node22), runtime-browser,
+backend-static/migrations, repository integrity, backend runtime/autonomy/models
+and Linux Git job succeeded. Hosted system remains in progress. Original local
+system shard remains active at .local/jarvis-2/backend-system in jarvis-two-workspace;
+latest observed progress22%, not a pass. Do not duplicate unchanged expensive runs.
+
+Remaining after budget slice: automatic standing admission, conversational follow-up,
+native result review/Inbox (including paused five-recommendation fixture), full
+navigation, Work projects/lifecycle/retention, Library/files/sources, Settings and
+remaining A-M end-to-end acceptance. No full-campaign completion claimed.
