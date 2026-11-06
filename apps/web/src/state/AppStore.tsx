@@ -10,6 +10,7 @@ import {
 } from 'react'
 import { post, request, WS_URL } from '../api/client'
 import { useGoalsState } from './useGoalsState'
+import { useResultsState } from './useResultsState'
 import { useRuntimeState } from './useRuntimeState'
 import { useCatalogState } from './useCatalogState'
 import { useCoordinationState } from './useCoordinationState'
@@ -49,6 +50,7 @@ interface AppState {
 
 interface Store extends AppState {
   goals: ReturnType<typeof useGoalsState>
+  results: ReturnType<typeof useResultsState>
   coordination: ReturnType<typeof useCoordinationState>
   decomposition: ReturnType<typeof useDecompositionState>
   catalog: ReturnType<typeof useCatalogState>
@@ -126,6 +128,7 @@ function parseSnapshot(payload: Record<string, unknown>): {
 export function AppStoreProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState(initial)
   const goals = useGoalsState()
+  const results = useResultsState()
   const runtime = useRuntimeState(state.lastSync)
   const catalog = useCatalogState(runtime.refreshRuntime)
   const office = useOfficeState(state.lastSync)
@@ -372,6 +375,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       ...state,
       runtime,
       goals,
+      results,
       catalog,
       decomposition,
       coordination,
@@ -385,7 +389,7 @@ export function AppStoreProvider({ children }: { children: ReactNode }) {
       selectedAgentId,
       selectedTaskId,
     }),
-    [state, runtime, goals, catalog, decomposition, coordination, office, tools, providers, refresh, action, selectedAgentId, selectedTaskId],
+    [state, runtime, goals, results, catalog, decomposition, coordination, office, tools, providers, refresh, action, selectedAgentId, selectedTaskId],
   )
   return <Context.Provider value={value}>{children}</Context.Provider>
 }

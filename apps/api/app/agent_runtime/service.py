@@ -768,6 +768,88 @@ class AgentRuntimeService:
         )
         return self._commit(command, aggregate, (event,))
 
+    def finalize_model_review(self, command, *, domain_effects) -> RuntimeCommandResult:
+        """Commit a reviewed result and its domain effects as one native event batch.
+
+        Dedicated result-review authority must be checked by domain_effects inside
+        the durable transaction. This operation is not exposed by runtime dispatch.
+        """
+        aggregate = self._load_current(command.run_id)
+        if existing := self._assert_idempotency(command.run_id, command.command_id, command):
+            return existing
+        snapshot = aggregate.snapshot
+        self._ensure_expected_version(snapshot, command.expected_run_version, command)
+        if (
+            snapshot.state != AgentRunState.PAUSED
+            or snapshot.pause_reason is None
+            or snapshot.pause_reason.code != "model_result_review_required"
+            or snapshot.pause_reason.resume_state != AgentRunState.RUNNING
+            or snapshot.active_attempt_id is None
+        ):
+            raise InvalidTransitionError(
+                "Run is not awaiting model-result review.", run_id=command.run_id
+            )
+        # Client timestamps are retained in command identity, never used to move
+        # the native ledger backwards (browser timestamps have lower precision).
+        event_command = command.model_copy(
+            update={
+                "timestamp": max(
+                    self.utc_clock(), self.repository.list_events(command.run_id)[-1].timestamp
+                )
+            }
+        )
+        if command.decision == "accept":
+            steps = (
+                (
+                    AgentRuntimeEventType.RUN_RESUMED,
+                    {
+                        "target_state": AgentRunState.RUNNING,
+                        "detail": "Operator accepted saved result",
+                    },
+                ),
+                (
+                    AgentRuntimeEventType.ATTEMPT_SUCCEEDED,
+                    {"detail": "Operator accepted saved result"},
+                ),
+                (AgentRuntimeEventType.RUN_SUCCEEDED, {"detail": "Operator accepted saved result"}),
+            )
+        else:
+            cancellation = CancellationRecord(
+                reason_code="operator_result_review",
+                detail="Operator finalized saved result",
+                requester_reference=command.actor_reference,
+                timestamp=event_command.timestamp,
+            )
+            steps = (
+                (
+                    AgentRuntimeEventType.CANCELLATION_REQUESTED,
+                    {"cancellation": cancellation.model_dump(mode="json")},
+                ),
+                (
+                    AgentRuntimeEventType.CANCELLATION_STARTED,
+                    {"detail": "Operator finalized saved result"},
+                ),
+                (
+                    AgentRuntimeEventType.RUN_CANCELLED,
+                    {"detail": "Operator finalized saved result"},
+                ),
+            )
+        current = aggregate
+        events = []
+        for event_type, payload in steps:
+            event = self._build_event(
+                command=event_command,
+                run_id=command.run_id,
+                attempt_id=current.snapshot.active_attempt_id,
+                event_type=event_type,
+                sequence_number=current.snapshot.event_sequence_number + 1,
+                run_version=current.snapshot.version + 1,
+                payload=payload,
+            )
+            current = apply_event(current, event)
+            events.append(event)
+        return self._commit(command, aggregate, events, domain_effects=domain_effects)
+
     def resume_run(self, command: ResumeAgentRunCommand) -> RuntimeCommandResult:
         aggregate = self._load_current(command.run_id)
         if existing := self._assert_idempotency(command.run_id, command.command_id, command):
@@ -1369,6 +1451,8 @@ class AgentRuntimeService:
         command: RuntimeCommand,
         aggregate: RuntimeAggregate,
         new_events: Sequence[RuntimeEventEnvelope],
+        *,
+        domain_effects=None,
     ) -> RuntimeCommandResult:
         updated_aggregate = aggregate
         for event in new_events:
@@ -1388,6 +1472,7 @@ class AgentRuntimeService:
             require_execution_enabled=self._execution_enabled_required.get(),
             execution_fence=self._execution_fence.get(),
             **({"commit_guard": self._commit_guard.get()} if self._commit_guard.get() else {}),
+            **({"domain_effects": domain_effects} if domain_effects is not None else {}),
         )
         if existing_record is not None:
             return existing_record.result.model_copy(update={"idempotent_replay": True}, deep=True)

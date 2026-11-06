@@ -904,6 +904,27 @@ class ModelExecutionRow(Base):
     )
 
 
+class ResultReviewRow(Base):
+    __tablename__ = "result_reviews"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    execution_id: Mapped[str] = mapped_column(ForeignKey("model_executions.execution_id"), unique=True)
+    actor_id: Mapped[str] = mapped_column(ForeignKey("identity_agents.id"))
+    command_id: Mapped[str] = mapped_column(String(200))
+    result_hash: Mapped[str] = mapped_column(String(64))
+    decision: Mapped[str] = mapped_column(String(30))
+    reason: Mapped[str] = mapped_column(Text)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ResultArtifactContentRow(Base):
+    __tablename__ = "result_artifact_contents"
+    artifact_id: Mapped[str] = mapped_column(ForeignKey("artifacts.id"), primary_key=True)
+    review_id: Mapped[str] = mapped_column(ForeignKey("result_reviews.id"), unique=True)
+    content: Mapped[str] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64))
+
+
 class CoordinationRow(Base):
     __tablename__ = "task_coordinations"
     id: Mapped[str] = mapped_column(String(80), primary_key=True)

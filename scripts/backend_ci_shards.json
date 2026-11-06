@@ -38,6 +38,7 @@
     "tests/test_model_provider_adapters.py",
     "tests/test_persistence.py",
     "tests/test_planning_review_orchestration.py",
+    "tests/test_result_review.py",
     "tests/test_remote_goal_submission.py",
     "tests/test_remote_http.py",
     "tests/test_task_projects.py",

@@ -112,7 +112,7 @@ from app.team_selection.router import router as team_selection_router
 from app.tool_execution.router import router as tool_execution_router
 from app.tool_execution.service import ToolExecutionService
 
-DATABASE_REVISION = "20261106_goals"
+DATABASE_REVISION = "20261106_results"
 IdempotencyKeyHeader = Annotated[
     str | None,
     Header(
@@ -389,6 +389,11 @@ def create_app(
         session_factory,
         outbox_max_attempts=repository.outbox_max_attempts,
     )
+    from app.result_review.router import router as result_review_router
+    from app.result_review.service import ResultReviewService
+
+    app.state.result_review_service = ResultReviewService(session_factory, app.state.identity_service, app.state.agent_runtime_service, task_leases)
+    app.include_router(result_review_router)
     app.state.autonomous_worker_service = AutonomousWorkerService(
         settings=settings,
         executions=app.state.model_execution_repository,
@@ -514,6 +519,8 @@ def create_app(
                 },
             )
         response = await call_next(request)
+        if request.url.path.startswith("/api/results"):
+            response.headers["Cache-Control"] = "no-store"
         if (
             request.method in {"POST", "PATCH"}
             and request.url.path.startswith("/api/identity/agents/")

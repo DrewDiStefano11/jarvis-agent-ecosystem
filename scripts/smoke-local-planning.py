@@ -12,6 +12,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")
 
 import json
+from hashlib import sha256
 import os
 import socket
 import subprocess
@@ -22,7 +23,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.error import URLError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parents[1]
 API = ROOT / "apps/api"
@@ -38,7 +39,8 @@ def free_port():
 def main():
     calls = []
     office_mode = os.environ.get("JARVIS_SMOKE_OFFICE") == "true"
-    browser_mode = office_mode or os.environ.get("JARVIS_SMOKE_BROWSER") == "true"
+    review_mode = os.environ.get("JARVIS_SMOKE_REVIEW") == "true"
+    browser_mode = review_mode or office_mode or os.environ.get("JARVIS_SMOKE_BROWSER") == "true"
     result = {
         "schemaVersion": "1.0",
         "summary": "Deterministic transport fixture completed.",
@@ -62,6 +64,13 @@ def main():
         "missingInformation": [],
         "requiresHumanReview": False,
     }
+    if review_mode:
+        result.update({
+            "summary": "Level 1 trapeze prefab QC checklist",
+            "recommendations": [{"title": title, "description": "Confirm against project schedules and field evidence before release.", "priority": "high"} for title in ("Quantities and loads", "Conductor sizing", "Mount coordination", "Tagging", "Code addenda")],
+            "assumptions": ["No project schedules or field documents were supplied."],
+            "requiresHumanReview": True,
+        })
 
     class Provider(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -285,11 +294,11 @@ for (const name of ['client', 'planning']) {
                                 logs.seek(0)
                                 raise RuntimeError(logs.read())
                             time.sleep(0.05)
-                    runner = ROOT / (
+                    runner = ROOT / ("scripts/smoke-result-review.cjs" if review_mode else (
                         "scripts/smoke-office.cjs"
                         if office_mode
                         else "scripts/smoke-browser.cjs"
-                    )
+                    ))
                 completed = subprocess.run(
                     ["node", str(runner)],
                     env={
@@ -321,7 +330,7 @@ for (const name of ['client', 'planning']) {
                 print(completed.stdout.strip())
                 # The planning browser checks an original and a corrected task;
                 # the office browser observes one actual worker execution.
-                expected_tasks = 2 if browser_mode and not office_mode else 1
+                expected_tasks = 3 if review_mode else (2 if browser_mode and not office_mode else 1)
 
                 team_calls = [
                     c
@@ -406,9 +415,23 @@ for (const name of ['client', 'planning']) {
                         timeout=5,
                     ) as response:
                         saved_task = json.load(response)["data"]
-                    assert saved_task["status"] == "completed" and saved_task[
-                        "result"
-                    ].startswith("model-execution:")
+                    expected_status = ({"Accept": "completed", "Changes": "revision_requested", "Reject": "cancelled"}[saved_task["title"].split()[0]] if review_mode else "completed")
+                    assert saved_task["status"] == expected_status and saved_task["result"].startswith("model-execution:")
+                if review_mode:
+                    def review_get(path, actor_id=None):
+                        headers = {"Origin": ui_url}
+                        if actor_id:
+                            headers["X-Jarvis-Actor-Id"] = actor_id
+                        with urlopen(Request(f"http://127.0.0.1:{port}" + path, headers=headers), timeout=5) as response:
+                            return response.read()
+                    reviewer = json.loads(review_get("/api/results/operator"))["data"]["actorId"]
+                    library = json.loads(review_get("/api/results/artifacts", reviewer))["data"]
+                    assert len(library) == 1
+                    content = review_get(f"/api/results/artifacts/{library[0]['id']}/content", reviewer)
+                    assert sha256(content).hexdigest() == library[0]["resultHash"]
+                    assert json.loads(content)["requiresHumanReview"] is True
+                    assert json.loads(review_get("/api/results/reviews", reviewer))["data"] == []
+                    print("PASS: API restart retains review receipts and hash-verified artifact bytes")
                 time.sleep(0.25)
                 assert len(calls) == expected_tasks
                 print(

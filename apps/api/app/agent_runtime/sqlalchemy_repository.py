@@ -229,6 +229,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
         require_execution_enabled=False,
         execution_fence: RuntimeExecutionFence | None = None,
         commit_guard=None,
+        domain_effects=None,
     ):
         run_id = snapshot.specification.run_id
         events = tuple(events)
@@ -244,6 +245,7 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                     autonomous_admission
                     or commit_authorizer is not None
                     or commit_guard is not None
+                    or domain_effects is not None
                 ) and s.bind.dialect.name == "sqlite":
                     # SQLite ignores FOR UPDATE. Acquire its write fence before
                     # reading either the replay record or the authoritative task.
@@ -376,6 +378,8 @@ class SqlAlchemyAgentRuntimeRepository(AgentRuntimeRepository):
                 ag = replay_execution_ledger(old + list(events))
                 if not ag or ag.snapshot != snapshot:
                     raise LedgerReplayError("Ledger/projection mismatch", run_id=run_id)
+                if domain_effects is not None:
+                    domain_effects(s)
                 if not create and not events:
                     self._store(s, processed_command)
                     self._store_audit(s, processed_command, snapshot, events, previous_state)
