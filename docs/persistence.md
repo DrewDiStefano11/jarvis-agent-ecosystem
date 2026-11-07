@@ -10,6 +10,15 @@ Every connection enables foreign keys, WAL, a five-second busy timeout, and a bo
 
 SQLite is suitable for one local control-plane process. PostgreSQL can later replace the SQLAlchemy repository/session implementation while retaining Pydantic contracts and repository protocols.
 
+Native planning-manager identities and legacy simulator agents have separate ID
+domains. The validated task payload and team-selection record preserve the native
+`assignedManagerId`. The normalized `tasks.assigned_manager_id` foreign key and
+`task_agents` association remain simulator projections: they reference only IDs
+present in the legacy `agents` table. A native manager therefore has a null legacy
+manager projection, without losing its native assignment or receiving any new
+authority. Global/system persistence, task updates and context commits use this
+same boundary so a saved native plan cannot break emergency stop or resume.
+
 Failed outbox rows remain stored after their configured retry ceiling. Health exposes an exhausted count and degrades while any exhausted record remains; dispatcher selection excludes those rows without deleting their audit evidence.
 
 Context rows enter the same unit of work as audit, outbox, and terminal idempotency state. Metrics are recalculated from loaded rows and therefore survive restart without counter drift.

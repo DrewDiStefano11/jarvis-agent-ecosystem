@@ -33,11 +33,97 @@ from app.db.models import (
 )
 from app.db.session import create_database_engine
 from app.main import DATABASE_REVISION, create_app
+from app.models.domain import CreateTaskRequest
+from app.models.identity import CreateAgentRequest
+from app.repositories.sqlalchemy import SqlAlchemyRepository
+from app.services.task_creation import prepare_task_creation
 from app.services.unit_of_work import UnitOfWork
 
 
 def database_url(path: Path) -> str:
     return f"sqlite:///{path.as_posix()}"
+
+
+def test_class_level_task_row_factory_preserves_correction_creation(tmp_path: Path) -> None:
+    app = create_app(database_url=database_url(tmp_path / "static-correction.db"))
+    with TestClient(app):
+        source = app.state.repository.get_task_durable("task-completed")
+        correction = prepare_task_creation(
+            CreateTaskRequest(
+                title="Clarify the saved plan",
+                description="Use the review findings to prepare revised advice.",
+                correctionOfTaskId=source.id,
+            ),
+            source,
+        )
+        # Saved-result review creates its correction inside its own transaction
+        # through this class-level factory, without a repository instance.
+        with app.state.repository.session_factory() as session, session.begin():
+            row = SqlAlchemyRepository._task_row(correction)
+            session.add(row)
+            session.flush()
+            assert row.assigned_manager_id == "jarvis"
+            assert row.payload["correctionOfTaskId"] == source.id
+            assert session.execute(text("PRAGMA foreign_key_check")).all() == []
+
+
+@pytest.mark.parametrize("manager_kind", ["identity", "legacy"])
+def test_emergency_stop_preserves_native_and_legacy_manager_assignments(
+    tmp_path: Path, manager_kind: str
+) -> None:
+    url = database_url(tmp_path / "manager-stop.db")
+    app = create_app(database_url=url)
+    repository = app.state.repository
+    manager_id = "jarvis"
+    if manager_kind == "identity":
+        manager = app.state.identity_service.create_agent(
+            CreateAgentRequest(
+                stable_key="native-stop-manager",
+                display_name="Native planning manager",
+                agent_type="worker",
+            )
+        )
+        app.state.identity_service.transition(manager.id, "active")
+        manager_id = manager.id
+
+    with repository.session_factory() as session, session.begin():
+        row = session.get(TaskRow, "task-demo")
+        row.payload = row.payload | {"assignedManagerId": manager_id}
+        row.assigned_manager_id = manager_id if manager_kind == "legacy" else None
+    repository.reload()
+    with repository.session_factory() as session:
+        original_audit = {row.id: row.payload for row in session.scalars(select(AuditEventRow))}
+
+    with TestClient(app, raise_server_exceptions=False) as api:
+        stopped = api.post("/api/system/emergency-stop")
+        assert stopped.status_code == 200, stopped.text
+        assert stopped.json()["data"]["emergencyStop"] is True
+        assert api.post("/api/system/emergency-stop").status_code == 200
+        with repository.session_factory() as session:
+            assert session.get(SystemStateRow, 1).emergency_stop is True
+            row = session.get(TaskRow, "task-demo")
+            assert row.payload["assignedManagerId"] == manager_id
+            assert row.assigned_manager_id == (manager_id if manager_kind == "legacy" else None)
+            assert session.execute(text("PRAGMA foreign_key_check")).all() == []
+            saved_audit = {row.id: row.payload for row in session.scalars(select(AuditEventRow))}
+            assert all(saved_audit[key] == value for key, value in original_audit.items())
+            assert (
+                session.scalar(
+                    select(func.count())
+                    .select_from(OutboxEventRow)
+                    .where(OutboxEventRow.event_type == "system.emergency_stop")
+                )
+                == 1
+            )
+        resumed = api.post("/api/system/resume")
+        assert resumed.status_code == 200, resumed.text
+        assert resumed.json()["data"]["emergencyStop"] is False
+
+    with TestClient(create_app(database_url=url)) as restarted:
+        assert restarted.get("/api/system/status").json()["data"]["emergencyStop"] is False
+        assert (
+            restarted.get("/api/tasks/task-demo").json()["data"]["assignedManagerId"] == manager_id
+        )
 
 
 def test_blank_database_migrates_to_head(tmp_path: Path, monkeypatch) -> None:

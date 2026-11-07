@@ -21,10 +21,56 @@ from app.db.models import (
     TaskRow,
 )
 from app.main import create_app
+from app.models.identity import CreateAgentRequest
+from app.models.team_selection import TeamSelectionRecord
 
 
 def database_url(path: Path) -> str:
     return f"sqlite:///{path.as_posix()}"
+
+
+def test_context_commit_preserves_native_manager_without_legacy_agent_foreign_key(
+    tmp_path: Path,
+) -> None:
+    app = create_app(database_url=database_url(tmp_path / "native-manager-context.db"))
+    repository = app.state.repository
+    manager = app.state.identity_service.create_agent(
+        CreateAgentRequest(
+            stable_key="native-context-manager",
+            display_name="Native context manager",
+            agent_type="worker",
+        )
+    )
+    app.state.identity_service.transition(manager.id, "active")
+    task = repository.get_task_durable("task-demo")
+    selection = TeamSelectionRecord(
+        selectionId="selection-native-manager",
+        taskId=task.id,
+        status="completed",
+        managerId=manager.id,
+        workforceFingerprint="native-manager-test",
+        createdAt=task.createdAt,
+        updatedAt=task.updatedAt,
+    )
+    with repository.session_factory() as session, session.begin():
+        row = session.get(TaskRow, task.id)
+        row.assigned_manager_id = None
+        row.payload = row.payload | {
+            "assignedManagerId": manager.id,
+            "teamSelection": selection.model_dump(mode="json"),
+        }
+    repository.reload()
+
+    with TestClient(app, raise_server_exceptions=False) as api:
+        response = api.post("/api/context/assemblies", json=context_body())
+        assert response.status_code == 201, response.text
+        assert response.json()["data"]["status"] == "completed"
+        saved = api.get(f"/api/tasks/{task.id}").json()["data"]
+        assert saved["assignedManagerId"] == manager.id
+        assert saved["teamSelection"] == selection.model_dump(mode="json")
+        with repository.session_factory() as session:
+            assert session.get(TaskRow, task.id).assigned_manager_id is None
+            assert session.execute(text("PRAGMA foreign_key_check")).all() == []
 
 
 def test_context_commit_preserves_unrelated_worker_updates(tmp_path, monkeypatch):
