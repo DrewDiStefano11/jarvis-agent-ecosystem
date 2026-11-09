@@ -372,6 +372,102 @@ async def test_native_worker_uses_one_fixture_request_for_captured_goal(
     assert len(calls) == 1
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("consent_change", ["revoke", "renew"])
+async def test_inflight_consent_refusal_keeps_worker_polling(local, consent_change):
+    import json
+
+    import httpx
+
+    from app.autonomous_worker.__main__ import _run_once_resilient
+    from tests.test_autonomous_worker import VALID_RESULT
+
+    app, client, origin = local
+    _, headers, policy, goal, _ = captured_goal(app, client, origin)
+    calls = []
+    renewed = None
+
+    def renew():
+        response = client.post(
+            "/api/goal-planning/policy",
+            headers={**headers, "Idempotency-Key": "renew-policy"},
+            json={
+                "confirmation": "allow_bounded_goal_planning",
+                "expectedRevision": policy["revision"],
+                "maximumGoals": 2,
+                "expiresAt": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+                "profile": "direct-v1",
+            },
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["data"]
+
+    def transport(request):
+        nonlocal renewed
+        if request.method == "GET":
+            return httpx.Response(
+                200, json={"models": [{"name": "fixture-model"}], "version": "fixture"}
+            )
+        calls.append(json.loads(request.content))
+        if len(calls) == 1:
+            # Change persisted operator authority after dispatch, before the
+            # provider response reaches the fenced result write.
+            if consent_change == "revoke":
+                response = client.post(
+                    f"/api/goal-planning/policy/{policy['id']}/revoke",
+                    headers=headers,
+                    json={"expectedPolicyHash": policy["policyHash"]},
+                )
+                assert response.status_code == 200, response.text
+            else:
+                renewed = renew()
+        return httpx.Response(
+            200,
+            json={
+                "model": "fixture-model",
+                "message": {"role": "assistant", "content": json.dumps(VALID_RESULT)},
+                "done": True,
+                "done_reason": "stop",
+                "prompt_eval_count": 20,
+                "eval_count": 40,
+            },
+        )
+
+    provider = app.state.model_router.registry.list()[0]
+    service = app.state.autonomous_worker_service
+    worker = app.state.task_leases.register_worker("consent-fixture", "consent-fixture", 60)
+    async with httpx.AsyncClient(
+        base_url="http://127.0.0.1:9", transport=httpx.MockTransport(transport)
+    ) as fake_http:
+        provider._client = fake_http
+        assert await _run_once_resilient(service, worker.id) is None
+        assert len(calls) == 1
+        with app.state.repository.session_factory() as session:
+            execution = session.scalar(
+                select(ModelExecutionRow).where(ModelExecutionRow.task_id == goal["taskId"])
+            )
+            assert execution is not None and execution.result_json is None
+        if renewed is None:
+            renewed = renew()
+        response = client.post(
+            "/api/goals",
+            headers={**headers, "Idempotency-Key": "fresh-consent-goal"},
+            json={
+                "request": "Prepare another bounded QC checklist.",
+                "planningConsent": {
+                    "policyId": renewed["id"],
+                    "policyHash": renewed["policyHash"],
+                },
+            },
+        )
+        assert response.status_code == 201, response.text
+        next_goal = response.json()["data"]
+        result = await _run_once_resilient(service, worker.id)
+        assert result.taskId == next_goal["taskId"]
+        assert result.stage == "human_review_required"
+        assert len(calls) == 2
+
+
 def test_changed_configured_worker_invalidates_capture_and_native_dispatch(local):
     from app.autonomous_worker.provisioning import configure_task_actor
     from app.core.errors import DomainError

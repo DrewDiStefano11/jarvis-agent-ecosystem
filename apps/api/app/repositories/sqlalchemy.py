@@ -313,6 +313,11 @@ class SqlAlchemyRepository:
             self.reload()
             raise
 
+    def _legacy_agent_reference(self, agent_id: str | None) -> str | None:
+        # Native identity assignments stay in the task payload. These foreign
+        # keys project only the separate simulator agents table.
+        return agent_id if agent_id in self.agents else None
+
     @staticmethod
     def _task_row(item: Task) -> TaskRow:
         return TaskRow(
@@ -339,6 +344,11 @@ class SqlAlchemyRepository:
             updated_at=item.updatedAt,
             completed_at=item.completedAt,
         )
+
+    def _task_row_for_persistence(self, item: Task) -> TaskRow:
+        row = self._task_row(item)
+        row.assigned_manager_id = self._legacy_agent_reference(item.assignedManagerId)
+        return row
 
     @staticmethod
     def _context_row(item: ContextAssembly) -> ContextAssemblyRow:
@@ -399,7 +409,7 @@ class SqlAlchemyRepository:
             )
             session.flush()
         for item in self.tasks.values():
-            session.merge(self._task_row(item))
+            session.merge(self._task_row_for_persistence(item))
             session.flush()
         for item in self.approvals.values():
             updated = item.reviewedAt or item.createdAt
@@ -731,7 +741,7 @@ class SqlAlchemyRepository:
                 elif created_context is not None:
                     self._persist_created_context(session, *created_context)
                 elif updated_task is not None:
-                    session.merge(self._task_row(updated_task))
+                    session.merge(self._task_row_for_persistence(updated_task))
                     session.execute(
                         delete(TaskAgentRow).where(TaskAgentRow.task_id == updated_task.id)
                     )
@@ -836,7 +846,7 @@ class SqlAlchemyRepository:
             current.assignedManagerId = task.assignedManagerId
             current.assignedAgentIds = task.assignedAgentIds
             row.payload = current.model_dump(mode="json")
-            row.assigned_manager_id = current.assignedManagerId
+            row.assigned_manager_id = self._legacy_agent_reference(current.assignedManagerId)
             session.execute(delete(TaskAgentRow).where(TaskAgentRow.task_id == task.id))
             for agent_id in current.assignedAgentIds:
                 # Match _persist_entities: task_agents is the legacy simulator
@@ -860,7 +870,7 @@ class SqlAlchemyRepository:
                     "The source project changed while preparing the correction. Try again.",
                     409,
                 )
-        session.add(self._task_row(item))
+        session.add(self._task_row_for_persistence(item))
         session.flush()
 
     def pending_outbox(self) -> list[dict[str, Any]]:

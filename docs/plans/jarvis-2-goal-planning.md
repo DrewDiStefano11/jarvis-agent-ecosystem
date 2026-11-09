@@ -120,3 +120,18 @@ fence now retains the native autonomous/authorizer boundary, and all eight paren
 authorization tests pass. Tests also reject a tampered persisted context budget.
 Full-system validation and exact published-head CI remain pending; the last item
 is intentionally open until those results and the draft PR are recorded.
+
+## Consent changes during worker execution
+
+Revocation, renewal, expiry or configured-worker changes can reject any native
+fenced write, including the first response receipt after a provider call. The
+worker polling boundary treats only `GOAL_PLANNING_CONSENT_UNAVAILABLE` as an
+expected per-task refusal. It does not persist the refused result, bypass consent,
+retry inference or cancel other execution slots. Scope corruption/mismatch and
+unlisted failures still propagate. Recovery continues to use the existing native
+leases and checkpoints; old captured work never inherits renewed consent.
+
+Regression coverage changes persisted consent during a mocked provider request
+for both revocation and renewal, verifies that no result is saved, then processes
+a new goal under fresh consent. Separate polling tests preserve an unrelated
+execution slot and require integrity errors to remain visible.
