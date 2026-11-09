@@ -4,13 +4,15 @@ import { NavIcon } from './NavIcon'
 export const navigationGroups = [
   { label: 'Operations', links: [
     { to: '/', label: 'Home', icon: 'overview', mobile: true },
+    { to: '/inbox', label: 'Inbox', icon: 'approvals', mobile: true },
     { to: '/mission-control', label: 'Overview', icon: 'overview', mobile: false },
     { to: '/tasks', label: 'Tasks', icon: 'tasks', mobile: true },
     { to: '/agents', label: 'Agents', icon: 'agents', mobile: false },
-    { to: '/approvals', label: 'Approvals', icon: 'approvals', mobile: true },
+    { to: '/approvals', label: 'Approvals', icon: 'approvals', mobile: false },
     { to: '/runtime', label: 'Planning', icon: 'planning', mobile: true },
   ] },
   { label: 'Workspace', links: [
+    { to: '/library', label: 'Library', icon: 'tasks', mobile: false },
     { to: '/lab', label: 'Business Lab', icon: 'lab', mobile: false },
     { to: '/office', label: 'Office', icon: 'office', mobile: false },
   ] },

@@ -67,3 +67,25 @@ Later archive/trash metadata is distinct from runtime state. Trash defaults to 3
 8. Actual API/browser offline acceptance A-M at 320,390,768,1024,1440,1920; record operator interactions, task rows, fixture calls, reservations, final states and restart recovery. No live acceptance without separate authorization.
 
 Every source milestone includes focused tests, required quality gates, browser interaction evidence where applicable, a reviewable commit/PR and ledger update. Existing passing historical checks are not claimed for changed sources.
+
+## Saved-result review vertical slice
+
+Inbox now renders the full persisted structured planning result, including every
+recommendation, assumption, risk, missing-information item and generation reference.
+A dedicated explicit local reviewer setup owns read/review authority independently
+of worker permissions and workspace approvals. Accept, request changes and reject
+use native terminal transitions and a separate operator-decision record; the model's
+original review flag and result hash remain evidence, not operator authorization.
+
+The durable runtime commit accepts explicit SQL domain effects after native event
+replay/version validation. A result review uses this boundary to commit native
+events/processed command, decision, task, existing ArtifactRow metadata plus real
+JSON content, audit and outbox atomically. In-memory runtime storage rejects SQL
+effects. Inbox retains an exact captured command across uncertain acknowledgement
+and reload; it never automatically resends. Library previews/downloads hash-verified
+accepted output. Both views use the shared `useResultsState` in `apps/web/src/state`.
+
+The Library slice currently covers accepted structured planning outputs. Uploads,
+general attachment ingestion, project organization, retention controls and the
+complete six-destination navigation remain later campaign work. Automatic Home
+admission remains disabled and no live provider acceptance was performed.

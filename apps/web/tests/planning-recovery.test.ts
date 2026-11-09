@@ -51,3 +51,10 @@ test('malformed saved values never become executable submissions', async () => {
   expect(readPlanningRecovery().items).toEqual([])
   expect(readPlanningRecovery().warning).toContain('unreadable')
 })
+
+test('reload preserves captured direct budget profile without upgrading legacy submissions', async () => {
+  const current = { ...submission, responseFormat: 'planning_review_json_v1' as const, budgetProfile: 'direct-v1' as const }
+  await rememberPlanningSubmission(current)
+  const saved = readPlanningRecovery().items[0]!
+  expect((await restorePlanningSubmission(saved, task)).budgetProfile).toBe('direct-v1')
+})

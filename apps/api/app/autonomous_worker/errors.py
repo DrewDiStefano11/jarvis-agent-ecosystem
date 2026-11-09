@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.core.errors import DomainError
 
 ERROR_MESSAGES = {
+    "BOUNDED_PROVIDER_REQUIRED": "Direct planning requires a native adapter that enforces a single structured request and its completion cap.",
     "AUTONOMOUS_WORKER_CONCURRENCY_INVALID": "Worker concurrency must be an explicitly configured integer from one to four.",
     "FREE_CAPACITY_UNAVAILABLE": "No verified nonbillable model capacity is available; execution is paused.",
     "MODEL_DISPATCH_OUTCOME_UNKNOWN": "A reserved model dispatch has an unknown outcome; operator reconciliation is required.",

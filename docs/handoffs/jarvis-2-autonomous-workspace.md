@@ -1,5 +1,84 @@
 # Jarvis 2.0 campaign ledger
 
+## Resume here — native result review, November 6
+
+Current worktree is `C:/Users/DDistefano/.codex/worktrees/jarvis-stage-budgets/jarvis-agent-ecosystem`,
+branch `codex/jarvis-result-review`, based on PR164 head
+`60e3f041df053b8c4dfae6b871fecae169b22476`. Result-review source is being prepared as a stacked draft while the full system shard finishes. Preserve this source,
+the earlier uncommitted publication notes below, and all local logs. The two
+previous draft PRs remain unmerged: PR163 (intake) and stacked PR164 (budgets).
+Do not mistake any single milestone for campaign completion.
+
+Implemented this milestone:
+
+- `app.models.result_review` contracts; migration `20261106_results` after goals;
+  append-only operator decision and real JSON content linked to existing ArtifactRow.
+- `/api/results` explicit local reviewer setup/discovery, pending reviews, decisions,
+  accepted artifact discovery/download; narrow native read/review RBAC, exact
+  Origin/loopback/no-forward boundary, no-store including errors. Repeated setup
+  does not renew expired/revoked grants or reactivate an identity.
+- Native runtime atomic review event batches and explicit durable `domain_effects`
+  callback after event/version validation. Decision/task/artifact/audit/outbox and
+  native processed-command record share one transaction. Accept succeeds native
+  attempt/run; reject/changes cancel natively; changes creates one fresh queued
+  correction draft without runtime admission. Original result/hash/review flag and
+  generation completion timestamp stay intact.
+- Result/checkpoint/digest/context/task/run-version fences, target row locking,
+  stop/lease/unfinished descendant checks; independent review fixes prevent denied
+  or stale records from hiding valid results, including >100 storage candidates.
+- Shared `useResultsState`, real Inbox with all five recommendations and assumptions,
+  exact captured-decision recovery after lost acknowledgement/reload, Library preview
+  and hash-verified JSON download, task links and awaiting-review progress label.
+  Existing legacy action approvals and Office remain available.
+
+New evidence on this working source:
+
+- 24 final focused review tests pass; the earlier19 plus complete `test_api.py`: **47 passed**, including
+  expired grants, denial/inactive/stop, stale hash/checkpoint/version/task, atomic
+  rollback, API reopening/exact retry, and 100 stale rows preceding a valid result.
+- Native runtime/idempotency/control-plane/budget regression selection: 66 passed
+  before the final five review additions; those additions are covered above.
+- Full runtime shard: **437 passed**, log `.local/result-review/full-runtime.log`.
+- Full autonomy shard: **523 passed, 1 failed** because the status OpenAPI default
+  still advertised the previous migration. Corrected `models/domain.py` to results;
+  the complete API suite and review tests then passed (47 above). Retain this failed
+  evidence and correction; do not describe that original shard as wholly passing.
+- Full models shard completed: 1392 passed, 3 explicit skips; log
+  `.local/result-review/full-models.log`, artifacts `full-models/` (Windows skips are not passing hosted-CI evidence).
+- Full system shard still running: session74101; log
+  `.local/result-review/full-system.log`, artifacts `full-system/` (last seen3%).
+  It is progressing through native Git tests; do not restart merely for duration.
+- Earlier baseline system process remains session84805 in jarvis-two-workspace;
+  its earlier evidence does not establish this changed source's system pass.
+- Backend Ruff passes; blank authoritative migration cycle passes. Frontend
+  typecheck/ESLint, **267 tests in38 files**, and final production build pass.
+  Logs `.local/result-review/{frontend-03,build-final,migrations,final-api}.log`.
+- Final actual API + separate worker + Vite/Playwright acceptance passes all three
+  decisions, five recommendations, original downloaded hash/flag, acceptance with
+  deliberately lost acknowledgement + reload + exact retry, one unexecuted correction
+  draft, actual API restart including review receipts/artifact bytes, and exactly
+  three deterministic HTTP fixture calls (zero organizational/extra/restart calls).
+  `.local/result-review/browser-final.log`; screenshots/JSON/download at the
+  visualization root `.../01a1b1d4-40d7-7460-9d48-a0c80cc95b17/result-review`.
+  Inbox widths1920/1440/1024/768/390/320; Library1440/390/320; zero overflow/pageerror.
+  Browser plugin lacks local capability here; existing local Playwright is the
+  documented fallback. Real provider APIs and production state were untouched.
+- Sandbox temp-path restrictions stalled pytest and denied Vitest rename before
+  application execution. Bounded runs outside that temp sandbox verified the
+  expected initial404 red test, then the passes above. No stall is passing evidence.
+- Independent read-only reviewer `review_result_transaction` found/fixed stale
+  discovery, pre-filter limit and target locking issues; no captured-command actor
+  bypass found. No deployment, cloud activation, merge or production mutation.
+
+Next: retain source evidence; let running shards finish while doing safe independent
+planning. Repair any actual failures, recheck final relevant source, record exact
+tested commit/source digest, then commit/publish a stacked draft PR based on
+`codex/jarvis-stage-budgets`. Update the plan checklist and this checkpoint with PR
+and check results. The user-authorized campaign still requires ordinary Home
+standing admission/clarification, full Work/projects/retention, uploads/sources,
+six-destination navigation, Settings/notifications/recurring controls and broader
+acceptance. See the architecture feature-parity inventory; do not restart it.
+
 ## Active checkpoint — November 6, 2026
 
 - Goal: complete functional offline-verified autonomous workspace; full owner requirements are in attachment 57431584-eb40-4e2b-ad0b-72a7513fb7a1.
@@ -104,3 +183,140 @@ root. Updated smoke-browser to wait for Home and smoke-mission-control to open
 passed (fixture inference only): submission/correction, lost acknowledgement and
 reload/recovery, one result per task, Office camera/regions, desktop/mobile.
 Backend application/test source remains identical to 11b7dd2 for running shards.
+## Next active milestone
+
+PR #163 at 11b7dd2 is the explicit dependency for codex/jarvis-stage-budgets,
+managed worktree C:/Users/DDistefano/.codex/worktrees/jarvis-stage-budgets/jarvis-agent-ecosystem.
+The original intake checkout is retained unchanged for its running system suite
+and exact-source evidence. Stage-budget design/plan: docs/plans/jarvis-2-stage-budgets.md.
+No stage-budget implementation or test pass claimed yet. One-request direct graph
+is the next supported slice; general multi-stage aggregate reservation remains
+unsupported until it can be enforced through native quota authority.
+
+## Budget slice implementation / resume evidence
+
+Current branch: codex/jarvis-stage-budgets. Explicit dependency PR #163; its latest
+published follow-up is 3dcd1fe049e5f5bff00f5b5fb57217f18397857d. Budget branch started
+at 11b7dd2 and must incorporate/rebase onto that follow-up before publication.
+
+Implemented opt-in strict frozen stage/aggregate limits persisted with context;
+normal new Planning submissions capture direct-v1 (one request/attempt, no hidden
+team/decomposition/repair calls). Replay preserves the captured profile; true
+legacy and workspace submissions remain compatible. Worker caps scope, routed
+model, conservative complete wire body and reported input/output/total usage.
+Configured native Groq/account/rate checks remain authoritative; no quota ledger
+or activation bypass was introduced. Unsupported multi-stage graphs stay blocked.
+
+Review found a P1: subscription/Codex transports omit physical completion caps and
+can hide native inference stages. Reproduced with inert type fixtures, then fixed
+by exact native adapter type/capability filter, routing allowlist and predispatch
+recheck. Two MockTransport tests inspect actual Ollama num_predict/format and
+compatible max_tokens/response_format. Rejected fixtures now advertise the same
+CHAT/STRUCTURED_OUTPUT metadata to prove metadata cannot grant the guarantee.
+Reviewer rechecked and found no residual blocker.
+
+Observed tests before final commit:
+- 14 new budget tests pass; 90 relevant backend worker/context/output/HTTP tests
+  pass, including legacy behavior. Ruff clean after formatting; last frontend-only
+  profile consistency guard does not change that backend evidence.
+- Frontend full suite 264 passed/build passed before one additional captured-profile
+  regression; focused12 profile/recovery tests, typecheck and ESLint pass after it.
+  Rerun final complete frontend/build before commit.
+- Actual API+separateworker+frontend command replay fixture pass: one physical
+  planning fixture call per task and zero organizational model calls.
+- Actual Playwright browser original/corrected tasks, lost acknowledgement/reload,
+  source preservation, Office camera/regions and desktop/mobile pass. Actual API
+  restart retains immutable one-request envelopes and completed result links; no
+  additional fixture calls. Output .local-stage-browser.log; screenshots at
+  C:/Users/DDistefano/.codex/visualizations/2026/11/06/01a1b1d4-40d7-7460-9d48-a0c80cc95b17/direct-planning.
+- Initial failed browser timeout was missing pinned Office assets in fresh checkout;
+  ran office:assets. Later503 was the deterministic fixture's default chat-only
+  metadata; explicitly declared its tested structured-output capability in the
+  disposable harness. No live model/provider setting changed.
+- First transport attempt failed closed at requestCount0 because duplicated schema
+  instructions exceeded the cap. Direct structured mode now sends its schema once
+  through the actual adapter contract; full conservative preflight precedes context
+  commit, with exact model recheck before dispatch. No real inference occurred.
+
+PR163 hosted run42264800321 at exact3dcd1fe: frontend (CI Node22), runtime-browser,
+backend-static/migrations, repository integrity, backend runtime/autonomy/models
+and Linux Git job succeeded. Hosted system remains in progress. Original local
+system shard remains active at .local/jarvis-2/backend-system in jarvis-two-workspace;
+latest observed progress22%, not a pass. Do not duplicate unchanged expensive runs.
+
+Remaining after budget slice: automatic standing admission, conversational follow-up,
+native result review/Inbox (including paused five-recommendation fixture), full
+navigation, Work projects/lifecycle/retention, Library/files/sources, Settings and
+remaining A-M end-to-end acceptance. No full-campaign completion claimed.
+
+## Latest publication checkpoint — resume here
+
+PR #164: https://github.com/DrewDiStefano11/jarvis-agent-ecosystem/pull/164
+Source: 60e3f041df053b8c4dfae6b871fecae169b22476.
+Branch codex/jarvis-stage-budgets is now rebased onto PR163 head3dcd1fe and pushed.
+Integration order: PR163, then164; neither is merged or approved for merging.
+The rebase conflict was documentation-only and both handoff entries were preserved.
+Application/test sources match tested1d51a92 byte-for-byte; inherited legacy browser
+scripts differ only by trailing blank lines. Final frontend265/37files, typecheck,
+ESLint/build pass. Backend focused90 plus new14 tests, Ruff596files pass. Independent
+review P1 fix rechecked. Actual browser/separate-worker/APIrestart fixture passed.
+Exact-head full CI for164 is newly running; no complete-suite pass claimed.
+
+No live inference, production records, encrypted credentials, permanent provider
+settings, startup, external communications, deployment or merges were changed.
+All worker runs were disposable, deterministic loopback fixtures and were stopped.
+Original local backend system shard still runs only in jarvis-two-workspace;
+check its retained evidence at a useful checkpoint instead of restarting it.
+
+Next actionable milestone: native saved-result review and Inbox integration.
+Inspect autonomous_worker/service.py human-review pause checkpoints and native
+agent_runtime transitions, models/autonomous_worker.py persisted result hashes,
+identity/RBAC and transactional event/idempotency helpers. A reviewed output must
+not authorize provider calls or tools. Build an isolated faithful five-recommendation
+fixture; preserve task-5259094efe and live data unchanged. Plan the exact RBAC,
+expected run/checkpoint/result version, idempotency, audit/outbox and completed
+artifact linkage before adding accept/request-changes/reject controls.
+
+There are local root .local-stage*.log evidence files in this worktree (not staged
+or committed); never include runtime data, logs, dependencies or builds. The only
+intentional tracked change after published60e3f04 is this local ledger checkpoint.
+
+### Native result-review investigation retained for the next implementation
+
+- autonomous_worker/service.py:_pause_for_review confirms native run pause with
+  reason model_result_review_required; task_leases.pause_for_review sets the task
+  under_review, stores model-execution:<id>, ends the lease attempt and deletes
+  the lease. ModelExecutionRepository marks human_review_required and retains
+  the immutable structured result/hash. Other failure-review pauses may have no
+  result and must not be accepted as completed output.
+- agent_runtime/service.py:complete_attempt and complete_run use native events;
+  complete_run requires a succeeded latest attempt. resume_run derives the target
+  from the persisted pause reason. Do not issue separate resume/complete API calls
+  with a worker-visible intermediate state.
+- SqlAlchemyAgentRuntimeRepository.commit_command supports atomic batches of
+  native events. Investigate one review command using existing resumed/attempt
+  succeeded/run succeeded events in one fenced commit, plus a clearly named domain
+  effects hook for task/result-review/artifact changes. Do not perform domain
+  mutations under a misleading authorization-only callback.
+- Keep model-generated requiresHumanReview and original result bytes/hash intact.
+  Add a separate durable operator decision with exact result/checkpoint/run version,
+  actor/permission and stable command identity; never rewrite the model's flag to
+  manufacture approval. Accept must not dispatch providers or tools. Request changes
+  should create/revise a separately bounded correction, never reuse exhausted or
+  stale approved scope. Reject must terminalize through native authority.
+- New review permission must be distinct from worker completion and workspace/source
+  approval. Native deny, target lifecycle, emergency stop, lease/descendant state,
+  stale result/checkpoint/hash, expiry and duplicate/conflicting command cases need
+  tests before UI. The local operator namespace uses explicit Origin/peer/no-forward
+  boundary and identity-backed RBAC (see provider_configuration/router.py/service.py
+  for an existing pattern), with no credentials or automatic inference setup.
+
+Active retained local system process session ID84805 (underlying pytest launched
+by scripts/backend_ci.py system in jarvis-two-workspace); other completed local
+shards are recorded above. Its durable logs/progress are authoritative if session
+polling is unavailable. Do not use a long wait while safe implementation exists.
+
+Next commands: read this ledger, verify git status/HEAD and PR163->164 dependency;
+read native runtime _commit/commit_command and ledger transition reducers; write
+result-review design and failing isolated five-recommendation tests; implement
+native decisions plus shared Inbox projection. Broad campaign remains active.
