@@ -6,9 +6,11 @@ import sys
 from hashlib import sha256
 
 from app.autonomous_worker.errors import AutonomousWorkerError
+from app.core.errors import DomainError
 from app.main import create_app
 
 EXPECTED_RUN_ERRORS = {
+    "GOAL_PLANNING_CONSENT_UNAVAILABLE",
     "VERIFICATION_IN_PROGRESS",
     "EXECUTION_CANCELLED",
     "EXECUTION_EMERGENCY_STOPPED",
@@ -26,7 +28,10 @@ def _create_worker_app():
 async def _run_once_resilient(service, worker_id: str):
     try:
         return await service.run_once(worker_id)
-    except AutonomousWorkerError as exc:
+    except DomainError as exc:
+        # Operator consent can change at any fenced write, including recovery
+        # and post-provider writes. Stop only that poll; never bypass its fence
+        # or tear down other execution slots. All unlisted errors still escape.
         if exc.code not in EXPECTED_RUN_ERRORS:
             raise
         return None

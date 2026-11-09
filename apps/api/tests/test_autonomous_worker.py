@@ -2441,6 +2441,50 @@ async def test_worker_polling_continues_after_expected_run_error() -> None:
     assert raised.value.code == "MODEL_EXECUTION_DISABLED"
 
 
+@pytest.mark.asyncio
+async def test_consent_refusal_does_not_cancel_another_execution_slot() -> None:
+    from app.core.errors import DomainError
+
+    sibling_started = asyncio.Event()
+    release_sibling = asyncio.Event()
+
+    class ConcurrentService:
+        async def run_once(self, worker_id):
+            if worker_id == "revoked":
+                await sibling_started.wait()
+                raise DomainError("GOAL_PLANNING_CONSENT_UNAVAILABLE", "Consent revoked", 409)
+            sibling_started.set()
+            await release_sibling.wait()
+            return worker_id
+
+    service = ConcurrentService()
+    revoked = asyncio.create_task(_run_once_resilient(service, "revoked"))
+    sibling = asyncio.create_task(_run_once_resilient(service, "unrelated"))
+    try:
+        assert await asyncio.wait_for(revoked, 5) is None
+        assert not sibling.done()
+        release_sibling.set()
+        assert await asyncio.wait_for(sibling, 5) == "unrelated"
+    finally:
+        revoked.cancel()
+        sibling.cancel()
+        await asyncio.gather(revoked, sibling, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", ["GOAL_PLANNING_SCOPE_CORRUPT", "GOAL_PLANNING_SCOPE_MISMATCH"])
+async def test_worker_polling_does_not_hide_consent_integrity_errors(code) -> None:
+    from app.core.errors import DomainError
+
+    class CorruptService:
+        async def run_once(self, worker_id):
+            raise DomainError(code, "Invalid persisted consent scope", 409)
+
+    with pytest.raises(DomainError) as raised:
+        await _run_once_resilient(CorruptService(), "worker")
+    assert raised.value.code == code
+
+
 def test_autonomous_scan_paginates_past_ordinary_queued_runs(tmp_path: Path) -> None:
     router = FakeRouter([json.dumps(VALID_RESULT)])
     app, client, actor_id, _ = worker_fixture(

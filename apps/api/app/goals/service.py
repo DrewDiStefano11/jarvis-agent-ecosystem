@@ -24,15 +24,31 @@ def prepare_goal(body: CreateGoalRequest):
     return goal, task
 
 
-async def save_goal(broker, goal, task, idempotency):
+async def save_goal(broker, goal, task, idempotency, *, domain_effects=None, actor_id=None):
     await broker.emit(
         "task.created",
         {"task": task.model_dump(mode="json"), "goalId": goal.id},
         task.id,
         source="operator",
         correlation_id=goal.id,
-        audit={"summary": "Saved goal draft; no execution admitted"},
+        audit={
+            "summary": "Captured goal under bounded planning consent"
+            if goal.planning
+            else "Saved goal draft; no execution admitted",
+            **({"actorIdentityId": actor_id} if actor_id else {}),
+            **(
+                {
+                    "payload": {
+                        "policyId": goal.planning.policyId,
+                        "policyHash": goal.planning.policyHash,
+                    }
+                }
+                if goal.planning
+                else {}
+            ),
+        },
         created_task=task,
         created_goal=goal,
         idempotency=idempotency,
+        **({"domain_effects": domain_effects} if domain_effects is not None else {}),
     )

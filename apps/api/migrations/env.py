@@ -12,6 +12,8 @@ from app.db.base import Base
 from app.development_agent import baseline_repository as baseline_models  # noqa: F401
 from app.development_agent import lineage_repository as lineage_models  # noqa: F401
 from app.development_agent import repository as development_models  # noqa: F401
+from app.goal_planning import repository as goal_planning_models  # noqa: F401
+from app.goals import repository as goal_models  # noqa: F401
 from app.provider_configuration import groq_repository as groq_capacity_models  # noqa: F401
 from app.provider_configuration import repository as provider_configuration_models  # noqa: F401
 from app.self_improvement import repository as improvement_models  # noqa: F401

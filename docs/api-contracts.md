@@ -541,6 +541,10 @@ configurable UI budgets and standing automatic Home admission remain unfinished.
 
 ## Saved planning-result review
 
+Bounded Home planning adds a separately consented path; see the goal-planning
+section below. Its trusted policy requires operator review even when the original
+model response does not request it. The original model flag is never rewritten.
+
 OpenAPI contracts in `app.models.result_review` define the local operator API:
 
 - `GET /api/results/operator` discovers an existing reviewer without provisioning.
@@ -576,3 +580,60 @@ Emergency stop, active leases/related work, target lifecycle and stale/corrupt
 result/context/checkpoint positions block finalization. Migration
 `20261106_results` follows `20261106_goals`; downgrade refuses populated review or
 artifact-content history.
+
+## Bounded planning from Home
+
+Legacy `POST /api/goals` remains draft-only. New submissions may explicitly carry
+`planningConsent: { policyId, policyHash }` with the configuring operator header.
+The request's native idempotency identity also binds that actor. Goal responses
+add an optional immutable `planning` link (policy/hash/run); old bodies/responses
+omit new fields. A captured pending draft never acquires later enabled consent.
+
+The local `/api/goal-planning` namespace requires exact configured Origin, loopback
+peer and no forwarding headers; responses are no-store. It provides:
+
+- `GET /operator` and explicit `POST /operator/setup` with confirmation
+  `configure_bounded_goal_planning`. The separate configuration identity has only
+  `goals.configure` administrative-function access, not global runtime/tools rights.
+- `GET /policy` returns actual scope/consumed goal permissions and configuration
+  availability; no provider health/model requests or automatic setup.
+- `POST /policy` requires an Idempotency-Key, confirmation
+  `allow_bounded_goal_planning`, expected revision, maximumGoals1–20, an aware
+  expiresAt within24hours and immutable profile `direct-v1`. The UI chooses one
+  hour. Native idempotency resolves exact consent retries even after configuration
+  becomes unavailable. New configuration supersedes older scope.
+- `POST /policy/{id}/revoke` requires its exact policy hash; repeated revocation
+  is inert. Current worker changes, expiry, inactivity, revocation and native
+  denials block new admission/dispatch. Setup never enables providers, workers,
+  cloud inference, workspace permissions or scheduling.
+- `GET /goals/{id}` shows native admission state and bounded diagnostic code.
+  `POST /goals/{id}/retry` reuses the existing captured task/context/run scope;
+  it does not consume another goal permission or create another attempt.
+
+The hashed scope fixes one request, one attempt,7500 conservative total tokens
+(5964input/schema/framing +1536output), no repair/retry/critic/organizational/tool
+calls, and mandatory operator review. Native provider activation/current verified
+eligibility, full actual wire budget and native quota reservations remain
+authoritative. The maximumGoals counter bounds standing authorization; it is not
+a second inference quota ledger.
+
+Goal/task/context, immutable authority binding, expiring task-specific native
+worker grants, one consumed permission, audit/outbox and creation idempotency
+receipt commit atomically. Concurrent API instances cannot cross the final slot.
+Native deterministic Create/Queue commands own admission recovery position.
+Post-save refusal preserves the creation receipt and diagnostic; explicit retry
+uses the same commands. A linked task cannot substitute another context, worker,
+run or wider execution graph, including through legacy metadata-free paths.
+Native leasing/model write fences recheck consent independently of model/run
+metadata. Unrelated manual/legacy planning paths retain their existing behavior.
+
+The native worker pauses these outputs for operator review without changing
+result JSON/hash or its original review flag, including restart/finalization
+recovery. Saved-result authority remains separate. The read-protected
+`GET /api/results/tasks/{task_id}/executions` exposes up to20 actual executions
+for Home; goal configuration permission alone cannot read model output.
+
+Migration `20261106_goal_plans` follows results and refuses populated authority
+history downgrade. Automatic cleanup, general graph profiles, conversational
+clarification revisions, attachments and full Work retention remain subsequent
+campaign scope; this API does not imply those capabilities are available.

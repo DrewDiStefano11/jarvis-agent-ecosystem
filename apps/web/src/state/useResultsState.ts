@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react'
 import { ApiError, API_BASE, request } from '../api/client'
 import type { ResultReviewItem, ReviewCommand, ReviewDecision, ReviewedArtifact, ReviewReceipt } from '../types/results'
-import type { PlanningResult } from '../types/runtime'
+import type { ModelExecution, PlanningResult } from '../types/runtime'
 
 const storageKey = 'jarvis.result-review.pending.v1'
 function restored(): ReviewCommand | null {
@@ -21,6 +21,7 @@ export function useResultsState() {
   const [items, setItems] = useState<ResultReviewItem[]>([])
   const [artifacts, setArtifacts] = useState<ReviewedArtifact[]>([])
   const [previews, setPreviews] = useState<Record<string, PlanningResult>>({})
+  const [taskExecutions, setTaskExecutions] = useState<Record<string, ModelExecution[]>>({})
   const [pending, setPending] = useState(restored)
   const captured = useRef(pending)
   const [receipt, setReceipt] = useState<ReviewReceipt | null>(null)
@@ -34,6 +35,7 @@ export function useResultsState() {
     const current = ++generation.current
     setLoading(true)
     setPreviews({})
+    setTaskExecutions({})
     try {
       const operator = await request<{ actorId: string } | null>('/api/results/operator')
       if (current !== generation.current) return
@@ -113,5 +115,13 @@ export function useResultsState() {
       window.setTimeout(() => URL.revokeObjectURL(url), 1000)
     } catch (caught) { setError(caught instanceof Error ? caught.message : 'Download failed') }
   }, [artifactText])
-  return { actorId, items, artifacts, previews, pending, receipt, busy, loading, error, refresh, setup, decide, retry, preview, download }
+  const loadTask = useCallback(async (taskId: string) => {
+    if (!actorId) return
+    const currentScope = generation.current
+    try {
+      const executions = await request<ModelExecution[]>(`/api/results/tasks/${encodeURIComponent(taskId)}/executions`, { headers: { 'X-Jarvis-Actor-Id': actorId } })
+      if (currentScope === generation.current) setTaskExecutions(current => ({ ...current, [taskId]: executions }))
+    } catch (caught) { if (currentScope === generation.current) { setTaskExecutions(current => ({ ...current, [taskId]: [] })); setError(caught instanceof Error ? caught.message : 'Saved task output is unavailable') } }
+  }, [actorId])
+  return { actorId, items, artifacts, previews, taskExecutions, pending, receipt, busy, loading, error, refresh, setup, decide, retry, preview, download, loadTask }
 }

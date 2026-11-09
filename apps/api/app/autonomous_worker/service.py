@@ -293,7 +293,7 @@ class AutonomousWorkerService:
                 worker_id,
                 lease.leaseToken,
             )
-            if execution.requiresHumanReview:
+            if self._requires_operator_review(execution):
                 return self._pause_for_review(
                     snapshot, actor, execution, worker_id, lease.leaseToken
                 )
@@ -2037,6 +2037,11 @@ class AutonomousWorkerService:
             raise AutonomousWorkerError("RUNTIME_EXECUTION_NOT_ELIGIBLE")
         return snapshot
 
+    def _requires_operator_review(self, execution):
+        return execution.requiresHumanReview or self.executions.goal_review_required(
+            execution.taskId
+        )
+
     async def _recover_finalization(
         self, worker_id: str, actor: RuntimeActorContext, task_id: str | None = None
     ) -> ModelExecutionResult | None:
@@ -2086,7 +2091,7 @@ class AutonomousWorkerService:
             self._authorize_recovery_action(snapshot, actor, "confirm_cancellation")
         elif task_status == "failed":
             self._authorize_recovery_action(snapshot, actor, "fail_run")
-        elif execution.requiresHumanReview:
+        elif self._requires_operator_review(execution):
             self._authorize_recovery_action(snapshot, actor, "confirm_pause")
         else:
             review = self._durable_review_decision(execution, actor)
@@ -2124,7 +2129,7 @@ class AutonomousWorkerService:
                 worker_id=worker_id,
                 lease_token=None,
             )
-        if execution.requiresHumanReview:
+        if self._requires_operator_review(execution):
             if (
                 snapshot.state == AgentRunState.PAUSED
                 and task_state is not None
@@ -2145,7 +2150,7 @@ class AutonomousWorkerService:
         if acquired is None:
             return None
         _, lease = acquired
-        if execution.requiresHumanReview:
+        if self._requires_operator_review(execution):
             return self._pause_for_review(
                 snapshot,
                 actor,

@@ -39,7 +39,8 @@ def free_port():
 def main():
     calls = []
     office_mode = os.environ.get("JARVIS_SMOKE_OFFICE") == "true"
-    review_mode = os.environ.get("JARVIS_SMOKE_REVIEW") == "true"
+    home_mode = os.environ.get("JARVIS_SMOKE_HOME") == "true"
+    review_mode = home_mode or os.environ.get("JARVIS_SMOKE_REVIEW") == "true"
     browser_mode = (
         review_mode or office_mode or os.environ.get("JARVIS_SMOKE_BROWSER") == "true"
     )
@@ -87,7 +88,7 @@ def main():
                 "assumptions": [
                     "No project schedules or field documents were supplied."
                 ],
-                "requiresHumanReview": True,
+                "requiresHumanReview": not home_mode,
             }
         )
 
@@ -314,7 +315,9 @@ for (const name of ['client', 'planning']) {
                                 raise RuntimeError(logs.read())
                             time.sleep(0.05)
                     runner = ROOT / (
-                        "scripts/smoke-result-review.cjs"
+                        "scripts/smoke-goal-planning.cjs"
+                        if home_mode
+                        else "scripts/smoke-result-review.cjs"
                         if review_mode
                         else (
                             "scripts/smoke-office.cjs"
@@ -354,7 +357,13 @@ for (const name of ['client', 'planning']) {
                 # The planning browser checks an original and a corrected task;
                 # the office browser observes one actual worker execution.
                 expected_tasks = (
-                    3 if review_mode else (2 if browser_mode and not office_mode else 1)
+                    1
+                    if home_mode
+                    else (
+                        3
+                        if review_mode
+                        else (2 if browser_mode and not office_mode else 1)
+                    )
                 )
 
                 team_calls = [
@@ -441,13 +450,17 @@ for (const name of ['client', 'planning']) {
                     ) as response:
                         saved_task = json.load(response)["data"]
                     expected_status = (
-                        {
-                            "Accept": "completed",
-                            "Changes": "revision_requested",
-                            "Reject": "cancelled",
-                        }[saved_task["title"].split()[0]]
-                        if review_mode
-                        else "completed"
+                        "completed"
+                        if home_mode
+                        else (
+                            {
+                                "Accept": "completed",
+                                "Changes": "revision_requested",
+                                "Reject": "cancelled",
+                            }[saved_task["title"].split()[0]]
+                            if review_mode
+                            else "completed"
+                        )
                     )
                     assert saved_task["status"] == expected_status and saved_task[
                         "result"
@@ -475,7 +488,7 @@ for (const name of ['client', 'planning']) {
                         f"/api/results/artifacts/{library[0]['id']}/content", reviewer
                     )
                     assert sha256(content).hexdigest() == library[0]["resultHash"]
-                    assert json.loads(content)["requiresHumanReview"] is True
+                    assert json.loads(content)["requiresHumanReview"] is (not home_mode)
                     assert (
                         json.loads(review_get("/api/results/reviews", reviewer))["data"]
                         == []
